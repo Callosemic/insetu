@@ -1,0 +1,11 @@
+# inSetu Volatile State
+data/
+contexts/
+diffs/
+workflows/
+*.db
+*.db-journal
+
+# OS Files
+.DS_Store
+__pycache__/

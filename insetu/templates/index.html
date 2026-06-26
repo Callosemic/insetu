@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#121212">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/favicon.ico?v={{ title|urlencode }}">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.min.js"></script>
+</head>
+<body>
+    <script>
+        window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
+    </script>
+    <div class="top-bar">
+
+        <div class="tabs" id="main-tabs-container">
+            <div class="tab" onclick="switchTab(event, 'context')">Context</div>
+            <div class="tab active" onclick="switchTab(event, 'edit')">Edit</div>
+            <div class="tab" onclick="switchTab(event, 'tasks')">Tasks</div>
+        </div>
+        <div style="position: absolute; right: 15px; top: 10px;">
+            <button id="settings-toggle" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); font-size: 1.1rem; padding: 4px 8px;">{{ emoji }}</button>
+            <div id="settings-menu" style="display: none; position: absolute; right: 0; top: 40px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-width: 150px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 200;">
+                <h4 id="workspaces-header" style="display: none; margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">Workspace</h4>
+                <div id="workspaces-list" style="display: none; flex-direction: column; gap: 5px; margin-bottom: 15px;"></div>
+
+                <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">Theme</h4>
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <button class="theme-btn" data-theme-value="light" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">☀️ Light</button>
+                    <button class="theme-btn" data-theme-value="dark" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">🌙 Dark</button>
+                    <button class="theme-btn" data-theme-value="e-ink" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">📖 E-Ink</button>
+                </div>
+                <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <button id="full-refresh-btn" onclick="fullRefresh()" style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full Refresh</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="tab-context" class="tab-content">
+        <div class="screen active" style="min-height: 80vh;">
+            <div class="sub-tabs">
+                <div class="sub-tab active" id="st-bundles" onclick="switchSubTab('bundles')">Main</div>
+                <div class="sub-tab" id="st-prompts" onclick="switchSubTab('prompts')">Prompts</div>
+                <div class="sub-tab" id="st-diffs" onclick="switchSubTab('diffs')">Diffs</div>
+                <div class="sub-tab" id="st-gather" onclick="switchSubTab('gather')">Gather</div>
+            </div>
+
+            <div id="sub-bundles" class="sub-tab-content active">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <h2 style="margin: 0;">System Context</h2>
+                    <span id="refresh-time" style="font-size: 0.9rem; color: #888; font-style: italic;"></span>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <input type="text" id="context-search" placeholder="Filter contexts..." style="width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box;" onkeyup="filterContexts(this.value)">
+                </div>
+                <div id="context-loading" class="spinner">Compiling ecosystem contexts... please wait.</div>
+                <div id="context-results" style="display: none;">
+                    <h3 id="result-message" style="color: #4CAF50; margin-top: 0; font-size: 1rem;"></h3>
+                    <div id="context-download-links" style="display: flex; flex-direction: column;"></div>
+                </div>
+            </div>
+            <div id="sub-diffs" class="sub-tab-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
+                    <button class="btn-sm" style="background: #f59e0b; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+                </div>
+                <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
+                <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
+                    <p style="color: #888; font-style: italic;">Diffs automatically map when this tab is opened.</p>
+                </div>
+            </div>
+
+            <div id="sub-prompts" class="sub-tab-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <h2 style="margin: 0;">Prompt Library</h2>
+                </div>
+                <div id="prompts-list" style="display: flex; flex-direction: column;">
+                    <p style="color: #888; font-style: italic;">Compile contexts to view available prompts.</p>
+                </div>
+            </div>
+            <div id="sub-gather" class="sub-tab-content">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                    <h2 style="margin: 0;">Context Batches & Workflows</h2>
+                    <button class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openEditBatchModal()">+ New Batch</button>
+                </div>
+                <div id="gather-loading" class="spinner" style="display: none;">Loading batches...</div>
+                <div id="gather-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
+            </div>
+        </div>
+    </div>
+        <div id="tab-edit" class="tab-content active">
+            <div class="screen active" style="min-height: 80vh;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 15px;">
+                    <div class="sub-tabs" style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">
+                        <div class="sub-tab active" id="st-bridge" onclick="switchSubTab('bridge')">Yomama</div>
+                        <div class="sub-tab" id="st-files" onclick="switchSubTab('files')">Files</div>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="btn-new-folder" onclick="openNewFolderModal()" class="btn-sm" style="background: #3b82f6; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ Folder</button>
+                        <button id="btn-new-file" onclick="openNewFileModal()" class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ File</button>
+                        <button id="btn-paste" onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; resetStatus(); document.getElementById('payload').dispatchEvent(new Event('input')); }).catch(e => alert('Clipboard access denied.'));" class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
+                    </div>
+                </div>
+                <div id="sub-bridge" class="sub-tab-content active" style="height: 100%;">
+                    <div style="display:flex; flex-direction:column; height: 100%;">
+                        <div id="bridge-input-area" style="display: flex; flex-direction: column; flex: 1;">
+                            <textarea id="payload" placeholder="<<<<<<< FILE: sample.py&#10;<<<<<<< SEARCH&#10;start_anchor()&#10;{{until}}&#10;end_anchor()&#10;=======&#10;new_code()&#10;>>>>>>> REPLACE" style="min-height: 300px; margin-top: 0; flex: 1; margin-bottom: 15px;"></textarea>
+
+                            <div style="display: flex; gap: 10px; margin-bottom: 15px; justify-content: flex-end;">
+                                <button onclick="sync(true)" class="btn-sm" style="background: #d97706; margin: 0;">🧪 Dry Run</button>
+                                <button onclick="sync(false)" class="btn-sm" style="background: #10b981; margin: 0;">⚡ Execute Patch</button>
+                            </div>
+
+                            <div id="repo-pins" style="display: flex; align-items: center; gap: 6px; margin-bottom: 15px; flex-wrap: wrap;"></div>
+
+                            <div id="target-files"></div>
+                        </div>
+
+                        <div id="bridge-console-area" style="display: none; flex: 1; flex-direction: column;">
+                            <div id="status-box" style="flex: 1; width: 100%; padding: 15px; background: var(--console-bg); color: var(--console-text); border-radius: 4px; font-family: monospace; white-space: pre-wrap; border: 1px solid var(--border); overflow-y: auto; box-sizing: border-box; min-height: 300px; margin-bottom: 15px;">Ready...</div>
+                            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                                    <button id="btn-back" onclick="showInput()" class="btn-sm" style="background: #64748b; margin: 0; display: none;">🔙 Back to Edit</button>
+                            </div>
+                        </div>
+            </div>
+        </div>
+        <div id="sub-files" class="sub-tab-content" style="height: 100%;">
+            <div style="display:flex; flex-direction:column; height: 100%;">
+                <input type="text" id="global-fs-search" placeholder="Fuzzy find files in workspace..." style="width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; margin-bottom: 15px;" onkeyup="filterGlobalFS(this.value)">
+
+                    <div id="global-fs-header" style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap;">
+                        <button id="global-fs-up-btn" class="btn-sm" style="background: #64748b;" onclick="globalFSUp()">⬆️ Up</button>
+                        <span id="global-fs-path" style="font-family: monospace; color: var(--text); opacity: 0.7;">/</span>
+                        <button id="global-fs-clear-btn" onclick="clearGlobalFSSearch()" class="btn-sm" style="background: #64748b; margin: 0; margin-left: auto; display: none;">❌ Clear Search</button>
+                    </div>
+                    <div id="global-fs-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">
+                            <div class="spinner" style="display:block;">Compile contexts first to hydrate file tree...</div>
+                    </div>
+                </div>
+            </div>
+    </div>
+</div>
+<div id="copy-modal" class="fullscreen-modal"  style="z-index: 1050;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 id="modal-title" style="margin:0; font-size: 1.1rem; word-break: break-all;">File Content</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button id="modal-toggle-btn" onclick="toggleModalMode()" class="btn-sm" style="background: #64748b; margin: 0; display: none;">👁️ Preview</button>
+                    <button id="modal-save-btn" onclick="saveModalFile()" class="btn-sm" style="background: #f59e0b; display: none; margin: 0;">💾 Save</button>
+                    <button onclick="document.getElementById('copy-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
+                </div>
+            </div>
+            <div id="modal-edit-toolbar" style="display: none; gap: 10px; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: flex-start; position: relative;">
+                <div id="toolbar-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; overflow: hidden; max-height: 32px; flex: 1; transition: max-height 0.2s;">
+                    <button onclick="openMoveModal()" class="btn-sm" style="background: #3b82f6; margin: 0;">🚚 Move</button>
+                    <button onclick="archiveModalFile()" class="btn-sm" style="background: #f59e0b; margin: 0;">📦 Archive</button>
+                    <button onclick="deleteModalFile()" class="btn-sm" style="background: #dc2626; margin: 0;">🗑️ Delete</button>
+                    <button id="modal-clean-btn" onclick="cleanModalFile()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🧹 Clean AI Tags</button>
+                </div>
+                <button onclick="const tb = document.getElementById('toolbar-buttons'); tb.style.maxHeight = tb.style.maxHeight === '32px' ? '500px' : '32px';" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0;">...</button>
+            </div>
+            <div id="modal-body-container" style="display: flex; flex: 1; flex-direction: column; overflow: hidden; margin-bottom: 10px;">
+                <textarea id="modal-text" style="flex: 1; margin: 0; font-size: 13px; resize: none;"></textarea>
+                <div id="modal-preview" style="flex: 1; margin: 0; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 15px; display: none; font-size: 14px; color: var(--text);"></div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button id="modal-dl-btn" onclick="downloadFromModal()" style="flex: 1; margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #0284c7;">⬇️ Download</button>
+                <button onclick="copyFromModal()" style="flex: 1; margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #10b981;">📋 Copy</button>
+            </div>
+        </div>
+    </div>
+    <div id="browse-modal" class="fullscreen-modal" style="z-index: 1070;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; gap: 10px; flex-wrap: wrap;">
+                <h3 id="browse-modal-title" style="margin:0; font-size: 1.1rem; word-break: break-all;">Browse Files</h3>
+                <input type="text" id="browse-search" placeholder="Fuzzy find files..." style="flex: 1; min-width: 200px; margin: 0; padding: 6px 10px; font-size: 14px;" onkeyup="filterBrowse(this.value)">
+            </div>
+            <div id="browse-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; gap: 10px; flex-wrap: wrap;">
+                <button id="browse-clear-btn" onclick="clearBrowseSearch()" class="btn-sm" style="background: #64748b; margin: 0; display: none;">❌ Clear Search</button>
+                <button id="browse-select-folder-btn" onclick="confirmFolderSelection()" class="btn-sm" style="background: #10b981; margin: 0; display: none;">✅ Select This Folder</button>
+                <div style="flex: 1;"></div>
+                <button onclick="closeBrowseModal()" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
+            </div>
+        </div>
+    </div>
+    <div id="move-modal" class="fullscreen-modal" style="z-index: 1060;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Move File</h3>
+                <button onclick="document.getElementById('move-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
+            </div>
+            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Destination Path (including filename):</label>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <input type="text" id="move-dest-path" placeholder="e.g. axoneme-cli/new_folder/my_file.py" style="flex: 1; padding: 8px; margin: 0;">
+                <button onclick="openFolderBrowser()" class="btn-sm" style="background: #8b5cf6; margin: 0;">📁 Browse...</button>
+            </div>
+            <button id="execute-move-btn" onclick="executeMove()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">🚚 Move File</button>
+        </div>
+    </div>
+    <div id="batch-modal" class="fullscreen-modal" style="z-index: 1050;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 id="batch-modal-title" style="margin:0; font-size: 1.1rem;">Batch Workflow</h3>
+                <button onclick="document.getElementById('batch-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Close</button>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 15px; flex: 1; overflow-y: auto; padding-right: 5px;">
+                <div id="batch-context-section" style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <h4 style="margin-top: 0; color: #38bdf8;">1. Compiled Context Payload</h4>
+                    <p style="font-size: 0.85rem; color: #888; margin-bottom: 8px;">This payload dynamically concatenates the following files:</p>
+                    <ul id="batch-includes-list" style="margin-top: 0; margin-bottom: 15px; font-family: monospace; font-size: 0.85rem; color: var(--text); opacity: 0.8; padding-left: 20px;"></ul>
+                    <div style="display: flex; gap: 10px;">
+                        <button id="batch-copy-context-btn" class="btn-sm" style="background: #10b981; margin: 0;">📋 Copy Context to Clipboard</button>
+                        <button id="batch-dl-context-btn" class="btn-sm" style="background: #0284c7; margin: 0;">⬇️ Download .txt</button>
+                    </div>
+                </div>
+
+                <div id="batch-prompt-section" style="display: none; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <h4 style="margin-top: 0; color: #a855f7;">2. Instruction Prompt</h4>
+                    <textarea id="batch-prompt-text" style="height: 150px; margin-bottom: 10px;"></textarea>
+                    <button id="batch-copy-prompt-btn" class="btn-sm" style="background: #a855f7; margin: 0;" onclick="navigator.clipboard.writeText(document.getElementById('batch-prompt-text').value); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Prompt', 2000);">📋 Copy Prompt</button>
+                </div>
+                <div id="batch-response-section" style="display: none; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <h4 style="margin-top: 0; color: #10b981;">3. LLM Response Integration</h4>
+                    <p style="font-size: 0.85rem; color: #888; margin-bottom: 10px;">Paste the LLM's response below to save it to: <code id="batch-response-path-display"></code></p>
+                    <textarea id="batch-response-text" style="flex: 1; min-height: 250px; margin-bottom: 10px; margin-top: 0;" placeholder="Paste LLM response here..."></textarea>
+                    <button id="batch-save-response-btn" class="btn-sm" style="background: #10b981; margin: 0; padding: 15px; font-size: 1.1rem; font-weight: bold;">💾 Save Response</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-batch-modal" class="fullscreen-modal" style="z-index: 1060;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 id="edit-batch-title" style="margin:0; font-size: 1.1rem;">Create/Edit Batch</h3>
+                <button onclick="document.getElementById('edit-batch-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Close</button>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 15px; flex: 1; overflow-y: auto; padding-right: 5px;">
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 150px;">
+                        <label style="font-weight: bold; font-size: 0.85rem; color: #888;">Batch Title</label>
+                        <input type="text" id="eb-title" placeholder="e.g. API Wrap-Up" style="padding: 8px; margin-top: 5px; font-weight: bold;" onkeyup="document.getElementById('eb-id').value = this.value.toLowerCase().replace(/[^a-z0-9]+/g, '_');">
+                    </div>
+                    <div style="flex: 1; min-width: 150px;">
+                        <label style="font-weight: bold; font-size: 0.85rem; color: #888;">Batch ID</label>
+                        <input type="text" id="eb-id" placeholder="api_wrap_up" style="padding: 8px; margin-top: 5px;">
+                    </div>
+                    <div style="flex: 1; min-width: 150px;">
+                        <label style="font-weight: bold; font-size: 0.85rem; color: #888;">Domain</label>
+                        <input type="text" id="eb-domain" placeholder="e.g. Workflows" style="padding: 8px; margin-top: 5px;">
+                    </div>
+                </div>
+
+                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <h4 style="margin-top: 0; color: #38bdf8;">1. Includes (Contexts & Diffs)</h4>
+                    <div id="eb-includes-list" style="display: flex; flex-direction: column; gap: 5px; max-height: 250px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; border: 1px solid var(--border); padding: 10px; border-radius: 4px;">
+                        </div>
+                </div>
+
+                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <input type="checkbox" id="eb-has-prompt" style="transform: scale(1.2); cursor: pointer;" onchange="document.getElementById('eb-prompt-wrapper').style.display = this.checked ? 'block' : 'none';">
+                        <h4 style="margin: 0; color: #a855f7; cursor: pointer;" onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt</h4>
+                    </div>
+                    <div id="eb-prompt-wrapper" style="display: none;">
+                        <select id="eb-prompt-select" style="width: 100%; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); font-family: monospace;">
+                        </select>
+                    </div>
+                </div>
+
+                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                        <input type="checkbox" id="eb-has-response" style="transform: scale(1.2); cursor: pointer;" onchange="document.getElementById('eb-response-wrapper').style.display = this.checked ? 'block' : 'none';">
+                        <h4 style="margin: 0; color: #10b981; cursor: pointer;" onclick="document.getElementById('eb-has-response').click()">3. Response Text Box</h4>
+                    </div>
+                    <div id="eb-response-wrapper" style="display: none;">
+                        <label style="font-size: 0.85rem; color: #888; display: block; margin-bottom: 5px;">Response Path</label>
+                        <input type="text" id="eb-response-path" placeholder="e.g. sotu/sotu_{date}.current.md" style="padding: 8px; width: 100%; font-family: monospace; margin: 0; margin-bottom: 10px;">
+
+                        <label style="font-size: 0.85rem; color: #888; display: block; margin-bottom: 5px;">Archive Path (Optional)</label>
+                        <input type="text" id="eb-archive-path" placeholder="e.g. sotu/archive/" style="padding: 8px; width: 100%; font-family: monospace; margin: 0;">
+                    </div>
+                </div>
+
+                <button id="eb-save-btn" onclick="saveEditBatch()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #8b5cf6;">💾 Save Batch Configuration</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="new-file-modal" class="fullscreen-modal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Create New Workspace File</h3>
+                <button onclick="document.getElementById('new-file-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
+            </div>
+            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: #8b5cf6;"></span></label>
+            <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
+            <div id="new-file-ext-warning" style="display: none; color: #f59e0b; font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+            <textarea id="new-file-content" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box;" placeholder="Enter file content here..."></textarea>
+            <button onclick="saveNewFile()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #10b981;">💾 Create & Save File</button>
+        </div>
+    </div>
+    <div id="new-folder-modal" class="fullscreen-modal" style="z-index: 1060;">
+        <div class="modal-content" style="height: auto; max-height: 90vh; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 id="new-folder-title" style="margin:0; font-size: 1.1rem;">Create New Folder</h3>
+                <button onclick="document.getElementById('new-folder-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Cancel</button>
+            </div>
+            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: #8b5cf6;"></span></label>
+            <input type="text" id="new-folder-name" placeholder="Directory name..." style="margin-bottom: 15px; padding: 10px; font-weight: bold;">
+            <div id="new-repo-fields" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                <h4 style="margin: 0; margin-bottom: 5px; color: #38bdf8;">Repository Configuration</h4>
+
+                <div>
+                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Repository Title</label>
+                    <input type="text" id="new-repo-title" placeholder="e.g., Core API" style="padding: 8px; margin: 0; width: 100%;">
+                </div>
+                <div>
+                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Domain Category</label>
+                    <input type="text" id="new-repo-domain" placeholder="e.g., Workspaces" style="padding: 8px; margin: 0; width: 100%;">
+                </div>
+                <div>
+                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Description</label>
+                    <input type="text" id="new-repo-desc" placeholder="Short summary..." style="padding: 8px; margin: 0; width: 100%;">
+                </div>
+                <div>
+                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Tracked Extensions</label>
+                    <input type="text" id="new-repo-exts" placeholder="e.g., .py, .json, .md" style="padding: 8px; margin: 0; width: 100%; font-family: monospace;">
+                </div>
+            </div>
+
+            <button id="btn-submit-new-folder" onclick="saveNewFolder()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">📁 Create</button>
+        </div>
+    </div>
+
+    <div id="new-task-modal" class="fullscreen-modal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Create New Ticket</h3>
+                <button onclick="document.getElementById('new-task-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <select id="new-task-repo" style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
+                <select id="new-task-type" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                    <option value="todo">To-Do (Task)</option>
+                    <option value="bug">Bug</option>
+                    <option value="queue">Queue (Research)</option>
+                </select>
+                <select id="new-task-status" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                    <option value="open">Open (Backlog)</option>
+                    <option value="active">Active (In Progress)</option>
+                </select>
+                <select id="new-task-bucket" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                    <option value="None">No Bucket</option>
+                </select>
+            </div>
+            <input type="text" id="new-task-title" placeholder="Ticket Title (e.g., Fix schema registry timeout)" style="margin-bottom: 10px; padding: 10px; font-weight: bold;">
+            <input type="text" id="new-task-tags" placeholder="Tags (comma separated, e.g. frontend, critical)" style="margin-bottom: 10px; padding: 10px;">
+            <textarea id="new-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0;" placeholder="Markdown description..."></textarea>
+            <button id="save-task-btn" onclick="saveNewTask()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #8b5cf6;">💾 Create Ticket</button>
+        </div>
+    </div>
+
+    <div id="edit-task-modal" class="fullscreen-modal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Edit Ticket Metadata</h3>
+                <button onclick="document.getElementById('edit-task-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
+            </div>
+
+            <input type="hidden" id="edit-task-filepath">
+            <input type="hidden" id="edit-task-original-yaml">
+
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <select id="edit-task-bucket" style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
+                    <option value="None">No Bucket</option>
+                </select>
+            </div>
+            <input type="text" id="edit-task-title" placeholder="Ticket Title" style="margin-bottom: 10px; padding: 10px; font-weight: bold;">
+            <input type="text" id="edit-task-tags" placeholder="Tags (comma separated)" style="margin-bottom: 10px; padding: 10px;">
+            <textarea id="edit-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0;" placeholder="Markdown description..."></textarea>
+
+            <button id="save-edit-task-btn" onclick="saveEditTask()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">💾 Save Changes</button>
+        </div>
+    </div>
+
+    <div id="tab-tasks" class="tab-content">
+        <div class="screen active" style="min-height: 80vh;">
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                    <div class="sub-tabs" style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">
+                        <div class="sub-tab active" id="st-todos" onclick="switchSubTab('todos')">To-Dos</div>
+                        <div class="sub-tab" id="st-bugs" onclick="switchSubTab('bugs')">Bugs</div>
+                        <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
+                        <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
+                    </div>
+                    <button class="btn-sm" style="background: #8b5cf6; margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
+                </div>
+                <div id="task-repo-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;"></div>
+            </div>
+            <div id="sub-todos" class="sub-tab-content active">
+                <div class="board-columns">
+                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                        <h3 style="margin-top: 0;">Open</h3>
+                        <div id="todos-open-list"></div>
+                    </div>
+                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                        <h3 style="margin-top: 0;">Active</h3>
+                        <div id="todos-active-list"></div>
+                    </div>
+                </div>
+            </div>
+    <div id="sub-bugs" class="sub-tab-content">
+        <div class="board-columns">
+            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                <h3 style="margin-top: 0;">Open</h3>
+                <div id="bugs-open-list"></div>
+            </div>
+            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                <h3 style="margin-top: 0;">Active</h3>
+                <div id="bugs-active-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="sub-queue" class="sub-tab-content">
+        <div class="board-columns">
+            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                <h3 style="margin-top: 0;">Open (Research Queue)</h3>
+                <div id="queue-open-list"></div>
+            </div>
+        </div>
+    </div>
+    <div id="sub-log" class="sub-tab-content">
+                <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
+            </div>
+        </div>
+    </div>
+    <div id="sweep-modal" class="fullscreen-modal" style="z-index: 1080;">
+        <div class="modal-content" style="max-height: 80vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">🧹 Selective Sweep</h3>
+                <button onclick="document.getElementById('sweep-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
+            </div>
+
+            <div id="sweep-loading" class="spinner" style="display:none; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>
+
+            <div id="sweep-files-container" style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px;">
+                </div>
+
+            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
+            <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none;"></textarea>
+
+            <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
+
+            <button id="execute-sweep-btn" onclick="executeSweepPush()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #f59e0b;">🚀 Commit & Push Selected</button>
+        </div>
+    </div>
+
+    <div id="push-modal" class="fullscreen-modal">
+        <div class="modal-content" style="max-height: 400px; height: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">🚀 Commit & Push: <span id="push-repo-name" style="color: #8b5cf6;"></span></h3>
+                <button onclick="document.getElementById('push-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
+            </div>
+
+            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
+            <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" onchange="document.getElementById('push-message').value = this.value;">
+                <option value="">-- Type a custom message below --</option>
+            </select>
+            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
+            <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0;"></textarea>
+
+            <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
+
+            <button id="execute-push-btn" onclick="executePush()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #8b5cf6;">🚀 Execute Push</button>
+        </div>
+    </div>
+    <div id="global-status-bar" class="bottom-bar" data-default="{{ title }}">{{ title }}</div>
+
+    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

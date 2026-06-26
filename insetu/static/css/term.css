@@ -1,0 +1,5 @@
+/* Dedicated stylesheet for ttyd iframe to override the browser's native scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0f172a; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; border: 2px solid #0f172a; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }

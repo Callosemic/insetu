@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insetu"
+version = "0.1.0"
+description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
+authors = [{ name = "inSetu Contributors", email = "hello@insetu.io" }]
+requires-python = ">=3.10"
+dependencies = [
+    "Flask>=3.0.0",
+    "rjsmin",
+    "rcssmin"
+]
+
+[project.scripts]
+# This allows the user to type `insetu serve` from anywhere
+insetu = "insetu.cli:main"
+
+[tool.setuptools]
+# Ensure the UI assets are packaged with the Python code
+include-package-data = true
+packages = ["insetu"]

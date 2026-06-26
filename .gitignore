@@ -1,0 +1,30 @@
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Python Cache & Build Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Local Testing/Artifacts (if running insetu serve inside its own repo)
+data/
+contexts/
+diffs/
+workflows/
+sotu/
+*.db
+*.db-journal
+.insetu/
+workspaces.json
+config.json
+
+# OS/Editor Artifacts
+.DS_Store
+.vscode/
+.idea/

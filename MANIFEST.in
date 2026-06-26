@@ -1,0 +1,3 @@
+recursive-include insetu/static *
+recursive-include insetu/templates *
+recursive-include insetu/defaults *
