@@ -117,9 +117,12 @@ async function bootExtensions() {
         }
     }
 }
-
 // Restore UI State on Load
 window.addEventListener('DOMContentLoaded', async () => {
+    // The JS engine successfully booted. Hide the pure-HTML panic switch.
+    const panicBtn = document.getElementById('js-panic-button');
+    if (panicBtn) panicBtn.style.display = 'none';
+
     await bootExtensions();
 
     const textArea = document.getElementById('modal-text');
@@ -299,18 +302,10 @@ function switchSubTab(subId) {
     if (subId === 'gather') {
         loadGatherBatches();
     }
-    if (subId === 'bridge' || subId === 'files') {
-        const consoleArea = document.getElementById('bridge-console-area');
-        if (subId === 'files') {
-            if (pasteBtn) pasteBtn.style.display = 'none';
-            if (newFileBtn) newFileBtn.style.display = globalBrowsePath.length === 0 ? 'none' : 'block';
-            if (newFolderBtn) newFolderBtn.style.display = 'block';
-        } else {
-            if (pasteBtn) pasteBtn.style.display = (consoleArea && consoleArea.style.display === 'flex') ? 'none' : 'block';
-            if (newFileBtn) newFileBtn.style.display = 'none';
-            if (newFolderBtn) newFolderBtn.style.display = 'none';
-        }
-    }
+    const consoleArea = document.getElementById('bridge-console-area');
+    if (pasteBtn) pasteBtn.style.display = (subId === 'bridge' && consoleArea && consoleArea.style.display !== 'flex') ? 'block' : 'none';
+    if (newFileBtn) newFileBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
+    if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
 async function renderPromptsTab() {
     const container = document.getElementById('prompts-list');
@@ -435,8 +430,7 @@ export async function generateDiffs() {
                         }
                     }
                 }
-
-                const rawBrand = baseFile.replace('_context.txt', '');
+                const rawModule = baseFile.replace('_context.txt', '');
                 let matchedMeta = null;
                 let parentBucket = null;
 
@@ -444,8 +438,8 @@ export async function generateDiffs() {
                     if (cfg.sub_buckets) {
                         for (const b of cfg.sub_buckets) {
                             if (b.dynamic_split_prefix) {
-                                if (b.meta_map && b.meta_map[rawBrand]) {
-                                    matchedMeta = b.meta_map[rawBrand];
+                                if (b.meta_map && b.meta_map[rawModule]) {
+                                    matchedMeta = b.meta_map[rawModule];
                                     parentBucket = b;
                                     break;
                                 }
@@ -456,7 +450,7 @@ export async function generateDiffs() {
                     if (matchedMeta) break;
                 }
 
-                const title = matchedMeta?.title || rawBrand.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                 const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
                 desc = matchedMeta?.description ? `Uncommitted changes for ${title} (${matchedMeta.description})` : (parentBucket?.description ? `Uncommitted changes for ${title} (${parentBucket.description})` : `Uncommitted logic changes for ${title}.`);
 
@@ -520,6 +514,11 @@ function updateRefreshText() {
     const el = document.getElementById('refresh-time');
     if (el) el.innerText = `Refreshed ${text}`;
 }
+export function normalizeAccentText(str) {
+    if (!str) return '';
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
 export let globalGatherOptions = {
     contexts: [],
     diffs: [],
@@ -631,8 +630,7 @@ export function renderContextFiles(files, msg) {
                     }
                 }
             }
-
-            const rawBrand = fileName.replace('_context.txt', '');
+            const rawModule = fileName.replace('_context.txt', '');
             let matchedMeta = null;
             let parentBucket = null;
 
@@ -640,8 +638,8 @@ export function renderContextFiles(files, msg) {
                 if (cfg.sub_buckets) {
                     for (const b of cfg.sub_buckets) {
                         if (b.dynamic_split_prefix) {
-                            if (b.meta_map && b.meta_map[rawBrand]) {
-                                matchedMeta = b.meta_map[rawBrand];
+                            if (b.meta_map && b.meta_map[rawModule]) {
+                                matchedMeta = b.meta_map[rawModule];
                                 parentBucket = b;
                                 break;
                             }
@@ -652,7 +650,7 @@ export function renderContextFiles(files, msg) {
                 if (matchedMeta) break;
             }
 
-            const title = matchedMeta?.title || rawBrand.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
             desc = matchedMeta?.description || parentBucket?.description || `Dynamically mapped logic and templates for ${title}.`;
 
@@ -699,27 +697,29 @@ export let contextManifest = {};
 export function setContextManifest(m) {
     contextManifest = m;
 }
-
+let contextSearchTimeout = null;
 export function filterContexts(query) {
-    const q = query.toLowerCase().trim();
-    const container = document.getElementById('context-download-links');
-    const categories = container.querySelectorAll('.category-heading');
-
-    categories.forEach(cat => {
-        let hasVisible = false;
-        let nextEl = cat.nextElementSibling;
-        while (nextEl && nextEl.classList.contains('file-card')) {
-            const title = nextEl.querySelector('.file-title').innerText.toLowerCase();
-            if (title.includes(q)) {
-                nextEl.style.display = 'block';
-                hasVisible = true;
-            } else {
-                nextEl.style.display = 'none';
+    clearTimeout(contextSearchTimeout);
+    contextSearchTimeout = setTimeout(() => {
+        const q = query.toLowerCase().trim();
+        const container = document.getElementById('context-download-links');
+        const categories = container.querySelectorAll('.category-heading');
+        categories.forEach(cat => {
+            let hasVisible = false;
+            let nextEl = cat.nextElementSibling;
+            while (nextEl && nextEl.classList.contains('file-card')) {
+                const title = nextEl.querySelector('.file-title').innerText.toLowerCase();
+                if (title.includes(q)) {
+                    nextEl.style.display = 'block';
+                    hasVisible = true;
+                } else {
+                    nextEl.style.display = 'none';
+                }
+                nextEl = nextEl.nextElementSibling;
             }
-            nextEl = nextEl.nextElementSibling;
-        }
-        cat.style.display = hasVisible ? 'block' : 'none';
-    });
+            cat.style.display = hasVisible ? 'block' : 'none';
+        });
+    }, 200);
 }
 
 async function finishContextLoad(result) {
@@ -785,6 +785,18 @@ async function loadContext() {
         document.getElementById('context-results').style.display = 'block';
     }
 }
+async function simulatePanic() {
+    if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload in 3 seconds. Continue?")) return;
+    const btn = document.getElementById('simulate-panic-btn');
+    if (btn) btn.innerText = "⏳ Crashing...";
+    try {
+        await fetch('/api/system/panic', { method: 'POST' });
+        setTimeout(() => window.location.reload(), 3000);
+    } catch (e) {
+        alert("Error triggering panic.");
+    }
+}
+
 async function fullRefresh() {
     const btn = document.getElementById('full-refresh-btn');
     if (btn) btn.innerText = "⏳ Syncing...";
@@ -935,8 +947,10 @@ export async function fetchAndDownloadState(filePath, btnElement) {
             Explicitly binding UI-triggered functions to the global scope so they 
             survive the transition to <script type="module">
             ========================================================================== */
+window.normalizeAccentText = normalizeAccentText;
 window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
+window.simulatePanic = simulatePanic;
 // Context / Gather
 window.filterContexts = filterContexts;

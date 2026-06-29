@@ -1,0 +1,85 @@
+import urllib.request
+import urllib.parse
+
+def extract_markdown_from_url(target_url, method="jina"):
+    """
+    Extracts core content from a URL into clean Markdown.
+    Supports native Jina API or local BeautifulSoup parsing.
+    """
+    # Intercept and unwrap Google search redirect links
+    parsed_url = urllib.parse.urlparse(target_url)
+    if 'google.com' in parsed_url.netloc and parsed_url.path == '/url':
+        qs = urllib.parse.parse_qs(parsed_url.query)
+        if 'q' in qs:
+            target_url = qs['q'][0]
+        elif 'url' in qs:
+            target_url = qs['url'][0]
+            
+    extracted_title = "Imported Content"
+    extracted_url = target_url
+    published_time = "Unknown"
+    clean_markdown = ""
+
+    if method == "bs4":
+        try:
+            from bs4 import BeautifulSoup
+            import markdownify
+        except ImportError:
+            raise Exception("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
+
+        req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            html_content = response.read().decode('utf-8', errors='ignore')
+
+        soup = BeautifulSoup(html_content, 'html.parser')
+        if soup.title and soup.title.string:
+            extracted_title = soup.title.string.strip()
+
+        # Remove scripts, styles, and other layout clutter
+        for element in soup(["script", "style", "nav", "footer", "iframe", "header", "aside"]):
+            element.decompose()
+
+        # Attempt to target the main article container to reduce noise, fallback to body
+        main_content = soup.find('article') or soup.find('main') or soup.body
+        if main_content:
+            clean_markdown = markdownify.markdownify(str(main_content), heading_style="ATX").strip()
+        else:
+            clean_markdown = markdownify.markdownify(html_content, heading_style="ATX").strip()
+
+    else:
+        # Use Jina Reader API to cleanly convert HTML to Markdown without heavy local dependencies
+        req = urllib.request.Request(f"https://r.jina.ai/{target_url}", headers={'User-Agent': 'inSetu-OS/1.0'})
+        with urllib.request.urlopen(req) as response:
+            markdown_content = response.read().decode('utf-8')
+
+        # Parse Jina's header block
+        lines = markdown_content.splitlines()
+
+        content_start_idx = 0
+        for i, line in enumerate(lines[:30]):
+            if line.startswith("Title: "):
+                extracted_title = line.replace("Title: ", "").strip()
+            elif line.startswith("URL Source: "):
+                extracted_url = line.replace("URL Source: ", "").strip()
+            elif line.startswith("Published Time: "):
+                published_time = line.replace("Published Time: ", "").strip()
+            elif line.startswith("Markdown Content:"):
+                content_start_idx = i + 1
+                break
+
+        if content_start_idx > 0:
+            clean_markdown = "\n".join(lines[content_start_idx:]).lstrip()
+        else:
+            clean_markdown = markdown_content
+
+        # Fallback title extraction if Jina changes format
+        first_line = clean_markdown.lstrip().split('\n')[0]
+        if first_line.startswith('# '):
+            extracted_title = first_line[2:].strip()
+
+    return {
+        "title": extracted_title,
+        "resolved_url": extracted_url,
+        "published_time": published_time,
+        "clean_markdown": clean_markdown
+    }

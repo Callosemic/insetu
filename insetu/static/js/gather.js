@@ -18,10 +18,9 @@ export async function loadGatherBatches() {
         globalGatherOptions.prompts = data.available_prompts || [];
         globalGatherOptions.artifactsDir = data.artifacts_dir || ".insetu/profiles/default/data";
         globalGatherOptions.profileDir = data.profile_dir || ".insetu/profiles/default";
-
         container.innerHTML = '';
         if (!data.batches || data.batches.length === 0) {
-            container.innerHTML = '<p style="color: #888;">No context batches defined in config.json.</p>';
+            container.innerHTML = '<p style="color: #888;">No context batches defined in workflows.json.</p>';
             return;
         }
 
@@ -275,11 +274,18 @@ export function openBatchModal(batch) {
     } else {
         resSec.style.display = 'none';
     }
-
     document.getElementById('batch-modal').style.display = 'block';
 }
 
+export function openNewPromptModal() {
+    const profileDir = globalGatherOptions.profileDir || ".insetu/profiles/default";
+    if (window.openNewFileModal) {
+        window.openNewFileModal(`${profileDir}/prompts/`);
+    }
+}
+
 // Bind HTML click handlers to the global scope
+window.openNewPromptModal = openNewPromptModal;
 window.openEditBatchModal = openEditBatchModal;
 window.saveEditBatch = saveEditBatch;
 window.openBatchModal = openBatchModal;

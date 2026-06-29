@@ -1,8 +1,9 @@
 import os
 import re
 from insetu.utils_core import resolve_workspace_path, WORKSPACE_ROOT, get_sister_repos
-
 def expand_macros(text):
+    # Semantic Multiplier Macro: e.g., {{ ` * 3 }} or {{ = * 7 }}
+    text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
     text = re.sub(r'\{\{\s*triple(.)\s*\}\}', lambda m: m.group(1) * 3, text)
     text = re.sub(r'_(?:[^_\n]_){3,}', lambda m: m.group(0).replace('_', ''), text)
     text = re.sub(r'\x5b\x73\x6f\x75\x72\x63\x65\x3a\x5c\x73\x2a\x5c\x64\x2b\x5d', '', text)

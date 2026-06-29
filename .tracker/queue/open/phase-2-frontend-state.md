@@ -6,6 +6,7 @@ created: "2026-06-26"
 ---
 # Frontend State Hardening
 
+**[Step 3 of the V2 Migration Sequence - Executes AFTER Micro-Kernel Decoupling]**
 Implement a strict Unidirectional Data Flow (UDF) to replace the `app.js` DOM-reading monolith.
 
 ### Action Items

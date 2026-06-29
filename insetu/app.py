@@ -1,4 +1,10 @@
 import os
+
+# Fire Drill: Intercept the boot sequence to test the Lifeboat FS
+if os.environ.get("INSETU_SIMULATE_PANIC") == "1":
+    del os.environ["INSETU_SIMULATE_PANIC"] # Clear flag to prevent a permanent boot loop
+    raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
+
 import io
 import random
 import datetime
@@ -119,10 +125,10 @@ def api_repos():
                     b["meta_map"] = {}
                 dyn_dir = os.path.join(WORKSPACE_ROOT, r_dir, b["dynamic_split_prefix"])
                 if os.path.exists(dyn_dir):
-                    for brand in os.listdir(dyn_dir):
-                        if os.path.isdir(os.path.join(dyn_dir, brand)) and not brand.startswith('.'):
-                            if brand not in b["meta_map"]:
-                                b["meta_map"][brand] = {"title": brand.replace('_', ' ').title()}
+                    for module in os.listdir(dyn_dir):
+                        if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                            if module not in b["meta_map"]:
+                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
     from insetu.utils_core import CONFIG_PATH
     return jsonify({
         "repos": get_sister_repos(),
@@ -132,18 +138,34 @@ def api_repos():
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
         "config_missing": not os.path.exists(CONFIG_PATH)
     })
+@app.route('/api/system/panic', methods=['POST'])
+def api_system_panic():
+    """Injects a poison pill into the environment and restarts the daemon."""
+    import threading
+    import sys
+    import os
+
+    def crash_and_restart():
+        import time
+        time.sleep(1.0)
+        os.environ["INSETU_SIMULATE_PANIC"] = "1"
+        python_exe = sys.executable
+        cli_script = os.path.abspath(sys.argv[0])
+        os.execv(python_exe, [python_exe, cli_script] + sys.argv[1:])
+
+    threading.Thread(target=crash_and_restart, daemon=True).start()
+    return jsonify({"status": "success", "message": "Initiating kernel panic..."})
+
 @app.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():
-    import json
     import os
-    index_path = os.path.join(os.getcwd(), ".insetu", "profiles", "workspaces.json")
+    import insetu.utils_core as utils_core
+
+    # workspaces.json is the global switchboard; it is strictly anchored to the host daemon
+    index_path = os.path.join(utils_core._cwd, ".insetu", "workspaces.json")
 
     if request.method == 'GET':
-        if not os.path.exists(index_path):
-            return jsonify({"active_workspace": "default", "workspaces": {}})
-
-        with open(index_path, 'r', encoding='utf-8') as f:
-            return jsonify(json.load(f))
+        return jsonify(utils_core.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))
 
     if request.method == 'POST':
         data = request.json
@@ -151,15 +173,13 @@ def api_workspaces():
         if not os.path.exists(index_path):
             return jsonify({"error": "workspaces.json not found."}), 404
 
-        with open(index_path, 'r', encoding='utf-8') as f:
-            w_data = json.load(f)
+        w_data = utils_core.load_json_file(index_path, {})
 
         if new_active not in w_data.get("workspaces", {}):
             return jsonify({"error": "Workspace ID not found."}), 400
 
         w_data["active_workspace"] = new_active
-        with open(index_path, 'w', encoding='utf-8') as f:
-            json.dump(w_data, f, indent=2)
+        utils_core.save_json_file(index_path, w_data)
 
         # Acknowledge the swap, then gracefully restart the daemon
         import threading
@@ -211,10 +231,10 @@ def api_batches():
                     # Dynamic split prefix - infer from active directories
                     dyn_dir = os.path.join(utils_core.WORKSPACE_ROOT, r_dir, b["dynamic_split_prefix"])
                     if os.path.exists(dyn_dir):
-                        for brand in os.listdir(dyn_dir):
-                            if os.path.isdir(os.path.join(dyn_dir, brand)) and not brand.startswith('.'):
-                                expected_contexts.add(f"contexts/{brand}_context.txt")
-                                expected_diffs.add(f"diffs/{brand}_diffs.txt")
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                                expected_contexts.add(f"contexts/{module}_context.txt")
+                                expected_diffs.add(f"diffs/{module}_diffs.txt")
         else:
             out = c.get("out_file", f"{safe_r_dir}_context.txt")
             expected_contexts.add(f"contexts/{out}")
@@ -228,16 +248,16 @@ def api_batches():
         for f in os.listdir(engine_gather.DIFFS_DIR):
             if f.endswith('.txt'): expected_diffs.add(f"diffs/{f}")
     available_prompts = [f"prompts/{f}" for f in os.listdir(engine_gather.PROMPTS_DIR) if f.lower().endswith(('.md', '.txt'))] if os.path.exists(engine_gather.PROMPTS_DIR) else []
-    artifacts_rel = os.path.relpath(engine_gather.ARTIFACTS_BASE, utils_core.WORKSPACE_ROOT).replace('\\', '/')
-    profile_rel = os.path.relpath(os.path.dirname(utils_core.CONFIG_PATH), utils_core.WORKSPACE_ROOT).replace('\\', '/')
+    artifacts_abs = engine_gather.ARTIFACTS_BASE.replace('\\', '/')
+    profile_abs = os.path.dirname(utils_core.CONFIG_PATH).replace('\\', '/')
 
     return jsonify({
         "batches": batches,
         "available_contexts": sorted(list(expected_contexts)),
         "available_diffs": sorted(list(expected_diffs)),
         "available_prompts": sorted(available_prompts),
-        "artifacts_dir": artifacts_rel,
-        "profile_dir": profile_rel
+        "artifacts_dir": artifacts_abs,
+        "profile_dir": profile_abs
     })
 @app.route('/api/batches/save', methods=['POST'])
 def api_batches_save():
@@ -389,6 +409,196 @@ def api_fs_delete():
         print(f"Warning: Cartographer failed during delete: {str(e)}")
 
     return jsonify({"status": "success"})
+
+@app.route('/api/fs/search', methods=['GET'])
+def api_fs_search():
+    query = request.args.get('q', '').lower()
+    if not query: return jsonify({"results": []})
+
+    terms = [t for t in query.split() if t]
+    if not terms: return jsonify({"results": []})
+
+    import os
+    import json
+    from insetu.utils_core import WORKSPACE_ROOT
+    import insetu.engine_gather as engine_gather
+
+    manifest_path = os.path.join(engine_gather.CONTEXTS_DIR, "manifest.json")
+    md_files = set()
+    if os.path.exists(manifest_path):
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            try:
+                manifest = json.load(f)
+                for file_list in manifest.values():
+                    for filepath in file_list:
+                        if filepath.lower().endswith('.md'):
+                            md_files.add(filepath)
+            except Exception:
+                pass
+    from insetu.utils_core import resolve_workspace_path
+
+    results = []
+    for filepath in md_files:
+        abs_path = resolve_workspace_path(filepath)
+        if not os.path.exists(abs_path): continue
+
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            content_lower = content.lower()
+            score = 0
+            snippet = ""
+
+            file_lower = filepath.lower()
+            for term in terms:
+                if term in file_lower:
+                    score += 2  # Higher weight for filename match
+                if term in content_lower:
+                    score += 1
+
+            if score > 0:
+                # Extract a small context snippet around the first matched term
+                first_term = next((t for t in terms if t in content_lower), None)
+                if first_term:
+                    idx = content_lower.find(first_term)
+                    start = max(0, idx - 30)
+                    end = min(len(content), idx + 70)
+                    snippet = content[start:end].replace('\n', ' ').strip()
+
+                results.append({
+                    "path": filepath,
+                    "score": score,
+                    "snippet": snippet
+                })
+        except Exception:
+            pass
+    # Sort by score descending, return top 50
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return jsonify({"results": results[:50]})
+
+@app.route('/api/fs/compile-document', methods=['POST'])
+def api_fs_compile_document():
+    data = request.json
+    filepath = data.get('filepath')
+    target_format = data.get('format', 'pdf')
+
+    if not filepath: return jsonify({"error": "Filepath required"}), 400
+
+    from insetu.utils_core import resolve_workspace_path
+    import os, tempfile, subprocess, json, sqlite3
+    import insetu.engine_gather as engine_gather
+
+    resolved_path = resolve_workspace_path(filepath)
+    if not os.path.exists(resolved_path): return jsonify({"error": "File not found"}), 404
+
+    with open(resolved_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    import re
+    backmatter_match = re.search(r'\n+---\n+citations:\n([\s\S]*?)\n---$', content)
+
+    true_ids = []
+    if backmatter_match:
+        lines = backmatter_match.group(1).splitlines()
+        for line in lines:
+            parts = line.split(':')
+            if len(parts) >= 2:
+                true_ids.append(parts[1].replace('"', '').replace("'", "").strip())
+
+    csl_items = []
+    if true_ids:
+        db_path = os.path.join(engine_gather.ARTIFACTS_BASE, "citations.db")
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            placeholders = ','.join(['?'] * len(true_ids))
+            try:
+                cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
+                for row in cursor.fetchall():
+                    csl_items.append(json.loads(row['raw_json']))
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
+    import shutil
+    temp_dir = tempfile.mkdtemp()
+    try:
+        bib_path = os.path.join(temp_dir, 'bibliography.json')
+        with open(bib_path, 'w', encoding='utf-8') as f:
+            json.dump(csl_items, f)
+
+        out_filename = f"compiled_output.{target_format}"
+        out_path = os.path.join(temp_dir, out_filename)
+
+        cmd = ['pandoc', resolved_path, '-o', out_path]
+        if csl_items:
+            cmd.extend(['--citeproc', '--bibliography', bib_path])
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            return jsonify({"error": "Pandoc is not installed or not in PATH."}), 500
+
+        if res.returncode != 0:
+            err_msg = res.stderr.strip()
+            if "pdflatex not found" in err_msg.lower():
+                err_msg += " (Please install a LaTeX engine like MacTeX, MiKTeX, or TeX Live to generate PDFs)."
+            return jsonify({"error": f"Pandoc failed: {err_msg}"}), 500
+
+        with open(out_path, 'rb') as f:
+            file_data = f.read()
+
+        import io
+        from flask import send_file
+        mem_file = io.BytesIO(file_data)
+        mem_file.seek(0)
+
+        safe_basename = os.path.basename(resolved_path).rsplit('.', 1)[0]
+        return send_file(mem_file, as_attachment=True, download_name=f"{safe_basename}.{target_format}")
+
+    except Exception as e:
+        return jsonify({"error": f"Compilation error: {str(e)}"}), 500
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+@app.route('/api/fs/import-url', methods=['POST'])
+def api_fs_import_url():
+    data = request.json
+    target_url = data.get("url", "").strip()
+    method = data.get("method", "jina")
+    if not target_url: return jsonify({"error": "URL is required"}), 400
+
+    import datetime
+    from insetu.utils_scraping import extract_markdown_from_url
+
+    try:
+        extracted = extract_markdown_from_url(target_url, method)
+
+        now = datetime.datetime.now().isoformat(timespec='seconds')
+        safe_title = extracted["title"].replace('"', "'")
+        yaml_frontmatter = (
+            f"---\n"
+            f"title: \"{safe_title}\"\n"
+            f"source_url: \"{extracted['resolved_url']}\"\n"
+            f"published_at: \"{extracted['published_time']}\"\n"
+            f"imported_at: \"{now}\"\n"
+            f"---\n\n"
+            f"## Notes\n\n\n"
+            f"---\n\n"
+        )
+
+        return jsonify({
+            "status": "success", 
+            "markdown": yaml_frontmatter + extracted["clean_markdown"],
+            "title": safe_title,
+            "resolved_url": extracted["resolved_url"]
+        })
+    except Exception as e:
+        if "Missing optional dependencies" in str(e):
+            return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Failed to fetch and convert URL: {str(e)}"}), 500
+
 @app.route('/api/fs/save', methods=['POST'])
 def api_fs_save():
     """Universal save-back endpoint. Integrates directly with workspace paths."""
@@ -485,14 +695,23 @@ def get_repo_from_diff(diff_filename):
     sister_repos = get_sister_repos()
     clean_name = diff_filename.replace("_tracker_diffs.txt", "").replace("_diffs.txt", "")
     from insetu.utils_core import get_safe_repo_id
+
+    # Pass 1: Exact matches (prevents 'insetu' swallowing '.insetu' / 'dot_insetu')
+    for c in cfg.get("target_repos", []):
+        repo_id = get_safe_repo_id(c.get("repo_dir"))
+        if repo_id == clean_name: return c["repo_dir"]
+        if c.get("out_file") and clean_name == c["out_file"].replace("_context.txt", ""): return c["repo_dir"]
+
+    # Pass 2: Partial matches & Sub-buckets
     for c in cfg.get("target_repos", []):
         repo_id = get_safe_repo_id(c.get("repo_dir"))
         if repo_id in clean_name or clean_name in repo_id: return c["repo_dir"]
         if c.get("out_file") and clean_name in c["out_file"].replace("_context.txt", ""): return c["repo_dir"]
 
-        # Search through sub_buckets for specific out_files like axoneme_os_kernel_context.txt
+        # Search through sub_buckets for specific out_files
         for b in c.get("sub_buckets", []):
             if b.get("out_file") and clean_name in b["out_file"].replace("_context.txt", ""): return c["repo_dir"]
+
     fallback = clean_name.replace("_", "-")
     if fallback in sister_repos: return fallback
 
@@ -768,8 +987,14 @@ def bridge_sync():
             for target_file, blocks in parsed_structure.items():
                 if target_file not in active_files or not blocks: continue
 
-                # Execution Lock Containment Check
+                # Hardware Lock: Protect Bootloader and Lifeboat
                 norm_target = target_file.replace('\\', '/')
+                if norm_target.endswith('cli.py') or norm_target.endswith('fallback_bridge.py'):
+                    print(f"  [!] TRANSACTION ABORTED: '{target_file}' is hardware-locked. The bootloader and lifeboat must be edited manually.")
+                    print("." * 30)
+                    continue
+
+                # Execution Lock Containment Check
                 explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
                 if explicit_repo in sister_repos and explicit_repo not in allowed_repos:
                     print(f"  [!] TRANSACTION ABORTED: Target repository '{explicit_repo}' is not pinned. Skipping {target_file}.")
@@ -803,12 +1028,15 @@ def bridge_sync():
                             search_roots.append(repo_path)
 
                     search_roots = list(set(os.path.abspath(r) for r in search_roots))
+                    from insetu.utils_core import load_config
+                    live_cfg = load_config()
+                    ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
 
                     candidates = []
                     for s_root in search_roots:
                         for root, dirs, files in os.walk(s_root):
                             # Explicitly allow .tracker while blocking other hidden/system folders
-                            dirs[:] = [d for d in dirs if (not d.startswith('.') or d == '.tracker') and d not in ('node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git')]
+                            dirs[:] = [d for d in dirs if (not d.startswith('.') or d == '.tracker') and d not in ignore_dirs]
                             if basename in files:
                                 cand_abs = os.path.abspath(os.path.join(root, basename)).replace('\\', '/')
                                 cand_rel = os.path.relpath(cand_abs, WORKSPACE_ROOT).replace('\\', '/')

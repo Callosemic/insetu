@@ -65,32 +65,33 @@ WantedBy=default.target
     else:
         print(f"❌ Unknown service action: {action}. Use install|uninstall|start|stop|restart|status.")
 def scaffold_profiles(cwd):
-    base_dir = os.path.join(cwd, ".insetu", "profiles")
+    base_dir = os.path.join(cwd, ".insetu")
     is_new_hub = not os.path.exists(base_dir)
     os.makedirs(base_dir, exist_ok=True)
+  
     script_dir = os.path.dirname(os.path.abspath(__file__))
     defaults_dir = os.path.join(script_dir, "defaults")
+    
     # Scaffold the default config
-    default_profile_dir = os.path.join(base_dir, "default")
-    os.makedirs(default_profile_dir, exist_ok=True)
-    target_config = os.path.join(default_profile_dir, "config.json")
+    target_config = os.path.join(base_dir, "config.json")
     if not os.path.exists(target_config):
         src_config = os.path.join(defaults_dir, "config.json")
         if os.path.exists(src_config):
             shutil.copy(src_config, target_config)
 
     # Scaffold workflows
-    target_workflows = os.path.join(default_profile_dir, "workflows.json")
+    target_workflows = os.path.join(base_dir, "workflows.json")
     if not os.path.exists(target_workflows):
         with open(target_workflows, "w", encoding="utf-8") as f:
             json.dump({"context_batches": []}, f, indent=2)
 
-    # Scaffold the switchboard
+    # Scaffold the switchboard locally
     target_ws = os.path.join(base_dir, "workspaces.json")
     if not os.path.exists(target_ws):
         src_ws = os.path.join(defaults_dir, "workspaces.json")
         if os.path.exists(src_ws):
             shutil.copy(src_ws, target_ws)
+            
     # Scaffold the Git safeguard
     target_gitignore = os.path.join(base_dir, ".gitignore")
     if not os.path.exists(target_gitignore):
@@ -99,7 +100,7 @@ def scaffold_profiles(cwd):
             shutil.copy(src_gitignore, target_gitignore)
 
     if is_new_hub:
-        print(f"[*] Initialized new inSetu profile hub at {base_dir}")
+        print(f"[*] Initialized local inSetu environment at {base_dir}")
 def main():
     if len(sys.argv) < 2:
         print("Usage: insetu [serve | service]")
@@ -107,12 +108,19 @@ def main():
 
     command = sys.argv[1]
     cwd = os.getcwd()
-
     if command == "serve":
         scaffold_profiles(cwd)
-        # Import after scaffolding to ensure paths resolve correctly
-        from insetu.app import run_app
-        run_app()
+        # The Immutable Recovery Bootloader
+        try:
+            # Import after scaffolding to ensure paths resolve correctly
+            from insetu.app import run_app
+            run_app()
+        except (SyntaxError, ImportError) as e:
+            print(f"\n[!] KERNEL PANIC: {type(e).__name__} detected during boot.")
+            print(f"[!] Details: {str(e)}")
+            print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
+            from insetu.fallback_bridge import run_recovery_app
+            run_recovery_app()
     elif command == "service":
         if len(sys.argv) < 3:
             print("Usage: insetu service [install | uninstall | start | stop | restart | status]")

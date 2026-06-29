@@ -10,14 +10,15 @@ import {
     renderRepoPins,
     compileContexts,
     fetchAndCopy,
-    fetchAndDownloadState
+    fetchAndDownloadState,
+    normalizeAccentText
 } from './app.js';
 import {
     openPushModal
 } from './git.js';
 let currentModalFile = '';
 export let currentModalOriginalText = '';
-let currentModalIsFS = false;
+export let currentModalIsFS = false;
 let isPreviewMode = false;
 
 export async function downloadFile(fetchUrl, fallbackFilename) {
@@ -46,10 +47,13 @@ export async function downloadFile(fetchUrl, fallbackFilename) {
 function renderMarkdownPreview() {
     const preview = document.getElementById('modal-preview');
     let text = document.getElementById('modal-text').value;
-
     // Intercept YAML frontmatter and wrap it in a custom styled block
     const yamlRegex = /^---\n([\s\S]*?)\n---/;
-    text = text.replace(yamlRegex, '<pre class="yaml-frontmatter">$1</pre>');
+    text = text.replace(yamlRegex, (match, p1) => {
+        // Auto-link URLs inside the frontmatter
+        const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: #38bdf8; text-decoration: underline;">$1</a>');
+        return '<pre class="yaml-frontmatter">' + linkedP1 + '</pre>';
+    });
 
     preview.innerHTML = marked.parse(text);
 
@@ -70,11 +74,95 @@ function renderMarkdownPreview() {
                 matchCount++;
                 return match;
             });
-
             document.getElementById('modal-text').value = rawText;
             if (currentModalIsFS) saveModalFile(true);
         });
     });
+    // Wiki-link interception
+    const links = preview.querySelectorAll('a');
+    links.forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            showWikiPopup(e, link.getAttribute('href'), link.getAttribute('title'));
+        });
+    });
+}
+
+let activeWikiPopup = null;
+function showWikiPopup(e, href, title) {
+    if (activeWikiPopup) activeWikiPopup.remove();
+
+    const popup = document.createElement('div');
+    popup.className = 'wiki-link-popup';
+    popup.style.position = 'fixed';
+
+    // Offset slightly so it doesn't immediately intercept subsequent clicks
+    popup.style.left = (e.clientX + 10) + 'px';
+    popup.style.top = (e.clientY + 15) + 'px';
+
+    const displayHref = href.length > 40 ? href.substring(0, 40) + '...' : href;
+    const titleHtml = title ? `<div style="font-size: 0.85rem; font-weight: bold; color: var(--btn); margin-bottom: 4px;">${title}</div>` : '';
+
+    popup.innerHTML = `
+        <div style="display: flex; flex-direction: column;">
+            ${titleHtml}
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text); opacity: 0.8;">${displayHref}</span>
+                <button class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 8px; font-weight: bold;">Go</button>
+            </div>
+        </div>
+    `;
+
+    const goBtn = popup.querySelector('button');
+    goBtn.onclick = () => {
+        popup.remove();
+        activeWikiPopup = null;
+
+        let targetPath = href;
+
+        // Handle local relative paths
+        if (!href.startsWith('http') && !href.startsWith('/')) {
+            const parts = currentModalFile.split('/');
+            parts.pop(); // Remove current filename to anchor at its directory
+
+            if (href.startsWith('./')) {
+                targetPath = parts.join('/') + '/' + href.substring(2);
+            } else if (href.startsWith('../')) {
+                let hrefParts = href.split('/');
+                while(hrefParts[0] === '..') {
+                    hrefParts.shift();
+                    parts.pop();
+                }
+                targetPath = parts.join('/') + '/' + hrefParts.join('/');
+            } else {
+                targetPath = parts.length > 0 ? parts.join('/') + '/' + href : href;
+            }
+            // Sanitize redundant slashes
+            targetPath = targetPath.replace(/\/+/g, '/').replace(/^\/+/, '');
+        }
+
+        if (targetPath.startsWith('http')) {
+            window.open(targetPath, '_blank');
+        } else {
+            // Assume workspace relative and open it in the modal
+            viewSourceFile(targetPath, true);
+        }
+    };
+
+    document.body.appendChild(popup);
+    activeWikiPopup = popup;
+
+    // Listen for outside clicks to close the pop-up gracefully
+    setTimeout(() => {
+        const closer = (ev) => {
+            if (!popup.contains(ev.target)) {
+                popup.remove();
+                activeWikiPopup = null;
+                document.removeEventListener('click', closer);
+            }
+        };
+        document.addEventListener('click', closer);
+    }, 10);
 }
 
 function toggleModalMode() {
@@ -555,43 +643,44 @@ function globalFSUp() {
         renderGlobalFSLevel();
     }
 }
-
+let globalFSSearchTimeout = null;
 function filterGlobalFS(query) {
-    const q = query.toLowerCase().trim();
-    const container = document.getElementById('global-fs-list');
-    const clearBtn = document.getElementById('global-fs-clear-btn');
-    const headerDiv = document.getElementById('global-fs-header');
+    clearTimeout(globalFSSearchTimeout);
+    globalFSSearchTimeout = setTimeout(() => {
+        const q = query.toLowerCase().trim();
+        const container = document.getElementById('global-fs-list');
+        const clearBtn = document.getElementById('global-fs-clear-btn');
+        const headerDiv = document.getElementById('global-fs-header');
 
-    if (!q) {
-        clearBtn.style.display = 'none';
-        headerDiv.style.display = 'flex';
-        renderGlobalFSLevel();
-        return;
-    }
+        if (!q) {
+            clearBtn.style.display = 'none';
+            headerDiv.style.display = 'flex';
+            renderGlobalFSLevel();
+            return;
+        }
 
-    clearBtn.style.display = 'block';
-    // We intentionally keep the header visible so users know what directory they are searching within
-    container.innerHTML = '';
+        clearBtn.style.display = 'block';
+        // We intentionally keep the header visible so users know what directory they are searching within
+        container.innerHTML = '';
+        // Scope search to the current active directory level
+        const currentPrefix = globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '';
+        const matches = globalManifest.filter(f => f.startsWith(currentPrefix) && f.substring(currentPrefix.length).toLowerCase().includes(q));
+        if (matches.length === 0) {
+            container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
+            return;
+        }
 
-    // Scope search to the current active directory level
-    const currentPrefix = globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '';
-    const matches = globalManifest.filter(f => f.startsWith(currentPrefix) && f.substring(currentPrefix.length).toLowerCase().includes(q));
-
-    if (matches.length === 0) {
-        container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
-        return;
-    }
-
-    matches.forEach(filepath => {
-        const filename = filepath.split('/').pop();
-        createFileCard({
-            filename: filepath,
-            displayName: filename,
-            description: filepath,
-            isFS: true,
-            isSource: true
-        }, container);
-    });
+        matches.forEach(filepath => {
+            const filename = filepath.split('/').pop();
+            createFileCard({
+                filename: filepath,
+                displayName: filename,
+                description: filepath,
+                isFS: true,
+                isSource: true
+            }, container);
+        });
+    }, 200);
 }
 
 function clearGlobalFSSearch() {
@@ -630,22 +719,25 @@ function checkFileExtension(filename) {
         }
     }
 }
-
-function openNewFileModal() {
-    // Inherit the spatial context from the active browser path
-    const prefix = globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '';
+function openNewFileModal(overridePath = null) {
+    // Inherit the spatial context from the active browser path or an override
+    const prefix = typeof overridePath === 'string' ? overridePath : (globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '');
     document.getElementById('new-file-base-path').innerText = prefix;
     document.getElementById('new-file-name').value = '';
     if (document.getElementById('new-file-ext-warning')) document.getElementById('new-file-ext-warning').style.display = 'none';
     document.getElementById('new-file-content').value = '';
+    // Keep the Library toggle hidden until a URL is successfully imported
+    const libWrapper = document.getElementById('new-file-library-wrapper');
+    if (libWrapper) {
+        libWrapper.style.display = 'none';
+    }
+
     document.getElementById('new-file-modal').style.display = 'block';
 }
-
 async function saveNewFile() {
     const basePath = document.getElementById('new-file-base-path').innerText;
     let fileName = document.getElementById('new-file-name').value.trim();
-    const content = document.getElementById('new-file-content').value;
-
+    let content = document.getElementById('new-file-content').value;
     if (!fileName || !content) {
         alert("Filename and content are required.");
         return;
@@ -654,6 +746,11 @@ async function saveNewFile() {
     // Prevent double slashes if user types leading slash
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
+    // Trigger mutually linked ingestion if the extension is present and selected
+    const libCheckbox = document.getElementById('new-file-add-library');
+if (libCheckbox && libCheckbox.checked && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
+        content = await window.addFileToLibrary(fileName, content, filepath);
+}
 
     // Give the button a temporary ID if it lacks one so the mutation helper can track it
     const btn = document.querySelector('#new-file-modal button[style*="10b981"]');
@@ -670,10 +767,12 @@ async function saveNewFile() {
             await compileContexts();
             const mRes = await fetch('/api/manifest?t=' + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
-
             document.getElementById('new-file-modal').style.display = 'none';
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
                 loadGlobalFS();
+            }
+            if (document.getElementById('st-prompts') && document.getElementById('st-prompts').classList.contains('active')) {
+                if (window.switchSubTab) window.switchSubTab('prompts');
             }
         }
     });
@@ -807,11 +906,23 @@ export async function viewSourceFile(filepath, isFS = false) {
     document.getElementById('modal-save-btn').style.display = 'none';
     document.getElementById('copy-modal').style.display = 'block';
     closeBrowseModal();
-
     const tb = document.getElementById('modal-edit-toolbar');
     if (isFS) {
         tb.style.display = 'flex';
         document.getElementById('modal-clean-btn').style.display = (isMarkdown || ext === 'txt') ? 'block' : 'none';
+        const citeBtn = document.getElementById('btn-insert-citation');
+        if (citeBtn) {
+            citeBtn.style.display = (isMarkdown && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations')) ? 'block' : 'none';
+        }
+        const syncBtn = document.getElementById('btn-sync-citations');
+        if (syncBtn) {
+            syncBtn.style.display = (isMarkdown && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations')) ? 'block' : 'none';
+        }
+
+        const publishBtn = document.getElementById('btn-publish-doc');
+        if (publishBtn) {
+            publishBtn.style.display = isMarkdown ? 'block' : 'none';
+        }
     } else {
         tb.style.display = 'none';
     }
@@ -901,37 +1012,38 @@ function clearBrowseSearch() {
     document.getElementById('browse-clear-btn').style.display = 'none';
     filterBrowse('');
 }
-
+let browseSearchTimeout = null;
 function filterBrowse(query) {
-    const q = query.toLowerCase().trim();
-    const container = document.getElementById('browse-list');
-    const clearBtn = document.getElementById('browse-clear-btn');
+    clearTimeout(browseSearchTimeout);
+    browseSearchTimeout = setTimeout(() => {
+        const q = query.toLowerCase().trim();
+        const container = document.getElementById('browse-list');
+        const clearBtn = document.getElementById('browse-clear-btn');
+        if (!q) {
+            clearBtn.style.display = 'none';
+            renderBrowseLevel();
+            return;
+        }
 
-    if (!q) {
-        clearBtn.style.display = 'none';
-        renderBrowseLevel();
-        return;
-    }
+        clearBtn.style.display = 'block';
+        container.innerHTML = '';
+        const matches = currentBrowseManifest.filter(f => f.toLowerCase().includes(q));
+        if (matches.length === 0) {
+            container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
+            return;
+        }
+        matches.forEach(filepath => {
+            const filename = filepath.split('/').pop();
+            createFileCard({
+                filename: filepath,
+                displayName: filename,
+                description: filepath,
+                isFS: true,
+                isSource: true
 
-    clearBtn.style.display = 'block';
-    container.innerHTML = '';
-    const matches = currentBrowseManifest.filter(f => f.toLowerCase().includes(q));
-
-    if (matches.length === 0) {
-        container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
-        return;
-    }
-    matches.forEach(filepath => {
-        const filename = filepath.split('/').pop();
-        createFileCard({
-            filename: filepath,
-            displayName: filename,
-            description: filepath,
-            isFS: true,
-            isSource: true
-
-        }, container);
-    });
+            }, container);
+        });
+    }, 200);
 }
 
 function buildFileTree(files) {
@@ -1069,8 +1181,132 @@ export function openBrowseModal(contextFilename) {
     renderBrowseLevel();
     document.getElementById('browse-modal').style.display = 'block';
 }
+export function openVirtualFile(filename, content) {
+    currentModalFile = filename;
+    currentModalIsFS = false;
+    document.getElementById('modal-title').innerText = filename;
+    const textArea = document.getElementById('modal-text');
+    const preview = document.getElementById('modal-preview');
+    const toggleBtn = document.getElementById('modal-toggle-btn');
+
+    if (typeof mdeInstance !== 'undefined' && mdeInstance) {
+        mdeInstance.value(content);
+        mdeInstance.codemirror.setOption("mode", "markdown");
+        mdeInstance.codemirror.setOption("readOnly", false);
+    } else {
+        textArea.value = content;
+        textArea.readOnly = false;
+    }
+
+    document.getElementById('modal-save-btn').style.display = 'none';
+    document.getElementById('copy-modal').style.display = 'block';
+    closeBrowseModal();
+    document.getElementById('modal-edit-toolbar').style.display = 'none';
+
+    toggleBtn.style.display = 'block';
+    isPreviewMode = false;
+    preview.style.display = 'none';
+
+    const mdeWrap = document.querySelector('.EasyMDEContainer');
+    if (mdeWrap) {
+        mdeWrap.style.display = 'flex';
+        textArea.style.display = 'none';
+        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
+    } else {
+        textArea.style.display = 'block';
+    }
+
+    currentModalOriginalText = content;
+}
 
 // Window Bindings
+window.openVirtualFile = openVirtualFile;
+export function importFromUrl() {
+    document.getElementById('import-url-input').value = '';
+    document.getElementById('import-url-modal').style.display = 'block';
+    setTimeout(() => document.getElementById('import-url-input').focus(), 100);
+}
+
+export async function executeImportUrl() {
+    const url = document.getElementById('import-url-input').value.trim();
+    if (!url) return alert("Please enter a valid URL.");
+
+    const method = document.querySelector('input[name="import-method"]:checked').value;
+    document.getElementById('import-url-modal').style.display = 'none';
+
+    const statusEl = document.getElementById('import-url-status');
+    const contentEl = document.getElementById('new-file-content');
+
+    statusEl.style.display = 'inline-block';
+    statusEl.innerText = "Fetching and converting...";
+    statusEl.style.color = "#888";
+
+    try {
+        const res = await fetch('/api/fs/import-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, method })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            // Append or overwrite content seamlessly
+            if (contentEl.value.trim() !== '') {
+                if (confirm("Overwrite existing content with imported markdown?")) {
+                    contentEl.value = data.markdown;
+                } else {
+                    contentEl.value += '\n\n' + data.markdown;
+                }
+            } else {
+                contentEl.value = data.markdown;
+            }
+
+            // Reveal and auto-check the Library toggle now that we have an external reference
+            const libWrapper = document.getElementById('new-file-library-wrapper');
+            const libCheckbox = document.getElementById('new-file-add-library');
+            if (libWrapper && libCheckbox && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations')) {
+                libWrapper.style.display = 'flex';
+                libCheckbox.checked = true;
+            }
+            // Try to auto-guess a clean filename if the user hasn't typed one
+            const nameEl = document.getElementById('new-file-name');
+            if (nameEl.value.trim() === '') {
+                let slug = '';
+                if (data.title && data.title !== 'Imported Content') {
+                    slug = data.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                }
+                if (!slug) {
+                    try {
+                        const urlObj = new URL(data.resolved_url || url);
+                        slug = urlObj.pathname.split('/').pop() || urlObj.hostname;
+                        slug = slug.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+                    } catch(e) {}
+                }
+                if (!slug) slug = 'imported-article';
+                slug = slug.replace(/^-+|-+$/g, '').substring(0, 60);
+                nameEl.value = slug + '.md';
+                if(typeof checkFileExtension === 'function') checkFileExtension(nameEl.value);
+            }
+
+            statusEl.innerText = "✅ Success";
+            statusEl.style.color = "#10b981";
+        } else {
+            statusEl.innerText = "❌ Error";
+            statusEl.style.color = "#dc2626";
+            alert(data.error || "Failed to import URL.");
+        }
+    } catch (e) {
+        statusEl.innerText = "❌ Error";
+        statusEl.style.color = "#dc2626";
+        alert("Network error: " + e.message);
+    }
+
+    setTimeout(() => {
+        statusEl.style.display = 'none';
+    }, 3000);
+}
+window.importFromUrl = importFromUrl;
+window.executeImportUrl = executeImportUrl;
 window.openNewFileModal = openNewFileModal;
 window.saveNewFile = saveNewFile;
 window.openNewFolderModal = openNewFolderModal;
@@ -1094,3 +1330,237 @@ window.openFolderBrowser = openFolderBrowser;
 window.confirmFolderSelection = confirmFolderSelection;
 window.clearBrowseSearch = clearBrowseSearch;
 window.filterBrowse = filterBrowse;
+
+let activeLinkTab = 'filename';
+let linkSearchTimeout = null;
+export function openLinkModal() {
+    // Hydrate manifest explicitly if missing to ensure files are available
+    if (!globalManifest || globalManifest.length === 0) {
+        const allFiles = new Set();
+        Object.values(contextManifest).forEach(fileArray => fileArray.forEach(f => {
+            if (f.toLowerCase().endsWith('.md')) allFiles.add(f);
+        }));
+        globalManifest = Array.from(allFiles);
+    }
+
+    document.getElementById('link-insert-modal').style.display = 'block';
+    document.getElementById('link-search-input').value = '';
+    document.getElementById('link-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Type to search...</span>';
+    switchLinkTab('filename');
+}
+
+export function switchLinkTab(tab) {
+    activeLinkTab = tab;
+    document.getElementById('lt-filename').classList.toggle('active', tab === 'filename');
+    document.getElementById('lt-deep').classList.toggle('active', tab === 'deep');
+
+    if (tab === 'filename') {
+        document.getElementById('btn-deep-search').style.display = 'none';
+        onLinkSearchInput(document.getElementById('link-search-input').value);
+    } else {
+        document.getElementById('btn-deep-search').style.display = 'block';
+        document.getElementById('link-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Hit search to rank by multi-word matching...</span>';
+    }
+}
+
+export function onLinkSearchInput(val) {
+    if (activeLinkTab !== 'filename') return;
+    clearTimeout(linkSearchTimeout);
+    linkSearchTimeout = setTimeout(() => {
+        executeLinkSearch(val);
+    }, 300);
+}
+export async function executeDeepLinkSearch() {
+    const val = document.getElementById('link-search-input').value;
+    const container = document.getElementById('link-results-list');
+    const q = val.toLowerCase().trim();
+
+    if (!q) {
+        container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search contents...</span>';
+        return;
+    }
+
+    container.innerHTML = '<div class="spinner" style="display:block; margin-top:0;">Searching file contents across workspace...</div>';
+    document.getElementById('btn-deep-search').disabled = true;
+
+    try {
+        const res = await fetch('/api/fs/search?q=' + encodeURIComponent(q));
+        if (!res.ok) throw new Error("Search failed");
+        const data = await res.json();
+
+        container.innerHTML = '';
+        if (data.results.length === 0) {
+            container.innerHTML = '<span style="color:#888; font-style:italic;">No files found matching contents.</span>';
+            return;
+        }
+
+        data.results.forEach(item => {
+            const name = item.path.split('/').pop();
+            const row = document.createElement('div');
+            row.className = 'file-card';
+            row.style.cursor = 'pointer';
+            row.style.padding = '8px 12px';
+            row.style.display = 'flex';
+            row.style.flexDirection = 'column';
+
+            row.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; color: var(--text);">${name}</span>
+                    <span style="font-size: 0.7rem; color: #10b981; border: 1px solid #10b981; padding: 2px 6px; border-radius: 10px;">Score: ${item.score}</span>
+                </div>
+                <span style="font-size: 0.75rem; color: #888; font-family: monospace;">${item.path}</span>
+                ${item.snippet ? `<span style="font-size: 0.8rem; color: var(--text); margin-top: 4px; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i>"...${item.snippet.replace(/</g, '&lt;')}"</i></span>` : ''}
+            `;
+
+            row.onclick = () => insertLinkToEditor(item.path, name);
+            container.appendChild(row);
+        });
+    } catch (e) {
+        container.innerHTML = `<span style="color:red;">Error: ${e.message}</span>`;
+    } finally {
+        document.getElementById('btn-deep-search').disabled = false;
+    }
+}
+
+function executeLinkSearch(query) {
+    const container = document.getElementById('link-results-list');
+    const q = query.toLowerCase().trim();
+
+    if (!q) {
+        container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search...</span>';
+        return;
+    }
+
+    const results = globalManifest.filter(path => path.toLowerCase().includes(q)).slice(0, 50);
+
+    container.innerHTML = '';
+    if (results.length === 0) {
+        container.innerHTML = '<span style="color:#888; font-style:italic;">No markdown files found.</span>';
+        return;
+    }
+
+    results.forEach(path => {
+        const name = path.split('/').pop();
+        const row = document.createElement('div');
+        row.className = 'file-card';
+        row.style.cursor = 'pointer';
+        row.style.padding = '8px 12px';
+        row.style.display = 'flex';
+        row.style.flexDirection = 'column';
+
+        row.innerHTML = `
+            <span style="font-weight: bold; color: var(--text);">${name}</span>
+            <span style="font-size: 0.75rem; color: #888; font-family: monospace;">${path}</span>
+        `;
+
+        row.onclick = () => insertLinkToEditor(path, name);
+        container.appendChild(row);
+    });
+}
+
+function insertLinkToEditor(path, name) {
+    let finalPath = path;
+
+    // Calculate intelligent relative path based on the file currently open in the modal
+    if (currentModalFile) {
+        const currentParts = currentModalFile.split('/');
+        currentParts.pop(); // Remove filename to anchor at its directory
+        const targetParts = path.split('/');
+
+        let commonLength = 0;
+        while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
+            commonLength++;
+        }
+
+        const upSteps = currentParts.length - commonLength;
+        const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
+        const downString = targetParts.slice(commonLength).join('/');
+
+        finalPath = upString + downString;
+    }
+
+    const linkText = `[${name}](${finalPath})`;
+
+    const mdeWrap = document.querySelector('.EasyMDEContainer');
+    const textArea = document.getElementById('modal-text');
+
+    // Inject into the active editor instance seamlessly
+    if (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined') {
+        const cm = mdeInstance.codemirror;
+        cm.replaceSelection(linkText);
+        cm.focus();
+    } else {
+        const start = textArea.selectionStart;
+        const end = textArea.selectionEnd;
+        const text = textArea.value;
+        textArea.value = text.substring(0, start) + linkText + text.substring(end);
+        textArea.selectionStart = textArea.selectionEnd = start + linkText.length;
+        textArea.focus();
+        textArea.dispatchEvent(new Event('input'));
+    }
+
+    document.getElementById('link-insert-modal').style.display = 'none';
+}
+
+// Expose new functions to the window so HTML element handlers can reach them
+window.openLinkModal = openLinkModal;
+window.switchLinkTab = switchLinkTab;
+window.onLinkSearchInput = onLinkSearchInput;
+window.executeDeepLinkSearch = executeDeepLinkSearch;
+export function openPublishModal() {
+    document.getElementById('publish-modal').style.display = 'block';
+}
+
+export async function executePublish() {
+    const format = document.getElementById('publish-format-select').value;
+    const btn = document.getElementById('execute-publish-btn');
+    const origText = btn.innerText;
+    btn.innerText = "⏳ Compiling...";
+
+    try {
+        const res = await fetch('/api/fs/compile-document', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filepath: currentModalFile, format: format })
+        });
+
+        if (!res.ok) {
+            let errText = "Compilation failed.";
+            try {
+                const errData = await res.json();
+                errText = errData.error || errText;
+            } catch(e) {}
+            alert("Error: " + errText);
+            return;
+        }
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+
+        let dlName = currentModalFile.split('/').pop().split('.')[0] + '.' + format;
+        const disposition = res.headers.get('Content-Disposition');
+        if (disposition && disposition.indexOf('filename=') !== -1) {
+            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+            if (matches != null && matches[1]) dlName = matches[1].replace(/['"]/g, '');
+        }
+
+        a.download = dlName;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+
+        document.getElementById('publish-modal').style.display = 'none';
+    } catch (e) {
+        alert("Network error: " + e.message);
+    } finally {
+        btn.innerText = origText;
+    }
+}
+
+window.openPublishModal = openPublishModal;
+window.executePublish = executePublish;
+window.viewSourceFile = viewSourceFile;

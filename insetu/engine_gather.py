@@ -62,6 +62,8 @@ def generate_context_file():
     from insetu.utils_core import get_safe_repo_id
     manifest = {}
     for config in live_cfg.get("target_repos", []):
+        if config.get("exclude_from_context"): continue
+ 
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
 
         physical_path = config.get("physical_path")
@@ -73,12 +75,16 @@ def generate_context_file():
         if not os.path.exists(repo_path): continue
         final_list = get_valid_workspace_files(repo_path, config)
         if not final_list: continue
-
         archive_type = config.get("archive_type", "repo")
         if archive_type == "media-vault":
             # Expose to UI manifest without generating massive context string payloads
             manifest[f"{config['repo_dir']}_vault.json"] = [f"{config['repo_dir']}/{f}" for f in final_list]
             continue
+        elif archive_type == "prompt-library":
+            # Inject into UI under the Prompts & State category without dumping context payloads
+            manifest["prompts_context.txt"] = [f"{config['repo_dir']}/{f}" for f in final_list]
+            continue
+
         # --- IMPLICIT TRACKER EXTRACTION ---
         tracker_files = [f for f in final_list if f.startswith(".tracker/")]
         if tracker_files:
@@ -98,14 +104,17 @@ def generate_context_file():
             for filepath in final_list:
                 matched = False
                 for b in sub_buckets:
-                    if b.get("dynamic_split_prefix") and filepath.startswith(b["dynamic_split_prefix"]):
-                        parts = filepath.split("/")
-                        if len(parts) > 1:
-                            brand = parts[1]
-                            if brand not in dynamic_files: dynamic_files[brand] = {"files": [], "cfg": b}
-                            dynamic_files[brand]["files"].append(filepath)
-                            matched = True
-                            break
+                    prefix = b.get("dynamic_split_prefix")
+                    if prefix:
+                        if prefix == "." or filepath.startswith(prefix):
+                            parts = filepath.split("/")
+                            module_idx = len([p for p in prefix.split('/') if p and p != '.'])
+                            if len(parts) > module_idx + 1:
+                                module = parts[module_idx]
+                                if module not in dynamic_files: dynamic_files[module] = {"files": [], "cfg": b}
+                                dynamic_files[module]["files"].append(filepath)
+                                matched = True
+                                break
                     elif b.get("match_prefixes") and any(filepath.startswith(p) for p in b["match_prefixes"]):
                         buckets[b["id"]]["files"].append(filepath)
                         matched = True
@@ -121,19 +130,18 @@ def generate_context_file():
                     out_path = os.path.join(CONTEXTS_DIR, safe_out)
                     write_bucket(out_path, data["files"], data["cfg"].get("title", b_id.upper()), data["cfg"].get("domain", ""), repo_path)
                     manifest[safe_out] = [f"{config['repo_dir']}/{f}" for f in data["files"]]
-
-            for brand, data in dynamic_files.items():
+            for module, data in dynamic_files.items():
                 files = data["files"]
                 cfg = data["cfg"]
                 meta_map = cfg.get("meta_map", {})
-                meta = meta_map.get(brand, {})
+                meta = meta_map.get(module, {})
 
-                title = meta.get("title", brand.replace('_', ' ').title())
+                title = meta.get("title", module.replace('_', ' ').title())
                 domain = meta.get("domain", cfg.get("domain", "Dynamic Modules"))
 
-                out_path = os.path.join(CONTEXTS_DIR, f"{brand}_context.txt")
+                out_path = os.path.join(CONTEXTS_DIR, f"{module}_context.txt")
                 write_bucket(out_path, files, title.upper(), domain, repo_path)
-                manifest[f"{brand}_context.txt"] = [f"{config['repo_dir']}/{f}" for f in files]
+                manifest[f"{module}_context.txt"] = [f"{config['repo_dir']}/{f}" for f in files]
         else:
             safe_out = config.get("out_file", f"{safe_r_dir}_context.txt")
             out_path = os.path.join(CONTEXTS_DIR, safe_out)
@@ -238,11 +246,11 @@ def generate_diff_context():
     diff_manifest = []
     from insetu.utils_core import get_safe_repo_id
     for config in live_cfg.get("target_repos", []):
+        if config.get("exclude_from_diffs"): continue
+   
         if config.get("archive_type", "repo") == "media-vault":
             continue
-
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
-
         physical_path = config.get("physical_path")
         if physical_path:
             repo_path = os.path.abspath(os.path.expanduser(physical_path))
@@ -284,13 +292,17 @@ def generate_diff_context():
                 for filepath, status in changed_files:
                     matched = False
                     for b in sub_buckets:
-                        if b.get("dynamic_split_prefix") and filepath.startswith(b["dynamic_split_prefix"]):
-                            brand = filepath.split("/")[1] if len(filepath.split("/")) > 1 else "misc"
-                            b_id = f"{brand}_diffs.txt"
-                            if b_id not in bucketed_files: bucketed_files[b_id] = []
-                            bucketed_files[b_id].append((filepath, status))
-                            matched = True
-                            break
+                        prefix = b.get("dynamic_split_prefix")
+                        if prefix:
+                            if prefix == "." or filepath.startswith(prefix):
+                                parts = filepath.split("/")
+                                module_idx = len([p for p in prefix.split('/') if p and p != '.'])
+                                module = parts[module_idx] if len(parts) > module_idx + 1 else "misc"
+                                b_id = f"{module}_diffs.txt"
+                                if b_id not in bucketed_files: bucketed_files[b_id] = []
+                                bucketed_files[b_id].append((filepath, status))
+                                matched = True
+                                break
                         elif b.get("match_prefixes") and any(filepath.startswith(p) for p in b["match_prefixes"]):
                             b_id = b["out_file"].replace("_context.txt", "_diffs.txt")
                             if b_id not in bucketed_files: bucketed_files[b_id] = []

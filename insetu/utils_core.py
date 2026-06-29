@@ -12,19 +12,22 @@ def _resolve_workspace_physics():
     """
     Agnostic spatial anchoring:
     1. Check for an explicit environment variable override.
-    2. Check for an active profile in '.insetu/profiles/workspaces.json'.
-    3. Default to '.insetu/profiles/default/config.json'.
+    2. Check for an active profile in '[CWD]/.insetu/workspaces.json'.
+    3. Default to '[CWD]/.insetu/config.json'.
     """
-    profiles_dir = os.path.join(_cwd, ".insetu", "profiles")
-    default_config = os.path.join(profiles_dir, "default", "config.json")
+    local_insetu_dir = os.path.join(_cwd, ".insetu")
+    default_config = os.path.join(local_insetu_dir, "config.json")
+    
     # 1. Environment Variable Override
     env_config = os.environ.get("INSETU_CONFIG")
     if env_config:
         resolved_cfg = os.path.abspath(os.path.expanduser(env_config))
         return resolved_cfg, _cwd
-    # 2. Workspace Hotswapper
-    index_path = os.path.join(profiles_dir, "workspaces.json")
+        
+    # 2. Host Workspace Switchboard
+    index_path = os.path.join(local_insetu_dir, "workspaces.json")
     resolved_cfg = default_config
+    
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
@@ -34,12 +37,20 @@ def _resolve_workspace_physics():
             if active and active in w_data.get("workspaces", {}):
                 cfg_path = w_data["workspaces"][active].get("config_path")
                 if cfg_path:
-                    # Resolve relative to the profiles_dir
-                    resolved_cfg = os.path.abspath(os.path.join(profiles_dir, os.path.expanduser(cfg_path)))
+                    # If relative (e.g. "config.json"), join with the host's .insetu/ dir
+                    if not os.path.isabs(os.path.expanduser(cfg_path)):
+                        resolved_cfg = os.path.abspath(os.path.join(local_insetu_dir, cfg_path))
+                    else:
+                        # Absolute path to another workspace's config
+                        resolved_cfg = os.path.abspath(os.path.expanduser(cfg_path))
         except Exception as e:
             print(f"Warning: Failed to parse {index_path}: {e}")
 
-    # 3. Check for Workspace Root Override inside the active config
+    # SELF-HEALING: If the switchboard points to a ghost path, snap back to the host's default
+    if not os.path.exists(resolved_cfg):
+        resolved_cfg = default_config
+
+    # 3. Resolve Workspace Root
     if os.path.exists(resolved_cfg):
         try:
             with open(resolved_cfg, 'r', encoding='utf-8') as f:
@@ -48,8 +59,13 @@ def _resolve_workspace_physics():
                 return resolved_cfg, os.path.abspath(os.path.expanduser(c_data["workspace_root"]))
         except Exception:
             pass
+            
+        # Mathematically infer root as the parent directory of the localized .insetu/ folder
+        inferred_root = os.path.dirname(os.path.dirname(resolved_cfg))
+        return resolved_cfg, inferred_root
 
     return resolved_cfg, _cwd
+
 CONFIG_PATH, WORKSPACE_ROOT = _resolve_workspace_physics()
 WORKFLOWS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "workflows.json") if CONFIG_PATH else ""
 
@@ -83,10 +99,29 @@ def save_json_file(filepath, data):
     _JSON_MTIME[filepath] = 0  # Explicitly force mtime invalidation to bypass cache collisions
 
 def load_config():
-    return load_json_file(CONFIG_PATH, {})
+    cfg = load_json_file(CONFIG_PATH, {})
+    
+    # Implicit Repo Injection: Mount .insetu for the UI, but exclude it from compilers
+    targets = cfg.get("target_repos", [])
+    if not any(r.get("repo_dir") == ".insetu" for r in targets):
+        targets.append({
+            "repo_dir": ".insetu",
+            "title": "inSetu OS",
+            "domain": "System Configuration",
+            "exts": [".json", ".md", ".txt"],
+            "apply_ignore": True,
+            "repo_ignore_dirs": ["data"],
+            "archive_type": "prompt-library",
+            "exclude_from_diffs": True,
+            "exclude_from_tracker": True
+        })
+        cfg["target_repos"] = targets
+        
+    return cfg
 
 def load_workflows():
     return load_json_file(WORKFLOWS_PATH, {"context_batches": []})
+
 def get_valid_workspace_files(repo_path, config):
     """Universal SSOT for extracting valid files respecting context filters and ignore rules."""
     live_cfg = load_config()
@@ -161,25 +196,26 @@ def get_safe_repo_id(repo_dir):
     return safe_dir.replace('-', '_')
 
 def get_sister_repos():
-
     cfg = load_config()
-    return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
+    return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir") and not repo.get("exclude_from_tracker")]
 def resolve_workspace_path(path):
     norm_path = path.replace('\\', '/')
     if os.path.isabs(norm_path):
         return norm_path
-    clean_parts = [p for p in norm_path.split('/') if p not in ('..', '.', '')]
-    if not clean_parts:
+
+    parts = [p for p in norm_path.split('/') if p]
+    if not parts:
         return path
 
     # Mount Point Protocol: Check for physical_path overrides
     cfg = load_config()
     for repo in cfg.get("target_repos", []):
-        if clean_parts[0] == repo.get("repo_dir"):
+        if parts[0] == repo.get("repo_dir"):
             physical_path = repo.get("physical_path")
             if physical_path:
-                expanded_base = os.path.expanduser(physical_path)
-                return os.path.join(expanded_base, *clean_parts[1:])
+                expanded_base = os.path.abspath(os.path.expanduser(physical_path))
+                # Mathematically resolve the path to respect valid '..' traversal
+                return os.path.abspath(os.path.join(expanded_base, *parts[1:]))
 
-    # Strictly anchor to WORKSPACE_ROOT to prevent silent writes into the CLI working directory
-    return os.path.join(WORKSPACE_ROOT, *clean_parts)
+    # Mathematically resolve against WORKSPACE_ROOT
+    return os.path.abspath(os.path.join(WORKSPACE_ROOT, norm_path))

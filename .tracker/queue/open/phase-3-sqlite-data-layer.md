@@ -6,7 +6,8 @@ created: "2026-06-26"
 ---
 # The Data Layer Swap
 
-Replace the expensive, blocking markdown-parsing backend logic with a fast SQL index.
+**[Step 4 of the V2 Migration Sequence - Executes AFTER UDF State Hardening]**
+Replace the expensive, blocking markdown-parsing backend logic in the newly isolated `engine_tracker.py` extension with a fast SQL index.
 
 ### Action Items
 - [ ] Rip out the backend Python regex logic that physically opens `.tracker` markdown files on every UI render.

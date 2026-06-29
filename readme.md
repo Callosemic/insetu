@@ -2,13 +2,16 @@
 **inSetu** (from *in situ*, meaning "in position" or "on site", and *Setu* [सेतु], Sanskrit for "bridge") is a local-first AI Developer OS, Context Gatherer, and Kanban Tracker. 
 
 It bridges the gap between Large Language Models (LLMs) and your local file system by treating your codebase as the ultimate source of truth. Instead of pasting code snippets back and forth, inSetu compiles massive, repository-wide context payloads for your LLM, and uses a deterministic "Sync Bridge" to apply the LLM's structural patches directly to your disk.
-
 ## ✨ Core Features
 
-* **Context Gatherer:** Scrapes mapped repositories to compile massive `.txt` context payloads (RAG) for Large Language Models, split logically by domain.
-* **The Sync Bridge:** A strict, AST-aware patching engine that parses LLM-generated `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks, safely applying diffs in-memory, handling indentation, and committing them to disk idempotently.
+* **Context Gatherer & Workflows:** Scrapes mapped repositories to compile massive `.txt` context payloads (RAG) for Large Language Models. Design custom Batch Workflows to pipe specific contexts, prompts, and LLM responses natively into your filesystem.
+* **The Sync Bridge (VFS):** A strict patching engine utilizing an in-memory Virtual File System. It parses `<<<<<<< SEARCH` and `>>>>>>> REPLACE` blocks, safely applies diffs, runs native pre-flight syntax validation (Python/JS/JSON), and commits to disk atomically.
 * **Markdown Kanban Tracker:** A built-in project management board that reads and writes purely to local `.tracker/` markdown files. Your tickets live with your code.
-* **Chassis Agnostic:** Drop it into any project. It reads a simple `config.json` to understand your workspace topology.
+* **Reference Library Extension:** A native CSL-JSON citation manager backed by SQLite. Search global catalogs (OpenAlex/Crossref), import external web pages as clean Markdown via Jina Reader, and cross-link research directly to your workspaces.
+* **Cartographer:** Automatically maps repository topologies and generates a deterministic `CODE_INDEX.md` architectural blueprint to prevent logic drift.
+* **Integrated Git Operations:** Visual workspace sweeping, untracked file staging, local diff generation, and push capabilities straight from the UI.
+* **Chassis Agnostic & Multi-Workspace:** Drop it into any project. It reads a simple `config.json` to understand your topology, and allows instant hot-swapping between distinct workspace environments.
+* **Embedded Terminal:** Native `ttyd` integration for direct command-line access within the UI.
 
 ## 🚀 Installation
 

@@ -16,6 +16,14 @@
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.min.js"></script>
 </head>
 <body>
+    <div id="js-panic-button" style="padding: 20px; background: #dc2626; color: white; text-align: center; font-family: monospace; z-index: 9999; position: relative;">
+        <h2 style="color: white; margin-top: 0;">⚠️ UI Engine Failed to Load</h2>
+        <p>If this banner remains on your screen, a JavaScript syntax error has bricked the main OS interface.</p>
+        <form action="/api/system/panic" method="POST">
+            <button type="submit" style="padding: 10px 20px; background: white; color: #dc2626; border: none; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 1rem;">Boot Recovery OS</button>
+        </form>
+    </div>
+
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
     </script>
@@ -41,6 +49,7 @@
                 <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
                 <div style="display: flex; flex-direction: column; gap: 5px;">
                     <button id="full-refresh-btn" onclick="fullRefresh()" style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full Refresh</button>
+                    <button id="simulate-panic-btn" onclick="simulatePanic()" style="margin: 0; background: transparent; color: #f59e0b; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">⚠️ Test Recovery</button>
                 </div>
             </div>
         </div>
@@ -78,10 +87,10 @@
                     <p style="color: #888; font-style: italic;">Diffs automatically map when this tab is opened.</p>
                 </div>
             </div>
-
             <div id="sub-prompts" class="sub-tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                     <h2 style="margin: 0;">Prompt Library</h2>
+                    <button class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptModal()">+ Prompt</button>
                 </div>
                 <div id="prompts-list" style="display: flex; flex-direction: column;">
                     <p style="color: #888; font-style: italic;">Compile contexts to view available prompts.</p>
@@ -161,6 +170,10 @@
             </div>
             <div id="modal-edit-toolbar" style="display: none; gap: 10px; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: flex-start; position: relative;">
                 <div id="toolbar-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; overflow: hidden; max-height: 32px; flex: 1; transition: max-height 0.2s;">
+                    <button onclick="openLinkModal()" class="btn-sm" style="background: #10b981; margin: 0;">🔗 Insert Link</button>
+                    <button id="btn-insert-citation" onclick="openCitationModal()" class="btn-sm" style="background: #a855f7; margin: 0; display: none;">📚 Cite</button>
+                    <button id="btn-sync-citations" onclick="syncDocumentCitations()" class="btn-sm" style="background: #eab308; margin: 0; display: none;">🔄 Sync Refs</button>
+                    <button id="btn-publish-doc" onclick="openPublishModal()" class="btn-sm" style="background: #ea580c; margin: 0; display: none;">📄 Publish</button>
                     <button onclick="openMoveModal()" class="btn-sm" style="background: #3b82f6; margin: 0;">🚚 Move</button>
                     <button onclick="archiveModalFile()" class="btn-sm" style="background: #f59e0b; margin: 0;">📦 Archive</button>
                     <button onclick="deleteModalFile()" class="btn-sm" style="background: #dc2626; margin: 0;">🗑️ Delete</button>
@@ -194,6 +207,60 @@
             </div>
         </div>
     </div>
+    <div id="publish-modal" class="fullscreen-modal" style="z-index: 1090;">
+        <div class="modal-content" style="max-height: 250px; height: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Publish Document</h3>
+                <button onclick="document.getElementById('publish-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
+            </div>
+            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
+            <select id="publish-format-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;">
+                <option value="pdf">PDF (Requires LaTeX/pdflatex)</option>
+                <option value="docx">Word Document (.docx)</option>
+                <option value="html">HTML Webpage</option>
+            </select>
+            <button id="execute-publish-btn" onclick="executePublish()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #ea580c;">🚀 Compile & Download</button>
+        </div>
+    </div>
+
+    <div id="citation-insert-modal" class="fullscreen-modal" style="z-index: 1080;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Insert Citation</h3>
+                <button onclick="document.getElementById('citation-insert-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
+            </div>
+
+            <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
+
+            <div id="citation-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
+                <span style="color:#888; font-style:italic;">Type to search...</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="link-insert-modal" class="fullscreen-modal" style="z-index: 1080;">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Insert Link</h3>
+                <button onclick="document.getElementById('link-insert-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
+            </div>
+
+            <div class="sub-tabs" style="margin-bottom: 10px; border-bottom: none; padding-bottom: 0;">
+                <div class="sub-tab active" id="lt-filename" onclick="switchLinkTab('filename')">Filename</div>
+                <div class="sub-tab" id="lt-deep" onclick="switchLinkTab('deep')">Deep Search</div>
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <input type="text" id="link-search-input" placeholder="Search files..." style="flex: 1; padding: 8px; margin: 0;" oninput="if(typeof onLinkSearchInput === 'function') onLinkSearchInput(this.value)">
+                <button id="btn-deep-search" onclick="executeDeepLinkSearch()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🔍 Search</button>
+            </div>
+
+            <div id="link-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
+                <span style="color:#888; font-style:italic;">Type to search...</span>
+            </div>
+        </div>
+    </div>
+
     <div id="move-modal" class="fullscreen-modal" style="z-index: 1060;">
         <div class="modal-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -298,6 +365,31 @@
             </div>
         </div>
     </div>
+    <div id="import-url-modal" class="fullscreen-modal" style="z-index: 1070;">
+        <div class="modal-content" style="max-height: 380px; height: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">Import from URL</h3>
+                <button onclick="document.getElementById('import-url-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Cancel</button>
+            </div>
+
+            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
+            <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+
+            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                    <input type="radio" name="import-method" value="jina" checked> 
+                    <b>Jina Reader API</b> <span style="color: #888; font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                    <input type="radio" name="import-method" value="bs4"> 
+                    <b>BeautifulSoup Local</b> <span style="color: #888; font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
+                </label>
+            </div>
+
+            <button onclick="executeImportUrl()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">📥 Fetch & Convert</button>
+        </div>
+    </div>
 
     <div id="new-file-modal" class="fullscreen-modal">
         <div class="modal-content">
@@ -308,6 +400,16 @@
             <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: #8b5cf6;"></span></label>
             <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
             <div id="new-file-ext-warning" style="display: none; color: #f59e0b; font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+            <div id="new-file-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
+                <button onclick="importFromUrl()" class="btn-sm" style="background: #3b82f6; margin: 0;">🌐 Import from URL</button>
+                <span id="import-url-status" style="font-size: 0.8rem; color: #888; display: none;">Fetching...</span>
+            </div>
+
+            <div id="new-file-library-wrapper" style="display: none; align-items: center; gap: 8px; margin-bottom: 10px;">
+                <input type="checkbox" id="new-file-add-library" style="transform: scale(1.1); cursor: pointer;">
+                <label for="new-file-add-library" style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer;">📚 Add to Reference Library</label>
+            </div>
+
             <textarea id="new-file-content" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box;" placeholder="Enter file content here..."></textarea>
             <button onclick="saveNewFile()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #10b981;">💾 Create & Save File</button>
         </div>
@@ -445,6 +547,9 @@
         </div>
     </div>
     <div id="sub-log" class="sub-tab-content">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 15px;">
+                    <button id="btn-generate-changelog" class="btn-sm" style="background: #8b5cf6; margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
+                </div>
                 <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
         </div>

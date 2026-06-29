@@ -48,6 +48,12 @@ border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor:
     };
     container.appendChild(createPill("ALL", "All"));
     ALL_REPOS.forEach(repo => container.appendChild(createPill(repo, repo)));
+
+    const logBtn = document.getElementById('btn-generate-changelog');
+    if (logBtn) {
+        const isMulti = taskPinnedRepos.has('ALL') || taskPinnedRepos.size > 1;
+        logBtn.innerText = isMulti ? "📜 Generate Multi-Repo Changelog" : "📜 Generate Repo Changelog";
+    }
 }
 export async function loadTrackerBoard() {
     // Silently sync the ecosystem to ensure the board is perfectly up-to-date
@@ -88,7 +94,6 @@ export async function loadTrackerBoard() {
                     if (l.startsWith('created_at:')) timestamp = l.replace('created_at:', '').trim();
 
                     if (l.startsWith('sub_bucket:')) subBucket = l.replace('sub_bucket:', '').replace(/"/g, '').replace(/'/g, '').trim() || 'None';
-
                     if (l.startsWith('tags:')) {
 
                         const rawTags = l.replace('tags:', '').trim();
@@ -106,6 +111,13 @@ export async function loadTrackerBoard() {
                 });
             }
 
+            let parsedDesc = content;
+            if (yamlMatch) {
+                parsedDesc = content.replace(yamlMatch[0], '').trim();
+                if (parsedDesc.startsWith('## Description')) {
+                    parsedDesc = parsedDesc.replace(/^## Description\n+/, '').trim();
+                }
+            }
 
             const repo = filepath.split('/')[0];
             const isBug = filepath.includes('/bugs/');
@@ -128,7 +140,8 @@ export async function loadTrackerBoard() {
                 status,
                 timestamp,
                 tags,
-                subBucket
+                subBucket,
+                description: parsedDesc
             });
         } catch (e) {
             console.error("Failed to load task:", filepath);
@@ -230,8 +243,8 @@ border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor:
             repoCfg.sub_buckets.forEach(b => {
 
                 if (b.dynamic_split_prefix && b.meta_map) {
-                    Object.keys(b.meta_map).forEach(brand => {
-                        container.appendChild(createPill(brand, b.meta_map[brand].title || brand));
+                    Object.keys(b.meta_map).forEach(module => {
+                        container.appendChild(createPill(module, b.meta_map[module].title || module));
 
                     });
                 } else if (!b.dynamic_split_prefix) {
@@ -513,11 +526,11 @@ function populateNewTaskBuckets() {
     if (repoConfig && repoConfig.sub_buckets) {
         repoConfig.sub_buckets.forEach(b => {
             if (b.dynamic_split_prefix && b.meta_map) {
-                Object.keys(b.meta_map).forEach(brand => {
+                Object.keys(b.meta_map).forEach(module => {
                     const opt = document.createElement('option');
 
-                    opt.value = brand;
-                    opt.innerText = b.meta_map[brand].title || brand;
+                    opt.value = module;
+                    opt.innerText = b.meta_map[module].title || module;
                     select.appendChild(opt);
                 });
             } else if (!b.dynamic_split_prefix) {
@@ -616,11 +629,11 @@ async function openEditTaskModal(filepath) {
         if (repoConfig && repoConfig.sub_buckets) {
             repoConfig.sub_buckets.forEach(b => {
                 if (b.dynamic_split_prefix && b.meta_map) {
-                    Object.keys(b.meta_map).forEach(brand => {
+                    Object.keys(b.meta_map).forEach(module => {
                         const opt = document.createElement('option');
 
-                        opt.value = brand;
-                        opt.innerText = b.meta_map[brand].title || brand;
+                        opt.value = module;
+                        opt.innerText = b.meta_map[module].title || module;
                         select.appendChild(opt);
                     });
 
@@ -724,8 +737,59 @@ async function saveEditTask() {
         btn.innerText = origBtnText;
     }
 }
+export function generateHistoricalChangelog() {
+    const closedTasks = currentTasks.filter(t => {
+        const isClosed = t.status === 'closed' || t.status === 'archived';
+        const matchesRepo = taskPinnedRepos.has('ALL') || taskPinnedRepos.has(t.repo);
+        return isClosed && matchesRepo;
+    });
+
+    const tasksByRepo = {};
+    closedTasks.forEach(t => {
+        if (!tasksByRepo[t.repo]) tasksByRepo[t.repo] = [];
+        tasksByRepo[t.repo].push(t);
+    });
+
+    let changelog = "";
+
+    Object.keys(tasksByRepo).sort().forEach(repo => {
+        changelog += `# 📜 Historical Changelog for ${repo}\n\n`;
+
+        const repoTasks = tasksByRepo[repo];
+        repoTasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+        let currentDate = "";
+
+        repoTasks.forEach(t => {
+            const dateStr = t.timestamp ? t.timestamp.split('T')[0] : 'Unknown Date';
+            if (dateStr !== currentDate) {
+                changelog += `\n## ${dateStr}\n\n`;
+                currentDate = dateStr;
+            }
+            const typeIcon = t.isBug ? '🐛' : t.isQueue ? '🔬' : '✨';
+            changelog += `### ${typeIcon} ${t.title}\n\n`;
+
+            if (t.description) {
+                // Drop the execution log/notes header to keep the changelog clean
+                const cleanDesc = t.description.split('## Notes / Execution Log')[0].trim();
+                changelog += `${cleanDesc}\n\n`;
+            }
+        });
+        changelog += `\n---\n\n`;
+    });
+
+    // Clean up trailing separators
+    changelog = changelog.trim().replace(/---$/, '').trim();
+
+    if (window.openVirtualFile) {
+        window.openVirtualFile("Historical_Changelog.md", changelog);
+    } else {
+        alert("Virtual file viewer is not available.");
+    }
+}
 
 // Window Bindings
+window.generateHistoricalChangelog = generateHistoricalChangelog;
 window.openNewTaskModal = openNewTaskModal;
 window.saveNewTask = saveNewTask;
 window.saveEditTask = saveEditTask;

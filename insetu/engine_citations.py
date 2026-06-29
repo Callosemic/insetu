@@ -7,6 +7,34 @@ from flask import Blueprint, request, jsonify
 from insetu.engine_gather import ARTIFACTS_BASE
 
 citations_bp = Blueprint('citations', __name__)
+_METADATA_CACHE = {"publications": [], "authors": []}
+_METADATA_INITIALIZED = False
+
+def _rebuild_metadata_cache():
+    global _METADATA_CACHE, _METADATA_INITIALIZED
+    try:
+        conn = get_db()
+        cursor = conn.execute("SELECT raw_json FROM citations")
+        pubs = set()
+        authors = set()
+        for row in cursor.fetchall():
+            item = json.loads(row['raw_json'])
+            if item.get('container-title'):
+                pubs.add(item['container-title'])
+            for a in item.get('author', []):
+                if a.get('family') and a.get('given'):
+                    authors.add(f"{a['family']}, {a['given']}")
+                elif a.get('family'):
+                    authors.add(a['family'])
+
+        _METADATA_CACHE = {
+            "publications": sorted(list(pubs)), 
+            "authors": sorted(list(authors))
+        }
+        _METADATA_INITIALIZED = True
+    except Exception:
+        pass
+
 def get_db():
     db_path = os.path.join(ARTIFACTS_BASE, "citations.db")
     conn = sqlite3.connect(db_path)
@@ -26,6 +54,12 @@ def get_db():
         pass
     conn.commit()
     return conn
+@citations_bp.route('/api/citations/index', methods=['GET'])
+def get_metadata_index():
+    global _METADATA_CACHE, _METADATA_INITIALIZED
+    if not _METADATA_INITIALIZED:
+        _rebuild_metadata_cache()
+    return jsonify(_METADATA_CACHE)
 
 @citations_bp.route('/api/citations', methods=['GET'])
 def get_citations():
@@ -182,19 +216,35 @@ def import_citations():
             # Overwrite or insert new, preserving attachments
             csl_type = item.get("type", "unknown")
             csl_title = item.get("title", "Untitled Reference")
-
             conn.execute(
                 "INSERT OR REPLACE INTO citations (id, type, title, raw_json, attachments) VALUES (?, ?, ?, ?, ?)",
                 (str(csl_id), str(csl_type), str(csl_title), json.dumps(item), atts)
             )
             count += 1
-            
         conn.commit()
+
+        _rebuild_metadata_cache()
+
         return jsonify({
-            "status": "success", 
+            "status": "success",  
             "imported": count, 
             "conflicts": conflicts,
             "message": f"Successfully integrated {count} records."
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@citations_bp.route('/api/citations/<path:csl_id>', methods=['DELETE'])
+def delete_citation(csl_id):
+    try:
+        conn = get_db()
+        cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Citation not found"}), 404
+        conn.commit()
+
+        _rebuild_metadata_cache()
+
+        return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

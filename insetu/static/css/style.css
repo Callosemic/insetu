@@ -290,7 +290,28 @@ color: #000000 !important;
     border: 1px dashed #000000 !important;
     opacity: 1 !important;
 }
-
 [data-theme="e-ink"] #term-iframe {
     filter: invert(1) grayscale(1) contrast(1.5);
+}
+
+/* Wiki Link Popup */
+.wiki-link-popup {
+    background: var(--pane-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 2000;
+}
+
+[data-theme="light"] .wiki-link-popup {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+[data-theme="e-ink"] .wiki-link-popup {
+    border: 2px solid #000;
+    box-shadow: 4px 4px 0 #000;
 }
