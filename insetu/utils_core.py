@@ -100,7 +100,9 @@ def save_json_file(filepath, data):
 
 def load_config():
     cfg = load_json_file(CONFIG_PATH, {})
-    
+    from insetu.hooks import hooks
+    hooks.emit('mutate_workspace_config', cfg)
+
     # Implicit Repo Injection: Mount .insetu for the UI, but exclude it from compilers
     targets = cfg.get("target_repos", [])
     if not any(r.get("repo_dir") == ".insetu" for r in targets):
@@ -212,10 +214,37 @@ def resolve_workspace_path(path):
     for repo in cfg.get("target_repos", []):
         if parts[0] == repo.get("repo_dir"):
             physical_path = repo.get("physical_path")
-            if physical_path:
-                expanded_base = os.path.abspath(os.path.expanduser(physical_path))
-                # Mathematically resolve the path to respect valid '..' traversal
-                return os.path.abspath(os.path.join(expanded_base, *parts[1:]))
+            expanded_base = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else os.path.abspath(os.path.join(WORKSPACE_ROOT, repo.get("repo_dir")))
+            
+            # EDGE CASE FIX: "Repo Name == Top Level Folder Name" (e.g. insetu/insetu/app.py)
+            path_stripped = os.path.abspath(os.path.join(expanded_base, *parts[1:])) if len(parts) > 1 else expanded_base
+            path_kept = os.path.abspath(os.path.join(expanded_base, *parts))
+            if os.path.exists(path_kept) and not os.path.exists(path_stripped):
+                return path_kept
+
+            # GENESIS PATCH AMBIGUITY HEALER:
+            # If neither exists (new file), evaluate which path fragment requires creating the fewest new
+            # subdirectories by tracing backwards to the deepest existing directory.
+            if not os.path.exists(path_kept) and not os.path.exists(path_stripped):
+                def get_unmatched_distance(target_path):
+                    d_path = os.path.dirname(target_path)
+                    distance = 0
+                    while d_path and d_path.startswith(expanded_base) and len(d_path) >= len(expanded_base):
+                        if os.path.isdir(d_path):
+                            return distance
+                        distance += 1
+                        d_path = os.path.dirname(d_path)
+                    return distance
+
+                dist_kept = get_unmatched_distance(path_kept)
+                dist_stripped = get_unmatched_distance(path_stripped)
+
+                # Only use path_kept if it explicitly maps closer to an existing physical tree
+                if dist_kept < dist_stripped:
+                    return path_kept
+                return path_stripped
+
+            return path_stripped
 
     # Mathematically resolve against WORKSPACE_ROOT
     return os.path.abspath(os.path.join(WORKSPACE_ROOT, norm_path))

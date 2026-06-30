@@ -14,6 +14,7 @@ from insetu.utils_core import resolve_workspace_path, get_sister_repos, WORKSPAC
 from insetu.engine_bridge import parse_blocks, apply_block_in_memory
 import insetu.engine_gather as engine_gather
 import insetu.engine_tracker as engine_tracker
+import insetu.workers # Initializes the metronome listeners
 app = Flask(__name__)
 
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
@@ -147,6 +148,8 @@ def api_system_panic():
 
     def crash_and_restart():
         import time
+        from insetu.hooks import hooks
+        hooks.emit('system_shutdown')
         time.sleep(1.0)
         os.environ["INSETU_SIMULATE_PANIC"] = "1"
         python_exe = sys.executable
@@ -155,6 +158,23 @@ def api_system_panic():
 
     threading.Thread(target=crash_and_restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Initiating kernel panic..."})
+@app.route('/api/system/config', methods=['GET', 'POST'])
+def api_system_config():
+    from insetu.utils_core import load_config, save_json_file, CONFIG_PATH
+    import json
+    if request.method == 'GET':
+        try:
+            # Bypass in-memory OS injections (like .insetu mount) to get raw state
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                return jsonify(json.load(f))
+        except Exception:
+            return jsonify(load_config())
+    else:
+        try:
+            save_json_file(CONFIG_PATH, request.json)
+            return jsonify({"status": "success", "message": "Configuration saved successfully."})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
 @app.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():
@@ -188,6 +208,8 @@ def api_workspaces():
 
         def restart():
             import time
+            from insetu.hooks import hooks
+            hooks.emit('system_shutdown')
             time.sleep(1.0)
             # Use absolute paths to guarantee a clean process replacement at the OS level
             python_exe = sys.executable
@@ -568,29 +590,15 @@ def api_fs_import_url():
     target_url = data.get("url", "").strip()
     method = data.get("method", "jina")
     if not target_url: return jsonify({"error": "URL is required"}), 400
-
-    import datetime
     from insetu.utils_scraping import extract_markdown_from_url
 
     try:
         extracted = extract_markdown_from_url(target_url, method)
-
-        now = datetime.datetime.now().isoformat(timespec='seconds')
         safe_title = extracted["title"].replace('"', "'")
-        yaml_frontmatter = (
-            f"---\n"
-            f"title: \"{safe_title}\"\n"
-            f"source_url: \"{extracted['resolved_url']}\"\n"
-            f"published_at: \"{extracted['published_time']}\"\n"
-            f"imported_at: \"{now}\"\n"
-            f"---\n\n"
-            f"## Notes\n\n\n"
-            f"---\n\n"
-        )
 
         return jsonify({
             "status": "success", 
-            "markdown": yaml_frontmatter + extracted["clean_markdown"],
+            "markdown": extracted["clean_markdown"],
             "title": safe_title,
             "resolved_url": extracted["resolved_url"]
         })
@@ -832,22 +840,22 @@ def api_git_push():
             break
 
     if not os.path.exists(repo_path): return jsonify({"error": "Repo not found"}), 404
+    import subprocess
 
-    # Parse the specific files out of the diff payload
-    import insetu.engine_gather as engine_gather
-    diff_path = os.path.join(engine_gather.DIFFS_DIR, diff_file)
+    # Git is the SSOT for repository state. Query it directly instead of parsing artifact files.
+    status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
+
     files_to_stage = set()
-    if os.path.exists(diff_path):
-        with open(diff_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.startswith(">>>NEW FILE :: /") or line.startswith(">>>DIFF :: /") or line.startswith(">>>DELETED FILE :: /"):
-                    filepath = line.split(":: /")[1].split(" |")[0].strip()
-                    files_to_stage.add(filepath)
+    for line in status_res.stdout.splitlines():
+        if len(line) >= 3:
+            filepath = line[3:]
+            # Safely handle git renames (e.g., R  old -> new)
+            if '->' in filepath: 
+                filepath = filepath.split('->')[-1]
+            files_to_stage.add(filepath.strip())
 
     if not files_to_stage:
-        return jsonify({"error": "No files found in diff payload to commit."}), 400
-
-    import subprocess
+        return jsonify({"error": "No files found to commit. Working tree is clean."}), 400
     try:
         # Guarantee topology is perfectly mapped before staging
         from insetu.cartographer import map_repositories
@@ -964,9 +972,20 @@ def download_file(filename):
     safe_basename = os.path.basename(filename)
     search_paths = [os.path.join(d, safe_basename) for d in [engine_gather.CONTEXTS_DIR, engine_gather.PROMPTS_DIR, engine_gather.DIFFS_DIR, engine_gather.GATHER_DIR]]
     file_path = next((p for p in search_paths if os.path.exists(p)), None)
+
+    # Fallback to resolving against the workspace root for media-vault files
+    if not file_path:
+        resolved = resolve_workspace_path(filename)
+        if os.path.exists(resolved): file_path = resolved
+
     if not file_path: return jsonify({"error": "File not found"}), 404
     base, ext = os.path.splitext(filename)
     dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+
+    # If explicitly requested as inline view, let the browser handle the mime type natively
+    if request.args.get('inline') == '1':
+        return send_file(file_path, as_attachment=False)
+
     return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
 
 @app.route('/api/bridge/sync', methods=['POST'])
@@ -1003,7 +1022,13 @@ def bridge_sync():
                 resolved_path = resolve_workspace_path(target_file)
                 is_genesis = all(not b["search"].strip() for b in blocks)
                 if is_genesis and explicit_repo not in sister_repos:
-                                if len(allowed_repos) == 1:
+                                from insetu.utils_core import load_config
+                                all_known = [r.get("repo_dir") for r in load_config().get("target_repos", []) if r.get("repo_dir")]
+                                if explicit_repo in all_known:
+                                                pass
+                                elif explicit_repo and os.path.isdir(os.path.join(WORKSPACE_ROOT, explicit_repo)):
+                                                print(f"  [⚡] Auto-Resolved: '{explicit_repo}' exists physically. Allowing genesis patch.")
+                                elif len(allowed_repos) == 1:
                                                 target_file = f"{allowed_repos[0]}/{norm_target}"
                                                 norm_target = target_file.replace('\\', '/')
                                                 explicit_repo = allowed_repos[0]
@@ -1206,7 +1231,12 @@ def bridge_fetch():
     return "File not found.", 404
 def run_app():
     from insetu.utils_core import load_config
+    from insetu.hooks import hooks
     import os
+    
+    # Ignite OS Substrates
+    hooks.emit('system_boot')
+    
     cfg = load_config()
     # Lock the port on initial boot so it survives os.execv workspace swaps
     if "INSETU_PORT" not in os.environ:

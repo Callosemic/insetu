@@ -5,8 +5,74 @@ import urllib.request
 import urllib.parse
 from flask import Blueprint, request, jsonify
 from insetu.engine_gather import ARTIFACTS_BASE
+from insetu.hooks import hooks
 
 citations_bp = Blueprint('citations', __name__)
+@hooks.on('mutate_workspace_config')
+def inject_citation_metadata(cfg):
+    """Dynamically injects virtual UI metadata for citation payloads."""
+    if "citations" not in cfg.get("extensions", []): return
+
+    targets = cfg.get("target_repos", [])
+
+    # Prevent duplication across in-memory cache loads
+    if any(r.get("repo_dir") == "virtual_citations" for r in targets):
+        return
+
+    # Inject the Global Library mapping
+    targets.append({
+        "repo_dir": "virtual_citations",
+        "title": "Global Reference Library",
+        "domain": "Reference Library",
+        "description": "Academic citations and bibliography records.",
+        "out_file": "citations_context.txt",
+        "exclude_from_context": True,
+        "exclude_from_diffs": True,
+        "exclude_from_tracker": True
+    })
+
+    # Dynamically inject mappings for repo-specific citation buckets
+    try:
+        import sqlite3, os, json
+        db_path = os.path.join(ARTIFACTS_BASE, "citations.db")
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
+            citation_scopes = set()
+            for row in cursor.fetchall():
+                atts = json.loads(row[0])
+                for att in atts:
+                    repo = att.get('repo')
+                    bucket = att.get('bucket', 'None')
+                    if repo: 
+                        citation_scopes.add((repo, None))
+                        if bucket and bucket != "None":
+                            citation_scopes.add((repo, bucket))
+
+            for repo, bucket in citation_scopes:
+                if bucket:
+                    virtual_dir = f"virtual_citations_{repo}_{bucket}"
+                    ui_title = f"{repo}/{bucket}"
+                    out_file = f"{repo}_{bucket}_citations_context.txt"
+                else:
+                    virtual_dir = f"virtual_citations_{repo}"
+                    ui_title = repo
+                    out_file = f"{repo}_citations_context.txt"
+
+                if not any(t.get("repo_dir") == virtual_dir for t in targets):
+                    targets.append({
+                        "repo_dir": virtual_dir,
+                        "title": ui_title,
+                        "description": f"Academic citations scoped to {ui_title}.",
+                        "domain": "Reference Library",
+                        "out_file": out_file,
+                        "exclude_from_context": True,
+                        "exclude_from_diffs": True,
+                        "exclude_from_tracker": True
+                    })
+            conn.close()
+    except Exception:
+        pass
 _METADATA_CACHE = {"publications": [], "authors": []}
 _METADATA_INITIALIZED = False
 

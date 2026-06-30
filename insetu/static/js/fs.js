@@ -140,12 +140,22 @@ function showWikiPopup(e, href, title) {
             // Sanitize redundant slashes
             targetPath = targetPath.replace(/\/+/g, '/').replace(/^\/+/, '');
         }
-
         if (targetPath.startsWith('http')) {
             window.open(targetPath, '_blank');
         } else {
-            // Assume workspace relative and open it in the modal
-            viewSourceFile(targetPath, true);
+            const ext = targetPath.split('.').pop().toLowerCase();
+            const mediaExts = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mp3', 'wav', 'webm'];
+
+            if (mediaExts.includes(ext)) {
+                // Open PDFs and images in a new browser tab using the inline viewer
+                window.open('/download/' + encodeURIComponent(targetPath) + '?inline=1', '_blank');
+            } else if (['zip', 'docx', 'xlsx', 'pptx', 'tar', 'gz'].includes(ext)) {
+                // Force a direct download for heavy binaries
+                window.open('/download/' + encodeURIComponent(targetPath), '_blank');
+            } else {
+                // Assume workspace text/code and open it in the modal
+                viewSourceFile(targetPath, true);
+            }
         }
     };
 
@@ -189,13 +199,13 @@ function toggleModalMode() {
     const isMarkdown = ext === 'md';
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
-
     if (isPreviewMode) {
         renderMarkdownPreview();
         textArea.style.display = 'none';
         if (mdeWrap) mdeWrap.style.display = 'none';
         preview.style.display = 'block';
         toggleBtn.innerText = '📝 Edit';
+        setTimeout(() => preview.focus(), 50);
     } else {
         if (isSupportedEditor && mdeWrap) {
             mdeWrap.style.display = 'flex';
@@ -253,6 +263,7 @@ async function viewAndCopy(filename) {
         preview.style.display = 'block';
         toggleBtn.innerText = '📝 Edit';
         preview.innerHTML = '<p>Loading...</p>';
+        setTimeout(() => preview.focus(), 50);
     } else {
         toggleBtn.style.display = 'none';
         isPreviewMode = false;
@@ -506,11 +517,77 @@ export function createFileCard(fileInfo, container) {
         const origText = dlBtn.innerText;
         dlBtn.innerText = '⏳...';
         try {
-            const fetchUrl = fileInfo.isSource ? `/api/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-            await downloadFile(fetchUrl, fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename);
+            const fetchUrl = fileInfo.isSource ?
+                `/api/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+
+            const res = await fetch(fetchUrl);
+            if (!res.ok) throw new Error("Failed to fetch");
+
+            const text = await res.text();
+            const CHUNK_LIMIT = 300000; // ~300kb limit
+
+            if (!fileInfo.isSource && text.length > CHUNK_LIMIT && fileInfo.filename.endsWith('.txt')) {
+                const chunks = [];
+                let currentChunk = "";
+                // Split cleanly at file boundaries so we don't chop code blocks in half
+                const sections = text.split(/(?=\n\n={60}\n>>>NEW FILE :: )/);
+
+                for (const sec of sections) {
+                    if (currentChunk.length + sec.length > CHUNK_LIMIT && currentChunk.length > 0) {
+                        chunks.push(currentChunk);
+                        currentChunk = sec;
+                    } else {
+                        currentChunk += sec;
+                    }
+                }
+                if (currentChunk) chunks.push(currentChunk);
+
+                if (chunks.length > 1) {
+                    const card = dlBtn.closest('.file-card');
+                    let partsContainer = card.querySelector('.chunk-container');
+                    if (!partsContainer) {
+                        partsContainer = document.createElement('div');
+                        partsContainer.className = 'chunk-container';
+                        partsContainer.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; width: 100%; border-top: 1px dashed var(--border); padding-top: 12px;';
+                        card.appendChild(partsContainer);
+                    }
+                    partsContainer.innerHTML = ''; 
+
+                    const baseName = fileInfo.filename.split('/').pop().replace('.txt', '');
+                    chunks.forEach((c, idx) => {
+                        const blob = new Blob([c], { type: 'text/plain' });
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${baseName}_pt${idx + 1}.txt`;
+                        a.className = 'btn-sm';
+                        a.style.cssText = 'background: #0ea5e9; color: white; text-decoration: none; padding: 4px 8px; font-size: 0.75rem; border-radius: 4px;';
+                        a.innerText = `📄 Part ${idx + 1} (${(c.length/1024).toFixed(0)} kb)`;
+                        partsContainer.appendChild(a);
+                    });
+
+                    dlBtn.innerText = "✅ Chunked";
+                    setTimeout(() => dlBtn.innerText = origText, 2000);
+                    return;
+                }
+            }
+
+            // Fallback download if < 300kb or is a source file
+            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+
+            dlBtn.innerText = "✅ Done";
+            setTimeout(() => dlBtn.innerText = origText, 2000);
         } catch (e) {
             alert("Error downloading file: " + e.message);
-        } finally {
             dlBtn.innerText = origText;
         }
     };
@@ -936,6 +1013,7 @@ export async function viewSourceFile(filepath, isFS = false) {
         preview.style.display = 'block';
         toggleBtn.innerText = '📝 Edit';
         preview.innerHTML = '<p>Loading...</p>';
+        setTimeout(() => preview.focus(), 50);
     } else {
         toggleBtn.style.display = 'none';
         isPreviewMode = false;
@@ -977,8 +1055,9 @@ function closeBrowseModal() {
     document.getElementById('browse-select-folder-btn').style.display = 'none';
     document.getElementById('browse-search').style.display = 'block';
 }
-
-function openFolderBrowser() {
+let _folderBrowserCallback = null;
+function openFolderBrowser(callback = null) {
+    _folderBrowserCallback = typeof callback === 'function' ? callback : null;
     isFolderSelectMode = true;
     document.getElementById('browse-select-folder-btn').style.display = 'block';
     document.getElementById('browse-search').style.display = 'none';
@@ -997,13 +1076,20 @@ function openFolderBrowser() {
     renderBrowseLevel();
     document.getElementById('browse-modal').style.display = 'block';
 }
-
 function confirmFolderSelection() {
     const selectedPath = currentBrowsePath.join('/');
-    const filename = currentModalFile.split('/').pop();
-    const finalPath = selectedPath ? `${selectedPath}/${filename}` : filename;
 
-    document.getElementById('move-dest-path').value = finalPath;
+    if (_folderBrowserCallback) {
+        _folderBrowserCallback(selectedPath);
+        closeBrowseModal();
+        return;
+    }
+
+    const filename = currentModalFile ? currentModalFile.split('/').pop() : '';
+    const finalPath = selectedPath ? (filename ? `${selectedPath}/${filename}` : selectedPath) : filename;
+
+    const moveInput = document.getElementById('move-dest-path');
+    if (moveInput) moveInput.value = finalPath;
     closeBrowseModal();
 }
 

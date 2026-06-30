@@ -35,8 +35,8 @@ if (libraryScreen) {
                 }
             }
         </style>
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 15px;">
-            <div class="sub-tabs" style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">
+        <div class="sub-tabs-bar">
+            <div class="sub-tabs">
                 <div class="sub-tab active" id="st-lib-main" onclick="switchSubTab('lib-main')">Main</div>
                 <div class="sub-tab" id="st-lib-explore" onclick="switchSubTab('lib-explore')">Explore</div>
                 <div class="sub-tab" id="st-lib-import" onclick="switchSubTab('lib-import')">Import</div>
@@ -576,10 +576,25 @@ if (libraryScreen) {
 
             const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
             const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
+            let actionHtml = '';
+            if (isExplore) {
+              // Check if the citation ID or URL already exists in the local library
+              const alreadyExists = localLibrary.some(libItem => 
+                libItem.id === c.id || 
+                (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase())
+              );
 
-            let actionHtml = isExplore 
-                ? `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: #10b981; margin: 0; padding: 2px 8px;">📥 Import</button>`
-                : `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: #8b5cf6; margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: #f59e0b; margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: #3b82f6; margin: 0; padding: 2px 8px;">📎 Attach</button>`;
+              if (alreadyExists) {
+                actionHtml = `<div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.75rem; color: #f59e0b; font-weight: bold;">⚠️ In Library</span>
+                        <button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: transparent; border: 1px solid #f59e0b; color: #f59e0b; padding: 2px 8px; margin: 0; font-size: 0.75rem;">Force Import</button>
+                        </div>`;
+              } else {
+                actionHtml = `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: #10b981; margin: 0; padding: 2px 8px;">📥 Import</button>`;
+              }
+            } else {
+              actionHtml = `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: #8b5cf6; margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: #f59e0b; margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: #3b82f6; margin: 0; padding: 2px 8px;">📎 Attach</button>`;
+            }
 
             const attTags = !isExplore && c._attachments && c._attachments.length > 0
                 ? c._attachments.map(a => `<span class="task-tag" style="background: var(--border);">${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}</span>`).join(' ')
@@ -812,7 +827,6 @@ if (libraryScreen) {
     // Initial Load
     loadMainLibrary();
 }
-
 export async function addFileToLibrary(filename, content, filepath) {
     let title = filename.replace('.md', '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     let url = '';
@@ -827,6 +841,32 @@ export async function addFileToLibrary(filename, content, filepath) {
             if (l.startsWith('source_url:')) url = l.replace('source_url:', '').replace(/['"]/g, '').trim();
             if (l.startsWith('published_at:')) dateStr = l.replace('published_at:', '').replace(/['"]/g, '').trim();
         });
+    }
+
+    // DO NO HARM BYPASS: Check if this URL already exists in the local library
+    if (url && typeof citationLibraryCache !== 'undefined' && citationLibraryCache) {
+        const existingRef = citationLibraryCache.find(c => c.URL && c.URL.toLowerCase() === url.toLowerCase());
+        if (existingRef) {
+            console.log("URL already exists in library. Bypassing metadata overwrite and tagging with existing ID:", existingRef.id);
+            cslId = existingRef.id;
+
+            // Extract existing year for the pretty tag
+            let existingYear = new Date().getFullYear().toString();
+            if (existingRef.issued && existingRef.issued['date-parts'] && existingRef.issued['date-parts'][0]) {
+                existingYear = existingRef.issued['date-parts'][0][0].toString();
+            }
+            const existingAuthor = existingRef.author && existingRef.author[0] ? existingRef.author[0].family.toLowerCase().replace(/[^a-z0-9]/g, '') : 'insetu';
+            const prettyId = `${existingAuthor}${existingYear}`;
+
+            let newContent = content.trim();
+            if (yamlMatch) {
+                newContent = newContent.replace(yamlMatch[0], yamlMatch[0] + `\n\n**Source Reference:** [@${prettyId}]`);
+            } else {
+                newContent = `---\ntitle: "${title}"\n---\n\n**Source Reference:** [@${prettyId}]\n\n` + newContent;
+            }
+            newContent += `\n\n---\ncitations:\n  ${prettyId}: "${cslId}"\n---`;
+            return newContent;
+        }
     }
 
     let year = new Date().getFullYear().toString();

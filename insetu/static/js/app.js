@@ -61,6 +61,21 @@ window.addEventListener('beforeunload', (e) => {
 export let mdeInstance = null;
 // --- EXTENSION REGISTRY ---
 window.ExtensionRegistry = {
+    registerSettingsAction: (id, label, icon, callback) => {
+        const container = document.getElementById('settings-modal-links');
+        if (!container) return;
+        const btn = document.createElement('button');
+        btn.className = 'btn-sm';
+        btn.style.cssText = 'background: var(--input-bg); color: var(--text); border: 1px solid var(--border); text-align: left; padding: 10px 15px; font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 10px; font-weight: bold; transition: background 0.2s;';
+        btn.innerHTML = `<span style="font-size: 1.2rem;">${icon}</span> <span>${label}</span>`;
+        btn.onmouseover = () => btn.style.background = 'var(--bg)';
+        btn.onmouseout = () => btn.style.background = 'var(--input-bg)';
+        btn.onclick = () => {
+            document.getElementById('settings-modal').style.display = 'none';
+            callback();
+        };
+        container.appendChild(btn);
+    },
     registerTab: (id, label) => {
         const container = document.getElementById('main-tabs-container');
         if (!container) return null;
@@ -270,7 +285,11 @@ function switchTab(event, tabId) {
 
     if (tabId === 'context') loadContext();
     if (tabId === 'tasks') loadTrackerBoard();
-    if (tabId === 'edit' && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+    if (tabId === 'edit') {
+        const activeSub = document.querySelector('#tab-edit .sub-tab.active');
+        if (activeSub) switchSubTab(activeSub.id.replace('st-', ''));
+        if (document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+    }
 }
 
 function switchSubTab(subId) {
@@ -302,8 +321,14 @@ function switchSubTab(subId) {
     if (subId === 'gather') {
         loadGatherBatches();
     }
+    
+    // Bridge UI Hardening: Guarantee Paste button visibility using computed styles
     const consoleArea = document.getElementById('bridge-console-area');
-    if (pasteBtn) pasteBtn.style.display = (subId === 'bridge' && consoleArea && consoleArea.style.display !== 'flex') ? 'block' : 'none';
+    const isConsoleActive = consoleArea && window.getComputedStyle(consoleArea).display !== 'none';
+    
+    if (pasteBtn) {
+        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ? 'block' : 'none';
+    }
     if (newFileBtn) newFileBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
     if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }

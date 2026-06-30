@@ -10,8 +10,18 @@ if (termScreen) {
     termScreen.style.flexDirection = 'column';
     termScreen.style.overflow = 'hidden';
     termScreen.style.background = 'var(--console-bg)';
+    // 2. Inject the sub-tabs-bar to match the global layout
+    const subTabBar = document.createElement('div');
+    subTabBar.className = 'sub-tabs-bar';
+    subTabBar.innerHTML = `
+        <div class="sub-tabs">
+            <div class="sub-tab active">Console</div>
+        </div>
+        <button class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 12px; margin: 0; font-size: 0.85rem;" onclick="document.getElementById('term-iframe').src += ''">🔄 Restart</button>
+    `;
+    termScreen.parentElement.insertBefore(subTabBar, termScreen);
 
-    // 2. Build the iframe target
+    // 3. Build the iframe target
     termScreen.innerHTML = `
         <iframe id="term-iframe" style="flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px;"></iframe>
     `;

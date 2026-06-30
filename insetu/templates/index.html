@@ -7,9 +7,13 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" href="/favicon.ico?v={{ title|urlencode }}">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/searchcursor.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/search.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js"></script>
@@ -49,20 +53,21 @@
                 <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
                 <div style="display: flex; flex-direction: column; gap: 5px;">
                     <button id="full-refresh-btn" onclick="fullRefresh()" style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full Refresh</button>
-                    <button id="simulate-panic-btn" onclick="simulatePanic()" style="margin: 0; background: transparent; color: #f59e0b; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">⚠️ Test Recovery</button>
+                    <button id="btn-settings-more" onclick="document.getElementById('settings-menu').style.display='none'; document.getElementById('settings-modal').style.display='block';" style="margin: 0; background: transparent; color: var(--btn); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">⚙️ More...</button>
                 </div>
             </div>
         </div>
     </div>
     <div id="tab-context" class="tab-content">
-        <div class="screen active" style="min-height: 80vh;">
+        <div class="sub-tabs-bar">
             <div class="sub-tabs">
                 <div class="sub-tab active" id="st-bundles" onclick="switchSubTab('bundles')">Main</div>
                 <div class="sub-tab" id="st-prompts" onclick="switchSubTab('prompts')">Prompts</div>
                 <div class="sub-tab" id="st-diffs" onclick="switchSubTab('diffs')">Diffs</div>
                 <div class="sub-tab" id="st-gather" onclick="switchSubTab('gather')">Gather</div>
             </div>
-
+        </div>
+        <div class="screen active" style="min-height: 80vh;">
             <div id="sub-bundles" class="sub-tab-content active">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                     <h2 style="margin: 0;">System Context</h2>
@@ -107,18 +112,18 @@
         </div>
     </div>
         <div id="tab-edit" class="tab-content active">
-            <div class="screen active" style="min-height: 80vh;">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 15px;">
-                    <div class="sub-tabs" style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">
-                        <div class="sub-tab active" id="st-bridge" onclick="switchSubTab('bridge')">Yomama</div>
-                        <div class="sub-tab" id="st-files" onclick="switchSubTab('files')">Files</div>
-                    </div>
-                    <div style="display: flex; gap: 10px;">
-                        <button id="btn-new-folder" onclick="openNewFolderModal()" class="btn-sm" style="background: #3b82f6; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ Folder</button>
-                        <button id="btn-new-file" onclick="openNewFileModal()" class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ File</button>
-                        <button id="btn-paste" onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; resetStatus(); document.getElementById('payload').dispatchEvent(new Event('input')); }).catch(e => alert('Clipboard access denied.'));" class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
-                    </div>
+            <div class="sub-tabs-bar">
+                <div class="sub-tabs">
+                    <div class="sub-tab active" id="st-bridge" onclick="switchSubTab('bridge')">Yomama</div>
+                    <div class="sub-tab" id="st-files" onclick="switchSubTab('files')">Files</div>
                 </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="btn-new-folder" onclick="openNewFolderModal()" class="btn-sm" style="background: #3b82f6; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ Folder</button>
+                    <button id="btn-new-file" onclick="openNewFileModal()" class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ File</button>
+                    <button id="btn-paste" onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; resetStatus(); document.getElementById('payload').dispatchEvent(new Event('input')); }).catch(e => alert('Clipboard access denied.'));" class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
+                </div>
+            </div>
+            <div class="screen active" style="min-height: 80vh;">
                 <div id="sub-bridge" class="sub-tab-content active" style="height: 100%;">
                     <div style="display:flex; flex-direction:column; height: 100%;">
                         <div id="bridge-input-area" style="display: flex; flex-direction: column; flex: 1;">
@@ -183,7 +188,7 @@
             </div>
             <div id="modal-body-container" style="display: flex; flex: 1; flex-direction: column; overflow: hidden; margin-bottom: 10px;">
                 <textarea id="modal-text" style="flex: 1; margin: 0; font-size: 13px; resize: none;"></textarea>
-                <div id="modal-preview" style="flex: 1; margin: 0; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 15px; display: none; font-size: 14px; color: var(--text);"></div>
+                <div id="modal-preview" tabindex="0" style="flex: 1; margin: 0; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 15px; display: none; font-size: 14px; color: var(--text); outline: none;"></div>
             </div>
             <div style="display: flex; gap: 10px;">
                 <button id="modal-dl-btn" onclick="downloadFromModal()" style="flex: 1; margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #0284c7;">⬇️ Download</button>
@@ -257,6 +262,19 @@
 
             <div id="link-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
                 <span style="color:#888; font-style:italic;">Type to search...</span>
+            </div>
+        </div>
+    </div>
+    <div id="settings-modal" class="fullscreen-modal" style="z-index: 1100;">
+        <div class="modal-content" style="max-height: 500px; height: auto; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin:0; font-size: 1.1rem;">System Settings & Extensions</h3>
+                <button onclick="document.getElementById('settings-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
+            </div>
+            <div id="settings-modal-links" style="display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; margin-bottom: 20px;">
+                </div>
+            <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end;">
+                <button id="simulate-panic-btn" onclick="simulatePanic()" class="btn-sm" style="background: #f59e0b; margin: 0; font-weight: bold;">⚠️ Test Recovery</button>
             </div>
         </div>
     </div>
@@ -498,19 +516,18 @@
             <button id="save-edit-task-btn" onclick="saveEditTask()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">💾 Save Changes</button>
         </div>
     </div>
-
     <div id="tab-tasks" class="tab-content">
+        <div class="sub-tabs-bar">
+            <div class="sub-tabs">
+                <div class="sub-tab active" id="st-todos" onclick="switchSubTab('todos')">To-Dos</div>
+                <div class="sub-tab" id="st-bugs" onclick="switchSubTab('bugs')">Bugs</div>
+                <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
+                <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
+            </div>
+            <button class="btn-sm" style="background: #8b5cf6; margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
+        </div>
         <div class="screen active" style="min-height: 80vh;">
             <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-                    <div class="sub-tabs" style="margin-bottom: 0; border-bottom: none; padding-bottom: 0;">
-                        <div class="sub-tab active" id="st-todos" onclick="switchSubTab('todos')">To-Dos</div>
-                        <div class="sub-tab" id="st-bugs" onclick="switchSubTab('bugs')">Bugs</div>
-                        <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
-                        <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
-                    </div>
-                    <button class="btn-sm" style="background: #8b5cf6; margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
-                </div>
                 <div id="task-repo-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;"></div>
             </div>
             <div id="sub-todos" class="sub-tab-content active">

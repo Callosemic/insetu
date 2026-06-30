@@ -26,10 +26,17 @@ def extract_markdown_from_url(target_url, method="jina"):
             import markdownify
         except ImportError:
             raise Exception("Missing optional dependencies for local parsing. Please install them via: pip install beautifulsoup4 markdownify")
-
-        req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0'})
+        req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0', 'Accept-Encoding': 'gzip, deflate'})
         with urllib.request.urlopen(req) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
+            raw_data = response.read()
+            encoding = response.info().get('Content-Encoding', '').lower()
+            if encoding == 'gzip':
+                import gzip
+                raw_data = gzip.decompress(raw_data)
+            elif encoding == 'deflate':
+                import zlib
+                raw_data = zlib.decompress(raw_data)
+            html_content = raw_data.decode('utf-8', errors='ignore')
 
         soup = BeautifulSoup(html_content, 'html.parser')
         if soup.title and soup.title.string:
@@ -48,9 +55,17 @@ def extract_markdown_from_url(target_url, method="jina"):
 
     else:
         # Use Jina Reader API to cleanly convert HTML to Markdown without heavy local dependencies
-        req = urllib.request.Request(f"https://r.jina.ai/{target_url}", headers={'User-Agent': 'inSetu-OS/1.0'})
+        req = urllib.request.Request(f"https://r.jina.ai/{target_url}", headers={'User-Agent': 'inSetu-OS/1.0', 'Accept-Encoding': 'gzip, deflate'})
         with urllib.request.urlopen(req) as response:
-            markdown_content = response.read().decode('utf-8')
+            raw_data = response.read()
+            encoding = response.info().get('Content-Encoding', '').lower()
+            if encoding == 'gzip':
+                import gzip
+                raw_data = gzip.decompress(raw_data)
+            elif encoding == 'deflate':
+                import zlib
+                raw_data = zlib.decompress(raw_data)
+            markdown_content = raw_data.decode('utf-8', errors='ignore')
 
         # Parse Jina's header block
         lines = markdown_content.splitlines()
@@ -71,15 +86,34 @@ def extract_markdown_from_url(target_url, method="jina"):
             clean_markdown = "\n".join(lines[content_start_idx:]).lstrip()
         else:
             clean_markdown = markdown_content
-
         # Fallback title extraction if Jina changes format
         first_line = clean_markdown.lstrip().split('\n')[0]
         if first_line.startswith('# '):
             extracted_title = first_line[2:].strip()
 
+    import datetime
+    now_str = datetime.datetime.now().isoformat(timespec='seconds')
+    safe_title = extracted_title.replace('"', "'")
+    # Binary/Garbage heuristics detection
+    garbage_ratio = sum(1 for c in clean_markdown if ord(c) < 32 and c not in '\n\r\t') / max(len(clean_markdown), 1)
+    if garbage_ratio > 0.01 or '\x00' in clean_markdown:
+        clean_markdown = "> **[inSetu Engine Warning]** This file appears to contain compressed binary data or failed to decode cleanly. You may want to Re-Scrape or manually verify the source URL.\n\n" + clean_markdown
+
+    yaml_frontmatter = (
+        f"---\n"
+        f"title: \"{safe_title}\"\n"
+        f"source_url: \"{extracted_url}\"\n"
+        f"published_at: \"{published_time}\"\n"
+        f"imported_at: \"{now_str}\"\n"
+        f"---\n\n"
+        f"## Notes\n\n\n"
+        f"---\n\n"
+    )
+    final_markdown = yaml_frontmatter + clean_markdown
+
     return {
         "title": extracted_title,
         "resolved_url": extracted_url,
         "published_time": published_time,
-        "clean_markdown": clean_markdown
+        "clean_markdown": final_markdown
     }

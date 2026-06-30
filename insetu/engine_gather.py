@@ -37,7 +37,7 @@ def generate_ascii_tree(file_paths):
             lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
         return lines
     return ".\n" + "\n".join(print_tree(tree))
-def write_bucket(output_path, filepaths, title, domain_str, repo_path):
+def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir):
     if not filepaths: return
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as outfile:
@@ -49,7 +49,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path):
 
                 display_domain = domain_str
 
-                outfile.write(f"\n\n{'='*60}\n>>>NEW FILE :: /{filepath} | {display_domain}\n{'='*60}\n\n{content}")
+                outfile.write(f"\n\n{'='*60}\n>>>NEW FILE :: {repo_dir}/{filepath} | {display_domain}\n{'='*60}\n\n{content}")
             except Exception as e: print(f"Skipping {filepath}: {e}")
 def generate_context_file():
     # Pre-flight purge: destroy all stale contexts to prevent ghost files
@@ -90,7 +90,7 @@ def generate_context_file():
         if tracker_files:
             tracker_out = f"{safe_r_dir}_tracker_context.txt"
             out_path = os.path.join(CONTEXTS_DIR, tracker_out)
-            write_bucket(out_path, tracker_files, f"ISSUE TRACKER ({config['repo_dir'].upper()})", "Active bugs, tasks, and planned units of work", repo_path)
+            write_bucket(out_path, tracker_files, f"ISSUE TRACKER ({config['repo_dir'].upper()})", "Active bugs, tasks, and planned units of work", repo_path, config['repo_dir'])
             manifest[tracker_out] = [f"{config['repo_dir']}/{f}" for f in tracker_files]
             # Remove tracker files from main pipeline to prevent catch-all duplication
             final_list = [f for f in final_list if not f.startswith(".tracker/")]
@@ -123,12 +123,11 @@ def generate_context_file():
                 if not matched:
                     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
                     if catch_all: buckets[catch_all["id"]]["files"].append(filepath)
-
             for b_id, data in buckets.items():
                 if data["files"]:
                     safe_out = data["cfg"].get("out_file", f"{config['repo_dir']}_{b_id}_context.txt")
                     out_path = os.path.join(CONTEXTS_DIR, safe_out)
-                    write_bucket(out_path, data["files"], data["cfg"].get("title", b_id.upper()), data["cfg"].get("domain", ""), repo_path)
+                    write_bucket(out_path, data["files"], data["cfg"].get("title", b_id.upper()), data["cfg"].get("domain", ""), repo_path, config['repo_dir'])
                     manifest[safe_out] = [f"{config['repo_dir']}/{f}" for f in data["files"]]
             for module, data in dynamic_files.items():
                 files = data["files"]
@@ -140,12 +139,12 @@ def generate_context_file():
                 domain = meta.get("domain", cfg.get("domain", "Dynamic Modules"))
 
                 out_path = os.path.join(CONTEXTS_DIR, f"{module}_context.txt")
-                write_bucket(out_path, files, title.upper(), domain, repo_path)
+                write_bucket(out_path, files, title.upper(), domain, repo_path, config['repo_dir'])
                 manifest[f"{module}_context.txt"] = [f"{config['repo_dir']}/{f}" for f in files]
         else:
             safe_out = config.get("out_file", f"{safe_r_dir}_context.txt")
             out_path = os.path.join(CONTEXTS_DIR, safe_out)
-            write_bucket(out_path, final_list, config.get("title", config["repo_dir"]), config.get("domain", ""), repo_path)
+            write_bucket(out_path, final_list, config.get("title", config["repo_dir"]), config.get("domain", ""), repo_path, config['repo_dir'])
             manifest[safe_out] = [f"{config['repo_dir']}/{f}" for f in final_list]
     # --- EXTENSION HOOKS ---
     if "citations" in live_cfg.get("extensions", []):
@@ -333,7 +332,7 @@ def generate_diff_context():
                     abs_filepath = os.path.join(repo_path, filepath)
                     if 'D' in status:
                         out_lines.append(f"============================================================")
-                        out_lines.append(f">>>DELETED FILE :: /{filepath} | PREVIOUSLY TRACKED")
+                        out_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{filepath} | PREVIOUSLY TRACKED")
                         out_lines.append(f"============================================================")
                         try:
                             diff_res = subprocess.run(['git', 'diff', 'HEAD', '--', filepath], capture_output=True, text=True, cwd=repo_path)
@@ -345,7 +344,7 @@ def generate_diff_context():
 
                     else:
                         out_lines.append(f"============================================================")
-                        out_lines.append(f">>>NEW FILE :: /{filepath} | CURRENT CONTENTS")
+                        out_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{filepath} | CURRENT CONTENTS")
                         out_lines.append(f"============================================================")
                         try:
                             with open(abs_filepath, 'r', encoding='utf-8') as cf: out_lines.append(cf.read())
@@ -353,7 +352,7 @@ def generate_diff_context():
                             out_lines.append("[Binary or unreadable file]")
 
                     out_lines.append(f"\n============================================================")
-                    out_lines.append(f">>>DIFF :: /{filepath} | CHANGES SINCE LAST COMMIT")
+                    out_lines.append(f">>>DIFF :: {config['repo_dir']}/{filepath} | CHANGES SINCE LAST COMMIT")
                     out_lines.append(f"============================================================")
 
                     if status == "??":
