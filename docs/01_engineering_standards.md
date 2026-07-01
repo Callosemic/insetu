@@ -13,6 +13,7 @@ Logic, schemas, and configurations must exist in exactly one place. Redundancy b
 * **DRY Utility Centralization**: Any structural logic required by multiple engines (e.g., resolving absolute workspace paths, sanitizing directory names into `dot_` prefixes, parsing JSON safely) MUST be centralized in `insetu/utils_core.py`.
 "Fat Controllers" copying/pasting prefix logic are architectural failures.
 * **The Artifact Parser Anti-Pattern**: Never parse generated output artifacts (e.g., compiled `.txt` diff dumps, RAG context payloads, or rendered UI strings) to determine system state or drive backend execution. Artifacts are strictly one-way projections for human or LLM consumption. Always query the underlying SSOT directly (e.g., executing `git status` via subprocess instead of reading a `_diffs.txt` file).
+* **Stateless Multi-Tenancy & Scoped Request Routing**: The inSetu Developer OS handles multiple tenant environments statelessly inside the REST layer via explicit tracking scopes. Swapping profiles dynamically must occur via frontend headers without backend process restarts. All backend managers, hooks, and extensions must accept a request-scoped `workspace_id` parameter and completely reject un-parameterized global state storage.
 
 ## 2. The Data Layer & CQRS Mandate
 inSetu operates directly on the user's hard drive. However, relying purely on raw filesystem I/O for high-velocity UI queries introduces unacceptable bottlenecks.
@@ -36,10 +37,10 @@ The frontend UI must be highly resilient, reactive, and entirely decoupled from 
 * **The DOM Read Ban**: Modules (`kanban.js`, `bridge.js`) are strictly forbidden from reading state out of the DOM (e.g., querying `document.getElementById('...').value` or checking if an element `.classList.contains('active')` to determine business logic).
 * **The Centralized Store**: The UI must operate as a pure function of a centralized state manager (Zustand or Vanilla PubSub in `store.js`). API payloads dispatch to the store; the DOM strictly subscribes to the store.
 * **The "Full Refresh" Anti-Pattern**: UI state desynchronization (ghost tickets, orphaned modals) indicates a failure of the UDF contract. The system must natively heal its own state tree asynchronously without requiring the user to execute manual browser reloads.
-
+* **The Low Memory Footprint Mandate**: The client layer must remain low-overhead to protect performance on low-spec and mobile platforms. The frontend is strictly banned from executing memory-intensive text chunking, holding massive multi-megabyte string buffers, or iterating over large regex arrays on raw text. All parsing, slicing, and segmentation operations must be offloaded to backend pipeline processes.
 ## 5. Asynchronous I/O & The Event Loop
 inSetu runs via a local Python web server (Flask/Uvicorn). You must never paralyze the local event loop.
-* **The I/O Block Ban**: Heavy workspace sweeps (e.g., parsing 500 files for Context Generation, executing blocking Git diff aggregations, spinning up cartography maps) MUST NOT block the main HTTP thread. 
+* **The I/O Block Ban**: Heavy workspace sweeps (e.g., parsing 500 files for Context Generation, executing blocking Git diff aggregations, spinning up cartography maps) MUST NOT block the main HTTP thread. All physical disk modifications, deletions, and massive multi-file collections must be executed through asynchronous off-thread background worker queues or pipelines.
 * **Streaming Over Polling**: Offload these heavy generators into asynchronous background task queues. The frontend should connect via WebSockets or Server-Sent Events (SSE) to receive non-blocking, real-time status pulses (`"Compressing payload..."`, `"Mapping context..."`) rather than hanging on a 15-second HTTP request.
 
 ## 6. The Yomama Patch Protocol (LLM Guardrails)

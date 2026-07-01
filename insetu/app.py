@@ -170,11 +170,11 @@ def favicon():
         mimetype = 'image/png' if local_icon_path.lower().endswith('.png') else 'image/vnd.microsoft.icon'
         return send_file(local_icon_path, mimetype=mimetype)
     return send_file(os.path.join(app.static_folder, 'favicon.ico'), mimetype='image/vnd.microsoft.icon')
-@app.route('/api/repos', methods=['GET'])
-def api_repos():
+@app.route('/api/<workspace_id>/repos', methods=['GET'])
+def api_repos(workspace_id):
     from insetu.utils_core import get_sister_repos, load_config, get_workspace_physics
     import os
-    cfg = load_config()
+    cfg = load_config(workspace_id)
     targets = cfg.get("target_repos", [])
     cfg_path, ws_root, _ = get_workspace_physics()
 
@@ -202,12 +202,11 @@ def api_repos():
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
         "config_missing": not os.path.exists(cfg_path)
     })
-@app.route('/api/batches', methods=['GET'])
-def api_batches():
+@app.route('/api/<workspace_id>/batches', methods=['GET'])
+def api_batches(workspace_id):
     import os
     from insetu.utils_core import load_config, load_workflows, get_gather_paths, get_safe_repo_id
 
-    workspace_id = request.headers.get('X-Workspace-ID')
     cfg = load_config(workspace_id)
     w_cfg = load_workflows(workspace_id)
     paths = get_gather_paths(workspace_id)
@@ -264,13 +263,12 @@ def api_batches():
         "artifacts_dir": artifacts_abs,
         "profile_dir": profile_abs
     })
-@app.route('/api/batches/save', methods=['POST'])
-def api_batches_save():
+@app.route('/api/<workspace_id>/batches/save', methods=['POST'])
+def api_batches_save(workspace_id):
     import json
     import insetu.utils_core as utils_core
     from insetu.utils_core import load_workflows, get_gather_paths
 
-    workspace_id = request.headers.get('X-Workspace-ID')
     paths = get_gather_paths(workspace_id)
 
     data = request.json
@@ -334,13 +332,6 @@ def submit():
                 except Exception as e:
                     print(f"Warning: Pre-compile hooks failed: {str(e)}")
 
-                q.put({"status": "progress", "message": "Generating diff contexts..."})
-
-                try:
-                    engine_gather.generate_diff_context(wid)
-                except Exception as e:
-                    print(f"Warning: Diff generation failed: {str(e)}")
-
                 q.put({"status": "progress", "message": "Mapping repositories (Cartographer)..."})
 
                 try:
@@ -361,7 +352,6 @@ def submit():
             finally:
                 q.put(None) # End of stream
                 _COMPILER_LOCK.release()
-
         threading.Thread(target=compile_worker, args=(workspace_id,), daemon=True).start()
 
         while True:
@@ -371,17 +361,8 @@ def submit():
             yield json.dumps(msg) + "\n"
 
     return Response(generate(), mimetype='application/x-ndjson')
-@app.route('/api/diffs/generate', methods=['POST'])
-def api_generate_diffs():
-    try:
-        workspace_id = request.headers.get('X-Workspace-ID')
-        files = engine_gather.generate_diff_context(workspace_id)
-        return jsonify({"status": "success", "files": files})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-@app.route('/api/manifest', methods=['GET'])
-def api_manifest():
-    workspace_id = request.headers.get('X-Workspace-ID')
+@app.route('/api/<workspace_id>/manifest', methods=['GET'])
+def api_manifest(workspace_id):
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
     manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")

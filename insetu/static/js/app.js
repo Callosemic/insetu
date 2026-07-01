@@ -9,7 +9,7 @@ import {
 import {
     loadGatherBatches
 } from './gather.js';
-import './bridge.js';
+import { BridgeStore } from './bridge.js';
 import './ui.js';
 
 export {
@@ -36,19 +36,16 @@ if ('serviceWorker' in navigator) {
 window.addEventListener('beforeunload', (e) => {
     let isDirty = false;
 
-    const copyModal = document.getElementById('copy-modal');
-    if (copyModal && copyModal.style.display === 'block' && typeof currentModalOriginalText !== 'undefined') {
-        if (document.getElementById('modal-text').value !== currentModalOriginalText) isDirty = true;
+    // Pull from the centralized Virtual File System Bridge Store
+    const bridgeState = BridgeStore.getState();
+    if (bridgeState && bridgeState.payloadText && bridgeState.payloadText.trim() !== '') {
+        isDirty = true;
     }
 
-    const newFileModal = document.getElementById('new-file-modal');
-    if (newFileModal && newFileModal.style.display === 'block' && document.getElementById('new-file-content').value.trim() !== '') isDirty = true;
-
-    const newTaskModal = document.getElementById('new-task-modal');
-    if (newTaskModal && newTaskModal.style.display === 'block' && document.getElementById('new-task-title').value.trim() !== '') isDirty = true;
-
-    const payload = document.getElementById('payload');
-    if (payload && payload.value.trim() !== '' && document.getElementById('tab-edit').classList.contains('active') && document.getElementById('st-bridge').classList.contains('active')) isDirty = true;
+    // Verify modal original content states safely
+    if (typeof currentModalOriginalText !== 'undefined' && document.getElementById('modal-text')) {
+        if (document.getElementById('modal-text').value !== currentModalOriginalText) isDirty = true;
+    }
 
     if (isDirty) {
         e.preventDefault();
@@ -312,6 +309,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         }
     }, 150);
     // The JS engine successfully booted. Hide the pure-HTML panic switch.
+    clearTimeout(window.panicTimeout);
     const panicBtn = document.getElementById('js-panic-button');
     if (panicBtn) panicBtn.style.display = 'none';
 
@@ -519,7 +517,8 @@ async function renderPromptsTab() {
     if (!container) return;
     container.innerHTML = '<div class="spinner" style="display:block;">Loading prompts...</div>';
     try {
-        const res = await fetch('/api/batches');
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/batches`);
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         const data = await res.json();
         globalGatherOptions.prompts = data.available_prompts || [];
@@ -590,9 +589,9 @@ export async function generateDiffs() {
     const results = document.getElementById('diff-results');
     loading.style.display = 'block';
     results.innerHTML = '';
-
     try {
-        const res = await fetch('/api/diffs/generate', {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/diffs/generate`, {
             method: 'POST'
         });
         const data = await res.json();
@@ -964,7 +963,8 @@ export function filterContexts(query) {
 }
 async function finishContextLoad(result) {
     try {
-        const mRes = await fetch('/api/manifest?t=' + Date.now());
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
         if (mRes.ok) setContextManifest(await mRes.json());
     } catch (e) {
         console.error("Manifest error", e);
@@ -1074,8 +1074,7 @@ async function simulatePanic() {
     }
 }
 async function performSoftRefresh() {
-    const currentWs = localStorage.getItem('insetu_workspace') || 'default';
-
+    const currentWs = AppStore.getState().activeWorkspace || 'default';
     // Evict old sub-store data frames instantly to prevent layout bleeding or race mutations
     if (window.KanbanStore) {
         window.KanbanStore.setState({ 
@@ -1088,7 +1087,7 @@ async function performSoftRefresh() {
 
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await fetch('/api/repos?t=' + Date.now());
+        const rRes = await fetch(`/api/${currentWs}/repos?t=` + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
             AppStore.setState({
@@ -1146,10 +1145,9 @@ async function performSoftRefresh() {
 
             if (typeof switchTab === 'function') switchTab(targetTab);
         }
-
         // 3. Compile context & physical file trees for the new tenant
         const compileData = await compileContexts();
-        const mRes = await fetch('/api/manifest?t=' + Date.now());
+        const mRes = await fetch(`/api/${currentWs}/manifest?t=` + Date.now());
         if (mRes.ok) setContextManifest(await mRes.json());
 
         // 4. Hydrate active DOM views
@@ -1178,7 +1176,6 @@ async function performSoftRefresh() {
         window.location.reload();
     }
 }
-
 async function fullRefresh() {
     const btn = document.getElementById('full-refresh-btn');
     if (btn) btn.innerText = "⏳ Syncing...";
@@ -1191,6 +1188,7 @@ async function fullRefresh() {
 
         await performSoftRefresh();
         if (btn) btn.innerText = "🔄 Full Refresh";
+        window.location.reload();
     } catch (error) {
         alert("Error during full refresh.");
         if (btn) btn.innerText = "🔄 Full Refresh";
@@ -1202,7 +1200,8 @@ async function fullRefresh() {
 import { AppStore } from './store.js';
 let HIDDEN_OUTPUTS = [];
 
-fetch('/api/repos').then(r => r.json()).then(d => {
+const initialWs = AppStore.getState().activeWorkspace || 'default';
+fetch(`/api/${initialWs}/repos`).then(r => r.json()).then(d => {
 HIDDEN_OUTPUTS = d.hidden_outputs || [];
 AppStore.setState({
     allRepos: d.repos,
@@ -1265,12 +1264,12 @@ AppStore.subscribe((state) => state.allRepos, () => renderRepoPins(AppStore.getS
 
 // Zustand doesn't fire an initial blast, trigger manually once
 setTimeout(() => renderRepoPins(AppStore.getState()), 100);
-
 export async function fetchAndCopy(filePath, btnElement) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
     try {
-        const res = await fetch('/api/bridge/fetch?file=' + encodeURIComponent(filePath));
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath));
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
         await navigator.clipboard.writeText(text);
@@ -1286,7 +1285,8 @@ export async function fetchAndDownloadState(filePath, btnElement) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
     try {
-        await downloadFile('/api/bridge/fetch?file=' + encodeURIComponent(filePath), filePath.split('/').pop());
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        await downloadFile(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath), filePath.split('/').pop());
         btnElement.innerText = "✅ Downloaded!";
     } catch (e) {
         btnElement.innerText = "❌ Error: " + e.message;
@@ -1307,7 +1307,8 @@ export async function fetchAndDownloadState(filePath, btnElement) {
         // Silently compile context to ensure the file tree and tracker are fresh
         await compileContexts();
         // Fetch the newly compiled manifest
-        const mRes = await fetch('/api/manifest?t=' + Date.now());
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
         if (mRes.ok) {
             setContextManifest(await mRes.json());
             // If the user happens to load directly into a tab that needs the manifest, render it

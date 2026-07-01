@@ -10,7 +10,8 @@ export async function loadGatherBatches() {
     const container = document.getElementById('gather-list');
     container.innerHTML = '<div class="spinner" style="display:block;">Loading batches...</div>';
     try {
-        const res = await fetch('/api/batches');
+        const { activeWorkspace } = AppStore.getState();
+        const res = await fetch(`/api/${activeWorkspace}/batches`);
         const data = await res.json();
         AppStore.setState({
             gatherOptions: {
@@ -184,7 +185,8 @@ export async function saveEditBatch() {
     const origText = btn.innerText;
     btn.innerText = 'Saving...';
     try {
-        const res = await fetch('/api/batches/save', {
+        const { activeWorkspace } = AppStore.getState();
+        const res = await fetch(`/api/${activeWorkspace}/batches/save`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -232,9 +234,9 @@ export function openBatchModal(batch) {
         promptSec.style.display = 'block';
         const promptTextArea = document.getElementById('batch-prompt-text');
         promptTextArea.value = "Loading prompt...";
-
-        // Dynamically fetch the prompt content JIT
-        fetch(`/api/bridge/fetch?file=${encodeURIComponent(profileDir + '/' + batch.include_prompt)}`)
+        // Dynamically fetch the prompt content JIT scoped to the active tenant
+        const { activeWorkspace } = AppStore.getState();
+        fetch(`/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(profileDir + '/' + batch.include_prompt)}`)
             .then(res => res.ok ? res.text() : Promise.reject(new Error("File not found")))
             .then(text => promptTextArea.value = text)
             .catch(err => promptTextArea.value = `[Error: ${err.message}]`);
@@ -268,7 +270,8 @@ export function openBatchModal(batch) {
                 payload.archive_path = `${artifactsDir}/${batch.archive_path}`;
             }
 
-            executeWorkspaceMutation('/api/fs/save', payload, {
+            const { activeWorkspace } = AppStore.getState();
+            executeWorkspaceMutation(`/api/${activeWorkspace}/fs/save`, payload, {
                 btnId: 'batch-save-response-btn',
                 loadingText: 'Saving...',
                 onSuccess: () => {

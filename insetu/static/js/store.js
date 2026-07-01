@@ -6,6 +6,7 @@ import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middlewa
 export const AppStore = createStore(
     devtools(
         subscribeWithSelector((set) => ({
+            activeWorkspace: localStorage.getItem('insetu_workspace') || 'default',
             manifest: {},
             allRepos: [],
             targetConfigs: [],

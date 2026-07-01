@@ -2,8 +2,128 @@ import os
 import subprocess
 from flask import Blueprint, request, jsonify
 from insetu.utils_core import load_config, get_workspace_physics
-
+from insetu.hooks import hooks
 git_bp = Blueprint('git', __name__)
+
+@hooks.on('pre_compile')
+def on_pre_compile_generate_diffs(workspace_id=None):
+    try:
+        generate_diff_context(workspace_id)
+    except Exception as e:
+        print(f"Warning: Background Git auto-diff generation failed: {e}")
+
+def generate_diff_context(workspace_id=None):
+    from insetu.utils_core import load_config, get_gather_paths, get_workspace_physics, get_safe_repo_id
+    from insetu.engine_gather import resolve_file_bucket
+    paths = get_gather_paths(workspace_id)
+    _, ws_root, _ = get_workspace_physics(workspace_id)
+
+    for f in os.listdir(paths["diffs_dir"]):
+        f_path = os.path.join(paths["diffs_dir"], f)
+        if os.path.isfile(f_path): os.remove(f_path)
+
+    live_cfg = load_config(workspace_id)
+    diff_manifest = []
+    for config in live_cfg.get("target_repos", []):
+        if config.get("exclude_from_diffs"): continue
+        if config.get("archive_type", "repo") == "media-vault": continue
+        safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
+        physical_path = config.get("physical_path")
+        repo_path = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else os.path.abspath(os.path.join(ws_root, config["repo_dir"]))
+
+        if not os.path.exists(repo_path): continue
+        try:
+            result = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
+            lines = result.stdout.splitlines()
+            if not lines: continue
+            changed_files = []
+            for line in lines:
+                if len(line) < 3: continue
+                status = line[:2]
+                filepath = line[3:]
+                if '->' in filepath: filepath = filepath.split('->')[-1].strip()
+                if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
+
+                if os.path.isfile(os.path.join(repo_path, filepath)) or 'D' in status:
+                    changed_files.append((filepath, status))
+            if not changed_files: continue
+            sub_buckets = config.get("sub_buckets", [])
+            bucketed_files = {}
+
+            if sub_buckets:
+                for filepath, status in changed_files:
+                    b, module = resolve_file_bucket(filepath, sub_buckets)
+                    if b and module:
+                        b_id = f"{module}_diffs.txt"
+                    elif b:
+                        b_id = b["out_file"].replace("_context.txt", "_diffs.txt")
+                    else:
+                        b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+                    if b_id not in bucketed_files: bucketed_files[b_id] = []
+                    bucketed_files[b_id].append((filepath, status))
+            else:
+                out_filename = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+                bucketed_files[out_filename] = changed_files
+
+            for out_filename, files_in_bucket in bucketed_files.items():
+                out_lines = []
+                out_lines.append(f"============================================================")
+                out_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
+                out_lines.append(f"============================================================")
+                for f_path, f_status in files_in_bucket:
+                    out_lines.append(f"[{f_status.ljust(2)}] {f_path}")
+                out_lines.append("\n\n")
+                for filepath, status in files_in_bucket:
+                    abs_filepath = os.path.join(repo_path, filepath)
+                    if 'D' in status:
+                        out_lines.append(f"============================================================")
+                        out_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{filepath} | PREVIOUSLY TRACKED")
+                        out_lines.append(f"============================================================")
+                        try:
+                            diff_res = subprocess.run(['git', 'diff', 'HEAD', '--', filepath], capture_output=True, text=True, cwd=repo_path)
+                            out_lines.append(diff_res.stdout)
+                        except Exception as e:
+                            out_lines.append(f"[Error generating diff: {e}]")
+                        out_lines.append("\n\n")
+                        continue
+                    else:
+                        out_lines.append(f"============================================================")
+                        out_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{filepath} | CURRENT CONTENTS")
+                        out_lines.append(f"============================================================")
+                        try:
+                            with open(abs_filepath, 'r', encoding='utf-8') as cf: out_lines.append(cf.read())
+                        except Exception:
+                            out_lines.append("[Binary or unreadable file]")
+
+                    out_lines.append(f"\n============================================================")
+                    out_lines.append(f">>>DIFF :: {config['repo_dir']}/{filepath} | CHANGES SINCE LAST COMMIT")
+                    out_lines.append(f"============================================================")
+
+                    if status == "??":
+                        out_lines.append("[Untracked file - full content above]")
+                    else:
+                        try:
+                            diff_res = subprocess.run(['git', 'diff', 'HEAD', '--', filepath], capture_output=True, text=True, cwd=repo_path)
+                            out_lines.append(diff_res.stdout)
+                        except Exception as e:
+                            out_lines.append(f"[Error generating diff: {e}]")
+                    out_lines.append("\n\n")
+                if out_lines:
+                    out_path = os.path.join(paths["diffs_dir"], out_filename)
+                    with open(out_path, 'w', encoding='utf-8') as out_f:
+                        out_f.write("\n".join(out_lines))
+                    diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
+        except Exception as e:
+            print(f"Skipping diff generation for {config['repo_dir']}: {e}")
+    return diff_manifest
+
+@git_bp.route('/api/<workspace_id>/diffs/generate', methods=['POST'])
+def api_generate_diffs(workspace_id):
+    try:
+        files = generate_diff_context(workspace_id)
+        return jsonify({"status": "success", "files": files})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @git_bp.route('/api/git/sweep/status', methods=['GET'])
 def api_git_sweep_status():
@@ -70,36 +190,32 @@ def api_git_sweep_push():
     return jsonify({"status": "success", "output": output_log})
 @git_bp.route('/api/git/changelogs', methods=['GET'])
 def api_git_changelogs():
+    """Queries the rapid SQLite tracking index to populate recent commit suggestions."""
     workspace_id = request.headers.get('X-Workspace-ID')
-    _, ws_root, _ = get_workspace_physics(workspace_id)
     repo = request.args.get('repo', '')
-    tracker_dir = os.path.join(ws_root, repo, ".tracker", "closed")
     changelogs = []
-    if os.path.exists(tracker_dir):
-        parsed_logs = []
-        for f in os.listdir(tracker_dir):
-            if f.endswith('.md'):
-                try:
-                    with open(os.path.join(tracker_dir, f), 'r', encoding='utf-8', errors='ignore') as fh:
-                        title, date_str = None, "0000"
-                        for line in fh:
-                            line = line.strip()
-                            if line.startswith('title:'):
-                                title = line.split('title:', 1)[1].strip().strip('\'"')
-                            elif line.startswith('closed_at:'):
-                                val = line.split('closed_at:', 1)[1].strip().strip('\'"')
-                                if val.lower() != 'null':
-                                    date_str = val
-                            if title and date_str != "0000":
-                                break # Found both, stop reading file
-                        if title:
-                            parsed_logs.append({"title": title, "date": date_str})
-                except Exception: pass
 
-        # Sort descending by the deterministic ISO timestamp
-        parsed_logs.sort(key=lambda x: x["date"], reverse=True)
-        for log in parsed_logs[:5]:
-            changelogs.append({"title": log["title"]})
+    # Safeguard horizontal cross-talk using the central SSOT helper
+    from insetu.utils_core import is_extension_enabled
+    if not is_extension_enabled('tracker', workspace_id):
+        return jsonify({"repo": repo, "changelogs": changelogs})
+
+    try:
+        from insetu.db import get_connection
+        conn = get_connection('tracker', workspace_id=workspace_id)
+        cursor = conn.execute("""
+            SELECT title 
+            FROM tracker_tickets 
+            WHERE repo = ? AND status = 'closed' 
+            ORDER BY COALESCE(closed_at, created_at) DESC 
+            LIMIT 5
+        """, (repo,))
+
+        for row in cursor.fetchall():
+            changelogs.append({"title": row['title']})
+    except Exception as e:
+        print(f"Warning: Failed to fetch release log suggestions from cache ledger: {e}")
+
     return jsonify({"repo": repo, "changelogs": changelogs})
 @git_bp.route('/api/git/push', methods=['POST'])
 def api_git_push():

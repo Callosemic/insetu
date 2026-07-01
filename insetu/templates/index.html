@@ -20,11 +20,18 @@
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.min.js"></script>
 </head>
 <body>
-    <div id="js-panic-button" style="padding: 20px; background: #dc2626; color: white; text-align: center; font-family: monospace; z-index: 9999; position: relative;">
+    <div id="js-panic-button" style="display: none; padding: 20px; background: #dc2626; color: white; text-align: center; font-family: monospace; z-index: 9999; position: relative;">
         <h2 style="color: white; margin-top: 0;">⚠️ UI Engine Failed to Load</h2>
         <p>If this banner remains on your screen, a JavaScript syntax error has bricked the main OS interface.</p>
         <button type="button" onclick="fetch('/api/system/panic', {method: 'POST'}); document.getElementById('js-panic-button').innerHTML='<h2 style=\'color:white;margin-top:0;\'>Rebooting into Lifeboat...</h2><p>Page will reload automatically.</p>'; setTimeout(()=>window.location.reload(), 3000);" style="padding: 10px 20px; background: white; color: #dc2626; border: none; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 1rem;">Boot Recovery OS</button>
     </div>
+    <script>
+        // Inline guard: Suppress initial flash, surface banner only if UI engine stalls
+        window.panicTimeout = setTimeout(() => {
+            const el = document.getElementById('js-panic-button');
+            if (el) el.style.display = 'block';
+        }, 1000);
+    </script>
 
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};

@@ -4,49 +4,89 @@ import {
     fetchAndDownloadState
 } from './app.js';
 import { AppStore } from './store.js';
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+
+// --- VFS BRIDGE STATE STORE (UDF LAYER) ---
+export const BridgeStore = createStore(
+    devtools(
+        subscribeWithSelector((set) => ({
+            payloadText: '',
+            detectedFiles: [],
+            activeFiles: new Set(),
+
+            setPayloadText: (text) => {
+                const val = text.replace(/\u00A0/g, ' ');
+                const regex = /^<<<<<<< FILE:\s*(.+)$/gm;
+                let match;
+                const files = new Set();
+                while ((match = regex.exec(val)) !== null) {
+                    files.add(match[1].trim());
+                }
+                const fileArray = Array.from(files);
+                set({ 
+                    payloadText: val, 
+                    detectedFiles: fileArray,
+                    activeFiles: new Set(fileArray) // Default all discovered targets to checked
+                });
+            },
+            toggleFileSelection: (file) => set((state) => {
+                const updated = new Set(state.activeFiles);
+                if (updated.has(file)) updated.delete(file);
+                else updated.add(file);
+                return { activeFiles: updated };
+            }),
+            clearPayload: () => set({ payloadText: '', detectedFiles: [], activeFiles: new Set() })
+        })),
+        { name: 'BridgeStore' }
+    )
+);
 
 export function resetStatus() {
     const sb = document.getElementById('status-box');
     if (sb) sb.innerHTML = "Ready...";
 }
-const payloadTextarea = document.getElementById('payload');
-if (payloadTextarea) {
-    payloadTextarea.addEventListener('paste', () => setTimeout(resetStatus, 50));
-    payloadTextarea.addEventListener('input', () => {
-        const val = payloadTextarea.value.replace(/\u00A0/g, ' ');
-        const regex = /^<<<<<<< FILE:\s*(.+)$/gm;
-        let match;
-        const files = new Set();
-        while ((match = regex.exec(val)) !== null) {
-            files.add(match[1].trim());
-        }
-        renderCheckboxes(Array.from(files));
-    });
-}
 
-function renderCheckboxes(files) {
+// Bind physical handlers contextually without reading direct text markers inside state logic
+window.addEventListener('DOMContentLoaded', () => {
+    const payloadTextarea = document.getElementById('payload');
+    if (payloadTextarea) {
+        payloadTextarea.addEventListener('paste', () => setTimeout(resetStatus, 50));
+        payloadTextarea.addEventListener('input', (e) => {
+            resetStatus();
+            BridgeStore.getState().setPayloadText(e.target.value);
+        });
+
+        // Sync the textarea's value back if state changes downstream
+        BridgeStore.subscribe((state) => state.payloadText, (text) => {
+            if (payloadTextarea.value !== text) {
+                payloadTextarea.value = text;
+            }
+        });
+    }
+});
+
+function syncDOMToBridgeState(state) {
     const targetFilesDiv = document.getElementById('target-files');
     if (!targetFilesDiv) return;
     targetFilesDiv.innerHTML = '';
-    files.forEach((file, index) => {
+
+    state.detectedFiles.forEach((file, index) => {
         const div = document.createElement('div');
         div.className = 'checkbox-row';
-        div.style.display = 'flex';
-        div.style.alignItems = 'center';
-        div.style.gap = '10px';
+        div.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 8px;';
 
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.id = 'cb-' + index;
-        cb.checked = true;
-        cb.dataset.file = file;
+        cb.checked = state.activeFiles.has(file);
+        cb.onclick = () => BridgeStore.getState().toggleFileSelection(file);
 
         const lbl = document.createElement('label');
         lbl.htmlFor = 'cb-' + index;
         lbl.className = 'file-label';
         lbl.innerText = file;
-        lbl.style.flex = '1';
-        lbl.style.wordBreak = 'break-all';
+        lbl.style.cssText = 'flex: 1; word-break: break-all;';
 
         const actionContainer = document.createElement('div');
 
@@ -54,19 +94,14 @@ function renderCheckboxes(files) {
         div.appendChild(lbl);
         div.appendChild(actionContainer);
         targetFilesDiv.appendChild(div);
-
-        // Asynchronously verify file existence via lightweight headers
-        fetch('/api/bridge/fetch?file=' + encodeURIComponent(file), {
-                method: 'HEAD'
-            })
-            .then(res => {
-                if (res.ok) {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        fetch(`/api/${activeWs}/fs/exists?file=` + encodeURIComponent(file))
+            .then(res => res.json())
+            .then(data => {
+                if (data.exists) {
                     const viewBtn = document.createElement('button');
                     viewBtn.className = 'btn-sm';
-                    viewBtn.style.margin = '0';
-                    viewBtn.style.padding = '4px 8px';
-                    viewBtn.style.fontSize = '0.8rem';
-                    viewBtn.style.background = '#0ea5e9';
+                    viewBtn.style.cssText = 'margin: 0; padding: 4px 8px; font-size: 0.8rem; background: #0ea5e9;';
                     viewBtn.innerText = '📋 View';
                     viewBtn.onclick = (e) => {
                         e.preventDefault();
@@ -75,16 +110,20 @@ function renderCheckboxes(files) {
                     actionContainer.appendChild(viewBtn);
                 } else {
                     const badge = document.createElement('span');
-                    badge.style.fontSize = '0.75rem';
-                    badge.style.color = '#f59e0b';
-                    badge.style.fontWeight = 'bold';
-                    badge.style.padding = '4px 8px';
+                    badge.style.cssText = 'font-size: 0.75rem; color: #f59e0b; font-weight: bold; padding: 4px 8px;';
                     badge.innerText = '❓ Unknown';
                     actionContainer.appendChild(badge);
                 }
             }).catch(e => console.error(e));
     });
 }
+let bridgeSyncTimeout = null;
+BridgeStore.subscribe((state) => state.detectedFiles, () => {
+    clearTimeout(bridgeSyncTimeout);
+    bridgeSyncTimeout = setTimeout(() => {
+        syncDOMToBridgeState(BridgeStore.getState());
+    }, 300);
+});
 
 function isPatchSandwich(text) {
     const blocks = text.split('>>>>>>> REPLACE');
@@ -115,10 +154,10 @@ export function showInput() {
     document.getElementById('btn-paste').style.display = 'block';
     document.getElementById('btn-back').style.display = 'none';
 }
-
 export function sync(dryRunActive, bypassSandwich = false) {
     if (bypassSandwich) globalBypassSandwich = true;
-    const textVal = payloadTextarea.value.replace(/\u00A0/g, ' ');
+    const bridgeState = BridgeStore.getState();
+    const textVal = bridgeState.payloadText;
     const statusBox = document.getElementById('status-box');
 
     showConsole();
@@ -127,14 +166,11 @@ export function sync(dryRunActive, bypassSandwich = false) {
         return;
     }
 
-    const activeFiles = [];
-    const checkboxes = document.getElementById('target-files').querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(cb => {
-        if (cb.checked) activeFiles.push(cb.dataset.file);
-    });
+    const activeFiles = Array.from(bridgeState.activeFiles);
 
     statusBox.innerText = "Processing streaming matrices...";
-    fetch('/api/bridge/sync', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    fetch(`/api/${activeWs}/bridge/sync`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -162,18 +198,14 @@ export function sync(dryRunActive, bypassSandwich = false) {
                 const safeP1 = p1.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
                 <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: #10b981; margin: 0;">📋 Copy State</button>
-
-                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7;
-margin: 0;">⬇️ Download State</button>
+                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7; margin: 0;">⬇️ Download State</button>
             </div>`;
             });
 
             statusBox.innerHTML = safeData;
 
-            // Micro-Interaction: Auto-clear payload if no errors or action flags occurred
             if (!data.includes('[!]') && !data.includes('ACTION_REQUIRED') && !dryRunActive) {
-                payloadTextarea.value = '';
-                payloadTextarea.dispatchEvent(new Event('input')); // Reset target file checkboxes
+                BridgeStore.getState().clearPayload();
             }
         }).catch(err => {
             statusBox.innerHTML = `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>`;
@@ -181,16 +213,12 @@ margin: 0;">⬇️ Download State</button>
 }
 
 export function updateFilePath(oldPath, newPath) {
-    let currentVal = payloadTextarea.value;
+    const currentVal = BridgeStore.getState().payloadText;
     const searchTargetOne = "<<<<<<< FILE: " + oldPath;
-    const searchTargetTwo = "<<<<<<< FILE: " + oldPath;
     const replaceTarget = "<<<<<<< FILE: " + newPath;
 
-    currentVal = currentVal.split(searchTargetOne).join(replaceTarget);
-    currentVal = currentVal.split(searchTargetTwo).join(replaceTarget);
-    payloadTextarea.value = currentVal;
-
-    payloadTextarea.dispatchEvent(new Event("input"));
+    const updatedVal = currentVal.split(searchTargetOne).join(replaceTarget);
+    BridgeStore.getState().setPayloadText(updatedVal);
     sync(false, globalBypassSandwich);
 }
 

@@ -15,11 +15,19 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`insetu.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps.
 
 ---
-
 ## 2. Active Extensions (V1 Finalized)
 These are fully built and compliant extensions currently operating within the system.
 
-### A. Citations (`engine_citations.py`)
+### A. Git Operations (`engine_git.py`)
+* **Status:** Active Extension (Fully Decoupled from Core Kernel space via lifecycle subscribers).
+* **Role:** Version control, diff generation, and repository synchronization.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Ephemeral (reads direct `.git/` history).
+* **Injection Surfaces:**
+    * UI Hooks: `zone:file-card-actions` to display diff statuses.
+    * Core Hooks: `@hooks.on('pre_compile')` to handle JIT background diff cache assembly.
+
+### B. Citations (`engine_citations.py`)
 * **Status:** Active in configuration.
 * **Role:** Manages the academic reference library, bibliography parsing, and citation generation.
 * **Dependencies (`__depends__`):** `None`
@@ -49,16 +57,7 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 * **Data Containment:** Currently blocking regex/Markdown files. Planned transition to `~/.insetu/data/tracker.db` during Step 4.
 * **Injection Surfaces:**
     * Config Hooks: Must use `@hooks.on('mutate_workspace_config')` to inject `.tracker/` virtual sub-buckets into the RAG Gatherer.
-
-### D. Git Operations (`engine_git.py`)
-* **Status:** Hardcoded. Pending Step 2 Extraction.
-* **Role:** Version control, diff generation, and repository synchronization.
-* **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Ephemeral (reads direct `.git/` history).
-* **Injection Surfaces:**
-    * UI Hooks: `zone:file-card-actions` to display diff statuses.
-
-### E. Release Management (`engine_release.py`)
+### D. Release Management (`engine_release.py`)
 * **Status:** Planned Extension.
 * **Role:** Context-aware repository management (e.g., executing `bump-my-version` strictly within a targeted directory).
 * **Dependencies (`__depends__`):** `['git']` (Cannot perform a version bump without a clean Git tree and automated commit logic).

@@ -6,7 +6,7 @@ import {
 import { AppStore } from './store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-const _getActiveWs = () => localStorage.getItem('insetu_workspace') || 'default';
+const _getActiveWs = () => AppStore.getState().activeWorkspace || 'default';
 
 const _safeParseLocalStorageSet = (key) => {
     try {
@@ -248,11 +248,11 @@ function renderTaskRepoPins(state) {
 }
 export async function loadTrackerBoard() {
     if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
-
     // Silently sync the ecosystem to ensure the board is perfectly up-to-date
     await compileContexts();
     // Refresh the context manifest for the Context/Download tabs
-    const mRes = await fetch('/api/manifest?t=' + Date.now());
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
     if (mRes.ok) setContextManifest(await mRes.json());
     // Read directly from the rapid SQLite index instead of opening physical markdown files via regex
     const tRes = await fetch('/api/tracker/files?t=' + Date.now());
@@ -338,28 +338,28 @@ function renderTaskTagPins(state) {
     });
 }
 function renderTrackerBoard(state) {
-    ['todos-open-list', 'todos-active-list', 'bugs-open-list', 'bugs-active-list', 'queue-open-list', 'log-list'].forEach(id => {
+    const targetLists = {
+        'log-list': [],
+        'todos-open-list': [],
+        'todos-active-list': [],
+        'bugs-open-list': [],
+        'bugs-active-list': [],
+        'queue-open-list': []
+    };
+
+    Object.keys(targetLists).forEach(id => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '';
     });
+
     const filtered = state.tasks.filter(t => {
         const matchesRepo = state.pinnedRepos.has('ALL') || state.pinnedRepos.has(t.repo);
         const matchesBucket = state.pinnedBuckets.has('ALL') || state.pinnedBuckets.has(t.subBucket);
         const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
         return matchesRepo && matchesBucket && matchesTag;
     });
-    // Sort tasks chronologically, newest at the top
-    filtered.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
-    const fragments = {
-        'log-list': document.createDocumentFragment(),
-        'todos-open-list': document.createDocumentFragment(),
-        'todos-active-list': document.createDocumentFragment(),
-        'bugs-open-list': document.createDocumentFragment(),
-        'bugs-active-list': document.createDocumentFragment(),
-        'queue-open-list': document.createDocumentFragment()
-    };
-
+    // Populate target column buckets
     filtered.forEach(t => {
         let containerId = null;
         if (t.status === 'closed') containerId = 'log-list';
@@ -369,14 +369,25 @@ function renderTrackerBoard(state) {
         else if (t.isBug && t.status === 'active') containerId = 'bugs-active-list';
         else if (t.isQueue && t.status === 'open') containerId = 'queue-open-list';
 
-        if (containerId && fragments[containerId]) {
-            createTaskCard(t, fragments[containerId]);
-        }
+        if (containerId) targetLists[containerId].push(t);
     });
 
-    Object.entries(fragments).forEach(([id, frag]) => {
+    // Sort active backlogs oldest-first so debt doesn't get buried
+    ['todos-open-list', 'todos-active-list', 'bugs-open-list', 'bugs-active-list', 'queue-open-list'].forEach(id => {
+        targetLists[id].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    });
+
+    // Sort the completed log column descending by close timestamp
+    targetLists['log-list'].sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+
+    // Batch render to DOM via document fragments
+    Object.entries(targetLists).forEach(([id, tasks]) => {
         const container = document.getElementById(id);
-        if (container) container.appendChild(frag);
+        if (container) {
+            const frag = document.createDocumentFragment();
+            tasks.forEach(t => createTaskCard(t, frag));
+            container.appendChild(frag);
+        }
     });
 }
 
@@ -816,15 +827,15 @@ export function generateHistoricalChangelog() {
 
     Object.keys(tasksByRepo).sort().forEach(repo => {
         changelog += `# 📜 Historical Changelog for ${repo}\n\n`;
-
         const repoTasks = tasksByRepo[repo];
-        repoTasks.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+        repoTasks.sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 
         let currentDate = "";
 
         repoTasks.forEach(t => {
-            const dateStr = t.timestamp ? t.timestamp.split('T')[0] : 'Unknown Date';
-            if (dateStr !== currentDate) {
+            const activeDate = t.closedAt || t.timestamp;
+            const dateStr = activeDate ? activeDate.split('T')[0] : 'Unknown Date';
+            if (dateStr !== currentDate)  {
                 changelog += `\n## ${dateStr}\n\n`;
                 currentDate = dateStr;
             }

@@ -68,6 +68,7 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>inSetu Recovery OS</title>
     <style>
         body { font-family: monospace; background: #0f172a; color: #38bdf8; padding: 20px; line-height: 1.6; }
@@ -90,8 +91,10 @@ HTML_TEMPLATE = """
 =======
 [fixed code]
 >>>>>>> REPLACE"></textarea>
-    <div style="display: flex; gap: 10px;">
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
         <button onclick="sync()">⚡ Execute Emergency Patch</button>
+        <button onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; }).catch(e => alert('Clipboard access denied.'))" style="background: #475569;">📋 Paste</button>
+        <button onclick="document.getElementById('payload').value = ''" style="background: #64748b;">❌ Clear</button>
         <button onclick="rebootOS()" style="background: #3b82f6;">🔄 Reboot inSetu OS</button>
     </div>
     <pre id="log" style="color: #f59e0b; margin-top: 15px; background: #1e293b; padding: 10px; border-radius: 4px; display: none;"></pre>
@@ -112,6 +115,40 @@ HTML_TEMPLATE = """
     <div class="fs-container" id="fs-list">Loading...</div>
 
     <script>
+        async function downloadFileResilient(fetchUrl, filename) {
+            try {
+                const res = await fetch(fetchUrl);
+                if (!res.ok) throw new Error("Download failed");
+                const blob = await res.blob();
+
+                // Intercept mobile architectures to summon device Share Sheet natively
+                if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                    try {
+                        const nativeFile = new File([blob], filename, { type: blob.type || 'text/plain' });
+                        await navigator.share({
+                            files: [nativeFile],
+                            title: filename
+                        });
+                        return;
+                    } catch (shareError) {
+                        if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
+                    }
+                }
+
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            } catch (e) {
+                window.location.href = fetchUrl;
+            }
+        }
+
         async function sync() {
             const text = document.getElementById('payload').value;
             const log = document.getElementById('log');
@@ -150,30 +187,7 @@ HTML_TEMPLATE = """
                 if (res.ok) {
                     btn.innerText = "✅ Compiled successfully";
                     setTimeout(() => btn.innerText = orig, 3000);
-                    // Leverage the lifeboat's own download route to instantly serve the file
-                    window.open('/download/' + encodeURIComponent(data.file), '_blank');
-                } else {
-                    alert("Dump failed: " + data.message);
-                    btn.innerText = orig;
-                }
-            } catch (e) {
-                alert("Network error: " + e.message);
-                btn.innerText = orig;
-            }
-        }
-
-        async function emergencyDump() {
-            const btn = document.getElementById('btn-emergency-dump');
-            const orig = btn.innerText;
-            btn.innerText = "⏳ Compiling...";
-            try {
-                const res = await fetch('/api/system/emergency_dump', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    btn.innerText = "✅ Compiled successfully";
-                    setTimeout(() => btn.innerText = orig, 3000);
-                    // Leverage the lifeboat's own download route to instantly serve the file
-                    window.open('/download/' + encodeURIComponent(data.file), '_blank');
+                    await downloadFileResilient('/download/' + encodeURIComponent(data.file), data.file);
                 } else {
                     alert("Dump failed: " + data.message);
                     btn.innerText = orig;
@@ -218,8 +232,12 @@ HTML_TEMPLATE = """
                 const a = document.createElement('a');
                 a.className = 'file-link';
                 a.innerText = '📄 ' + f;
-                a.href = '/download/' + encodeURIComponent(currentPath === '.' ? f : currentPath + '/' + f);
-                a.target = '_blank';
+                a.href = '#';
+                const dlUrl = '/download/' + encodeURIComponent(currentPath === '.' ? f : currentPath + '/' + f);
+                a.onclick = (e) => {
+                    e.preventDefault();
+                    downloadFileResilient(dlUrl, f);
+                };
                 list.appendChild(a);
             });
         }

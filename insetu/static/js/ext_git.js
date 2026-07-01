@@ -93,10 +93,10 @@ export async function executePush(modalId = 'push-modal') {
                 const m = document.getElementById(modalId);
                 if (m) m.style.display = 'none';
             }
-
 // Silently re-hydrate the UI manifest and bundles
             await compileContexts();
-            const mRes = await fetch('/api/manifest');
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            const mRes = await fetch(`/api/${activeWs}/manifest`);
             if (mRes.ok) setContextManifest(await mRes.json());
 
             generateDiffs();

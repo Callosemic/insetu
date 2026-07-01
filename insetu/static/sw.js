@@ -24,8 +24,9 @@ self.addEventListener('activate', (e) => {
     return self.clients.claim();
 });
 self.addEventListener('fetch', (e) => {
-    if (e.request.method !== 'GET') {
-        return; // Bypass the service worker completely for POST requests
+    const url = new URL(e.request.url);
+    if (e.request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname === '/submit' || url.pathname.startsWith('/download/')) {
+        return; // Bypass the service worker completely for stateful multi-tenant data loops
     }
 
     e.respondWith(

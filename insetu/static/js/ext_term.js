@@ -1,4 +1,5 @@
 // ext_term.js - Terminal Extension
+import { AppStore } from './store.js';
 const termScreen = window.ExtensionRegistry.registerTab('term', 'Term');
 
 if (termScreen) {
@@ -25,10 +26,10 @@ if (termScreen) {
     termScreen.innerHTML = `
         <iframe id="term-iframe" style="flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px;"></iframe>
     `;
-
     // 3. Fetch the port mapping from the backend and boot TTYD
-    fetch('/api/repos').then(r => r.json()).then(d => {
-        const termIframe = document.getElementById('term-iframe');
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        fetch(`/api/${activeWs}/repos`).then(r => r.json()).then(d => {
+            const termIframe = document.getElementById('term-iframe');
         if (termIframe && d.term_port) {
             termIframe.src = window.location.protocol + '//' + window.location.hostname + ':' + d.term_port;
         }

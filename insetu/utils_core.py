@@ -17,12 +17,18 @@ def sniff_tenant_id():
     except RuntimeError:
         pass
     return "default"
+def get_physics_for(workspace_id):
+    """
+    STATELESS ROUTING CORE CHASSIS
+    Resolves spatial physics dynamically for the specified request tenant ID.
+    """
+    return get_workspace_physics(workspace_id)
 
 def get_workspace_physics(workspace_id=None):
     """
     STATELESS ROUTING CORE
     Resolves spatial physics dynamically based on the requested tenant ID.
-    """
+"""
     if not workspace_id:
         workspace_id = sniff_tenant_id()
 
@@ -103,11 +109,17 @@ def get_gather_paths(workspace_id=None):
     os.makedirs(paths["diffs_dir"], exist_ok=True)
     os.makedirs(paths["gather_dir"], exist_ok=True)
     return paths
+def is_extension_enabled(ext_name, workspace_id=None):
+    """Universal SSOT helper to verify if an optional extension is enabled for a tenant."""
+    cfg = load_config(workspace_id)
+    return ext_name in cfg.get("extensions", [])
+
+
 def extension_auth(ext_name):
     """
     SECURITY GUARDRAIL
     Intercepts API requests to ensure the requested extension is active in the targeted tenant's config.json.
-    """
+"""
     def decorator(f):
         import functools
         @functools.wraps(f)
@@ -154,9 +166,9 @@ def load_config(workspace_id=None):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     cfg = load_json_file(cfg_path, {})
     from insetu.hooks import hooks
-    hooks.emit('mutate_workspace_config', cfg)
+    hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
 
-    # Implicit Repo Injection: Mount .insetu for the UI, but exclude it from compilers
+    # Implicit Repo Injection: Mount  .insetu for the UI, but exclude it from compilers
     targets = cfg.get("target_repos", [])
     if not any(r.get("repo_dir") == ".insetu" for r in targets):
         targets.append({
@@ -249,6 +261,33 @@ def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
+def get_omniscient_workspace_files(workspace_id, allowed_repos):
+    """
+    SSOT OMNISCIENT SWEEP
+    Centralizes all filesystem scanning loops to safely protect critical system 
+    nodes (like .git) without duplicating walk arrays across controllers.
+    """
+    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    live_cfg = load_config(workspace_id)
+    ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
+
+    search_roots = [os.path.dirname(cfg_path)]
+    for repo in allowed_repos:
+        repo_path = os.path.join(ws_root, repo)
+        if os.path.exists(repo_path):
+            search_roots.append(repo_path)
+    search_roots = list(set(os.path.abspath(r) for r in search_roots))
+
+    candidates = []
+    for s_root in search_roots:
+        for root, dirs, files in os.walk(s_root):
+            dirs[:] = [d for d in dirs if (not d.startswith('.') or d == '.tracker') and d not in ignore_dirs]
+            for f in files:
+                cand_abs = os.path.abspath(os.path.join(root, f)).replace('\\', '/')
+                cand_rel = os.path.relpath(cand_abs, ws_root).replace('\\', '/')
+                candidates.append((f, cand_rel))
+    return candidates
+
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir") and not repo.get("exclude_from_tracker")]
@@ -256,9 +295,27 @@ def resolve_workspace_path(path, workspace_id=None):
     _, workspace_root, _ = get_workspace_physics(workspace_id)
 
     norm_path = path.replace('\\', '/')
+    # Prevent absolute path traversal containment breaches
     if os.path.isabs(norm_path):
-        return norm_path
+        resolved_abs = os.path.abspath(norm_path)
+        # Check if the target is explicitly wrapped inside an authorized physical target repository
+        cfg = load_config(workspace_id)
+        for repo in cfg.get("target_repos", []):
+            p_path = repo.get("physical_path")
+            if p_path:
+                allowed_base = os.path.abspath(os.path.expanduser(p_path))
+                if resolved_abs.startswith(allowed_base):
+                    return resolved_abs
+        # Fall back to locking down to the general workspace sandbox framework
+        if resolved_abs.startswith(os.path.abspath(workspace_root)):
+            return resolved_abs
+        # Disallow arbitrary system breakout traversals; anchor back inside the root container
+        norm_path = os.path.relpath(resolved_abs, workspace_root).replace('\\', '/')
 
+    import re
+    # Strip out malicious directory traversal operators safely
+    norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
+    norm_path = re.sub(r'/+', '/', norm_path).strip('/')
     parts = [p for p in norm_path.split('/') if p]
     if not parts:
         return path

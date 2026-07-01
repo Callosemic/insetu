@@ -12,11 +12,27 @@ let currentModalFile = '';
 export let currentModalOriginalText = '';
 export let currentModalIsFS = false;
 let isPreviewMode = false;
-
-export async function downloadFile(fetchUrl, fallbackFilename) {
-    const res = await fetch(fetchUrl);
+export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
+    const res = await fetch(fetchUrl, fetchOptions);
     if (!res.ok) throw new Error('Download failed from server.');
     const blob = await res.blob();
+
+    // Standardized Mobile Integration Layer: Intercept mobile runtimes to summon the native device Share Sheet
+    if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        try {
+            const nativeFile = new File([blob], fallbackFilename, { type: blob.type || 'text/plain' });
+            await navigator.share({
+                files: [nativeFile],
+                title: fallbackFilename,
+                text: `inSetu Developer OS Context Matrix: ${fallbackFilename}`
+            });
+            return;
+        } catch (shareError) {
+            // Absorb clean user cancellations; bypass to standard blob anchor click on real failure bounds
+            if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
+        }
+    }
+
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.style.display = 'none';
@@ -45,11 +61,13 @@ function renderMarkdownPreview() {
         // Auto-link URLs inside the frontmatter
         const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: #38bdf8; text-decoration: underline;">$1</a>');
         return '<pre class="yaml-frontmatter">' + linkedP1 + '</pre>';
-    });
+});
 
-    preview.innerHTML = marked.parse(text);
+// Sanitize raw text vectors against script tag injection to enforce I/O safety bounds
+const sanitizedText = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '⚠️ [Script Blocked]');
+preview.innerHTML = marked.parse(sanitizedText);
 
-    const checkboxes = preview.querySelectorAll('input[type="checkbox"]');
+const checkboxes = preview.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach((cb, index) => {
         cb.disabled = false;
         cb.addEventListener('change', (e) => {
@@ -332,7 +350,8 @@ async function saveModalFile(autoSave = false) {
             return;
         }
     }
-    await executeWorkspaceMutation('/api/fs/save', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
         filepath: currentModalFile,
         content: content
     }, {
@@ -383,11 +402,11 @@ function openMoveModal() {
         ]
     });
 }
-
 async function executeMove(modalId = 'move-modal') {
     const destPath = document.getElementById('move-dest-path').value.trim();
     if (!destPath || destPath === currentModalFile) return alert("Please enter a valid new destination path.");
-    await executeWorkspaceMutation('/api/fs/move', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/move`, {
         filepath: currentModalFile,
         dest_path: destPath
     }, {
@@ -400,34 +419,45 @@ async function executeMove(modalId = 'move-modal') {
             document.getElementById('copy-modal').style.display = 'none';
             updateManifestState(currentModalFile, destPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                window.ExtensionRegistry.executeUIHook('zone:post-file-save', currentModalFile);
+            }
         }
     });
 }
-
 async function archiveModalFile() {
     if (!confirm("Are you sure you want to archive this file?\nIt will be moved to an 'archived/' subdirectory.")) return;
 
-    await executeWorkspaceMutation('/api/fs/archive', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/archive`, {
         filepath: currentModalFile
     }, {
         onSuccess: () => {
+            const oldPath = currentModalFile;
             document.getElementById('copy-modal').style.display = 'none';
-            updateManifestState(currentModalFile);
+            updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                window.ExtensionRegistry.executeUIHook('zone:post-file-save', oldPath);
+            }
         }
     });
 }
-
 async function deleteModalFile() {
     if (!confirm("Are you sure you want to delete this file?\nThis cannot be undone!")) return;
 
-    await executeWorkspaceMutation('/api/fs/delete', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/delete`, {
         filepath: currentModalFile
     }, {
         onSuccess: () => {
+            const oldPath = currentModalFile;
             document.getElementById('copy-modal').style.display = 'none';
-            updateManifestState(currentModalFile);
+            updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                window.ExtensionRegistry.executeUIHook('zone:post-file-save', oldPath);
+            }
         }
     });
 }
@@ -455,14 +485,14 @@ function cleanModalFile() {
         document.getElementById('modal-text').dispatchEvent(new Event('input'));
     }
 }
-
 async function downloadFromModal() {
     const btn = document.getElementById('modal-dl-btn');
     if (!btn) return;
     const origText = btn.innerText;
     btn.innerText = '⏳...';
     try {
-        const fetchUrl = currentModalIsFS ? `/api/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
         await downloadFile(fetchUrl, currentModalFile.split('/').pop());
     } catch (e) {
         alert("Error downloading file: " + e.message);
@@ -527,8 +557,9 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
         const origText = dlBtn.innerText;
         dlBtn.innerText = '⏳...';
         try {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
             const fetchUrl = fileInfo.isSource ?
-                `/api/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+                `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
 
             const res = await fetch(fetchUrl);
             if (!res.ok) throw new Error("Failed to fetch");
@@ -877,8 +908,8 @@ async function saveNewFile(modalId = 'new-file-modal') {
     }
 
     const btn = document.getElementById('temp-save-file-btn');
-
-    await executeWorkspaceMutation('/api/fs/save', {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
         filepath,
         content
     }, {
@@ -888,7 +919,7 @@ async function saveNewFile(modalId = 'new-file-modal') {
             if (btn) btn.innerText = "Syncing Tree...";
             await compileContexts();
 
-            const mRes = await fetch('/api/manifest?t=' + Date.now());
+            const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
 
             if (window.UIFactory) window.UIFactory.closeModal(modalId);
@@ -1001,10 +1032,11 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
         if (res.ok) {
             btn.innerText = "Syncing Tree...";
             await compileContexts();
-            const mRes = await fetch('/api/manifest?t=' + Date.now());
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
             if (isNewRepo) {
-                const rRes = await fetch('/api/repos?t=' + Date.now());
+                const rRes = await fetch(`/api/${activeWs}/repos?t=` + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
@@ -1104,9 +1136,9 @@ export async function viewSourceFile(filepath, isFS = false) {
             textArea.style.display = 'block';
         }
     }
-
     try {
-        const res = await fetch('/api/bridge/fetch?file=' + encodeURIComponent(filepath));
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(text);
@@ -1580,12 +1612,12 @@ export async function executeDeepLinkSearch() {
         container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search contents...</span>';
         return;
     }
-
     container.innerHTML = '<div class="spinner" style="display:block; margin-top:0;">Searching file contents across workspace...</div>';
     document.getElementById('btn-deep-search').disabled = true;
 
     try {
-        const res = await fetch('/api/fs/search?q=' + encodeURIComponent(q));
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(q));
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
 
@@ -1711,7 +1743,6 @@ window.executeDeepLinkSearch = executeDeepLinkSearch;
 export function openPublishModal() {
     document.getElementById('publish-modal').style.display = 'block';
 }
-
 export async function executePublish() {
     const format = document.getElementById('publish-format-select').value;
     const btn = document.getElementById('execute-publish-btn');
@@ -1719,40 +1750,14 @@ export async function executePublish() {
     btn.innerText = "⏳ Compiling...";
 
     try {
-        const res = await fetch('/api/fs/compile-document', {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const dlName = currentModalFile.split('/').pop().split('.')[0] + '.' + format;
+
+        await downloadFile(`/api/${activeWs}/fs/compile-document`, dlName, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filepath: currentModalFile, format: format })
         });
-
-        if (!res.ok) {
-            let errText = "Compilation failed.";
-            try {
-                const errData = await res.json();
-                errText = errData.error || errText;
-            } catch(e) {}
-            alert("Error: " + errText);
-            return;
-        }
-
-        const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-
-        let dlName = currentModalFile.split('/').pop().split('.')[0] + '.' + format;
-        const disposition = res.headers.get('Content-Disposition');
-        if (disposition && disposition.indexOf('filename=') !== -1) {
-            const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
-            if (matches != null && matches[1]) dlName = matches[1].replace(/['"]/g, '');
-        }
-
-        a.download = dlName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        a.remove();
 
         document.getElementById('publish-modal').style.display = 'none';
     } catch (e) {

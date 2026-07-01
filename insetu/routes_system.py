@@ -23,36 +23,44 @@ def api_system_panic():
 
     threading.Thread(target=crash_and_restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Initiating kernel panic..."})
+def get_system_config(workspace_id):
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    try:
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        data = load_config(workspace_id)
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    core_engines = {"bridge", "gather", "format", "ingest"}
+    available = []
+    for file in os.listdir(script_dir):
+        if file.startswith("engine_") and file.endswith(".py"):
+            ext_name = file.replace("engine_", "").replace(".py", "")
+            if ext_name not in core_engines:
+                available.append(ext_name)
+
+    data["_available_extensions"] = sorted(available)
+    return data
+
+
+def save_system_config(workspace_id, payload):
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    if "_available_extensions" in payload:
+        del payload["_available_extensions"]
+    save_json_file(cfg_path, payload)
+
+
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])
 def api_system_config():
     workspace_id = request.headers.get('X-Workspace-ID')
-    cfg_path, _, _ = get_workspace_physics(workspace_id)
-
     if request.method == 'GET':
-        try:
-            with open(cfg_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            data = load_config(workspace_id)
-
-        # Dynamically discover available extensions
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        core_engines = {"bridge", "gather", "format", "ingest"}
-        available = []
-        for file in os.listdir(script_dir):
-            if file.startswith("engine_") and file.endswith(".py"):
-                ext_name = file.replace("engine_", "").replace(".py", "")
-                if ext_name not in core_engines:
-                    available.append(ext_name)
-
-        data["_available_extensions"] = sorted(available)
+        data = get_system_config(workspace_id)
         return jsonify(data)
     else:
         try:
             payload = request.json
-            if "_available_extensions" in payload:
-                del payload["_available_extensions"]
-            save_json_file(cfg_path, payload)
+            save_system_config(workspace_id, payload)
             return jsonify({"status": "success", "message": "Configuration saved successfully."})
         except Exception as e:
             return jsonify({"error": str(e)}), 500

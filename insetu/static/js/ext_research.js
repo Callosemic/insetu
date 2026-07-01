@@ -1,5 +1,5 @@
 import { executeWorkspaceMutation } from './app.js';
-
+import { downloadFile } from './fs.js';
 // --- UDF STATE STORE ---
 const ResearchStore = {
     state: {
@@ -327,17 +327,20 @@ Output your response as a raw JSON object containing three arrays of \`id\` stri
                 container.innerHTML = '<span style="color: #f59e0b; font-size: 0.85rem;">No fully scraped pending links available to pack.</span>';
                 return;
             }
-
             chunks.forEach((chunk, i) => {
+                const filename = `context_${jobId.substring(0, 8)}_part_${i+1}.txt`;
                 const blob = new Blob([chunk], { type: 'text/plain' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url;
-                a.download = `context_${jobId.substring(0, 8)}_part_${i+1}.txt`;
+                a.href = '#';
                 a.innerText = `📄 Download Part ${i+1} (${(chunk.length/1024).toFixed(1)} kb)`;
-                a.style.cssText = 'color: #38bdf8; text-decoration: none; font-size: 0.9rem; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; width: fit-content; margin-bottom: 5px; display: inline-block;';
+                a.style.cssText = 'color: #38bdf8; text-decoration: none; font-size: 0.9rem; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; width: fit-content; margin-bottom: 5px; display: inline-block; cursor: pointer;';
                 a.onmouseover = () => a.style.background = 'var(--input-bg)';
                 a.onmouseout = () => a.style.background = 'var(--bg)';
+                a.onclick = (e) => {
+                    e.preventDefault();
+                    downloadFile(url, filename);
+                };
                 container.appendChild(a);
             });
         } catch(e) {

@@ -44,11 +44,16 @@ def init_tracker_db():
         """)
         conn.commit()
         _sync_disk_to_db(workspace_id=ws_id)
-
 @hooks.on('post_file_save')
-def handle_tracker_file_save(filepath):
+def handle_tracker_file_save(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
-        _sync_disk_to_db()
+        _sync_disk_to_db(workspace_id)
+
+
+@hooks.on('post_file_delete')
+def handle_tracker_file_delete(filepath, workspace_id=None):
+    if ".tracker/" in filepath and filepath.endswith(".md"):
+        _sync_disk_to_db(workspace_id)
 def _sync_disk_to_db(workspace_id=None):
     _, ws_root, _ = get_workspace_physics(workspace_id)
     conn = get_connection('tracker', workspace_id=workspace_id)
@@ -125,9 +130,8 @@ def _sync_disk_to_db(workspace_id=None):
                     except Exception:
                         pass
     conn.commit()
-
 @hooks.on('mutate_workspace_config')
-def inject_tracker_config(cfg):
+def inject_tracker_config(cfg, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
     from insetu.utils_core import get_safe_repo_id
@@ -201,6 +205,15 @@ sub_bucket: "{sub_bucket}"{tags_yaml}
     target_ws = workspace_id or "default"
     ticket_path = f"{repo}/.tracker/{ticket_type}s/{status}/{filename}"
 
+    # Synchronously seed the local ledger cache row to guarantee transactional accuracy on immediate CQRS query sweeps
+    conn = get_connection('tracker', workspace_id=target_ws)
+    conn.execute("""
+        INSERT OR REPLACE INTO tracker_tickets 
+        (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, filepath)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (ticket_id, repo, ticket_type, status, title, description, json.dumps([t.strip() for t in tags.split(',') if t.strip()]), sub_bucket, now.isoformat(), None, ticket_path))
+    conn.commit()
+
     execute_vfs_save(target_ws, ticket_path, content)
     return ticket_path
 def _extract_closed_date(content):
@@ -220,28 +233,40 @@ def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspa
     ticket_type = "bug" if "/bugs/" in current_rel_path else "queue" if "/queue/" in current_rel_path else "todo"
     if new_type: ticket_type = new_type
 
-    target_dir = get_tracker_path(repo, ticket_type, new_status, workspace_id=workspace_id)
-    os.makedirs(target_dir, exist_ok=True)
-    
     filename = os.path.basename(current_rel_path)
-    abs_target = os.path.join(target_dir, filename)
-    
-    # If transitioning to closed, stamp the YAML
-    if new_status == "closed":
-        with open(abs_current, "r", encoding="utf-8") as f:
-            content = f.read()
+
+    with open(abs_current, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Calculate updated frontmatter safely in memory
+    if new_status == "closed" and "closed_at: null" in content:
         now_iso = datetime.now().isoformat(timespec='seconds')
         content = re.sub(r"closed_at:\s*null", f"closed_at: {now_iso}", content)
-        with open(abs_current, "w", encoding="utf-8") as f:
-            f.write(content)
-    shutil.move(abs_current, abs_target)
 
-    # Return the new relative path
+    # Re-calculate correct relative tracking track targets
     if new_status in ["closed", "archived"]:
-        if ticket_type == "queue": return f"{repo}/.tracker/queue/closed/{filename}"
-        return f"{repo}/.tracker/closed/{'archived/' if new_status == 'archived' else ''}{filename}"
-    if ticket_type == "queue": return f"{repo}/.tracker/queue/{new_status}/{filename}"
-    return f"{repo}/.tracker/{ticket_type}s/{new_status}/{filename}"
+        if ticket_type == "queue": 
+            new_rel_path = f"{repo}/.tracker/queue/closed/{filename}"
+        else:
+            new_rel_path = f"{repo}/.tracker/closed/{'archived/' if new_status == 'archived' else ''}{filename}"
+    elif ticket_type == "queue": 
+        new_rel_path = f"{repo}/.tracker/queue/{new_status}/{filename}"
+    else:
+        new_rel_path = f"{repo}/.tracker/{ticket_type}s/{new_status}/{filename}"
+    from insetu.routes_fs import execute_vfs_save
+    # Process modifications asynchronously through our off-thread VFS queue pipeline
+    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": current_rel_path})
+
+    # Synchronously project state transitions inside the SQLite index cache for instant read synchronization
+    conn = get_connection('tracker', workspace_id=workspace_id)
+    conn.execute("""
+        UPDATE tracker_tickets 
+        SET status = ?, filepath = ?, ticket_type = ?, closed_at = ?
+        WHERE filepath = ?
+    """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, current_rel_path))
+    conn.commit()
+
+    return new_rel_path
 @hooks.on('pre_compile')
 def pre_compile_tracker_housekeeping(workspace_id=None):
     try:
@@ -286,11 +311,18 @@ def rescue_orphan_tickets(workspace_id=None):
 
                 os.makedirs(target_dir, exist_ok=True)
                 dest_path = os.path.join(target_dir, filename)
-
                 # Handle potential filename collisions gracefully
                 if not os.path.exists(dest_path) or os.path.getmtime(filepath) > os.path.getmtime(dest_path):
-                    shutil.move(filepath, dest_path)
-                    rescued_count += 1
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            f_content = f.read()
+                        new_rel_path = os.path.relpath(dest_path, ws_root).replace('\\', '/')
+                        old_rel_path = os.path.relpath(filepath, ws_root).replace('\\', '/')
+                        from insetu.routes_fs import execute_vfs_save
+                        execute_vfs_save(workspace_id, new_rel_path, f_content, data={"delete_source": old_rel_path})
+                        rescued_count += 1
+                    except Exception:
+                        pass
     return rescued_count
 def reconcile_declared_closures(workspace_id=None):
     """
@@ -330,9 +362,11 @@ def reconcile_declared_closures(workspace_id=None):
                     if closed_date_str:
                         # Content has declared closure. Resolve physical destination
                         target_dir = get_tracker_path(repo, ticket_type, "closed", workspace_id=workspace_id)
-                        os.makedirs(target_dir, exist_ok=True)
-
-                        shutil.move(filepath, os.path.join(target_dir, filename))
+                        dest_path = os.path.join(target_dir, filename)
+                        new_rel_path = os.path.relpath(dest_path, ws_root).replace('\\', '/')
+                        old_rel_path = os.path.relpath(filepath, ws_root).replace('\\', '/')
+                        from insetu.routes_fs import execute_vfs_save
+                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
                         reconciled_count += 1
                 except Exception:
                     pass # Safeguard against structural anomalies during disk read
@@ -363,10 +397,12 @@ def archive_stale_tickets(workspace_id=None):
                 closed_date_str = _extract_closed_date(content)
                 if closed_date_str:
                     try:
-                        closed_date = datetime.fromisoformat(closed_date_str)
+                        closed_date = datetime.fromisoformat(cutoff_date_str)
                         if closed_date < cutoff_date:
-                            os.makedirs(archive_dir, exist_ok=True)
-                            shutil.move(filepath, os.path.join(archive_dir, filename))
+                            new_rel_path = f"{repo}/.tracker/closed/archived/{filename}"
+                            old_rel_path = f"{repo}/.tracker/closed/{filename}"
+                            from insetu.routes_fs import execute_vfs_save
+                            execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
                             archived_count += 1
                     except ValueError:
                         pass # Ignore malformed dates
@@ -387,9 +423,6 @@ def api_tracker_new():
             sub_bucket=data.get('sub_bucket', 'None'),
             workspace_id=workspace_id
         )
-        from insetu.cartographer import map_repositories
-        map_repositories(workspace_id)
-        _sync_disk_to_db(workspace_id)
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -397,9 +430,13 @@ def api_tracker_new():
 def api_tracker_files():
     workspace_id = request.headers.get('X-Workspace-ID')
     try:
-        # JIT sync to populate the database for dynamically swapped workspaces
-        _sync_disk_to_db(workspace_id)
         conn = get_connection('tracker', workspace_id=workspace_id)
+
+        # True CQRS Mandate: Perform an initial seed walk only if the cache index is completely blank.
+        count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
+        if count_check == 0:
+            _sync_disk_to_db(workspace_id)
+
         cursor = conn.execute("SELECT * FROM tracker_tickets")
         tasks = []
         for row in cursor.fetchall():
@@ -415,6 +452,7 @@ def api_tracker_files():
                 "tags": json.loads(row['tags']) if row['tags'] else [],
                 "subBucket": row['sub_bucket'],
                 "timestamp": row['created_at'],
+                "closedAt": row['closed_at'],
                 "filepath": row['filepath']
             })
         return jsonify({"tasks": tasks})
@@ -432,7 +470,6 @@ def api_tracker_transition():
             new_type=data.get('new_type'),
             workspace_id=workspace_id
         )
-        _sync_disk_to_db(workspace_id)
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

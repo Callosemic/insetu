@@ -9,7 +9,7 @@ from insetu.hooks import hooks
 
 citations_bp = Blueprint('citations', __name__)
 @hooks.on('mutate_workspace_config')
-def inject_citation_metadata(cfg):
+def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     """Dynamically injects virtual UI metadata for citation payloads."""
     if "citations" not in cfg.get("extensions", []): return
     if "virtual_contexts" not in cfg:
@@ -31,54 +31,46 @@ def inject_citation_metadata(cfg):
 
     # Dynamically inject mappings for repo-specific citation buckets
     try:
-        import sqlite3, os, json
-        paths = get_gather_paths()
-        db_path = os.path.join(paths["artifacts_base"], "citations.db")
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
-            cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
-            citation_scopes = set()
-            for row in cursor.fetchall():
-                atts = json.loads(row[0])
-                for att in atts:
-                    repo = att.get('repo')
-                    bucket = att.get('bucket', 'None')
-                    if repo: 
-                        citation_scopes.add((repo, None))
-                        if bucket and bucket != "None":
-                            citation_scopes.add((repo, bucket))
+        from insetu.db import get_connection
+        conn = get_connection("citations", workspace_id=workspace_id)
+        cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
+        citation_scopes = set()
+        for row in cursor.fetchall():
+            atts = json.loads(row[0])
+            for att in atts:
+                repo = att.get('repo')
+                bucket = att.get('bucket', 'None')
+                if repo: 
+                    citation_scopes.add((repo, None))
+                    if bucket and bucket != "None":
+                        citation_scopes.add((repo, bucket))
 
-            for repo, bucket in citation_scopes:
-                if bucket:
-                    virtual_dir = f"virtual_citations_{repo}_{bucket}"
-                    ui_title = f"{repo}/{bucket}"
-                    out_file = f"{repo}_{bucket}_citations_context.txt"
-                else:
-                    virtual_dir = f"virtual_citations_{repo}"
-                    ui_title = repo
-                    out_file = f"{repo}_citations_context.txt"
-                if not any(v.get("out_file") == out_file for v in v_ctxs):
-                    v_ctxs.append({
-                        "title": ui_title,
-                        "description": f"Academic citations scoped to {ui_title}.",
-                        "domain": "Reference Library",
-                        "out_file": out_file
-                    })
-            conn.close()
+        for repo, bucket in citation_scopes:
+            if bucket:
+                virtual_dir = f"virtual_citations_{repo}_{bucket}"
+                ui_title = f"{repo}/{bucket}"
+                out_file = f"{repo}_{bucket}_citations_context.txt"
+            else:
+                virtual_dir = f"virtual_citations_{repo}"
+                ui_title = repo
+                out_file = f"{repo}_citations_context.txt"
+            if not any(v.get("out_file") == out_file for v in v_ctxs):
+                v_ctxs.append({
+                    "title": ui_title,
+                    "description": f"Academic citations scoped to {ui_title}.",
+                    "domain": "Reference Library",
+                    "out_file": out_file
+                })
     except Exception:
         pass
 @hooks.on('compile_contexts')
-def compile_citation_contexts(manifest):
+def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
     try:
-        import sqlite3
         from insetu.utils_core import get_gather_paths
-        paths = get_gather_paths()
-        db_path = os.path.join(paths["artifacts_base"], "citations.db")
-        if not os.path.exists(db_path):
-            return
+        from insetu.db import get_connection
+        paths = get_gather_paths(workspace_id)
 
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = get_connection("citations", workspace_id=workspace_id)
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
         rows = cursor.fetchall()
         if rows:
@@ -153,11 +145,8 @@ def _rebuild_metadata_cache():
     except Exception:
         pass
 def get_db():
-    from insetu.utils_core import get_gather_paths
-    paths = get_gather_paths()
-    db_path = os.path.join(paths["artifacts_base"], "citations.db")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    from insetu.db import get_connection
+    conn = get_connection("citations")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS citations (
             id TEXT PRIMARY KEY,

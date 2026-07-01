@@ -189,12 +189,12 @@ if (libraryScreen) {
     let libConfigs = [];
     let libPinnedRepos = new Set(JSON.parse(localStorage.getItem('insetu_lib_pinned_repos')) || ["ALL"]);
     let libPinnedBuckets = new Set(JSON.parse(localStorage.getItem('insetu_lib_pinned_buckets')) || ["ALL"]);
-
     let cachedPublications = [];
     let cachedAuthors = [];
 
     // Fetch repository configs to populate UI
-    fetch('/api/repos').then(r => r.json()).then(d => {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    fetch(`/api/${activeWs}/repos`).then(r => r.json()).then(d => {
         libRepos = d.repos || [];
         libConfigs = d.targets || [];
         renderLibPins();
