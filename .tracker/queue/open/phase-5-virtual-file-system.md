@@ -7,10 +7,10 @@ created: "2026-06-26"
 # VFS & Semantic Strategy Pattern
 
 Evolve the Yomama Sync Bridge into an atomic, syntax-aware patching engine.
-
 ### Action Items
-- [ ] Build an in-memory Virtual File System (VFS) to hold multi-file patches.
-- [ ] Enforce atomic rollbacks (if one file's syntax fails, abort the entire transaction).
+- [ ] Build an in-memory Virtual File System (VFS) to hold multi-file patches. [cite: 3157]
+- [ ] Enforce atomic rollbacks (if one file's syntax fails, abort the entire transaction). [cite: 3158]
+- [ ] Redesign the Sync Bridge write-path in `routes_bridge.py` to prevent structural leakage; do not write blocks straight to disk inside the file loop iteration before verification has successfully cleared.
 - [ ] Implement the **Strict Engine** (Python/YAML) for absolute whitespace tracking.
 - [ ] Implement the **Structural Engine** (JS/TS/Rust) using native AST formatters (e.g., Prettier).
 - [ ] Implement the **Object Engine** (JSON) for recursive dictionary patching.

@@ -2,7 +2,7 @@
 id: INSETU-QUEUE-20260622_0442_BLUEPRINTS
 title: "Backend Maintainability: Modularize Flask App with Blueprints"
 created_at: 2026-06-22T04:42:00
-closed_at: null
+closed_at: 2026-07-01T07:25:00
 tags: [backend, maintainability, architecture]
 ---
 ## Description

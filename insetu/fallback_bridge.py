@@ -96,6 +96,12 @@ HTML_TEMPLATE = """
     </div>
     <pre id="log" style="color: #f59e0b; margin-top: 15px; background: #1e293b; padding: 10px; border-radius: 4px; display: none;"></pre>
 
+    <div style="background: #3b82f620; border: 1px solid #3b82f6; padding: 15px; border-radius: 4px; margin-top: 20px;">
+        <h4 style="margin-top: 0; color: #60a5fa;">🆘 Architect Rescue Protocol</h4>
+        <p style="font-size: 0.9rem; color: #94a3b8;">If you need an LLM to debug this kernel panic, this button will instantly compile the raw source code of the entire inSetu OS into a single context payload.</p>
+        <button id="btn-emergency-dump" onclick="emergencyDump()" style="background: #3b82f6;">📦 Generate Core OS Context</button>
+    </div>
+
     <hr style="border-color: #334155; margin: 30px 0;">
 
     <h3>2. Lifeboat File Evacuation</h3>
@@ -131,6 +137,50 @@ HTML_TEMPLATE = """
                 setTimeout(() => window.location.reload(), 3000);
             } catch (e) {
                 alert("Reboot failed: " + e.message);
+            }
+        }
+
+        async function emergencyDump() {
+            const btn = document.getElementById('btn-emergency-dump');
+            const orig = btn.innerText;
+            btn.innerText = "⏳ Compiling...";
+            try {
+                const res = await fetch('/api/system/emergency_dump', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    btn.innerText = "✅ Compiled successfully";
+                    setTimeout(() => btn.innerText = orig, 3000);
+                    // Leverage the lifeboat's own download route to instantly serve the file
+                    window.open('/download/' + encodeURIComponent(data.file), '_blank');
+                } else {
+                    alert("Dump failed: " + data.message);
+                    btn.innerText = orig;
+                }
+            } catch (e) {
+                alert("Network error: " + e.message);
+                btn.innerText = orig;
+            }
+        }
+
+        async function emergencyDump() {
+            const btn = document.getElementById('btn-emergency-dump');
+            const orig = btn.innerText;
+            btn.innerText = "⏳ Compiling...";
+            try {
+                const res = await fetch('/api/system/emergency_dump', { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    btn.innerText = "✅ Compiled successfully";
+                    setTimeout(() => btn.innerText = orig, 3000);
+                    // Leverage the lifeboat's own download route to instantly serve the file
+                    window.open('/download/' + encodeURIComponent(data.file), '_blank');
+                } else {
+                    alert("Dump failed: " + data.message);
+                    btn.innerText = orig;
+                }
+            } catch (e) {
+                alert("Network error: " + e.message);
+                btn.innerText = orig;
             }
         }
 
@@ -245,10 +295,52 @@ def fs_list():
 
 @app.route('/download/<path:filepath>')
 def download(filepath):
+    # Werkzeug normalizes double slashes in URLs, stripping the leading slash off absolute paths.
+    # If the stripped path doesn't exist but the absolute one does, repair it.
+    if not os.path.exists(filepath) and os.path.exists('/' + filepath):
+        filepath = '/' + filepath
+        
     abs_path = os.path.abspath(filepath)
     if os.path.exists(abs_path):
         return send_file(abs_path, as_attachment=True)
     return "File not found", 404
+
+@app.route('/api/system/emergency_dump', methods=['POST'])
+def api_emergency_dump():
+    """Zero-dependency hardcoded compiler that survives core config corruption."""
+    import os
+    from datetime import datetime
+    try:
+        # Hardcoded to the current file's directory (insetu/insetu)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Drop it in the localized CWD so the dumb-terminal download route doesn't trip on absolute path slashes
+        out_file = "emergency_core_context.txt"
+        
+        with open(out_file, "w", encoding="utf-8") as out:
+            out.write("============================================================\n")
+            out.write(f"INSETU EMERGENCY CORE CONTEXT ({datetime.now()})\n")
+            out.write("============================================================\n\n")
+            
+            for root, _, files in os.walk(script_dir):
+                # Skip massive vendor/cache directories
+                if "__pycache__" in root or "node_modules" in root or ".git" in root: 
+                    continue
+                    
+                for f in files:
+                    if f.endswith(('.py', '.js', '.html', '.css')):
+                        filepath = os.path.join(root, f)
+                        rel_path = os.path.relpath(filepath, script_dir)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8') as inf:
+                                content = inf.read()
+                            out.write(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
+                        except Exception:
+                            pass
+                            
+        return jsonify({"status": "success", "file": out_file})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/system/reboot', methods=['POST'])
 def system_reboot():

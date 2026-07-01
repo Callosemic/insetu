@@ -1,15 +1,10 @@
-# This file is deprecated. Logic has moved to engine_ingest.py
-# per Step 1 of the V2 Architecture Migration.
+import urllib.request
+import urllib.parse
+from flask import Blueprint, request, jsonify
 
-def extract_markdown_from_url(*args, **kwargs):
-    from insetu.engine_ingest import extract_markdown_from_url as extract
-    return extract(*args, **kwargs)
+ingest_bp = Blueprint('ingest', __name__)
 
-def _deprecated_stub():
-    """
-    Extracts core content from a URL into clean Markdown.
-    Supports native Jina API or local BeautifulSoup parsing.
-    """
+def extract_markdown_from_url(target_url, method="jina"):
     # Intercept and unwrap Google search redirect links
     parsed_url = urllib.parse.urlparse(target_url)
     if 'google.com' in parsed_url.netloc and parsed_url.path == '/url':
@@ -121,3 +116,25 @@ def _deprecated_stub():
         "published_time": published_time,
         "clean_markdown": final_markdown
     }
+
+@ingest_bp.route('/api/ingest/url', methods=['POST'])
+def api_ingest_url():
+    data = request.json
+    target_url = data.get("url", "").strip()
+    method = data.get("method", "jina")
+    if not target_url: return jsonify({"error": "URL is required"}), 400
+
+    try:
+        extracted = extract_markdown_from_url(target_url, method)
+        safe_title = extracted["title"].replace('"', "'")
+
+        return jsonify({
+            "status": "success", 
+            "markdown": extracted["clean_markdown"],
+            "title": safe_title,
+            "resolved_url": extracted["resolved_url"]
+        })
+    except Exception as e:
+        if "Missing optional dependencies" in str(e):
+            return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Failed to fetch and convert URL: {str(e)}"}), 500

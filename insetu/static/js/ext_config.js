@@ -35,9 +35,9 @@ function renderExtensions() {
     const container = document.getElementById('config-editor-extensions');
     container.innerHTML = '';
     if (!currentConfig.extensions) currentConfig.extensions = ['config'];
-
-    const knownExtensions = ['citations', 'research', 'term'];
-    const allExtensions = Array.from(new Set([...knownExtensions, ...currentConfig.extensions])).sort();
+    // Dynamically load available extensions from the backend payload
+    const knownExtensions = currentConfig._available_extensions || [];
+    const allExtensions = Array.from(new Set([...knownExtensions, ...(currentConfig.extensions || [])])).sort();
 
     allExtensions.forEach(ext => {
         const isConfig = ext === 'config';

@@ -18,8 +18,10 @@ Extensions must be capable of relying on one another (e.g., a `zotero_sync` exte
 ## 2. The Backend Injection Surface (Python Event Bus)
 Extensions cannot hardcode themselves into `engine_gather.py` or the `bridge_sync` transaction loop. They must subscribe to OS lifecycle events.
 * **The `HookRegistry`:** The core OS will expose an `insetu.hooks` namespace where extensions register callbacks.
-    * `@hooks.on('mutate_workspace_config')`: Allows an extension to intercept the configuration load phase and dynamically inject virtual `sub_buckets`, alter `target_repos`, or append to `managed_dirs` (e.g., the Kanban tracker injecting its `.tracker` sub-bucket and registering it as a managed Cartographer directory). The RAG compiler and Cartographer will then natively process these virtual environments without bespoke logic.
-    * `@hooks.on('post_file_save')`: Fires after the VFS atomic commit, allowing an extension to update an SQLite cache instantly.
+* `@hooks.on('mutate_workspace_config')`: Allows an extension to intercept the configuration load phase and dynamically inject virtual `sub_buckets`, append to `managed_dirs`, or define isolated extension payloads in `virtual_contexts` (e.g., the Kanban tracker injecting its `.tracker` sub-bucket).
+The RAG compiler and Cartographer will then natively process these environments without bespoke logic.
+* `@hooks.on('compile_contexts')`: Fires during the RAG context compilation phase. Extensions receive the `manifest` dictionary and should inject their custom `.txt` artifacts natively, bypassing the core Cartographer sweep.
+* `@hooks.on('post_file_save')`: Fires after the VFS atomic commit, allowing an extension to update an SQLite cache instantly.
     * `@hooks.on('system_boot')`: Fires immediately after the core OS micro-kernel boots. Extensions must use this hook to execute their SQLite schema initializations (`CREATE TABLE`) and migrations (`ALTER TABLE`), guaranteeing that the runtime API routes remain fast, stateless, and free of inline database generation locks.
     * `@hooks.on('system_shutdown')`: Fires prior to a workspace swap (`os.execv`), signaling all active `threading.Event()` locks to commit SQLite transactions and release RAM before the process terminates.
 
@@ -30,11 +32,18 @@ Direct DOM mutation of the core OS elements is strictly forbidden. The UI is par
     * `ExtensionRegistry.registerSubTab(parentId, id, label)`
 * **Context-Aware Zone Injection:** Core UI files will expose specific anchor points. When triggered, the hook passes an `ExecutionContext` payload to the callback.
     * `ExtensionRegistry.registerUIHook(zoneId, callback)`
-    * **Defined Zones:** * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`.
-        * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
-        * `zone:new-file-modal`: Callback receives `{ basePath }`.
-        * `zone:settings-menu`: Callback receives `{ currentConfig, saveConfigFn }`, allowing extensions to mount configuration inputs (e.g., API keys, default behaviors) directly into the OS Settings modal.
+        * **Defined Zones:** * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`.
+            * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
+            * `zone:new-file-modal`: Callback receives `{ basePath }`.
+            * `zone:settings-menu`: Callback receives `{ currentConfig, saveConfigFn }`, allowing extensions to mount configuration inputs (e.g., API keys, default behaviors) directly into the OS Settings modal.
+            * `zone:file-edit-override`: Callback receives `filepath`. If the callback returns `true`, the OS aborts opening the standard code editor, allowing the extension to mount a custom modal (e.g., the Kanban UI).
+            * `zone:post-file-save`: Callback receives `filepath`, firing immediately after the OS confirms an atomic disk write.
 * **Extending Extensions:** A parent extension (e.g., `citations`) can register its *own* custom zones via the Registry, allowing child extensions to mount UI natively inside the parent's layout.
+### 3.1 The Client State Engine (Zustand Slices)
+To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must never mutate or query raw DOM layout strings directly. The client environment manages global state across two core reactive stores:
+* **`AppStore` (store.js):** Coordinates system-wide topologies, configuration schemas, manifest states, active repositories, and extension arrays.
+* **`KanbanStore` (ext_tracker.js):** Isolates the task tracking arrays, active ticket filters, tag matrices, and column expansion flags for the project management canvas.
+
 ## 4. The Background Worker Matrix (The Metronome & Ledger)
 Extensions must respect the ASGI event loop and the Cloud Run Serverless Lock constraint. Spinning up unmanaged `threading.Thread` loops is a vector for catastrophic failure. Furthermore, background tasks must survive workspace profile swaps (`os.execv` process replacements) without heavy multi-daemon architecture.
 * **The Ledger:** Extensions requiring background sweeping must submit their callback and interval to the centralized `insetu.workers` ledger. State remains strictly vaulted in the originating workspace's localized database.

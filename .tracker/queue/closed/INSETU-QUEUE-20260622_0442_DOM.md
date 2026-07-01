@@ -2,7 +2,7 @@
 id: INSETU-QUEUE-20260622_0442_DOM
 title: "Optimize Frontend Speed: DOM Batching"
 created_at: 2026-06-22T04:42:00
-closed_at: null
+closed_at: 2026-07-01T07:25:00
 tags: [frontend, performance, tech-debt]
 ---
 

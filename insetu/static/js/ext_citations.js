@@ -1,6 +1,7 @@
-import { TARGET_CONFIGS, mdeInstance } from './app.js';
+import { mdeInstance } from './app.js';
 import { currentModalIsFS } from './fs.js';
 import { openSelectorModal } from './ui.js';
+import { AppStore } from './store.js';
 
 const libraryScreen = window.ExtensionRegistry.registerTab('library', 'Library');
 if (libraryScreen) {
@@ -888,10 +889,10 @@ export async function addFileToLibrary(filename, content, filepath) {
     const parts = filepath.split('/');
     const repo = parts.length > 0 && parts[0] ? parts[0] : 'Workspace';
     const inferredBucket = parts.length > 1 && parts[1] ? parts[1] : 'None';
-
     let bucket = 'None';
-    if (typeof TARGET_CONFIGS !== 'undefined') {
-        const repoCfg = TARGET_CONFIGS.find(c => c.repo_dir === repo);
+    const { targetConfigs } = AppStore.getState();
+    if (targetConfigs) {
+        const repoCfg = targetConfigs.find(c => c.repo_dir === repo);
         if (repoCfg && repoCfg.sub_buckets) {
             for (const b of repoCfg.sub_buckets) {
                 if (b.dynamic_split_prefix && b.meta_map && b.meta_map[inferredBucket]) {
@@ -1176,3 +1177,31 @@ window.addFileToLibrary = addFileToLibrary;
 window.syncDocumentCitations = syncDocumentCitations;
 window.openCitationModal = openCitationModal;
 window.onCitationSearchInput = onCitationSearchInput;
+
+// --- REGISTER LIFECYCLE UNLOAD HOOK ---
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {
+    window.ExtensionRegistry.registerUnloadHook('citations', () => {
+        console.log("🧹 Evicting Citations Extension UI Canvas...");
+        
+        // Clear out personal library listings to prevent cross-tenant view bleeding
+        const mainList = document.getElementById('lib-main-list');
+        if (mainList) mainList.innerHTML = '';
+        
+        // Reset explore panel back to its default pristine state
+        const exploreList = document.getElementById('lib-explore-list');
+        if (exploreList) {
+            exploreList.innerHTML = '<p style="color: #888; font-style: italic;">Search the open science index to discover and import citations.</p>';
+        }
+        
+        // Clean out raw text import console log traces
+        const importLog = document.getElementById('lib-import-log');
+        if (importLog) importLog.innerText = '';
+        
+        // Dismiss standalone active citation modal frames if currently left open
+        const attachModal = document.getElementById('lib-attach-modal');
+        if (attachModal) attachModal.style.display = 'none';
+        
+        const editModal = document.getElementById('edit-citation-modal');
+        if (editModal) editModal.style.display = 'none';
+    });
+}

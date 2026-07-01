@@ -1,11 +1,10 @@
 import {
-    CATEGORY_ORDER,
     executeWorkspaceMutation,
     compileContexts,
     fetchAndCopy,
-    fetchAndDownloadState,
-    globalGatherOptions
+    fetchAndDownloadState
 } from './app.js';
+import { AppStore } from './store.js';
 
 export async function loadGatherBatches() {
     const container = document.getElementById('gather-list');
@@ -13,11 +12,15 @@ export async function loadGatherBatches() {
     try {
         const res = await fetch('/api/batches');
         const data = await res.json();
-        globalGatherOptions.contexts = data.available_contexts || [];
-        globalGatherOptions.diffs = data.available_diffs || [];
-        globalGatherOptions.prompts = data.available_prompts || [];
-        globalGatherOptions.artifactsDir = data.artifacts_dir || ".insetu/profiles/default/data";
-        globalGatherOptions.profileDir = data.profile_dir || ".insetu/profiles/default";
+        AppStore.setState({
+            gatherOptions: {
+                contexts: data.available_contexts || [],
+                diffs: data.available_diffs || [],
+                prompts: data.available_prompts || [],
+                artifactsDir: data.artifacts_dir || ".insetu/profiles/default/data",
+                profileDir: data.profile_dir || ".insetu/profiles/default"
+            }
+        });
         container.innerHTML = '';
         if (!data.batches || data.batches.length === 0) {
             container.innerHTML = '<p style="color: #888;">No context batches defined in workflows.json.</p>';
@@ -30,9 +33,10 @@ export async function loadGatherBatches() {
             if (!categories[domain]) categories[domain] = [];
             categories[domain].push(b);
         });
+        const { categoryOrder } = AppStore.getState();
         const sortedCats = Object.keys(categories).sort((a, b) => {
-            let iA = CATEGORY_ORDER.indexOf(a);
-            let iB = CATEGORY_ORDER.indexOf(b);
+            let iA = categoryOrder.indexOf(a);
+            let iB = categoryOrder.indexOf(b);
             if (iA === -1) iA = 999;
             if (iB === -1) iB = 999;
             if (iA !== iB) return iA - iB;
@@ -78,12 +82,14 @@ export function openEditBatchModal(batch = null) {
     document.getElementById('eb-title').value = batch ? batch.title : '';
     document.getElementById('eb-id').value = batch ? batch.id : '';
     document.getElementById('eb-domain').value = batch ? (batch.domain || 'Workflows') : 'Workflows';
-    document.getElementById('eb-id').readOnly = !!batch; // Prevent renaming IDs after creation to avoid orphans
+document.getElementById('eb-id').readOnly = !!batch;
+// Prevent renaming IDs after creation to avoid orphans
 
-    const listDiv = document.getElementById('eb-includes-list');
-    listDiv.innerHTML = '';
-    const allFiles = [...globalGatherOptions.diffs, ...globalGatherOptions.contexts];
-    const includesSet = new Set(batch ? batch.includes : []);
+const listDiv = document.getElementById('eb-includes-list');
+listDiv.innerHTML = '';
+const { gatherOptions } = AppStore.getState();
+const allFiles = [...gatherOptions.diffs, ...gatherOptions.contexts];
+const includesSet = new Set(batch ? batch.includes : []);
     allFiles.forEach((file, index) => {
         const row = document.createElement('div');
         row.style.display = 'flex';
@@ -109,10 +115,9 @@ export function openEditBatchModal(batch = null) {
         row.appendChild(lbl);
         listDiv.appendChild(row);
     });
-
     const promptSelect = document.getElementById('eb-prompt-select');
     promptSelect.innerHTML = '<option value="">-- Select a prompt --</option>';
-    globalGatherOptions.prompts.forEach(p => {
+    gatherOptions.prompts.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p;
         opt.innerText = p;
@@ -216,12 +221,13 @@ export function openBatchModal(batch) {
     const contextFile = `${batch.id}_context.txt`;
     const copyCtxBtn = document.getElementById('batch-copy-context-btn');
     const dlCtxBtn = document.getElementById('batch-dl-context-btn');
-    const artifactsDir = globalGatherOptions.artifactsDir || ".insetu/profiles/default/data";
+    const { gatherOptions } = AppStore.getState();
+    const artifactsDir = gatherOptions.artifactsDir || ".insetu/profiles/default/data";
 
     copyCtxBtn.onclick = () => fetchAndCopy(`${artifactsDir}/workflows/${contextFile}`, copyCtxBtn);
     dlCtxBtn.onclick = () => fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, dlCtxBtn);
     const promptSec = document.getElementById('batch-prompt-section');
-    const profileDir = globalGatherOptions.profileDir || ".insetu/profiles/default";
+    const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
     if (batch.include_prompt) {
         promptSec.style.display = 'block';
         const promptTextArea = document.getElementById('batch-prompt-text');
@@ -276,9 +282,9 @@ export function openBatchModal(batch) {
     }
     document.getElementById('batch-modal').style.display = 'block';
 }
-
 export function openNewPromptModal() {
-    const profileDir = globalGatherOptions.profileDir || ".insetu/profiles/default";
+    const { gatherOptions } = AppStore.getState();
+    const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
     if (window.openNewFileModal) {
         window.openNewFileModal(`${profileDir}/prompts/`);
     }

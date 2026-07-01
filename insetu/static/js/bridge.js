@@ -1,9 +1,9 @@
 import {
     viewSourceFile,
     fetchAndCopy,
-    fetchAndDownloadState,
-    pinnedRepos
+    fetchAndDownloadState
 } from './app.js';
+import { AppStore } from './store.js';
 
 export function resetStatus() {
     const sb = document.getElementById('status-box');
@@ -143,7 +143,7 @@ export function sync(dryRunActive, bypassSandwich = false) {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                pinned_repos: Array.from(pinnedRepos)
+                pinned_repos: Array.from(AppStore.getState().pinnedRepos)
             })
         })
         .then(res => res.text())
@@ -162,11 +162,19 @@ export function sync(dryRunActive, bypassSandwich = false) {
                 const safeP1 = p1.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
                 <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: #10b981; margin: 0;">📋 Copy State</button>
-                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7; margin: 0;">⬇️ Download State</button>
+
+                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7;
+margin: 0;">⬇️ Download State</button>
             </div>`;
             });
 
             statusBox.innerHTML = safeData;
+
+            // Micro-Interaction: Auto-clear payload if no errors or action flags occurred
+            if (!data.includes('[!]') && !data.includes('ACTION_REQUIRED') && !dryRunActive) {
+                payloadTextarea.value = '';
+                payloadTextarea.dispatchEvent(new Event('input')); // Reset target file checkboxes
+            }
         }).catch(err => {
             statusBox.innerHTML = `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>`;
         });

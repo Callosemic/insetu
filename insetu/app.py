@@ -10,30 +10,89 @@ import random
 import datetime
 from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
-from insetu.utils_core import resolve_workspace_path, get_sister_repos, WORKSPACE_ROOT
+from insetu.utils_core import resolve_workspace_path, get_sister_repos
 from insetu.engine_bridge import parse_blocks, apply_block_in_memory
 import insetu.engine_gather as engine_gather
-import insetu.engine_tracker as engine_tracker
 import insetu.workers # Initializes the metronome listeners
 app = Flask(__name__)
-
+from insetu.routes_fs import fs_bp
+from insetu.routes_bridge import bridge_bp
+from insetu.routes_system import system_bp
+app.register_blueprint(fs_bp)
+app.register_blueprint(bridge_bp)
+app.register_blueprint(system_bp)
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from insetu.utils_core import load_config
+    from insetu.utils_core import load_config, _cwd
     import importlib
+    import json
+    import os
 
-    cfg = load_config()
-    extensions = cfg.get("extensions", [])
+    raw_extensions = set()
 
-    for ext in extensions:
+    # 1. Sweep workspaces.json for a Union of all required extensions globally
+    index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+    if os.path.exists(index_path):
         try:
-            # Dynamically resolve engine module names matching the plugin array flags
-            module = importlib.import_module(f"insetu.engine_{ext}")
-            blueprint = getattr(module, f"{ext}_bp")
+            with open(index_path, 'r', encoding='utf-8') as f:
+                w_data = json.load(f)
+            for ws_id in w_data.get("workspaces", {}).keys():
+                cfg = load_config(workspace_id=ws_id)
+                for ext in cfg.get("extensions", []):
+                    raw_extensions.add(ext)
+        except Exception as e:
+            print(f"Warning: Failed to parse workspaces for extensions: {e}")
+
+    # Fallback to default active config if switchboard is empty/missing
+    if not raw_extensions:
+        cfg = load_config()
+        for ext in cfg.get("extensions", []):
+            raw_extensions.add(ext)
+
+    # DAG Node Resolution
+    modules = {}
+    for ext in list(raw_extensions):
+        try:
+            modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
+        except ImportError as e:
+            print(f"⚠️  Extension Load Failed [{ext}]: {str(e)}")
+
+    # Topological Sort
+    sorted_exts = []
+    visited = set()
+    visiting = set()
+
+    def visit(ext):
+        if ext in visited: return
+        if ext in visiting:
+            print(f"⚠️ Circular dependency detected involving [{ext}]. Bypassing.")
+            return
+
+        visiting.add(ext)
+        mod = modules.get(ext)
+        if mod and hasattr(mod, "__depends__"):
+            for dep in mod.__depends__:
+                if dep in modules:
+                    visit(dep)
+                else:
+                    print(f"⚠️ Extension [{ext}] requires missing dependency [{dep}].")
+
+        visiting.remove(ext)
+        visited.add(ext)
+        sorted_exts.append(ext)
+
+    for ext in list(modules.keys()):
+        if ext not in visited:
+            visit(ext)
+
+    # Mount Blueprints in safe DAG order
+    for ext in sorted_exts:
+        try:
+            blueprint = getattr(modules[ext], f"{ext}_bp")
             app.register_blueprint(blueprint)
             print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
-        except (ImportError, AttributeError) as e:
-            print(f"⚠️  Extension Mount Failed [{ext}]: {str(e)}")
+        except AttributeError as e:
+            print(f"⚠️  Blueprint Mount Failed [{ext}]: {str(e)}")
 
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
@@ -64,10 +123,10 @@ def manifest():
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-
-    from insetu.utils_core import CONFIG_PATH
+    from insetu.utils_core import get_workspace_physics
+    cfg_path, _, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
-    ts = int(os.path.getmtime(CONFIG_PATH)) if os.path.exists(CONFIG_PATH) else 1
+    ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
     if "icons" in manifest_data:
         for icon in manifest_data["icons"]:
             if "icon-192" in icon.get("src", ""):
@@ -84,26 +143,27 @@ def intercept_local_static_assets():
     """
     import os
     from flask import send_file
-    from insetu.utils_core import CONFIG_PATH
+    from insetu.utils_core import get_workspace_physics
 
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
         filename = os.path.basename(path)
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
-        instance_dir = os.path.dirname(CONFIG_PATH)
+        cfg_path, _, _ = get_workspace_physics()
+        instance_dir = os.path.dirname(cfg_path)
         local_path = os.path.join(instance_dir, "static", filename)
         if os.path.exists(local_path):
             return send_file(local_path, mimetype='image/png')
-
 @app.route('/favicon.ico')
 def favicon():
-    from insetu.utils_core import load_config, CONFIG_PATH
+    from insetu.utils_core import load_config, get_workspace_physics
     import os
     cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
 
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
-    instance_dir = os.path.dirname(CONFIG_PATH)
+    cfg_path, _, _ = get_workspace_physics()
+    instance_dir = os.path.dirname(cfg_path)
     local_icon_path = os.path.join(instance_dir, "static", custom_icon_name)
 
     if os.path.exists(local_icon_path):
@@ -112,10 +172,11 @@ def favicon():
     return send_file(os.path.join(app.static_folder, 'favicon.ico'), mimetype='image/vnd.microsoft.icon')
 @app.route('/api/repos', methods=['GET'])
 def api_repos():
-    from insetu.utils_core import get_sister_repos, load_config, WORKSPACE_ROOT
+    from insetu.utils_core import get_sister_repos, load_config, get_workspace_physics
     import os
     cfg = load_config()
     targets = cfg.get("target_repos", [])
+    cfg_path, ws_root, _ = get_workspace_physics()
 
     # Dynamically inject discovered directories into meta_map for the frontend
     for c in targets:
@@ -124,125 +185,44 @@ def api_repos():
             if b.get("dynamic_split_prefix"):
                 if "meta_map" not in b:
                     b["meta_map"] = {}
-                dyn_dir = os.path.join(WORKSPACE_ROOT, r_dir, b["dynamic_split_prefix"])
+                dyn_dir = os.path.join(ws_root, r_dir, b["dynamic_split_prefix"])
                 if os.path.exists(dyn_dir):
                     for module in os.listdir(dyn_dir):
                         if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
                             if module not in b["meta_map"]:
                                 b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-    from insetu.utils_core import CONFIG_PATH
+
     return jsonify({
         "repos": get_sister_repos(),
         "term_port": cfg.get("term_port", 8181),
         "targets": targets,
+        "virtual_contexts": cfg.get("virtual_contexts", []),
         "category_order": cfg.get("category_order", []),
+        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "research", "term"]),
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
-        "config_missing": not os.path.exists(CONFIG_PATH)
+        "config_missing": not os.path.exists(cfg_path)
     })
-@app.route('/api/system/panic', methods=['POST'])
-def api_system_panic():
-    """Injects a poison pill into the environment and restarts the daemon."""
-    import threading
-    import sys
-    import os
-
-    def crash_and_restart():
-        import time
-        from insetu.hooks import hooks
-        hooks.emit('system_shutdown')
-        time.sleep(1.0)
-        os.environ["INSETU_SIMULATE_PANIC"] = "1"
-        python_exe = sys.executable
-        cli_script = os.path.abspath(sys.argv[0])
-        os.execv(python_exe, [python_exe, cli_script] + sys.argv[1:])
-
-    threading.Thread(target=crash_and_restart, daemon=True).start()
-    return jsonify({"status": "success", "message": "Initiating kernel panic..."})
-@app.route('/api/system/config', methods=['GET', 'POST'])
-def api_system_config():
-    from insetu.utils_core import load_config, save_json_file, CONFIG_PATH
-    import json
-    if request.method == 'GET':
-        try:
-            # Bypass in-memory OS injections (like .insetu mount) to get raw state
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                return jsonify(json.load(f))
-        except Exception:
-            return jsonify(load_config())
-    else:
-        try:
-            save_json_file(CONFIG_PATH, request.json)
-            return jsonify({"status": "success", "message": "Configuration saved successfully."})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-@app.route('/api/system/workspaces', methods=['GET', 'POST'])
-def api_workspaces():
-    import os
-    import insetu.utils_core as utils_core
-
-    # workspaces.json is the global switchboard; it is strictly anchored to the host daemon
-    index_path = os.path.join(utils_core._cwd, ".insetu", "workspaces.json")
-
-    if request.method == 'GET':
-        return jsonify(utils_core.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))
-
-    if request.method == 'POST':
-        data = request.json
-        new_active = data.get("active_workspace")
-        if not os.path.exists(index_path):
-            return jsonify({"error": "workspaces.json not found."}), 404
-
-        w_data = utils_core.load_json_file(index_path, {})
-
-        if new_active not in w_data.get("workspaces", {}):
-            return jsonify({"error": "Workspace ID not found."}), 400
-
-        w_data["active_workspace"] = new_active
-        utils_core.save_json_file(index_path, w_data)
-
-        # Acknowledge the swap, then gracefully restart the daemon
-        import threading
-        import sys
-        import os
-
-        def restart():
-            import time
-            from insetu.hooks import hooks
-            hooks.emit('system_shutdown')
-            time.sleep(1.0)
-            # Use absolute paths to guarantee a clean process replacement at the OS level
-            python_exe = sys.executable
-            cli_script = os.path.abspath(sys.argv[0])
-            os.execv(python_exe, [python_exe, cli_script] + sys.argv[1:])
-
-        threading.Thread(target=restart, daemon=True).start()
-
-    return jsonify({"status": "success", "message": f"Switched to {new_active}"})
 @app.route('/api/batches', methods=['GET'])
 def api_batches():
-    from insetu.utils_core import load_config, load_workflows
-    import insetu.engine_gather as engine_gather
     import os
-    cfg = load_config()
-    w_cfg = load_workflows()
+    from insetu.utils_core import load_config, load_workflows, get_gather_paths, get_safe_repo_id
+
+    workspace_id = request.headers.get('X-Workspace-ID')
+    cfg = load_config(workspace_id)
+    w_cfg = load_workflows(workspace_id)
+    paths = get_gather_paths(workspace_id)
+
     batches = w_cfg.get("context_batches", [])
 
     # Gather options for the UI batch editor
     expected_contexts = set()
     expected_diffs = set()
-    import insetu.utils_core as utils_core
-    from insetu.utils_core import get_safe_repo_id
+
     for c in cfg.get("target_repos", []):
         r_dir = c.get("repo_dir", "")
         safe_r_dir = get_safe_repo_id(r_dir)
-
-        # Add implicit tracker files
-        t_ctx = f"{safe_r_dir}_tracker_context.txt"
-        expected_contexts.add(f"contexts/{t_ctx}")
-        expected_diffs.add(f"diffs/{t_ctx.replace('_context.txt', '_diffs.txt')}")
-
         subs = c.get("sub_buckets", [])
+
         if subs:
             for b in subs:
                 if not b.get("dynamic_split_prefix"):
@@ -251,7 +231,7 @@ def api_batches():
                     expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
                 else:
                     # Dynamic split prefix - infer from active directories
-                    dyn_dir = os.path.join(utils_core.WORKSPACE_ROOT, r_dir, b["dynamic_split_prefix"])
+                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
                     if os.path.exists(dyn_dir):
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
@@ -263,15 +243,18 @@ def api_batches():
             expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
 
     # Include physically existing files in case of unmapped manual overrides
-    if os.path.exists(engine_gather.CONTEXTS_DIR):
-        for f in os.listdir(engine_gather.CONTEXTS_DIR):
+    if os.path.exists(paths["contexts_dir"]):
+        for f in os.listdir(paths["contexts_dir"]):
             if f.endswith('.txt'): expected_contexts.add(f"contexts/{f}")
-    if os.path.exists(engine_gather.DIFFS_DIR):
-        for f in os.listdir(engine_gather.DIFFS_DIR):
+
+    if os.path.exists(paths["diffs_dir"]):
+        for f in os.listdir(paths["diffs_dir"]):
             if f.endswith('.txt'): expected_diffs.add(f"diffs/{f}")
-    available_prompts = [f"prompts/{f}" for f in os.listdir(engine_gather.PROMPTS_DIR) if f.lower().endswith(('.md', '.txt'))] if os.path.exists(engine_gather.PROMPTS_DIR) else []
-    artifacts_abs = engine_gather.ARTIFACTS_BASE.replace('\\', '/')
-    profile_abs = os.path.dirname(utils_core.CONFIG_PATH).replace('\\', '/')
+
+    available_prompts = [f"prompts/{f}" for f in os.listdir(paths["prompts_dir"]) if f.lower().endswith(('.md', '.txt'))] if os.path.exists(paths["prompts_dir"]) else []
+
+    artifacts_abs = paths["artifacts_base"].replace('\\', '/')
+    profile_abs = os.path.dirname(paths["config_path"]).replace('\\', '/')
 
     return jsonify({
         "batches": batches,
@@ -283,11 +266,15 @@ def api_batches():
     })
 @app.route('/api/batches/save', methods=['POST'])
 def api_batches_save():
-    from insetu.utils_core import load_workflows, WORKFLOWS_PATH
-    import insetu.utils_core as utils_core
     import json
+    import insetu.utils_core as utils_core
+    from insetu.utils_core import load_workflows, get_gather_paths
+
+    workspace_id = request.headers.get('X-Workspace-ID')
+    paths = get_gather_paths(workspace_id)
+
     data = request.json
-    w_cfg = load_workflows()
+    w_cfg = load_workflows(workspace_id)
     batches = w_cfg.get("context_batches", [])
     batch_id = data.get("id")
     existing = next((b for b in batches if b["id"] == batch_id), None)
@@ -300,14 +287,15 @@ def api_batches_save():
         existing.update(data)
     else:
         batches.append(data)
+
     w_cfg["context_batches"] = batches
-    utils_core.save_json_file(WORKFLOWS_PATH, w_cfg)
+    utils_core.save_json_file(paths["workflows_path"], w_cfg)
 
     # Auto-compile the modified batch silently
     import insetu.engine_gather as engine_gather
     target_batch = existing if existing else data
     try:
-        engine_gather.compile_batch(target_batch)
+        engine_gather.compile_batch(target_batch, workspace_id)
     except Exception as e:
         print(f"Warning: Failed to auto-compile batch {batch_id}: {str(e)}")
 
@@ -321,643 +309,82 @@ def index():
     extensions = cfg.get("extensions", [])
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
 import threading
+import queue
+import json
+from flask import Response
 _COMPILER_LOCK = threading.Lock()
 @app.route('/submit', methods=['POST'])
 def submit():
+    workspace_id = request.headers.get('X-Workspace-ID')
+    from insetu.utils_core import get_gather_paths
+    paths = get_gather_paths(workspace_id)
+
     if not _COMPILER_LOCK.acquire(blocking=False):
-        existing_files = [f for f in os.listdir(engine_gather.CONTEXTS_DIR) if f.endswith('.txt')] if os.path.exists(engine_gather.CONTEXTS_DIR) else []
+        existing_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')] if os.path.exists(paths["contexts_dir"]) else []
         return jsonify({"status": "success", "message": "Compilation locked. Serving cached context.", "files": sorted(existing_files)})
-    try:
-        try:
-            engine_tracker.rescue_orphan_tickets()
-            engine_tracker.reconcile_declared_closures()
-            engine_tracker.archive_stale_tickets()
-        except Exception as e:
-            print(f"Warning: Tracker housekeeping failed: {str(e)}")
+    def generate():
+        q = queue.Queue()
 
-        # Ensure diffs are actively generated before compiling contexts
-        try:
-            engine_gather.generate_diff_context()
-        except Exception as e:
-            print(f"Warning: Diff generation failed: {str(e)}")
-
-        try:
-            from insetu.cartographer import map_repositories
-            map_repositories()
-        except Exception as e:
-            print(f"Warning: Cartographer failed: {str(e)}")
-        engine_gather.generate_context_file()
-        generated_files = [f for f in os.listdir(engine_gather.CONTEXTS_DIR) if f.endswith('.txt')]
-        res = jsonify({"status": "success", "message": "Context successfully compiled!", "files": sorted(generated_files)})
-    except Exception as e:
-        import traceback
-        print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
-        res = jsonify({"status": "error", "message": f"Compilation Error: {str(e)}", "files": []})
-    finally:
-        _COMPILER_LOCK.release()
-    return res
-
-@app.route('/api/fs/move', methods=['POST'])
-def api_fs_move():
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    dest_path = data.get("dest_path", "").strip()
-    if not filepath or not dest_path: return jsonify({"error": "Filepath and destination required"}), 400
-
-    resolved_src = resolve_workspace_path(filepath)
-    resolved_dest = resolve_workspace_path(dest_path)
-
-    if not os.path.exists(resolved_src): return jsonify({"error": "Source file not found"}), 404
-
-    os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
-
-    import shutil
-    try:
-        shutil.move(resolved_src, resolved_dest)
-    except Exception as e:
-        return jsonify({"error": f"OS Move Failed: {str(e)}"}), 500
-
-    try:
-        from insetu.cartographer import map_repositories
-        map_repositories()
-    except Exception as e:
-        print(f"Warning: Cartographer failed during move: {str(e)}")
-
-    return jsonify({"status": "success", "new_filepath": dest_path})
-
-@app.route('/api/fs/archive', methods=['POST'])
-def api_fs_archive():
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    if not filepath: return jsonify({"error": "Filepath required"}), 400
-    resolved_path = resolve_workspace_path(filepath)
-    if not os.path.exists(resolved_path): return jsonify({"error": "File not found"}), 404
-
-    archive_dir = os.path.join(os.path.dirname(resolved_path), "archived")
-    os.makedirs(archive_dir, exist_ok=True)
-    new_path = os.path.join(archive_dir, os.path.basename(resolved_path))
-
-    import shutil
-    try:
-        shutil.move(resolved_path, new_path)
-    except Exception as e:
-        return jsonify({"error": f"OS Move Failed: {str(e)}"}), 500
-
-    try:
-        from insetu.cartographer import map_repositories
-        map_repositories()
-    except Exception as e:
-        print(f"Warning: Cartographer failed during archive: {str(e)}")
-
-    return jsonify({"status": "success"})
-
-@app.route('/api/fs/delete', methods=['POST'])
-def api_fs_delete():
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    if not filepath: return jsonify({"error": "Filepath required"}), 400
-    resolved_path = resolve_workspace_path(filepath)
-    if not os.path.exists(resolved_path): return jsonify({"error": "File not found"}), 404
-
-    try:
-        os.remove(resolved_path)
-    except Exception as e:
-        return jsonify({"error": f"OS Remove Failed: {str(e)}"}), 500
-
-    try:
-        from insetu.cartographer import map_repositories
-        map_repositories()
-    except Exception as e:
-        print(f"Warning: Cartographer failed during delete: {str(e)}")
-
-    return jsonify({"status": "success"})
-
-@app.route('/api/fs/search', methods=['GET'])
-def api_fs_search():
-    query = request.args.get('q', '').lower()
-    if not query: return jsonify({"results": []})
-
-    terms = [t for t in query.split() if t]
-    if not terms: return jsonify({"results": []})
-
-    import os
-    import json
-    from insetu.utils_core import WORKSPACE_ROOT
-    import insetu.engine_gather as engine_gather
-
-    manifest_path = os.path.join(engine_gather.CONTEXTS_DIR, "manifest.json")
-    md_files = set()
-    if os.path.exists(manifest_path):
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+        def compile_worker(wid):
             try:
-                manifest = json.load(f)
-                for file_list in manifest.values():
-                    for filepath in file_list:
-                        if filepath.lower().endswith('.md'):
-                            md_files.add(filepath)
-            except Exception:
-                pass
-    from insetu.utils_core import resolve_workspace_path
-
-    results = []
-    for filepath in md_files:
-        abs_path = resolve_workspace_path(filepath)
-        if not os.path.exists(abs_path): continue
-
-        try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            content_lower = content.lower()
-            score = 0
-            snippet = ""
-
-            file_lower = filepath.lower()
-            for term in terms:
-                if term in file_lower:
-                    score += 2  # Higher weight for filename match
-                if term in content_lower:
-                    score += 1
-
-            if score > 0:
-                # Extract a small context snippet around the first matched term
-                first_term = next((t for t in terms if t in content_lower), None)
-                if first_term:
-                    idx = content_lower.find(first_term)
-                    start = max(0, idx - 30)
-                    end = min(len(content), idx + 70)
-                    snippet = content[start:end].replace('\n', ' ').strip()
-
-                results.append({
-                    "path": filepath,
-                    "score": score,
-                    "snippet": snippet
-                })
-        except Exception:
-            pass
-    # Sort by score descending, return top 50
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return jsonify({"results": results[:50]})
-
-@app.route('/api/fs/compile-document', methods=['POST'])
-def api_fs_compile_document():
-    data = request.json
-    filepath = data.get('filepath')
-    target_format = data.get('format', 'pdf')
-
-    if not filepath: return jsonify({"error": "Filepath required"}), 400
-
-    from insetu.utils_core import resolve_workspace_path
-    import os, tempfile, subprocess, json, sqlite3
-    import insetu.engine_gather as engine_gather
-
-    resolved_path = resolve_workspace_path(filepath)
-    if not os.path.exists(resolved_path): return jsonify({"error": "File not found"}), 404
-
-    with open(resolved_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    import re
-    backmatter_match = re.search(r'\n+---\n+citations:\n([\s\S]*?)\n---$', content)
-
-    true_ids = []
-    if backmatter_match:
-        lines = backmatter_match.group(1).splitlines()
-        for line in lines:
-            parts = line.split(':')
-            if len(parts) >= 2:
-                true_ids.append(parts[1].replace('"', '').replace("'", "").strip())
-
-    csl_items = []
-    if true_ids:
-        db_path = os.path.join(engine_gather.ARTIFACTS_BASE, "citations.db")
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            placeholders = ','.join(['?'] * len(true_ids))
-            try:
-                cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
-                for row in cursor.fetchall():
-                    csl_items.append(json.loads(row['raw_json']))
-            except Exception:
-                pass
-            finally:
-                conn.close()
-
-    import shutil
-    temp_dir = tempfile.mkdtemp()
-    try:
-        bib_path = os.path.join(temp_dir, 'bibliography.json')
-        with open(bib_path, 'w', encoding='utf-8') as f:
-            json.dump(csl_items, f)
-
-        out_filename = f"compiled_output.{target_format}"
-        out_path = os.path.join(temp_dir, out_filename)
-
-        cmd = ['pandoc', resolved_path, '-o', out_path]
-        if csl_items:
-            cmd.extend(['--citeproc', '--bibliography', bib_path])
-
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
-        except FileNotFoundError:
-            return jsonify({"error": "Pandoc is not installed or not in PATH."}), 500
-
-        if res.returncode != 0:
-            err_msg = res.stderr.strip()
-            if "pdflatex not found" in err_msg.lower():
-                err_msg += " (Please install a LaTeX engine like MacTeX, MiKTeX, or TeX Live to generate PDFs)."
-            return jsonify({"error": f"Pandoc failed: {err_msg}"}), 500
-
-        with open(out_path, 'rb') as f:
-            file_data = f.read()
-
-        import io
-        from flask import send_file
-        mem_file = io.BytesIO(file_data)
-        mem_file.seek(0)
-
-        safe_basename = os.path.basename(resolved_path).rsplit('.', 1)[0]
-        return send_file(mem_file, as_attachment=True, download_name=f"{safe_basename}.{target_format}")
-
-    except Exception as e:
-        return jsonify({"error": f"Compilation error: {str(e)}"}), 500
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-@app.route('/api/fs/import-url', methods=['POST'])
-def api_fs_import_url():
-    data = request.json
-    target_url = data.get("url", "").strip()
-    method = data.get("method", "jina")
-    if not target_url: return jsonify({"error": "URL is required"}), 400
-    from insetu.utils_scraping import extract_markdown_from_url
-
-    try:
-        extracted = extract_markdown_from_url(target_url, method)
-        safe_title = extracted["title"].replace('"', "'")
-
-        return jsonify({
-            "status": "success", 
-            "markdown": extracted["clean_markdown"],
-            "title": safe_title,
-            "resolved_url": extracted["resolved_url"]
-        })
-    except Exception as e:
-        if "Missing optional dependencies" in str(e):
-            return jsonify({"error": str(e)}), 500
-        return jsonify({"error": f"Failed to fetch and convert URL: {str(e)}"}), 500
-
-@app.route('/api/fs/save', methods=['POST'])
-def api_fs_save():
-    """Universal save-back endpoint. Integrates directly with workspace paths."""
-    data = request.json
-    if not data:
-        return jsonify({"error": "Invalid or missing JSON payload"}), 400
-
-    filepath, content = data.get("filepath", "").strip(), data.get("content", "")
-    if not filepath: 
-        return jsonify({"error": "Filepath is required"}), 400
-
-    # Intercept SOTU saves to trigger automatic artifact rotation
-    if "sotu/sotu_" in filepath.lower() and filepath.lower().endswith(".md"):
-        import insetu.engine_gather as engine_gather
-        engine_gather.rotate_sotus()
-    if data.get("is_new_repo"):
-        from insetu.utils_core import WORKSPACE_ROOT
-        resolved_path = os.path.join(WORKSPACE_ROOT, filepath)
-    else:
-        resolved_path = resolve_workspace_path(filepath)
-
-    archive_path = data.get("archive_path")
-    original_response_path = data.get("original_response_path")
-    if archive_path and original_response_path and "{date}" in original_response_path:
-        resolved_archive = resolve_workspace_path(archive_path)
-        os.makedirs(resolved_archive, exist_ok=True)
-
-        # Extract prefix from response_path (e.g. "sotu/sotu_{date}.md" -> "sotu_")
-        basename = os.path.basename(original_response_path)
-        prefix = basename.split("{date}")[0]
-
-        resolved_target_dir = os.path.dirname(resolved_path)
-        if os.path.exists(resolved_target_dir):
-            import shutil
-            for f in os.listdir(resolved_target_dir):
-                if f.startswith(prefix) and os.path.isfile(os.path.join(resolved_target_dir, f)):
-                    shutil.move(os.path.join(resolved_target_dir, f), os.path.join(resolved_archive, f))
-
-    is_new = not os.path.exists(resolved_path)
-
-    # Defend against catastrophic JSONDecodeErrors crashing the daemon
-    if filepath.lower().endswith('.json'):
-        import json
-        try:
-            json.loads(content)
-        except json.JSONDecodeError as e:
-            return jsonify({"error": f"Invalid JSON syntax: {str(e)}"}), 400
-    target_dir = os.path.dirname(resolved_path)
-
-    if target_dir:
-        try:
-            os.makedirs(target_dir, exist_ok=True)
-        except Exception as e:
-            import traceback
-            return jsonify({"error": f"Directory Creation Error: {str(e)}\n\n{traceback.format_exc()}"}), 500
-
-    try:
-        with open(resolved_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-    except Exception as e:
-        return jsonify({"error": f"File System Error: {str(e)}"}), 500
-    if data.get("is_new_repo") and data.get("repo_dir"):
-        repo_dir = data.get("repo_dir")
-        from insetu.utils_core import load_config, CONFIG_PATH
-        import json
-        cfg = load_config()
-        targets = cfg.get("target_repos", [])
-        if not any(r.get("repo_dir") == repo_dir for r in targets):
-            ext_str = data.get("repo_exts", ".py,.json,.md,.sh,.txt,.html,.css,.js")
-            exts = [e.strip() for e in ext_str.split(",") if e.strip()]
-
-            targets.append({
-                "repo_dir": repo_dir,
-                "title": data.get("repo_title") or repo_dir.replace("-", " ").replace("_", " ").title(),
-                "domain": data.get("repo_domain") or "Workspaces",
-                "description": data.get("repo_desc") or f"Auto-initialized repository: {repo_dir}",
-                "exts": exts,
-                "apply_ignore": True
-            })
-            cfg["target_repos"] = targets
-            import insetu.utils_core as utils_core
-            utils_core.save_json_file(CONFIG_PATH, cfg)
-    if is_new:
-        try:
-            from insetu.cartographer import map_repositories
-            map_repositories()
-        except Exception as e:
-            print(f"Warning: Cartographer failed during save: {str(e)}")
-
-    return jsonify({"status": "success", "message": f"Saved {filepath}", "is_new": is_new})
-def get_repo_from_diff(diff_filename):
-    from insetu.utils_core import load_config, get_sister_repos
-    cfg = load_config()
-    sister_repos = get_sister_repos()
-    clean_name = diff_filename.replace("_tracker_diffs.txt", "").replace("_diffs.txt", "")
-    from insetu.utils_core import get_safe_repo_id
-
-    # Pass 1: Exact matches (prevents 'insetu' swallowing '.insetu' / 'dot_insetu')
-    for c in cfg.get("target_repos", []):
-        repo_id = get_safe_repo_id(c.get("repo_dir"))
-        if repo_id == clean_name: return c["repo_dir"]
-        if c.get("out_file") and clean_name == c["out_file"].replace("_context.txt", ""): return c["repo_dir"]
-
-    # Pass 2: Partial matches & Sub-buckets
-    for c in cfg.get("target_repos", []):
-        repo_id = get_safe_repo_id(c.get("repo_dir"))
-        if repo_id in clean_name or clean_name in repo_id: return c["repo_dir"]
-        if c.get("out_file") and clean_name in c["out_file"].replace("_context.txt", ""): return c["repo_dir"]
-
-        # Search through sub_buckets for specific out_files
-        for b in c.get("sub_buckets", []):
-            if b.get("out_file") and clean_name in b["out_file"].replace("_context.txt", ""): return c["repo_dir"]
-
-    fallback = clean_name.replace("_", "-")
-    if fallback in sister_repos: return fallback
-
-    # If all exact mapping fails, fallback to the first available repository
-    return sister_repos[0] if sister_repos else "workspace"
-@app.route('/api/git/sweep/status', methods=['GET'])
-def api_git_sweep_status():
-    from insetu.utils_core import load_config, WORKSPACE_ROOT
-    import subprocess
-    cfg = load_config()
-    results = {}
-    for c in cfg.get("target_repos", []):
-        repo = c.get("repo_dir")
-        repo_path = os.path.join(WORKSPACE_ROOT, repo)
-        if c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-        if not os.path.exists(repo_path): continue
-        try:
-            # Use -uall to recursively list untracked files inside new directories
-            res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
-            lines = res.stdout.splitlines()
-            files = []
-            for line in lines:
-                if len(line) < 3: continue
-                status = line[:2]
-                filepath = line[3:]
-                if '->' in filepath: filepath = filepath.split('->')[-1].strip()
-                files.append({"path": filepath, "status": status.strip()})
-            if files:
-                results[repo] = files
-        except Exception:
-            pass
-    return jsonify({"repos": results})
-
-@app.route('/api/git/sweep/push', methods=['POST'])
-def api_git_sweep_push():
-    from insetu.utils_core import load_config, WORKSPACE_ROOT
-    import subprocess
-    data = request.json
-    selections = data.get('selections', {})
-    message = data.get('message', 'chore: workspace sweep')
-
-    cfg = load_config()
-    output_log = ""
-
-    for repo, files in selections.items():
-        if not files: continue
-
-        repo_path = os.path.join(WORKSPACE_ROOT, repo)
-        for c in cfg.get("target_repos", []):
-            if c.get("repo_dir") == repo and c.get("physical_path"):
-                repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-                break
-
-        if not os.path.exists(repo_path): continue
-
-        try:
-            # Guarantee topology is perfectly mapped before staging
-            from insetu.cartographer import map_repositories
-            map_repositories()
-
-            subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True)
-            subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
-            subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
-            output_log += f"✅ {repo}: Pushed {len(files)} files.\n"
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
-            return jsonify({"error": f"{repo} Error: {err}"}), 500
-
-    return jsonify({"status": "success", "output": output_log})
-
-@app.route('/api/git/changelogs', methods=['GET'])
-def api_git_changelogs():
-    diff_file = request.args.get('diff_file', '')
-    repo = get_repo_from_diff(diff_file)
-    tracker_dir = os.path.join(WORKSPACE_ROOT, repo, ".tracker", "closed")
-    changelogs = []
-    if os.path.exists(tracker_dir):
-        parsed_logs = []
-        for f in os.listdir(tracker_dir):
-            if f.endswith('.md'):
+                q.put({"status": "progress", "message": "Running pre-compile hooks..."})
                 try:
-                    with open(os.path.join(tracker_dir, f), 'r', encoding='utf-8', errors='ignore') as fh:
-                        title, date_str = None, "0000"
-                        for line in fh:
-                            line = line.strip()
-                            if line.startswith('title:'):
-                                title = line.split('title:', 1)[1].strip().strip('\'"')
-                            elif line.startswith('closed_at:'):
-                                val = line.split('closed_at:', 1)[1].strip().strip('\'"')
-                                if val.lower() != 'null':
-                                    date_str = val
-                            if title and date_str != "0000":
-                                break # Found both, stop reading file
-                        if title:
-                            parsed_logs.append({"title": title, "date": date_str})
-                except Exception: pass
+                    from insetu.hooks import hooks
+                    hooks.emit('pre_compile', workspace_id=wid)
+                except Exception as e:
+                    print(f"Warning: Pre-compile hooks failed: {str(e)}")
 
-        # Sort descending by the deterministic ISO timestamp
-        parsed_logs.sort(key=lambda x: x["date"], reverse=True)
-        for log in parsed_logs[:5]:
-            changelogs.append({"title": log["title"]})
-    return jsonify({"repo": repo, "changelogs": changelogs})
-@app.route('/api/git/push', methods=['POST'])
-def api_git_push():
-    data = request.json
-    repo = data.get('repo')
-    message = data.get('message')
-    diff_file = data.get('diff_file')
-    if not repo or not message or not diff_file: return jsonify({"error": "Repo, message, and diff_file required"}), 400
+                q.put({"status": "progress", "message": "Generating diff contexts..."})
 
-    from insetu.utils_core import load_config
-    cfg = load_config()
-    repo_path = os.path.join(WORKSPACE_ROOT, repo)
-    for c in cfg.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+                try:
+                    engine_gather.generate_diff_context(wid)
+                except Exception as e:
+                    print(f"Warning: Diff generation failed: {str(e)}")
 
-    if not os.path.exists(repo_path): return jsonify({"error": "Repo not found"}), 404
-    import subprocess
+                q.put({"status": "progress", "message": "Mapping repositories (Cartographer)..."})
 
-    # Git is the SSOT for repository state. Query it directly instead of parsing artifact files.
-    status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
+                try:
+                    from insetu.cartographer import map_repositories
+                    map_repositories(wid)
+                except Exception as e:
+                    print(f"Warning: Cartographer failed: {str(e)}")
 
-    files_to_stage = set()
-    for line in status_res.stdout.splitlines():
-        if len(line) >= 3:
-            filepath = line[3:]
-            # Safely handle git renames (e.g., R  old -> new)
-            if '->' in filepath: 
-                filepath = filepath.split('->')[-1]
-            files_to_stage.add(filepath.strip())
+                q.put({"status": "progress", "message": "Compiling context payloads..."})
+                engine_gather.generate_context_file(wid)
 
-    if not files_to_stage:
-        return jsonify({"error": "No files found to commit. Working tree is clean."}), 400
-    try:
-        # Guarantee topology is perfectly mapped before staging
-        from insetu.cartographer import map_repositories
-        map_repositories()
+                generated_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
+                q.put({"status": "success", "message": "Context successfully compiled!", "files": sorted(generated_files)})
+            except Exception as e:
+                import traceback
+                print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
+                q.put({"status": "error", "message": f"Compilation Error: {str(e)}", "files": []})
+            finally:
+                q.put(None) # End of stream
+                _COMPILER_LOCK.release()
 
-        # Auto-include the updated Code Index and Tracker states so metadata stays synced
-        if os.path.exists(os.path.join(repo_path, "CODE_INDEX.md")): files_to_stage.add("CODE_INDEX.md")
-        if os.path.exists(os.path.join(repo_path, "docs", "CODE_INDEX.md")): files_to_stage.add("docs/CODE_INDEX.md")
-        if os.path.exists(os.path.join(repo_path, ".tracker")): files_to_stage.add(".tracker/")
-        # Surgically add only the parsed files + metadata
-        subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
-        # Gracefully handle empty commits
-        committed = False
-        status_res = subprocess.run(['git', 'status', '--porcelain'], cwd=repo_path, capture_output=True, text=True)
-        if status_res.stdout.strip():
-            subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
-            committed = True
+        threading.Thread(target=compile_worker, args=(workspace_id,), daemon=True).start()
 
-        push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+        while True:
+            msg = q.get()
+            if msg is None:
+                break
+            yield json.dumps(msg) + "\n"
 
-
-        output = push_res.stdout
-        if push_res.stderr:
-            output += "\n" + push_res.stderr
-
-        return jsonify({"status": "success", "output": output.strip()})
-    except subprocess.CalledProcessError as e:
-        err_out = e.stderr or e.stdout
-        if isinstance(err_out, bytes):
-            err_out = err_out.decode('utf-8', errors='replace')
-        if not err_out:
-
-            err_out = str(e)
-
-        if 'committed' in locals() and committed and hasattr(e, 'cmd') and 'push' in e.cmd:
-            return jsonify({
-                "status": "partial", 
-                "error": err_out, 
-                "message": "Local commit succeeded, but pushing to the remote repository failed. The daemon likely lacks Git credentials."
-            }), 200
-
-        return jsonify({"error": err_out}), 500
-
+    return Response(generate(), mimetype='application/x-ndjson')
 @app.route('/api/diffs/generate', methods=['POST'])
 def api_generate_diffs():
     try:
-        files = engine_gather.generate_diff_context()
+        workspace_id = request.headers.get('X-Workspace-ID')
+        files = engine_gather.generate_diff_context(workspace_id)
         return jsonify({"status": "success", "files": files})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-@app.route('/api/tracker/new', methods=['POST'])
-def api_tracker_new():
-    data = request.json
-    try:
-        new_path = engine_tracker.create_ticket(
-            repo=data['repo'], 
-            ticket_type=data['type'], 
-            status=data['status'], 
-            title=data['title'], 
-            description=data['description'],
-            tags=data.get('tags', ''),
-            sub_bucket=data.get('sub_bucket', 'None')
-        )
-        # Remap topologies so the UI instantly knows about the new file
-        from insetu.cartographer import map_repositories
-        map_repositories()
-        return jsonify({"status": "success", "filepath": new_path})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-@app.route('/api/tracker/files', methods=['GET'])
-def api_tracker_files():
-    files = []
-    try:
-        for repo in get_sister_repos():
-            base = os.path.join(WORKSPACE_ROOT, repo, ".tracker")
-            if os.path.exists(base):
-                for root, _, filenames in os.walk(base):
-                    for f in filenames:
-                        if f.endswith('.md'):
-                            abs_path = os.path.join(root, f)
-                            rel_path = os.path.relpath(abs_path, WORKSPACE_ROOT).replace('\\', '/')
-                            files.append(rel_path)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"files": files})
-
-@app.route('/api/tracker/transition', methods=['POST'])
-def api_tracker_transition():
-    data = request.json
-    try:
-        new_path = engine_tracker.transition_ticket(
-            repo=data['repo'], 
-            current_rel_path=data['filepath'], 
-            new_status=data['new_status'],
-            new_type=data.get('new_type')
-        )
-        return jsonify({"status": "success", "new_filepath": new_path})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 @app.route('/api/manifest', methods=['GET'])
 def api_manifest():
-    manifest_path = os.path.join(engine_gather.CONTEXTS_DIR, "manifest.json")
+    workspace_id = request.headers.get('X-Workspace-ID')
+    from insetu.utils_core import get_gather_paths
+    paths = get_gather_paths(workspace_id)
+    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
     headers = {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
@@ -968,14 +395,18 @@ def api_manifest():
     return jsonify({}), 200, headers
 @app.route('/download/<path:filename>')
 def download_file(filename):
+    workspace_id = request.headers.get('X-Workspace-ID')
+    from insetu.utils_core import get_gather_paths
+    paths = get_gather_paths(workspace_id)
+
     # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
     safe_basename = os.path.basename(filename)
-    search_paths = [os.path.join(d, safe_basename) for d in [engine_gather.CONTEXTS_DIR, engine_gather.PROMPTS_DIR, engine_gather.DIFFS_DIR, engine_gather.GATHER_DIR]]
+    search_paths = [os.path.join(d, safe_basename) for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
     file_path = next((p for p in search_paths if os.path.exists(p)), None)
-
     # Fallback to resolving against the workspace root for media-vault files
     if not file_path:
-        resolved = resolve_workspace_path(filename)
+        from insetu.utils_core import resolve_workspace_path
+        resolved = resolve_workspace_path(filename, workspace_id)
         if os.path.exists(resolved): file_path = resolved
 
     if not file_path: return jsonify({"error": "File not found"}), 404
@@ -988,247 +419,6 @@ def download_file(filename):
 
     return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
 
-@app.route('/api/bridge/sync', methods=['POST'])
-def bridge_sync():
-    data = request.json
-    out = io.StringIO()
-    sister_repos = get_sister_repos()
-    
-    with redirect_stdout(out):
-        try:
-            raw_text, active_files, dry_run = data.get("text", ""), data.get("active_files", []), data.get("dry_run", False)
-            pinned_repos_raw = data.get("pinned_repos", ["ALL"])
-            allowed_repos = sister_repos if "ALL" in pinned_repos_raw else [r for r in sister_repos if r in pinned_repos_raw]
-            
-            parsed_structure = parse_blocks(raw_text)
-            pid = f"{random.getrandbits(16):04x}".upper()
-            print(f"\n=== SYNC TRANSACTION PULSE [{datetime.datetime.now().strftime('%H:%M:%S')}] ID: {pid} ===")
-            for target_file, blocks in parsed_structure.items():
-                if target_file not in active_files or not blocks: continue
-
-                # Hardware Lock: Protect Bootloader and Lifeboat
-                norm_target = target_file.replace('\\', '/')
-                if norm_target.endswith('cli.py') or norm_target.endswith('fallback_bridge.py'):
-                    print(f"  [!] TRANSACTION ABORTED: '{target_file}' is hardware-locked. The bootloader and lifeboat must be edited manually.")
-                    print("." * 30)
-                    continue
-
-                # Execution Lock Containment Check
-                explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
-                if explicit_repo in sister_repos and explicit_repo not in allowed_repos:
-                    print(f"  [!] TRANSACTION ABORTED: Target repository '{explicit_repo}' is not pinned. Skipping {target_file}.")
-                    print("." * 30)
-                    continue
-                resolved_path = resolve_workspace_path(target_file)
-                is_genesis = all(not b["search"].strip() for b in blocks)
-                if is_genesis and explicit_repo not in sister_repos:
-                                from insetu.utils_core import load_config
-                                all_known = [r.get("repo_dir") for r in load_config().get("target_repos", []) if r.get("repo_dir")]
-                                if explicit_repo in all_known:
-                                                pass
-                                elif explicit_repo and os.path.isdir(os.path.join(WORKSPACE_ROOT, explicit_repo)):
-                                                print(f"  [⚡] Auto-Resolved: '{explicit_repo}' exists physically. Allowing genesis patch.")
-                                elif len(allowed_repos) == 1:
-                                                target_file = f"{allowed_repos[0]}/{norm_target}"
-                                                norm_target = target_file.replace('\\', '/')
-                                                explicit_repo = allowed_repos[0]
-                                                resolved_path = resolve_workspace_path(target_file)
-                                                print(f"  [⚡] Auto-Resolved: Genesis patch missing repo anchor. Defaulting to '{explicit_repo}'.")
-                                else:
-                                                bad_anchor = explicit_repo or target_file
-                                                print(f"  [!] TRANSACTION ERROR: Genesis patch missing valid repository anchor.")
-                                                print(f"  [!] TRANSACTION ABORTED: '{bad_anchor}' is not a recognized repository. Please prepend the repository name (e.g., repo-name/path/to/file).")
-                                                print("." * 30)
-                                                continue
-
-# Smart Resolution Engine
-                if not is_genesis:
-                    from insetu.utils_core import CONFIG_PATH
-                    basename = os.path.basename(target_file)
-                    # Anchor to the absolute instance directory, bypassing volatile OS working directories
-                    search_roots = [os.path.dirname(CONFIG_PATH)]
-                    for repo in allowed_repos:
-                        repo_path = os.path.join(WORKSPACE_ROOT, repo)
-                        if os.path.exists(repo_path):
-                            search_roots.append(repo_path)
-
-                    search_roots = list(set(os.path.abspath(r) for r in search_roots))
-                    from insetu.utils_core import load_config
-                    live_cfg = load_config()
-                    ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
-
-                    candidates = []
-                    for s_root in search_roots:
-                        for root, dirs, files in os.walk(s_root):
-                            # Explicitly allow .tracker while blocking other hidden/system folders
-                            dirs[:] = [d for d in dirs if (not d.startswith('.') or d == '.tracker') and d not in ignore_dirs]
-                            if basename in files:
-                                cand_abs = os.path.abspath(os.path.join(root, basename)).replace('\\', '/')
-                                cand_rel = os.path.relpath(cand_abs, WORKSPACE_ROOT).replace('\\', '/')
-                                if cand_rel not in candidates:
-                                    candidates.append(cand_rel)
-
-                    target_norm = target_file.replace('\\', '/')
-                    def grade_candidate(c):
-                        if c == target_norm or c.endswith("/" + target_norm):
-                            return (0, len(c))
-                        return (1, len(c))
-
-                    candidates.sort(key=grade_candidate)
-                    exact_match_passed = False
-                    verified_alts = []
-                    failed_diff_cands = []
-
-                    for cand in candidates:
-                        cand_abs = os.path.join(WORKSPACE_ROOT, cand)
-                        try:
-                            with open(cand_abs, 'r', encoding='utf-8') as cf:
-                                temp_content = cf.read()
-                            cand_success = True
-                            for b in blocks:
-                                success, _ = apply_block_in_memory(temp_content, b, silent=True)
-                                if not success:
-                                    cand_success = False
-                                    break
-
-                            if cand_success:
-                                verified_alts.append(cand)
-                                if os.path.abspath(resolved_path) == os.path.abspath(cand_abs):
-                                    exact_match_passed = True
-                                    break
-                            else:
-                                failed_diff_cands.append(cand)
-                        except Exception:
-                            pass
-
-                    if not exact_match_passed:
-                        if verified_alts:
-                            best_alt = verified_alts[0]
-                            if len(allowed_repos) == 1:
-                                print(f"  [⚡] Auto-Resolved: Only 1 repo pinned. Seamlessly routing '{target_file}' to '{best_alt}'.")
-                                target_file = best_alt
-                                resolved_path = resolve_workspace_path(target_file)
-                            else:
-                                print(f"  [?] Smart Resolution: Anchors failed or file missing for '{target_file}'.")
-                                print(f"  [✓] Confirmed Match: Found '{best_alt}' which perfectly matches your SEARCH anchors.")
-                                if len(verified_alts) > 1:
-                                    print(f"  [i] (Note: Also verified {len(verified_alts)-1} other valid matches).")
-                                print(f"  [ACTION_REQUIRED: UPDATE_PATH | {target_file} | {best_alt} ]")
-                                print("  [!] Halting execution for this file.")
-                                print("." * 30)
-                                continue
-                        else:
-                            if not os.path.exists(resolved_path):
-                                if failed_diff_cands:
-                                    print(f"  [!] TRANSACTION ERROR: Found {len(failed_diff_cands)} matching path candidate(s), but your SEARCH block failed the diff test.")
-                                    for fc in failed_diff_cands:
-                                        print(f"      - {fc}")
-                                    print("  [!] TRANSACTION ABORTED: Check your SEARCH block for hallucinated padding or mismatched context.")
-                                else:
-                                    print(f"  [!] TRANSACTION ERROR: Target file not found at path: {resolved_path}")
-                                    print(f"  [!] TRANSACTION ABORTED: Check your directory context or cross-repo prefix.")
-                                print("." * 30)
-                                continue
-
-                abs_target = os.path.abspath(resolved_path)
-                display_path = os.path.relpath(abs_target, WORKSPACE_ROOT).replace('\\', '/')
-
-                print(f"Targeting: {display_path} ({len(blocks)} chunks mapped)")
-
-                if os.path.exists(resolved_path):
-                    with open(resolved_path, 'r', encoding='utf-8') as f: working_content = f.read()
-                else:
-                    if blocks and blocks[0]["search"].strip():
-                        print(f"  [!] TRANSACTION ERROR: Target file not found at path: {resolved_path}")
-                        print(f"  [!] TRANSACTION ABORTED: Check your directory context or cross-repo prefix.")
-                        print("." * 30)
-                        continue
-                    working_content = ""
-                
-                original_content = working_content
-                file_success = True
-                for idx, b in enumerate(blocks):
-                    success, updated_content = apply_block_in_memory(working_content, b)
-                    if success: working_content = updated_content
-                    else:
-                        if not dry_run:
-                            print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1} failed.")
-                            print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                        file_success = False
-                        break
-                # --- PRE-FLIGHT SYNTAX VALIDATION ---
-                if file_success:
-                    ext = os.path.splitext(target_file)[1].lower()
-                    try:
-                        if ext == '.py':
-                            import ast
-                            ast.parse(working_content)
-                        elif ext == '.json':
-                            import json
-                            json.loads(working_content)
-                        elif ext == '.js':
-                            # Leverage local V8 engine for native JS parsing (bypassing execution)
-                            import subprocess
-                            import base64
-                            try:
-                                # Use --input-type=module to correctly parse ES6 imports
-                                res = subprocess.run(
-                                    ['node', '--input-type=module', '-c'], 
-                                    input=working_content, 
-                                    capture_output=True, 
-                                    text=True
-                                )
-                                if res.returncode != 0:
-                                    err_str = res.stderr.strip()
-                                    err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                                    print(f"  [!] SYNTAX ERROR: Patch introduces invalid JavaScript in {target_file}.")
-                                    print(f"      {err_str}")
-                                    print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
-                                    print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                                    file_success = False
-                            except FileNotFoundError:
-                                print(f"  [~] Warning: Node.js not found in PATH. Skipping JS syntax validation for {target_file}.")
-                    except SyntaxError as e:
-                        import base64
-                        err_str = f"Line {e.lineno}: {e.msg}"
-                        err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                        print(f"  [!] SYNTAX ERROR: Patch introduces invalid Python syntax in {target_file}.")
-                        print(f"      {err_str}")
-                        print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
-                        print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                        file_success = False
-                    except ValueError as e:
-                        import base64
-                        err_str = str(e)
-                        err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                        print(f"  [!] SYNTAX ERROR: Patch introduces invalid JSON syntax in {target_file}.")
-                        print(f"      Details: {err_str}")
-                        print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
-                        print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                        file_success = False
-                    except Exception as e:
-                        print(f"  [!] SYNTAX ERROR: Validation failed for {target_file}. Details: {str(e)}")
-                        file_success = False
-
-                if file_success and working_content != original_content and not dry_run:
-                    if os.path.dirname(resolved_path):
-                        os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
-                    with open(resolved_path, 'w', encoding='utf-8') as f: f.write(working_content)
-                    print(f"  [✓] Transaction complete: In-memory composition committed cleanly for {target_file}.")
-                elif file_success and dry_run:
-                    print(f"  [✓] [DRY RUN] Verified perfectly for {target_file}.")
-                print("." * 30)
-            print(f"=== PULSE {pid} COMPLETE ===\n")
-        except Exception as e: print(f"  [!] System processing fault: {str(e)}")
-        
-    return out.getvalue(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-
-@app.route('/api/bridge/fetch', methods=['GET'])
-def bridge_fetch():
-    resolved_path = resolve_workspace_path(request.args.get('file', ''))
-    if resolved_path and os.path.exists(resolved_path):
-        with open(resolved_path, 'r', encoding='utf-8') as f: return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-    return "File not found.", 404
 def run_app():
     from insetu.utils_core import load_config
     from insetu.hooks import hooks

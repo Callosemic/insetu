@@ -19,10 +19,10 @@ def run_formatter():
     sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     try:
         import insetu.utils_core as utils_core
-        import insetu.engine_gather as engine_gather
-        workspace_root = utils_core.WORKSPACE_ROOT
-        manifest_path = os.path.join(engine_gather.CONTEXTS_DIR, "manifest.json")
-    except ImportError:
+        paths = utils_core.get_gather_paths()
+        workspace_root = paths["workspace_root"]
+        manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    except Exception:
         print("❌ Error: Could not load core tooling modules.")
         sys.exit(1)
 

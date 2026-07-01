@@ -1,6 +1,6 @@
 import os
 import re
-from insetu.utils_core import resolve_workspace_path, WORKSPACE_ROOT, get_sister_repos
+from insetu.utils_core import resolve_workspace_path, get_sister_repos
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., {{ ` * 3 }} or {{ = * 7 }}
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
@@ -15,7 +15,8 @@ def parse_blocks(text):
     current_file = None
     state = "OUTSIDE"
     search_lines, replace_lines = [], []
-    lines = text.replace('\r\n', '\n').split('\n')
+    # Sanitize invisible non-breaking spaces (NBSP) that break strict matching
+    lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
     for line in lines:
         if line.startswith("<<<<<<< FILE:"):
             current_file = line.replace("<<<<<<< FILE:", "").strip()
@@ -76,10 +77,10 @@ def _get_base_step_and_diffs(lines):
     return 4, []
 
 def apply_block_in_memory(content, block, silent=False):
-    content = content.replace('\r\n', '\n')
+    content = content.replace('\r\n', '\n').replace('\xa0', ' ')
     file_lines = content.split('\n')
-    search_str = expand_macros(block["search"])
-    replace_str = expand_macros(block["replace"])
+    search_str = expand_macros(block["search"]).replace('\xa0', ' ')
+    replace_str = expand_macros(block["replace"]).replace('\xa0', ' ')
 
     if not search_str.strip(): return True, replace_str
     
@@ -170,6 +171,25 @@ def apply_block_in_memory(content, block, silent=False):
                 if f_stripped[i:i+n] == r_stripped:
                     if not silent: print("  └─ ℹ️  Idempotency: REPLACE block already present in target. Skipping chunk.")
                     return True, content
+                    
+        # Fallback: Regex extraction for edge-case grid desyncs
+        if "{{UNTIL}}" in search_str:
+            import re
+            try:
+                top, bottom = search_str.split("{{UNTIL}}", 1)
+                t_pat = r'\s*'.join(re.escape(line.strip()) for line in top.strip().split('\n') if line.strip())
+                b_pat = r'\s*'.join(re.escape(line.strip()) for line in bottom.strip().split('\n') if line.strip())
+                match = re.search(t_pat + r'[\s\S]*?' + b_pat, content)
+                if match:
+                    start_idx = match.start()
+                    # Backtrack to the start of the line to prevent double-indentation
+                    while start_idx > 0 and content[start_idx - 1] in ' \t':
+                        start_idx -= 1
+                    if not silent: print("  └─ ⚠️  Grid desync detected. Rescued chunk via Regex Fallback.")
+                    return True, content[:start_idx] + replace_str.lstrip('\n') + content[match.end():]
+            except Exception:
+                pass
+
         return False, content
     llm_base_indent = len(search_lines[baseline_s_idx]) - len(search_lines[baseline_s_idx].lstrip()) if baseline_s_idx != -1 else 0
     actual_base_indent = len(file_lines[matched_baseline_f_idx]) - len(file_lines[matched_baseline_f_idx].lstrip()) if matched_baseline_f_idx != -1 else 0

@@ -23,20 +23,16 @@
     <div id="js-panic-button" style="padding: 20px; background: #dc2626; color: white; text-align: center; font-family: monospace; z-index: 9999; position: relative;">
         <h2 style="color: white; margin-top: 0;">⚠️ UI Engine Failed to Load</h2>
         <p>If this banner remains on your screen, a JavaScript syntax error has bricked the main OS interface.</p>
-        <form action="/api/system/panic" method="POST">
-            <button type="submit" style="padding: 10px 20px; background: white; color: #dc2626; border: none; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 1rem;">Boot Recovery OS</button>
-        </form>
+        <button type="button" onclick="fetch('/api/system/panic', {method: 'POST'}); document.getElementById('js-panic-button').innerHTML='<h2 style=\'color:white;margin-top:0;\'>Rebooting into Lifeboat...</h2><p>Page will reload automatically.</p>'; setTimeout(()=>window.location.reload(), 3000);" style="padding: 10px 20px; background: white; color: #dc2626; border: none; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 1rem;">Boot Recovery OS</button>
     </div>
 
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
     </script>
     <div class="top-bar">
-
         <div class="tabs" id="main-tabs-container">
             <div class="tab" onclick="switchTab(event, 'context')">Context</div>
             <div class="tab active" onclick="switchTab(event, 'edit')">Edit</div>
-            <div class="tab" onclick="switchTab(event, 'tasks')">Tasks</div>
         </div>
         <div style="position: absolute; right: 15px; top: 10px;">
             <button id="settings-toggle" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); font-size: 1.1rem; padding: 4px 8px;">{{ emoji }}</button>
@@ -279,20 +275,6 @@
         </div>
     </div>
 
-    <div id="move-modal" class="fullscreen-modal" style="z-index: 1060;">
-        <div class="modal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h3 style="margin:0; font-size: 1.1rem;">Move File</h3>
-                <button onclick="document.getElementById('move-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
-            </div>
-            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Destination Path (including filename):</label>
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <input type="text" id="move-dest-path" placeholder="e.g. axoneme-cli/new_folder/my_file.py" style="flex: 1; padding: 8px; margin: 0;">
-                <button onclick="openFolderBrowser()" class="btn-sm" style="background: #8b5cf6; margin: 0;">📁 Browse...</button>
-            </div>
-            <button id="execute-move-btn" onclick="executeMove()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">🚚 Move File</button>
-        </div>
-    </div>
     <div id="batch-modal" class="fullscreen-modal" style="z-index: 1050;">
         <div class="modal-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -383,234 +365,7 @@
             </div>
         </div>
     </div>
-    <div id="import-url-modal" class="fullscreen-modal" style="z-index: 1070;">
-        <div class="modal-content" style="max-height: 380px; height: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">Import from URL</h3>
-                <button onclick="document.getElementById('import-url-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Cancel</button>
-            </div>
 
-            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
-            <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
-
-            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
-                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                    <input type="radio" name="import-method" value="jina" checked> 
-                    <b>Jina Reader API</b> <span style="color: #888; font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
-                </label>
-                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                    <input type="radio" name="import-method" value="bs4"> 
-                    <b>BeautifulSoup Local</b> <span style="color: #888; font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
-                </label>
-            </div>
-
-            <button onclick="executeImportUrl()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">📥 Fetch & Convert</button>
-        </div>
-    </div>
-
-    <div id="new-file-modal" class="fullscreen-modal">
-        <div class="modal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h3 style="margin:0; font-size: 1.1rem;">Create New Workspace File</h3>
-                <button onclick="document.getElementById('new-file-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
-            </div>
-            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: #8b5cf6;"></span></label>
-            <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
-            <div id="new-file-ext-warning" style="display: none; color: #f59e0b; font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
-            <div id="new-file-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-                <button onclick="importFromUrl()" class="btn-sm" style="background: #3b82f6; margin: 0;">🌐 Import from URL</button>
-                <span id="import-url-status" style="font-size: 0.8rem; color: #888; display: none;">Fetching...</span>
-            </div>
-
-            <div id="new-file-library-wrapper" style="display: none; align-items: center; gap: 8px; margin-bottom: 10px;">
-                <input type="checkbox" id="new-file-add-library" style="transform: scale(1.1); cursor: pointer;">
-                <label for="new-file-add-library" style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer;">📚 Add to Reference Library</label>
-            </div>
-
-            <textarea id="new-file-content" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box;" placeholder="Enter file content here..."></textarea>
-            <button onclick="saveNewFile()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #10b981;">💾 Create & Save File</button>
-        </div>
-    </div>
-    <div id="new-folder-modal" class="fullscreen-modal" style="z-index: 1060;">
-        <div class="modal-content" style="height: auto; max-height: 90vh; overflow-y: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <h3 id="new-folder-title" style="margin:0; font-size: 1.1rem;">Create New Folder</h3>
-                <button onclick="document.getElementById('new-folder-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin:0;">Cancel</button>
-            </div>
-            <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: #8b5cf6;"></span></label>
-            <input type="text" id="new-folder-name" placeholder="Directory name..." style="margin-bottom: 15px; padding: 10px; font-weight: bold;">
-            <div id="new-repo-fields" style="display: none; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                <h4 style="margin: 0; margin-bottom: 5px; color: #38bdf8;">Repository Configuration</h4>
-
-                <div>
-                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Repository Title</label>
-                    <input type="text" id="new-repo-title" placeholder="e.g., Core API" style="padding: 8px; margin: 0; width: 100%;">
-                </div>
-                <div>
-                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Domain Category</label>
-                    <input type="text" id="new-repo-domain" placeholder="e.g., Workspaces" style="padding: 8px; margin: 0; width: 100%;">
-                </div>
-                <div>
-                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Description</label>
-                    <input type="text" id="new-repo-desc" placeholder="Short summary..." style="padding: 8px; margin: 0; width: 100%;">
-                </div>
-                <div>
-                    <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Tracked Extensions</label>
-                    <input type="text" id="new-repo-exts" placeholder="e.g., .py, .json, .md" style="padding: 8px; margin: 0; width: 100%; font-family: monospace;">
-                </div>
-            </div>
-
-            <button id="btn-submit-new-folder" onclick="saveNewFolder()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">📁 Create</button>
-        </div>
-    </div>
-
-    <div id="new-task-modal" class="fullscreen-modal">
-        <div class="modal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">Create New Ticket</h3>
-                <button onclick="document.getElementById('new-task-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
-            </div>
-
-            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                <select id="new-task-repo" style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
-                <select id="new-task-type" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
-                    <option value="todo">To-Do (Task)</option>
-                    <option value="bug">Bug</option>
-                    <option value="queue">Queue (Research)</option>
-                </select>
-                <select id="new-task-status" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
-                    <option value="open">Open (Backlog)</option>
-                    <option value="active">Active (In Progress)</option>
-                </select>
-                <select id="new-task-bucket" style="padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
-                    <option value="None">No Bucket</option>
-                </select>
-            </div>
-            <input type="text" id="new-task-title" placeholder="Ticket Title (e.g., Fix schema registry timeout)" style="margin-bottom: 10px; padding: 10px; font-weight: bold;">
-            <input type="text" id="new-task-tags" placeholder="Tags (comma separated, e.g. frontend, critical)" style="margin-bottom: 10px; padding: 10px;">
-            <textarea id="new-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0;" placeholder="Markdown description..."></textarea>
-            <button id="save-task-btn" onclick="saveNewTask()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #8b5cf6;">💾 Create Ticket</button>
-        </div>
-    </div>
-
-    <div id="edit-task-modal" class="fullscreen-modal">
-        <div class="modal-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">Edit Ticket Metadata</h3>
-                <button onclick="document.getElementById('edit-task-modal').style.display='none'" class="btn-sm" style="background: #dc2626;">Cancel</button>
-            </div>
-
-            <input type="hidden" id="edit-task-filepath">
-            <input type="hidden" id="edit-task-original-yaml">
-
-            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                <select id="edit-task-bucket" style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);">
-                    <option value="None">No Bucket</option>
-                </select>
-            </div>
-            <input type="text" id="edit-task-title" placeholder="Ticket Title" style="margin-bottom: 10px; padding: 10px; font-weight: bold;">
-            <input type="text" id="edit-task-tags" placeholder="Tags (comma separated)" style="margin-bottom: 10px; padding: 10px;">
-            <textarea id="edit-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0;" placeholder="Markdown description..."></textarea>
-
-            <button id="save-edit-task-btn" onclick="saveEditTask()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #3b82f6;">💾 Save Changes</button>
-        </div>
-    </div>
-    <div id="tab-tasks" class="tab-content">
-        <div class="sub-tabs-bar">
-            <div class="sub-tabs">
-                <div class="sub-tab active" id="st-todos" onclick="switchSubTab('todos')">To-Dos</div>
-                <div class="sub-tab" id="st-bugs" onclick="switchSubTab('bugs')">Bugs</div>
-                <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
-                <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
-            </div>
-            <button class="btn-sm" style="background: #8b5cf6; margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
-        </div>
-        <div class="screen active" style="min-height: 80vh;">
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
-                <div id="task-repo-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;"></div>
-            </div>
-            <div id="sub-todos" class="sub-tab-content active">
-                <div class="board-columns">
-                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                        <h3 style="margin-top: 0;">Open</h3>
-                        <div id="todos-open-list"></div>
-                    </div>
-                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                        <h3 style="margin-top: 0;">Active</h3>
-                        <div id="todos-active-list"></div>
-                    </div>
-                </div>
-            </div>
-    <div id="sub-bugs" class="sub-tab-content">
-        <div class="board-columns">
-            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                <h3 style="margin-top: 0;">Open</h3>
-                <div id="bugs-open-list"></div>
-            </div>
-            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                <h3 style="margin-top: 0;">Active</h3>
-                <div id="bugs-active-list"></div>
-            </div>
-        </div>
-    </div>
-
-    <div id="sub-queue" class="sub-tab-content">
-        <div class="board-columns">
-            <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                <h3 style="margin-top: 0;">Open (Research Queue)</h3>
-                <div id="queue-open-list"></div>
-            </div>
-        </div>
-    </div>
-    <div id="sub-log" class="sub-tab-content">
-                <div style="display: flex; justify-content: flex-end; margin-bottom: 15px;">
-                    <button id="btn-generate-changelog" class="btn-sm" style="background: #8b5cf6; margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
-                </div>
-                <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
-            </div>
-        </div>
-    </div>
-    <div id="sweep-modal" class="fullscreen-modal" style="z-index: 1080;">
-        <div class="modal-content" style="max-height: 80vh; display: flex; flex-direction: column;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">🧹 Selective Sweep</h3>
-                <button onclick="document.getElementById('sweep-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
-            </div>
-
-            <div id="sweep-loading" class="spinner" style="display:none; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>
-
-            <div id="sweep-files-container" style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px;">
-                </div>
-
-            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-            <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none;"></textarea>
-
-            <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
-
-            <button id="execute-sweep-btn" onclick="executeSweepPush()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #f59e0b;">🚀 Commit & Push Selected</button>
-        </div>
-    </div>
-
-    <div id="push-modal" class="fullscreen-modal">
-        <div class="modal-content" style="max-height: 400px; height: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">🚀 Commit & Push: <span id="push-repo-name" style="color: #8b5cf6;"></span></h3>
-                <button onclick="document.getElementById('push-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
-            </div>
-
-            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
-            <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" onchange="document.getElementById('push-message').value = this.value;">
-                <option value="">-- Type a custom message below --</option>
-            </select>
-            <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-            <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0;"></textarea>
-
-            <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
-
-            <button id="execute-push-btn" onclick="executePush()" style="margin:0; padding: 15px; font-size: 1.1rem; font-weight: bold; background: #8b5cf6;">🚀 Execute Push</button>
-        </div>
-    </div>
     <div id="global-status-bar" class="bottom-bar" data-default="{{ title }}">{{ title }}</div>
 
     <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>

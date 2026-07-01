@@ -3,9 +3,7 @@ import re
 import subprocess
 import json
 from pathlib import Path
-from insetu.utils_core import get_valid_workspace_files
-# The workspace root contains all sister repositories
-from insetu.utils_core import WORKSPACE_ROOT, CONFIG_PATH, load_config
+from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, load_config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
@@ -91,9 +89,10 @@ def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path="
         lines.extend(render_ascii_tree(node[key], comment_map, managed_dirs, prefix + extension, next_path))
 
     return lines
-def map_repositories():
+def map_repositories(workspace_id=None):
     print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
-    cfg = load_config()
+    cfg = load_config(workspace_id)
+    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
     target_repos = cfg.get("target_repos", [])
     for config in target_repos:
         repo_dir = config["repo_dir"]
@@ -101,7 +100,7 @@ def map_repositories():
         if physical_path:
             repo_path = os.path.abspath(os.path.expanduser(physical_path))
         else:
-            repo_path = os.path.join(WORKSPACE_ROOT, repo_dir)
+            repo_path = os.path.join(ws_root, repo_dir)
 
         index_path = os.path.join(repo_path, "docs", "CODE_INDEX.md") if config.get("is_core_chassis") else os.path.join(repo_path, "CODE_INDEX.md")
         if not os.path.exists(repo_path):
@@ -123,8 +122,8 @@ def map_repositories():
         if config.get("is_core_chassis"):
             os.makedirs(os.path.dirname(index_path), exist_ok=True)
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
-        # Extract declarative managed list from config, default to .tracker to preserve previous behavior
-        managed_dirs = cfg.get("managed_dirs", [".tracker"]) + config.get("repo_managed_dirs", [])
+        # Extract declarative managed list from config
+        managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
 
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"

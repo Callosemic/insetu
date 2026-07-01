@@ -5,12 +5,13 @@ import urllib.request
 import urllib.parse
 import json
 from flask import Blueprint, request, jsonify
-from insetu.utils_scraping import extract_markdown_from_url
+from insetu.engine_ingest import extract_markdown_from_url
 from insetu.db import get_connection
 from insetu.workers import submit_job, register_callback
 from insetu.hooks import hooks
 
 research_bp = Blueprint('research', __name__)
+__depends__ = ['ingest']
 
 @hooks.on('system_boot')
 def init_research_db():
@@ -188,9 +189,10 @@ class GooglePlaywrightProvider(SearchProvider):
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    from insetu.db import ARTIFACTS_BASE
+                    from insetu.utils_core import get_workspace_physics
                     import time, os
-                    log_dir = os.path.join(ARTIFACTS_BASE, "logs", "research_dumps")
+                    cfg_path, _, _ = get_workspace_physics()
+                    log_dir = os.path.join(os.path.dirname(cfg_path), "data", "logs", "research_dumps")
                     os.makedirs(log_dir, exist_ok=True)
                     dump_path = os.path.join(log_dir, f"google_serp_fail_{int(time.time())}.html")
                     with open(dump_path, "w", encoding="utf-8") as f:
@@ -270,14 +272,13 @@ def get_provider(provider_name):
         return SerperDevProvider()
     raise ValueError(f"Unknown provider: {provider_name}")
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
-
-def gather_next_page(job_id):
+def gather_next_page(job_id, workspace_id=None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
-  conn = get_connection("research")
+  conn = get_connection("research", workspace_id=workspace_id)
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
   if not job or job['status'] != 'gathering':
-    w_conn = get_connection("workers")
+    w_conn = get_connection("workers", workspace_id=workspace_id)
     w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
     w_conn.commit()
     return
@@ -298,7 +299,7 @@ def gather_next_page(job_id):
 
         prior_cit = None
         try:
-          cit_conn = get_connection("citations")
+          cit_conn = get_connection("citations", workspace_id=workspace_id)
           # Utilize SQLite JSON1 extension to natively query the CSL-JSON matrix
           prior_cit = cit_conn.execute("SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?", (link['url'],)).fetchone()
         except Exception:
@@ -311,8 +312,7 @@ def gather_next_page(job_id):
           inbox_status = 'duplicate'
 
         inbox_id = str(uuid.uuid4())
-        conn.execute("INSERT INTO research_inbox (id, job_id, url, title, status) VALUES (?, ?, ?, ?, ?)",
-              (inbox_id, job_id, link['url'], link['title'], inbox_status))
+        conn.execute("INSERT INTO research_inbox (id, job_id, url, title, status) VALUES (?, ?, ?, ?, ?)", (inbox_id, job_id, link['url'], link['title'], inbox_status))
         new_links_count += 1
 
     conn.execute("UPDATE research_jobs SET total_links = total_links + ? WHERE id=?", (new_links_count, job_id))
@@ -320,7 +320,7 @@ def gather_next_page(job_id):
 
     if new_links_count == 0 or current_total >= max_results:
       conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
-      w_conn = get_connection("workers")
+      w_conn = get_connection("workers", workspace_id=workspace_id)
       w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
       w_conn.commit()
     else:
@@ -333,18 +333,17 @@ def gather_next_page(job_id):
       meta['error'] = str(e)
       conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), job_id))
       conn.commit()
-      w_conn = get_connection("workers")
+      w_conn = get_connection("workers", workspace_id=workspace_id)
       w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
       w_conn.commit()
-
-def scrape_next_link(job_id):
+def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
-    conn = get_connection("research")
+    conn = get_connection("research", workspace_id=workspace_id)
 
     job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
     if not job_status or job_status['status'] in ('paused', 'cancelled', 'completed', 'failed'):
         # Terminate the job in the metronome ledger
-        w_conn = get_connection("workers")
+        w_conn = get_connection("workers", workspace_id=workspace_id)
         w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
         w_conn.commit()
         return
@@ -355,7 +354,7 @@ def scrape_next_link(job_id):
 
         conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, job_id,))
         conn.commit()
-        w_conn = get_connection("workers")
+        w_conn = get_connection("workers", workspace_id=workspace_id)
         w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
         w_conn.commit()
         print(f"✅ [Research] Job {job_id} finished scraping (Status: {final_status}).")
@@ -371,12 +370,10 @@ def scrape_next_link(job_id):
 
       extracted = extract_markdown_from_url(target_url, method=parser_type)
       now_str = datetime.now().isoformat(timespec='seconds')
-      conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", 
-            (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))
+      conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))
     except Exception as e:
         now_str = datetime.now().isoformat(timespec='seconds')
-        conn.execute("UPDATE research_inbox SET raw_markdown=?, scraped_at=? WHERE id=?", 
-                     (f"Extraction Error: {str(e)}", now_str, inbox_id))
+        conn.execute("UPDATE research_inbox SET raw_markdown=?, scraped_at=? WHERE id=?", (f"Extraction Error: {str(e)}", now_str, inbox_id))
 
     conn.execute("UPDATE research_jobs SET processed_links = processed_links + 1 WHERE id=?", (job_id,))
     conn.commit()

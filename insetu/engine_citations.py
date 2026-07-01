@@ -4,7 +4,7 @@ import sqlite3
 import urllib.request
 import urllib.parse
 from flask import Blueprint, request, jsonify
-from insetu.engine_gather import ARTIFACTS_BASE
+from insetu.utils_core import get_gather_paths
 from insetu.hooks import hooks
 
 citations_bp = Blueprint('citations', __name__)
@@ -12,29 +12,28 @@ citations_bp = Blueprint('citations', __name__)
 def inject_citation_metadata(cfg):
     """Dynamically injects virtual UI metadata for citation payloads."""
     if "citations" not in cfg.get("extensions", []): return
+    if "virtual_contexts" not in cfg:
+        cfg["virtual_contexts"] = []
 
-    targets = cfg.get("target_repos", [])
+    v_ctxs = cfg["virtual_contexts"]
 
     # Prevent duplication across in-memory cache loads
-    if any(r.get("repo_dir") == "virtual_citations" for r in targets):
+    if any(v.get("out_file") == "citations_context.txt" for v in v_ctxs):
         return
 
     # Inject the Global Library mapping
-    targets.append({
-        "repo_dir": "virtual_citations",
+    v_ctxs.append({
         "title": "Global Reference Library",
         "domain": "Reference Library",
         "description": "Academic citations and bibliography records.",
-        "out_file": "citations_context.txt",
-        "exclude_from_context": True,
-        "exclude_from_diffs": True,
-        "exclude_from_tracker": True
+        "out_file": "citations_context.txt"
     })
 
     # Dynamically inject mappings for repo-specific citation buckets
     try:
         import sqlite3, os, json
-        db_path = os.path.join(ARTIFACTS_BASE, "citations.db")
+        paths = get_gather_paths()
+        db_path = os.path.join(paths["artifacts_base"], "citations.db")
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path)
             cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
@@ -58,21 +57,74 @@ def inject_citation_metadata(cfg):
                     virtual_dir = f"virtual_citations_{repo}"
                     ui_title = repo
                     out_file = f"{repo}_citations_context.txt"
-
-                if not any(t.get("repo_dir") == virtual_dir for t in targets):
-                    targets.append({
-                        "repo_dir": virtual_dir,
+                if not any(v.get("out_file") == out_file for v in v_ctxs):
+                    v_ctxs.append({
                         "title": ui_title,
                         "description": f"Academic citations scoped to {ui_title}.",
                         "domain": "Reference Library",
-                        "out_file": out_file,
-                        "exclude_from_context": True,
-                        "exclude_from_diffs": True,
-                        "exclude_from_tracker": True
+                        "out_file": out_file
                     })
             conn.close()
     except Exception:
         pass
+@hooks.on('compile_contexts')
+def compile_citation_contexts(manifest):
+    try:
+        import sqlite3
+        from insetu.utils_core import get_gather_paths
+        paths = get_gather_paths()
+        db_path = os.path.join(paths["artifacts_base"], "citations.db")
+        if not os.path.exists(db_path):
+            return
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
+        rows = cursor.fetchall()
+        if rows:
+            def write_citation_bucket(filename, items, list_title):
+                out_path = os.path.join(paths["contexts_dir"], filename)
+                with open(out_path, 'w', encoding='utf-8') as outfile:
+                    outfile.write("============================================================\n")
+                    outfile.write(f"INSETU TOPOLOGY ({list_title})\n")
+                    outfile.write("============================================================\n\n")
+                    for item in items:
+                        csl_id = item.get("id", "unknown")
+                        title = item.get("title", "Untitled")
+                        authors = ", ".join([a.get('family', '') for a in item.get('author', [])])
+                        outfile.write(f"--- [@{csl_id}] ---\n")
+                        outfile.write(f"Title: {title}\n")
+                        outfile.write(f"Author(s): {authors}\n")
+                        outfile.write(f"Type: {item.get('type', 'unknown')}\n")
+                        outfile.write(f"Raw CSL-JSON: {json.dumps(item)}\n\n")
+                    manifest[filename] = ["data/citations.db"]
+
+            global_items = []
+            bucketed_items = {}
+
+            for row in rows:
+                item = json.loads(row['raw_json'])
+                atts = json.loads(row['attachments']) if row['attachments'] else []
+                global_items.append(item)
+
+                for att in atts:
+                    repo = att.get("repo")
+                    bucket = att.get("bucket", "None")
+                    if repo:
+                        if repo not in bucketed_items: bucketed_items[repo] = []
+                        if item not in bucketed_items[repo]: bucketed_items[repo].append(item)
+                        if bucket and bucket != "None":
+                            rb_key = f"{repo}_{bucket}"
+                            if rb_key not in bucketed_items: bucketed_items[rb_key] = []
+                            if item not in bucketed_items[rb_key]: bucketed_items[rb_key].append(item)
+
+            write_citation_bucket("citations_context.txt", global_items, "GLOBAL REFERENCE LIBRARY")
+            for k, items in bucketed_items.items():
+                write_citation_bucket(f"{k}_citations_context.txt", items, f"REFERENCE LIBRARY ({k.upper()})")
+
+    except Exception as e:
+        print(f"Extension Hook Error (citations compile): {e}")
+
 _METADATA_CACHE = {"publications": [], "authors": []}
 _METADATA_INITIALIZED = False
 
@@ -100,9 +152,10 @@ def _rebuild_metadata_cache():
         _METADATA_INITIALIZED = True
     except Exception:
         pass
-
 def get_db():
-    db_path = os.path.join(ARTIFACTS_BASE, "citations.db")
+    from insetu.utils_core import get_gather_paths
+    paths = get_gather_paths()
+    db_path = os.path.join(paths["artifacts_base"], "citations.db")
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -120,14 +173,17 @@ def get_db():
         pass
     conn.commit()
     return conn
+from insetu.utils_core import extension_auth
+
 @citations_bp.route('/api/citations/index', methods=['GET'])
+@extension_auth('citations')
 def get_metadata_index():
     global _METADATA_CACHE, _METADATA_INITIALIZED
     if not _METADATA_INITIALIZED:
         _rebuild_metadata_cache()
     return jsonify(_METADATA_CACHE)
-
 @citations_bp.route('/api/citations', methods=['GET'])
+@extension_auth('citations')
 def get_citations():
     try:
         conn = get_db()

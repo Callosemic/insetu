@@ -1,21 +1,13 @@
 import {
     mdeInstance,
     executeWorkspaceMutation,
-    contextManifest,
     setContextManifest,
-    TARGET_CONFIGS,
-    setTargetConfigs,
-    ALL_REPOS,
-    setAllRepos,
-    renderRepoPins,
     compileContexts,
     fetchAndCopy,
     fetchAndDownloadState,
     normalizeAccentText
 } from './app.js';
-import {
-    openPushModal
-} from './git.js';
+import { AppStore } from './store.js';
 let currentModalFile = '';
 export let currentModalOriginalText = '';
 export let currentModalIsFS = false;
@@ -174,12 +166,10 @@ function showWikiPopup(e, href, title) {
         document.addEventListener('click', closer);
     }, 10);
 }
-
 function toggleModalMode() {
-    if (isPreviewMode && currentModalFile.includes('.tracker/')) {
-        document.getElementById('copy-modal').style.display = 'none';
-        openEditTaskModal(currentModalFile);
-        return;
+    if (isPreviewMode && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        const override = window.ExtensionRegistry.executeUIHook('zone:file-edit-override', currentModalFile);
+        if (override) return;
     }
 
     isPreviewMode = !isPreviewMode;
@@ -305,9 +295,9 @@ document.getElementById('modal-text').addEventListener('input', (e) => {
         }
     }
 });
-
 function updateManifestState(oldPath, newPath = null) {
-    Object.values(contextManifest).forEach(fileArray => {
+    const { manifest } = AppStore.getState();
+    Object.values(manifest).forEach(fileArray => {
         const index = fileArray.indexOf(oldPath);
         if (index > -1) {
             fileArray.splice(index, 1);
@@ -342,7 +332,6 @@ async function saveModalFile(autoSave = false) {
             return;
         }
     }
-
     await executeWorkspaceMutation('/api/fs/save', {
         filepath: currentModalFile,
         content: content
@@ -352,9 +341,12 @@ async function saveModalFile(autoSave = false) {
         silent: autoSave,
         onSuccess: () => {
             currentModalOriginalText = content;
-            document.getElementById('modal-save-btn').style.display = 'none';
+            document.getElementById('modal-save-btn').style.display = 
+'none';
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (autoSave && currentModalFile.includes('.tracker/')) loadTrackerBoard();
+            if (autoSave && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                window.ExtensionRegistry.executeUIHook('zone:post-file-save', currentModalFile);
+            }
         }
     });
 }
@@ -370,16 +362,31 @@ function copyFromModal() {
         alert("Clipboard API failed. Please manually select the text and copy it directly from the text box.");
     });
 }
-
 function openMoveModal() {
-    document.getElementById('move-dest-path').value = currentModalFile;
-    document.getElementById('move-modal').style.display = 'block';
+    const bodyHtml = `
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Destination Path (including filename):</label>
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <input type="text" id="move-dest-path" value="${currentModalFile}" placeholder="e.g. axoneme-cli/new_folder/my_file.py" style="flex: 1; padding: 8px; margin: 0; font-family: monospace;">
+            <button onclick="if(window.openFolderBrowser) window.openFolderBrowser()" class="btn-sm" style="background: #8b5cf6; margin: 0;">📁 Browse...</button>
+        </div>
+    `;
+    window.UIFactory.createModal({
+        id: 'move-modal',
+        title: 'Move File',
+        body: bodyHtml,
+        actions: [
+            { label: 'Cancel', style: 'secondary' },
+            { label: '🚚 Move File', style: 'primary', id: 'execute-move-btn', onClick: async (e, modal) => {
+                await executeMove(modal.id);
+                return true;
+            }}
+        ]
+    });
 }
 
-async function executeMove() {
+async function executeMove(modalId = 'move-modal') {
     const destPath = document.getElementById('move-dest-path').value.trim();
     if (!destPath || destPath === currentModalFile) return alert("Please enter a valid new destination path.");
-
     await executeWorkspaceMutation('/api/fs/move', {
         filepath: currentModalFile,
         dest_path: destPath
@@ -387,7 +394,9 @@ async function executeMove() {
         btnId: 'execute-move-btn',
         loadingText: 'Moving...',
         onSuccess: () => {
-            document.getElementById('move-modal').style.display = 'none';
+            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            else document.getElementById(modalId).style.display = 'none';
+
             document.getElementById('copy-modal').style.display = 'none';
             updateManifestState(currentModalFile, destPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
@@ -488,22 +497,23 @@ export function createFileCard(fileInfo, container) {
 
     const actions = document.createElement('div');
     actions.className = 'file-actions';
-    if (!fileInfo.isSource && contextManifest[fileInfo.filename]) {
+    const { manifest } = AppStore.getState();
+if (!fileInfo.isSource && manifest[fileInfo.filename]) {
         const browseBtn = document.createElement('button');
         browseBtn.className = 'btn-sm';
         browseBtn.style.background = '#8b5cf6';
         browseBtn.innerText = '📁 Browse';
         browseBtn.onclick = () => openBrowseModal(fileInfo.filename);
         actions.appendChild(browseBtn);
-    }
+}
 
-    if (fileInfo.filename.endsWith('_diffs.txt')) {
-        const pushBtn = document.createElement('button');
-        pushBtn.className = 'btn-sm';
-        pushBtn.style.background = '#8b5cf6';
-        pushBtn.innerText = '🚀 Push';
-        pushBtn.onclick = () => openPushModal(fileInfo.filename);
-        actions.appendChild(pushBtn);
+    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        window.ExtensionRegistry.executeUIHook('zone:file-card-actions', {
+            filepath: fileInfo.filename,
+            repoDir: fileInfo.repoDir,
+            isFS: fileInfo.isFS,
+            actionsContainer: actions
+        });
     }
 
     const dlBtn = document.createElement('button');
@@ -597,7 +607,6 @@ export function createFileCard(fileInfo, container) {
     header.appendChild(titleSpan);
     header.appendChild(actions);
     card.appendChild(header);
-
     if (fileInfo.description) {
         const desc = document.createElement('div');
         desc.className = 'file-desc';
@@ -605,24 +614,35 @@ export function createFileCard(fileInfo, container) {
         card.appendChild(desc);
     }
 
+    // Micro-Interaction: Double-click anywhere on the card to open
+    card.addEventListener('dblclick', (e) => {
+        // Prevent double-triggering if they specifically double-clicked an action button
+        if (e.target.tagName === 'BUTTON') return;
+
+        // Clear text selection that naturally happens on double click
+        window.getSelection().removeAllRanges();
+
+        if (fileInfo.isSource) viewSourceFile(fileInfo.filename, fileInfo.isFS);
+        else viewAndCopy(fileInfo.filename);
+    });
+
     container.appendChild(card);
 }
 let globalFileTree = {};
 export let globalBrowsePath = [];
 let globalManifest = [];
-
 export function loadGlobalFS() {
     const container = document.getElementById('global-fs-list');
     const allFiles = new Set();
-    Object.values(contextManifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
+    const { manifest, targetConfigs } = AppStore.getState();
+    Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
 
     globalManifest = Array.from(allFiles);
 
     globalFileTree = buildFileTree(globalManifest);
-
-    // Explicitly seed configured root repositories to allow initializing empty environments
-    if (typeof TARGET_CONFIGS !== 'undefined') {
-        TARGET_CONFIGS.forEach(cfg => {
+// Explicitly seed configured root repositories to allow initializing empty environments
+    if (targetConfigs) {
+        targetConfigs.forEach(cfg => {
             if (cfg.repo_dir && !globalFileTree[cfg.repo_dir]) {
                 globalFileTree[cfg.repo_dir] = {};
             }
@@ -677,7 +697,6 @@ function renderGlobalFSLevel() {
     for (const p of globalBrowsePath) {
         current = current[p];
     }
-
     const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
         const aIsDir = !current[a]._isFile;
         const bIsDir = !current[b]._isFile;
@@ -685,6 +704,8 @@ function renderGlobalFSLevel() {
         if (!aIsDir && bIsDir) return 1;
         return a.localeCompare(b);
     });
+
+    const fragment = document.createDocumentFragment();
     keys.forEach(key => {
         const item = current[key];
         if (item._isFile) {
@@ -696,7 +717,7 @@ function renderGlobalFSLevel() {
                 description: '',
                 isFS: true,
                 isSource: true
-            }, container);
+            }, fragment);
         } else {
             const card = document.createElement('div');
             card.className = 'file-card';
@@ -709,9 +730,10 @@ function renderGlobalFSLevel() {
                 globalBrowsePath.push(key);
                 renderGlobalFSLevel();
             };
-            container.appendChild(card);
+            fragment.appendChild(card);
         }
     });
+    container.appendChild(fragment);
 }
 
 function globalFSUp() {
@@ -735,13 +757,19 @@ function filterGlobalFS(query) {
             renderGlobalFSLevel();
             return;
         }
-
         clearBtn.style.display = 'block';
         // We intentionally keep the header visible so users know what directory they are searching within
         container.innerHTML = '';
         // Scope search to the current active directory level
         const currentPrefix = globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '';
-        const matches = globalManifest.filter(f => f.startsWith(currentPrefix) && f.substring(currentPrefix.length).toLowerCase().includes(q));
+
+        const terms = q.split(/\s+/).filter(t => t);
+        const matches = globalManifest.filter(f => {
+            if (!f.startsWith(currentPrefix)) return false;
+            const sub = f.substring(currentPrefix.length).toLowerCase();
+            return terms.every(t => sub.includes(t));
+        });
+
         if (matches.length === 0) {
             container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
             return;
@@ -771,10 +799,10 @@ function checkFileExtension(filename) {
     warningEl.style.display = 'none';
 
     if (!filename) return;
-
     if (globalBrowsePath.length > 0) {
         const repoDir = globalBrowsePath[0];
-        const repoCfg = TARGET_CONFIGS.find(c => c.repo_dir === repoDir);
+        const { targetConfigs } = AppStore.getState();
+        const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
 
         if (repoCfg && repoCfg.exts) {
             // Emulate Python's os.path.splitext() behavior for accurate parity
@@ -797,21 +825,41 @@ function checkFileExtension(filename) {
     }
 }
 function openNewFileModal(overridePath = null) {
-    // Inherit the spatial context from the active browser path or an override
     const prefix = typeof overridePath === 'string' ? overridePath : (globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '');
-    document.getElementById('new-file-base-path').innerText = prefix;
-    document.getElementById('new-file-name').value = '';
-    if (document.getElementById('new-file-ext-warning')) document.getElementById('new-file-ext-warning').style.display = 'none';
-    document.getElementById('new-file-content').value = '';
-    // Keep the Library toggle hidden until a URL is successfully imported
-    const libWrapper = document.getElementById('new-file-library-wrapper');
-    if (libWrapper) {
-        libWrapper.style.display = 'none';
-    }
 
-    document.getElementById('new-file-modal').style.display = 'block';
+    const bodyHtml = `
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: #8b5cf6;">${prefix}</span></label>
+        <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
+        <div id="new-file-ext-warning" style="display: none; color: #f59e0b; font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+
+        <div id="new-file-toolbar" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
+            <button onclick="if(window.importFromUrl) window.importFromUrl()" class="btn-sm" style="background: #3b82f6; margin: 0;">🌐 Import from URL</button>
+            <span id="import-url-status" style="font-size: 0.8rem; color: #888; display: none;">Fetching...</span>
+        </div>
+
+        <div id="new-file-library-wrapper" style="display: none; align-items: center; gap: 8px; margin-bottom: 10px;">
+            <input type="checkbox" id="new-file-add-library" style="transform: scale(1.1); cursor: pointer;">
+            <label for="new-file-add-library" style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer;">📚 Add to Reference Library</label>
+        </div>
+
+        <textarea id="new-file-content" style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box; min-height: 200px;" placeholder="Enter file content here..."></textarea>
+    `;
+
+    window.UIFactory.createModal({
+        id: 'new-file-modal',
+        title: 'Create New Workspace File',
+        body: bodyHtml,
+        actions: [
+            { label: 'Cancel', style: 'secondary' },
+            { label: '💾 Create & Save File', style: 'primary', id: 'temp-save-file-btn', onClick: async (e, modal) => {
+                await saveNewFile(modal.id);
+                return true; // Keep modal open during async operation, saveNewFile handles the close
+            }}
+        ]
+    });
 }
-async function saveNewFile() {
+
+async function saveNewFile(modalId = 'new-file-modal') {
     const basePath = document.getElementById('new-file-base-path').innerText;
     let fileName = document.getElementById('new-file-name').value.trim();
     let content = document.getElementById('new-file-content').value;
@@ -820,18 +868,15 @@ async function saveNewFile() {
         return;
     }
 
-    // Prevent double slashes if user types leading slash
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
-    // Trigger mutually linked ingestion if the extension is present and selected
-    const libCheckbox = document.getElementById('new-file-add-library');
-if (libCheckbox && libCheckbox.checked && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
-        content = await window.addFileToLibrary(fileName, content, filepath);
-}
 
-    // Give the button a temporary ID if it lacks one so the mutation helper can track it
-    const btn = document.querySelector('#new-file-modal button[style*="10b981"]');
-    if (btn && !btn.id) btn.id = 'temp-save-file-btn';
+    const libCheckbox = document.getElementById('new-file-add-library');
+    if (libCheckbox && libCheckbox.checked && window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
+        content = await window.addFileToLibrary(fileName, content, filepath);
+    }
+
+    const btn = document.getElementById('temp-save-file-btn');
 
     await executeWorkspaceMutation('/api/fs/save', {
         filepath,
@@ -842,9 +887,13 @@ if (libCheckbox && libCheckbox.checked && window.ACTIVE_EXTENSIONS && window.ACT
         onSuccess: async () => {
             if (btn) btn.innerText = "Syncing Tree...";
             await compileContexts();
+
             const mRes = await fetch('/api/manifest?t=' + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
-            document.getElementById('new-file-modal').style.display = 'none';
+
+            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            else document.getElementById(modalId).style.display = 'none';
+
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
                 loadGlobalFS();
             }
@@ -854,32 +903,59 @@ if (libCheckbox && libCheckbox.checked && window.ACTIVE_EXTENSIONS && window.ACT
         }
     });
 }
-
 function openNewFolderModal() {
     const isRoot = globalBrowsePath.length === 0;
     const prefix = isRoot ? '' : globalBrowsePath.join('/') + '/';
+    const modalTitle = isRoot ? 'Create New Repository' : 'Create New Folder';
+    const submitLabel = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
 
-    document.getElementById('new-folder-title').innerText = isRoot ? 'Create New Repository' : 'Create New Folder';
-    document.getElementById('btn-submit-new-folder').innerText = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
-    document.getElementById('btn-submit-new-folder').style.background = isRoot ? '#8b5cf6' : '#3b82f6';
+    const bodyHtml = `
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: #8b5cf6;">${prefix}</span></label>
+        <input type="text" id="new-folder-name" placeholder="Directory name..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
 
-    const repoFields = document.getElementById('new-repo-fields');
-    if (isRoot) {
-        repoFields.style.display = 'flex';
-        document.getElementById('new-repo-title').value = '';
-        document.getElementById('new-repo-domain').value = 'Workspaces';
-        document.getElementById('new-repo-desc').value = '';
-        document.getElementById('new-repo-exts').value = '.py, .json, .md, .sh, .txt, .html, .css, .js';
-    } else {
-        repoFields.style.display = 'none';
+        <div id="new-repo-fields" style="display: ${isRoot ? 'flex' : 'none'}; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+            <h4 style="margin: 0; margin-bottom: 5px; color: #38bdf8;">Repository Configuration</h4>
+            <div>
+                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Repository Title</label>
+                <input type="text" id="new-repo-title" placeholder="e.g., Core API" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
+            </div>
+            <div>
+                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Domain Category</label>
+                <input type="text" id="new-repo-domain" value="Workspaces" placeholder="e.g., Workspaces" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
+            </div>
+            <div>
+                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Description</label>
+                <input type="text" id="new-repo-desc" placeholder="Short summary..." style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
+            </div>
+            <div>
+                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Tracked Extensions</label>
+                <input type="text" id="new-repo-exts" value=".py, .json, .md, .sh, .txt, .html, .css, .js" placeholder="e.g., .py, .json, .md" style="padding: 8px; margin: 0; width: 100%; font-family: monospace; box-sizing: border-box;">
+            </div>
+        </div>
+    `;
+
+    window.UIFactory.createModal({
+        id: 'new-folder-modal',
+        title: modalTitle,
+        body: bodyHtml,
+        actions: [
+            { label: 'Cancel', style: 'secondary' },
+            { label: submitLabel, style: 'primary', id: 'btn-submit-new-folder', onClick: async (e, modal) => {
+                await saveNewFolder(modal.id);
+                return true; // Keep open so async operations finish and we close it programmatically
+            }}
+        ]
+    });
+
+    if (!isRoot) {
+        setTimeout(() => {
+            const btn = document.getElementById('btn-submit-new-folder');
+            if (btn) btn.style.background = '#3b82f6'; // Preserve the legacy blue button for generic folders
+        }, 50);
     }
-
-    document.getElementById('new-folder-base-path').innerText = prefix;
-    document.getElementById('new-folder-name').value = '';
-    document.getElementById('new-folder-modal').style.display = 'block';
 }
 
-async function saveNewFolder() {
+async function saveNewFolder(modalId = 'new-folder-modal') {
     const basePath = document.getElementById('new-folder-base-path').innerText;
     let folderName = document.getElementById('new-folder-name').value.trim();
 
@@ -927,19 +1003,20 @@ async function saveNewFolder() {
             await compileContexts();
             const mRes = await fetch('/api/manifest?t=' + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
-
             if (isNewRepo) {
                 const rRes = await fetch('/api/repos?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
-                    setAllRepos(d.repos);
-                    setTargetConfigs(d.targets || []);
-                    renderRepoPins();
-                    if (typeof window.renderTaskRepoPins === 'function') window.renderTaskRepoPins();
+                    AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
                 }
             }
 
-            document.getElementById('new-folder-modal').style.display = 'none';
+            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            else {
+                const m = document.getElementById(modalId);
+                if (m) m.style.display = 'none';
+            }
+
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
                 loadGlobalFS();
             }
@@ -1061,10 +1138,10 @@ function openFolderBrowser(callback = null) {
     isFolderSelectMode = true;
     document.getElementById('browse-select-folder-btn').style.display = 'block';
     document.getElementById('browse-search').style.display = 'none';
-
     // Rebuild tree from all contexts to allow global workspace navigation
     const allFiles = new Set();
-    Object.values(contextManifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
+    const { manifest } = AppStore.getState();
+    Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
     currentBrowseManifest = Array.from(allFiles);
     currentFileTree = buildFileTree(currentBrowseManifest);
     currentBrowsePath = []; // reset to root
@@ -1110,10 +1187,15 @@ function filterBrowse(query) {
             renderBrowseLevel();
             return;
         }
-
         clearBtn.style.display = 'block';
         container.innerHTML = '';
-        const matches = currentBrowseManifest.filter(f => f.toLowerCase().includes(q));
+
+        const terms = q.split(/\s+/).filter(t => t);
+        const matches = currentBrowseManifest.filter(f => {
+            const lowerF = f.toLowerCase();
+            return terms.every(t => lowerF.includes(t));
+        });
+
         if (matches.length === 0) {
             container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
             return;
@@ -1196,7 +1278,6 @@ function renderBrowseLevel() {
     for (const p of currentBrowsePath) {
         current = current[p];
     }
-
     // Sort folders first, then files
     const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
         const aIsDir = !current[a]._isFile;
@@ -1206,7 +1287,8 @@ function renderBrowseLevel() {
         return a.localeCompare(b);
     });
 
-    // Render items
+    const fragment = document.createDocumentFragment();
+// Render items
     keys.forEach(key => {
         const item = current[key];
         if (item._isFile) {
@@ -1214,14 +1296,14 @@ function renderBrowseLevel() {
                 filename: item.fullPath,
                 displayName: key,
                 description: '',
-
                 isFS: true,
                 isSource: true
-            }, container);
+            }, fragment);
         } else {
             const card = document.createElement('div');
             card.className = 'file-card';
             card.style.cursor = 'pointer';
+
             card.style.padding = '12px 15px';
             card.style.display = 'flex';
             card.style.alignItems = 'center';
@@ -1230,17 +1312,17 @@ function renderBrowseLevel() {
                 currentBrowsePath.push(key);
                 renderBrowseLevel();
             };
-            container.appendChild(card);
+            fragment.appendChild(card);
         }
     });
+    container.appendChild(fragment);
 }
-
 export function openBrowseModal(contextFilename) {
     isFolderSelectMode = false;
     document.getElementById('browse-select-folder-btn').style.display = 'none';
     document.getElementById('browse-search').style.display = 'block';
-
-    const files = contextManifest[contextFilename] || [];
+    const { manifest } = AppStore.getState();
+    const files = manifest[contextFilename] || [];
     currentBrowseManifest = files;
     currentFileTree = buildFileTree(files);
     currentBrowsePath = []; // reset to root
@@ -1308,17 +1390,50 @@ export function openVirtualFile(filename, content) {
 // Window Bindings
 window.openVirtualFile = openVirtualFile;
 export function importFromUrl() {
-    document.getElementById('import-url-input').value = '';
-    document.getElementById('import-url-modal').style.display = 'block';
-    setTimeout(() => document.getElementById('import-url-input').focus(), 100);
+    const bodyHtml = `
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
+        <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
+        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                <input type="radio" name="import-method" value="jina" checked> 
+                <b>Jina Reader API</b> <span style="color: #888; font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
+            </label>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                <input type="radio" name="import-method" value="bs4"> 
+                <b>BeautifulSoup Local</b> <span style="color: #888; font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
+            </label>
+        </div>
+    `;
+    window.UIFactory.createModal({
+        id: 'import-url-modal',
+        title: 'Import from URL',
+        body: bodyHtml,
+        actions: [
+            { label: 'Cancel', style: 'secondary' },
+            { label: '📥 Fetch & Convert', style: 'primary', onClick: async (e, modal) => {
+                await executeImportUrl(modal.id);
+                return true;
+            }}
+        ]
+    });
+    setTimeout(() => {
+        const input = document.getElementById('import-url-input');
+        if (input) input.focus();
+    }, 100);
 }
 
-export async function executeImportUrl() {
+export async function executeImportUrl(modalId = 'import-url-modal') {
     const url = document.getElementById('import-url-input').value.trim();
     if (!url) return alert("Please enter a valid URL.");
-
     const method = document.querySelector('input[name="import-method"]:checked').value;
-    document.getElementById('import-url-modal').style.display = 'none';
+
+    if (window.UIFactory) window.UIFactory.closeModal(modalId);
+    else {
+        const m = document.getElementById(modalId);
+        if (m) m.style.display = 'none';
+    }
 
     const statusEl = document.getElementById('import-url-status');
     const contentEl = document.getElementById('new-file-content');
@@ -1326,9 +1441,8 @@ export async function executeImportUrl() {
     statusEl.style.display = 'inline-block';
     statusEl.innerText = "Fetching and converting...";
     statusEl.style.color = "#888";
-
     try {
-        const res = await fetch('/api/fs/import-url', {
+        const res = await fetch('/api/ingest/url', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, method })
@@ -1423,7 +1537,8 @@ export function openLinkModal() {
     // Hydrate manifest explicitly if missing to ensure files are available
     if (!globalManifest || globalManifest.length === 0) {
         const allFiles = new Set();
-        Object.values(contextManifest).forEach(fileArray => fileArray.forEach(f => {
+        const { manifest } = AppStore.getState();
+        Object.values(manifest).forEach(fileArray => fileArray.forEach(f => {
             if (f.toLowerCase().endsWith('.md')) allFiles.add(f);
         }));
         globalManifest = Array.from(allFiles);

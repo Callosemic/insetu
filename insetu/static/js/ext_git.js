@@ -3,24 +3,40 @@ import {
     generateDiffs,
     setContextManifest
 } from './app.js';
-
 let currentPushRepo = '';
 let currentPushDiffFile = '';
-
-export async function openPushModal(diffFilename) {
+export async function openPushModal(diffFilename, repoDir) {
     currentPushDiffFile = diffFilename;
-    document.getElementById('push-modal').style.display = 'block';
-    document.getElementById('push-repo-name').innerText = "Loading...";
-    const select = document.getElementById('push-changelog-select');
-    select.innerHTML = '<option value="">-- Type a custom message below --</option>';
-    document.getElementById('push-message').value = '';
+    currentPushRepo = repoDir;
+
+    const bodyHtml = `
+        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
+        <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" onchange="document.getElementById('push-message').value = this.value;">
+            <option value="">-- Type a custom message below --</option>
+        </select>
+        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
+        <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0; width: 100%; box-sizing: border-box;"></textarea>
+        <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
+    `;
+
+    window.UIFactory.createModal({
+        id: 'push-modal',
+        title: `🚀 Commit & Push: <span style="color: #8b5cf6;">${repoDir || "Unknown Repo"}</span>`,
+        body: bodyHtml,
+        actions: [
+            { label: 'Cancel', style: 'secondary' },
+            { label: '🚀 Execute Push', style: 'primary', id: 'execute-push-btn', onClick: async (e, modal) => {
+                await executePush(modal.id);
+                return true;
+            }}
+        ]
+    });
+
     try {
-        const res = await fetch(`/api/git/changelogs?diff_file=${encodeURIComponent(diffFilename)}&t=${Date.now()}`);
+        const select = document.getElementById('push-changelog-select');
+        const res = await fetch(`/api/git/changelogs?repo=${encodeURIComponent(repoDir || '')}&t=${Date.now()}`);
         if (res.ok) {
             const data = await res.json();
-            currentPushRepo = data.repo;
-            document.getElementById('push-repo-name').innerText = currentPushRepo;
-
             if (data.changelogs && data.changelogs.length > 0) {
                 data.changelogs.forEach(cl => {
                     const opt = document.createElement('option');
@@ -31,15 +47,13 @@ export async function openPushModal(diffFilename) {
                 select.selectedIndex = 1;
                 document.getElementById('push-message').value = data.changelogs[0].title;
             }
-        } else {
-            document.getElementById('push-repo-name').innerText = "Unknown Repo";
         }
     } catch (e) {
         console.error("Failed to load changelogs.");
     }
 }
 
-export async function executePush() {
+export async function executePush(modalId = 'push-modal') {
     const msg = document.getElementById('push-message').value.trim();
     if (!msg) {
         alert("Please enter a commit message.");
@@ -52,8 +66,8 @@ export async function executePush() {
 
     const btn = document.getElementById('execute-push-btn');
     const spinner = document.getElementById('push-spinner');
-    btn.style.display = 'none';
-    spinner.style.display = 'block';
+    if (btn) btn.style.display = 'none';
+    if (spinner) spinner.style.display = 'block';
     try {
         const res = await fetch('/api/git/push', {
             method: 'POST',
@@ -73,8 +87,14 @@ export async function executePush() {
             } else {
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${data.output}`);
             }
-            document.getElementById('push-modal').style.display = 'none';
-            // Silently re-hydrate the UI manifest and bundles
+
+            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            else {
+                const m = document.getElementById(modalId);
+                if (m) m.style.display = 'none';
+            }
+
+// Silently re-hydrate the UI manifest and bundles
             await compileContexts();
             const mRes = await fetch('/api/manifest');
             if (mRes.ok) setContextManifest(await mRes.json());
@@ -86,12 +106,34 @@ export async function executePush() {
     } catch (e) {
         alert("Network error executing push.");
     } finally {
-        btn.style.display = 'block';
-        spinner.style.display = 'none';
+        if (btn) btn.style.display = 'block';
+        if (spinner) spinner.style.display = 'none';
     }
 }
 export async function openSweepModal() {
-    document.getElementById('sweep-modal').style.display = 'block';
+    const bodyHtml = `
+        <div id="sweep-loading" class="spinner" style="display:block; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>
+        <div id="sweep-files-container" style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; min-height: 200px;">
+        </div>
+        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
+        <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none; width: 100%; box-sizing: border-box;"></textarea>
+        <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
+    `;
+
+    window.UIFactory.createModal({
+        id: 'sweep-modal',
+        title: '🧹 Selective Sweep',
+        body: bodyHtml,
+        maxWidth: '700px',
+        actions: [
+            { label: 'Close', style: 'secondary' },
+            { label: '🚀 Commit & Push Selected', style: 'primary', id: 'execute-sweep-btn', onClick: async (e, modal) => {
+                await executeSweepPush(modal.id);
+                return true;
+            }}
+        ]
+    });
+
     await loadSweepFiles();
 }
 
@@ -218,8 +260,21 @@ export async function executeSweepPush() {
         spinner.style.display = 'none';
     }
 }
-
 window.openPushModal = openPushModal;
 window.executePush = executePush;
 window.openSweepModal = openSweepModal;
 window.executeSweepPush = executeSweepPush;
+
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
+        if (data.filepath && data.filepath.endsWith('_diffs.txt')) {
+            const pushBtn = document.createElement('button');
+            pushBtn.className = 'btn-sm';
+            pushBtn.style.background = '#8b5cf6';
+            pushBtn.innerText = '🚀 Push';
+            pushBtn.onclick = () => openPushModal(data.filepath, data.repoDir);
+            data.actionsContainer.appendChild(pushBtn);
+        }
+        return false; // Return false so we don't block other extensions from injecting buttons
+    });
+}

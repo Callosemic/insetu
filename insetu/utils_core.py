@@ -8,66 +8,119 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 import os
 import json
 _cwd = os.getcwd()
-def _resolve_workspace_physics():
+def sniff_tenant_id():
+    """Universal helper to extract the active workspace tenant from Flask headers."""
+    try:
+        from flask import request
+        if request and 'X-Workspace-ID' in request.headers:
+            return request.headers.get('X-Workspace-ID')
+    except RuntimeError:
+        pass
+    return "default"
+
+def get_workspace_physics(workspace_id=None):
     """
-    Agnostic spatial anchoring:
-    1. Check for an explicit environment variable override.
-    2. Check for an active profile in '[CWD]/.insetu/workspaces.json'.
-    3. Default to '[CWD]/.insetu/config.json'.
+    STATELESS ROUTING CORE
+    Resolves spatial physics dynamically based on the requested tenant ID.
     """
+    if not workspace_id:
+        workspace_id = sniff_tenant_id()
+
     local_insetu_dir = os.path.join(_cwd, ".insetu")
     default_config = os.path.join(local_insetu_dir, "config.json")
-    
-    # 1. Environment Variable Override
+    index_path = os.path.join(local_insetu_dir, "workspaces.json")
+
+    # 1. Environment Variable Override (Overrides everything)
     env_config = os.environ.get("INSETU_CONFIG")
     if env_config:
         resolved_cfg = os.path.abspath(os.path.expanduser(env_config))
-        return resolved_cfg, _cwd
-        
+        return resolved_cfg, _cwd, os.path.join(os.path.dirname(resolved_cfg), "workflows.json")
+
+    target_ws = workspace_id
+    if not target_ws:
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, 'r', encoding='utf-8') as f: w_data = json.load(f)
+                target_ws = w_data.get("active_workspace", "default")
+            except Exception:
+                target_ws = "default"
+        else:
+            target_ws = "default"
+
     # 2. Host Workspace Switchboard
-    index_path = os.path.join(local_insetu_dir, "workspaces.json")
     resolved_cfg = default_config
-    
+    cfg_path = None
+
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 w_data = json.load(f)
+            if target_ws in w_data.get("workspaces", {}):
+                cfg_path = w_data["workspaces"][target_ws].get("config_path")
+        except Exception:
+            pass
 
-            active = w_data.get("active_workspace")
-            if active and active in w_data.get("workspaces", {}):
-                cfg_path = w_data["workspaces"][active].get("config_path")
-                if cfg_path:
-                    # If relative (e.g. "config.json"), join with the host's .insetu/ dir
-                    if not os.path.isabs(os.path.expanduser(cfg_path)):
-                        resolved_cfg = os.path.abspath(os.path.join(local_insetu_dir, cfg_path))
-                    else:
-                        # Absolute path to another workspace's config
-                        resolved_cfg = os.path.abspath(os.path.expanduser(cfg_path))
-        except Exception as e:
-            print(f"Warning: Failed to parse {index_path}: {e}")
+    if cfg_path:
+        if not os.path.isabs(os.path.expanduser(cfg_path)):
+            resolved_cfg = os.path.abspath(os.path.join(local_insetu_dir, cfg_path))
+        else:
+            resolved_cfg = os.path.abspath(os.path.expanduser(cfg_path))
 
-    # SELF-HEALING: If the switchboard points to a ghost path, snap back to the host's default
     if not os.path.exists(resolved_cfg):
         resolved_cfg = default_config
 
     # 3. Resolve Workspace Root
+    workflows_path = os.path.join(os.path.dirname(resolved_cfg), "workflows.json")
     if os.path.exists(resolved_cfg):
         try:
-            with open(resolved_cfg, 'r', encoding='utf-8') as f:
-                c_data = json.load(f)
+            with open(resolved_cfg, 'r', encoding='utf-8') as f: c_data = json.load(f)
             if "workspace_root" in c_data:
-                return resolved_cfg, os.path.abspath(os.path.expanduser(c_data["workspace_root"]))
+                return resolved_cfg, os.path.abspath(os.path.expanduser(c_data["workspace_root"])), workflows_path
         except Exception:
             pass
-            
-        # Mathematically infer root as the parent directory of the localized .insetu/ folder
-        inferred_root = os.path.dirname(os.path.dirname(resolved_cfg))
-        return resolved_cfg, inferred_root
+        return resolved_cfg, os.path.dirname(os.path.dirname(resolved_cfg)), workflows_path
 
-    return resolved_cfg, _cwd
+    return resolved_cfg, _cwd, workflows_path
+def get_gather_paths(workspace_id=None):
+    """Dynamically calculates artifact physics for the requested tenant."""
+    cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
+    workspace_dir = os.path.dirname(cfg_path)
+    artifacts_base = os.path.join(workspace_dir, "data")
 
-CONFIG_PATH, WORKSPACE_ROOT = _resolve_workspace_physics()
-WORKFLOWS_PATH = os.path.join(os.path.dirname(CONFIG_PATH), "workflows.json") if CONFIG_PATH else ""
+    paths = {
+        "config_path": cfg_path,
+        "workspace_root": ws_root,
+        "workflows_path": wf_path,
+        "artifacts_base": artifacts_base,
+        "contexts_dir": os.path.join(artifacts_base, "contexts"),
+        "prompts_dir": os.path.join(workspace_dir, "prompts"),
+        "diffs_dir": os.path.join(artifacts_base, "diffs"),
+        "gather_dir": os.path.join(artifacts_base, "workflows")
+    }
+
+    os.makedirs(paths["contexts_dir"], exist_ok=True)
+    os.makedirs(paths["prompts_dir"], exist_ok=True)
+    os.makedirs(paths["diffs_dir"], exist_ok=True)
+    os.makedirs(paths["gather_dir"], exist_ok=True)
+    return paths
+def extension_auth(ext_name):
+    """
+    SECURITY GUARDRAIL
+    Intercepts API requests to ensure the requested extension is active in the targeted tenant's config.json.
+    """
+    def decorator(f):
+        import functools
+        @functools.wraps(f)
+        def decorated_function(*args, **kwargs):
+            from flask import jsonify
+            # The physics engine automatically resolves the tenant config via the HTTP headers
+            cfg = load_config()
+            if ext_name not in cfg.get("extensions", []):
+                return jsonify({"error": f"403 Forbidden: Extension '{ext_name}' is not enabled in this workspace."}), 403
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+# Module-level globals dismantled. All physics calculations are request-scoped functions.
 
 _JSON_CACHE = {}
 _JSON_MTIME = {}
@@ -97,9 +150,9 @@ def save_json_file(filepath, data):
         json.dump(data, f, indent=2)
     _JSON_CACHE[filepath] = data
     _JSON_MTIME[filepath] = 0  # Explicitly force mtime invalidation to bypass cache collisions
-
-def load_config():
-    cfg = load_json_file(CONFIG_PATH, {})
+def load_config(workspace_id=None):
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    cfg = load_json_file(cfg_path, {})
     from insetu.hooks import hooks
     hooks.emit('mutate_workspace_config', cfg)
 
@@ -120,13 +173,13 @@ def load_config():
         cfg["target_repos"] = targets
         
     return cfg
+def load_workflows(workspace_id=None):
+    _, _, wf_path = get_workspace_physics(workspace_id)
+    return load_json_file(wf_path, {"context_batches": []})
 
-def load_workflows():
-    return load_json_file(WORKFLOWS_PATH, {"context_batches": []})
-
-def get_valid_workspace_files(repo_path, config):
+def get_valid_workspace_files(repo_path, config, workspace_id=None):
     """Universal SSOT for extracting valid files respecting context filters and ignore rules."""
-    live_cfg = load_config()
+    live_cfg = load_config(workspace_id)
     global_ignore_dirs = set(live_cfg.get("ignore_dirs", []))
     global_ignore_files = set(live_cfg.get("ignore_files", []))
     global_ignore_patterns = live_cfg.get("ignore_patterns", [])
@@ -196,11 +249,12 @@ def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
-
-def get_sister_repos():
-    cfg = load_config()
+def get_sister_repos(workspace_id=None):
+    cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir") and not repo.get("exclude_from_tracker")]
-def resolve_workspace_path(path):
+def resolve_workspace_path(path, workspace_id=None):
+    _, workspace_root, _ = get_workspace_physics(workspace_id)
+
     norm_path = path.replace('\\', '/')
     if os.path.isabs(norm_path):
         return norm_path
@@ -210,11 +264,11 @@ def resolve_workspace_path(path):
         return path
 
     # Mount Point Protocol: Check for physical_path overrides
-    cfg = load_config()
+    cfg = load_config(workspace_id)
     for repo in cfg.get("target_repos", []):
         if parts[0] == repo.get("repo_dir"):
             physical_path = repo.get("physical_path")
-            expanded_base = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else os.path.abspath(os.path.join(WORKSPACE_ROOT, repo.get("repo_dir")))
+            expanded_base = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else os.path.abspath(os.path.join(workspace_root, repo.get("repo_dir")))
             
             # EDGE CASE FIX: "Repo Name == Top Level Folder Name" (e.g. insetu/insetu/app.py)
             path_stripped = os.path.abspath(os.path.join(expanded_base, *parts[1:])) if len(parts) > 1 else expanded_base
@@ -238,13 +292,11 @@ def resolve_workspace_path(path):
 
                 dist_kept = get_unmatched_distance(path_kept)
                 dist_stripped = get_unmatched_distance(path_stripped)
-
                 # Only use path_kept if it explicitly maps closer to an existing physical tree
                 if dist_kept < dist_stripped:
                     return path_kept
                 return path_stripped
 
             return path_stripped
-
-    # Mathematically resolve against WORKSPACE_ROOT
-    return os.path.abspath(os.path.join(WORKSPACE_ROOT, norm_path))
+    # Mathematically resolve against dynamic root
+    return os.path.abspath(os.path.join(workspace_root, norm_path))

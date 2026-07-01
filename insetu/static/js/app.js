@@ -9,11 +9,8 @@ import {
 import {
     loadGatherBatches
 } from './gather.js';
-import {
-    loadTrackerBoard
-} from './kanban.js';
-import './git.js';
 import './bridge.js';
+import './ui.js';
 
 export {
     viewSourceFile,
@@ -61,6 +58,25 @@ window.addEventListener('beforeunload', (e) => {
 export let mdeInstance = null;
 // --- EXTENSION REGISTRY ---
 window.ExtensionRegistry = {
+    uiHooks: {},
+    shortcuts: {},
+    registerShortcut: function(context, keyCombo, callback) {
+        if (!this.shortcuts[context]) this.shortcuts[context] = {};
+        this.shortcuts[context][keyCombo.toLowerCase()] = callback;
+    },
+    registerUIHook: function(zone, callback) {
+        if (!this.uiHooks[zone]) this.uiHooks[zone] = [];
+        this.uiHooks[zone].push(callback);
+    },
+    executeUIHook: function(zone, data) {
+        if (this.uiHooks[zone]) {
+            for (let cb of this.uiHooks[zone]) {
+                const res = cb(data);
+                if (res) return res;
+            }
+        }
+        return null;
+    },
     registerSettingsAction: (id, label, icon, callback) => {
         const container = document.getElementById('settings-modal-links');
         if (!container) return;
@@ -82,10 +98,28 @@ window.ExtensionRegistry = {
 
         const tab = document.createElement('div');
         tab.className = 'tab';
+        tab.dataset.id = id;
         tab.onclick = (e) => switchTab(e, id);
         tab.innerText = label;
-        // Append before the settings toggle logic if needed, or just append
         container.appendChild(tab);
+
+        // Dynamically reorder the DOM nodes to respect visual preferences over DAG boot order
+        const { tabOrder } = AppStore.getState();
+        if (tabOrder && tabOrder.length > 0) {
+            const tabs = Array.from(container.children);
+            tabs.sort((a, b) => {
+                // Safely extract the ID even for hardcoded index.html tabs via their onclick attribute
+                const idA = a.dataset.id || (a.getAttribute('onclick') || '').match(/'([^']+)'/)?.[1] || '';
+                const idB = b.dataset.id || (b.getAttribute('onclick') || '').match(/'([^']+)'/)?.[1] || '';
+
+                let iA = tabOrder.indexOf(idA);
+                let iB = tabOrder.indexOf(idB);
+                if (iA === -1) iA = 999;
+                if (iB === -1) iB = 999;
+                return iA - iB;
+            });
+            tabs.forEach(t => container.appendChild(t));
+        }
 
         const content = document.createElement('div');
         content.id = 'tab-' + id;
@@ -110,7 +144,6 @@ window.ExtensionRegistry = {
 
         const screen = parentTab.querySelector('.screen');
         if (!screen) return null;
-
         const subContent = document.createElement('div');
         subContent.id = 'sub-' + id;
         subContent.className = 'sub-tab-content';
@@ -119,6 +152,93 @@ window.ExtensionRegistry = {
     }
 };
 
+// --- CENTRALIZED SHORTCUT ROUTER ---
+window.addEventListener('keydown', (e) => {
+    let keyStr = e.key.toLowerCase();
+    // Ignore lone modifier presses
+    if (['control', 'meta', 'shift', 'alt'].includes(keyStr)) return;
+
+    let prefix = '';
+    if (e.ctrlKey || e.metaKey) prefix += 'ctrl+';
+    if (e.shiftKey) prefix += 'shift+';
+    if (e.altKey) prefix += 'alt+';
+
+    const combo = prefix + (keyStr === ' ' ? 'space' : keyStr);
+    const contexts = ['global'];
+
+    // 1. Active Tab Hierarchy
+    const activeTab = document.querySelector('.tab-content.active');
+    if (activeTab) {
+        contexts.unshift('tab:' + activeTab.id.replace('tab-', ''));
+        const activeSub = activeTab.querySelector('.sub-tab-content.active');
+        if (activeSub) contexts.unshift('subtab:' + activeSub.id.replace('sub-', ''));
+    }
+
+    // 2. Active Element
+    if (document.activeElement && document.activeElement !== document.body) {
+        const tag = document.activeElement.tagName.toLowerCase();
+        contexts.unshift('element:' + tag);
+        if (document.activeElement.id) contexts.unshift('element-id:' + document.activeElement.id);
+    }
+
+    // 3. Active Modal (Highest Priority)
+    const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
+    if (activeModal) contexts.unshift('modal:' + activeModal.id);
+
+    const { shortcuts } = window.ExtensionRegistry;
+    if (!shortcuts) return;
+
+    for (let ctx of contexts) {
+        if (shortcuts[ctx] && shortcuts[ctx][combo]) {
+            e.preventDefault();
+            shortcuts[ctx][combo](e);
+            return;
+        }
+    }
+});
+
+// Default OS Shortcut Registrations
+window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
+    // 1. Check for dynamic Factory Modals first
+    const dynamicModals = Array.from(document.querySelectorAll('.dynamic-modal'));
+    if (dynamicModals.length > 0) {
+        const topModal = dynamicModals[dynamicModals.length - 1]; // Get last appended
+        window.UIFactory.closeModal(topModal.id);
+        return;
+    }
+
+    // 2. Fallback for legacy hardcoded modals
+    const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
+    if (activeModal) {
+        // Trigger specific close/cancel buttons to ensure teardown logic fires natively
+        const closeBtn = activeModal.querySelector(`button[style*="dc2626"], button[onclick*="display='none'"]`);
+        if (closeBtn) closeBtn.click();
+        else activeModal.style.display = 'none';
+    }
+});
+
+window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
+    const el = e.target;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    el.value = el.value.substring(0, start) + "    " + el.value.substring(end);
+    el.selectionStart = el.selectionEnd = start + 4;
+    el.dispatchEvent(new Event('input'));
+});
+// Auto-resize generic textareas (prompts, descriptions) as the user types
+document.addEventListener('input', (e) => {
+    if (e.target.tagName.toLowerCase() === 'textarea' && e.target.id !== 'payload' && !e.target.closest('.EasyMDEContainer')) {
+        e.target.style.height = 'auto';
+        e.target.style.height = Math.min(e.target.scrollHeight + 2, 500) + 'px';
+    }
+});
+
+// Map Cmd/Ctrl + S contextually depending on which modal is currently visible
+window.ExtensionRegistry.registerShortcut('modal:copy-modal', 'ctrl+s', () => window.saveModalFile && window.saveModalFile(false));
+window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.saveNewFile && window.saveNewFile());
+window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => window.saveNewTask && window.saveNewTask());
+window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => window.saveEditTask && window.saveEditTask());
+window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
 async function bootExtensions() {
     if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.length > 0) {
         for (const ext of window.ACTIVE_EXTENSIONS) {
@@ -132,8 +252,65 @@ async function bootExtensions() {
         }
     }
 }
+// --- EXTENSION LIFECYCLE REGISTRY & TEARDOWN ENGINE ---
+if (!window.ExtensionRegistry) window.ExtensionRegistry = {};
+window.ExtensionRegistry._unloadHooks = new Map();
+
+window.ExtensionRegistry.registerUnloadHook = function(extName, callback) {
+    this._unloadHooks.set(extName, callback);
+};
+
+window.ExtensionRegistry.executeUnload = function(extName) {
+    if (this._unloadHooks.has(extName)) {
+        try {
+            this._unloadHooks.get(extName)();
+        } catch (e) {
+            console.error(`Error unloading extension [${extName}]:`, e);
+        }
+    }
+};
+
+// --- STATELESS TENANT ROUTING (Fetch Interceptor) ---
+const originalFetch = window.fetch;
+window.fetch = async (resource, options = {}) => {
+    // Only intercept local API requests; leave external URLs (Google/OpenAlex) alone
+    const isLocal = typeof resource === 'string' && (resource.startsWith('/') || resource.startsWith(window.location.origin));
+    if (isLocal) {
+        const headers = new Headers(options.headers || {});
+        const activeWs = localStorage.getItem('insetu_workspace') || 'default';
+        if (!headers.has('X-Workspace-ID')) headers.append('X-Workspace-ID', activeWs);
+        options.headers = headers;
+    }
+    return originalFetch(resource, options);
+};
+// Global listener to track active tab routing per-tenant
+document.addEventListener('click', (e) => {
+    const tab = e.target.closest('.tab');
+    if (tab) {
+        let tabId = tab.dataset.id;
+        if (!tabId && tab.getAttribute('onclick')) {
+            const match = tab.getAttribute('onclick').match(/'([^']+)'/);
+            if (match) tabId = match[1];
+        }
+        if (tabId) {
+            const ws = localStorage.getItem('insetu_workspace') || 'default';
+            localStorage.setItem(`insetu_tab_${ws}`, tabId);
+        }
+    }
+});
 // Restore UI State on Load
 window.addEventListener('DOMContentLoaded', async () => {
+    setTimeout(() => {
+        const ws = localStorage.getItem('insetu_workspace') || 'default';
+        const savedTab = localStorage.getItem(`insetu_tab_${ws}`);
+        if (savedTab && typeof switchTab === 'function') {
+            const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
+            if (!extMap[savedTab] || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(extMap[savedTab]))) {
+
+                switchTab(null, savedTab);
+            }
+        }
+    }, 150);
     // The JS engine successfully booted. Hide the pure-HTML panic switch.
     const panicBtn = document.getElementById('js-panic-button');
     if (panicBtn) panicBtn.style.display = 'none';
@@ -203,8 +380,10 @@ async function loadWorkspaces() {
         const res = await fetch('/api/system/workspaces');
         if (!res.ok) return;
         const data = await res.json();
-
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
+            // Synchronize the active tenant on load
+            localStorage.setItem('insetu_workspace', data.active_workspace);
+
             document.getElementById('workspaces-header').style.display = 'block';
             const list = document.getElementById('workspaces-list');
             list.style.display = 'flex';
@@ -226,25 +405,22 @@ async function loadWorkspaces() {
                             await Promise.all(keys.map(k => caches.delete(k)));
                         } catch(e) {}
                     }
-
                     await fetch('/api/system/workspaces', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ active_workspace: key })
                     });
 
-                    // Poll the backend until it comes back online, then hard refresh
-                    const pollInterval = setInterval(async () => {
-                        try {
-                            const ping = await fetch('/api/manifest?t=' + Date.now(), { cache: 'no-store' });
-                            if (ping.ok) {
-                                clearInterval(pollInterval);
-                                window.location.href = window.location.pathname + '?v=' + Date.now();
-                            }
-                        } catch (e) {
-                            // Backend is still rebooting via os.execv
-                        }
-                    }, 1000);
+                    // THE FIX: Immediately bind the new workspace to local storage 
+                    // so the fetch interceptor attaches the correct header.
+                    localStorage.setItem('insetu_workspace', key);
+
+                    // The Stateless Soft-Swap
+                    setGlobalStatus(`Switched to ${ws.title || key}. Hydrating UI...`, null);
+                    await performSoftRefresh();
+
+                    loadWorkspaces(); // Re-render the active green dot on the menu buttons
+                    document.getElementById('settings-menu').style.display = 'none';
                 };
                 list.appendChild(btn);
             });
@@ -270,25 +446,31 @@ function updateThemeSelectionUI(theme) {
     });
 }
 updateThemeSelectionUI(currentTheme);
-
 function switchTab(event, tabId) {
+    if (typeof event === 'string') {
+        tabId = event;
+        event = null;
+    }
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    if (event) {
+    if (event && event.currentTarget) {
         event.currentTarget.classList.add('active');
     } else {
-        const targetTab = document.querySelector(`.tab[onclick*="${tabId}"]`);
+        const targetTab = document.querySelector(`.tab[onclick*="${tabId}"], .tab[data-id="${tabId}"]`);
         if (targetTab) targetTab.classList.add('active');
     }
-    document.getElementById('tab-' + tabId).classList.add('active');
+    const targetContent = document.getElementById('tab-' + tabId);
+    if (targetContent) targetContent.classList.add('active');
     localStorage.setItem('insetu_tab', tabId);
-
     if (tabId === 'context') loadContext();
-    if (tabId === 'tasks') loadTrackerBoard();
+    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
+    }
     if (tabId === 'edit') {
         const activeSub = document.querySelector('#tab-edit .sub-tab.active');
         if (activeSub) switchSubTab(activeSub.id.replace('st-', ''));
-        if (document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
+        const stFiles = document.getElementById('st-files');
+        if (stFiles && stFiles.classList.contains('active')) loadGlobalFS();
     }
 }
 
@@ -428,16 +610,19 @@ export async function generateDiffs() {
                     desc: "Uncommitted prompt or state changes.",
                     displayName: 'prompts_diffs.txt'
                 };
-                if (baseFile.includes('tracker')) {
-                    const cleanName = baseFile.replace('_tracker_context.txt', '').replace(/^dot_/, '.').replace(/_/g, ' ').replace(/\\b\\w/g, c => c.toUpperCase());
-                    return {
-                        cat: "Issue Trackers",
-                        desc: "Uncommitted tracker changes.",
-                        displayName: `${cleanName} Tracker (Diffs)`
+                const { virtualContexts } = AppStore.getState();
+                if (virtualContexts) {
+                    const vMatch = virtualContexts.find(v => v.out_file === fileName);
+                    if (vMatch) return {
+                        cat: vMatch.domain || "Extensions",
+                        desc: vMatch.description || `Virtual context payload.`,
+                        displayName: vMatch.title || fileName
                     };
                 }
-                for (const cfg of TARGET_CONFIGS) {
-                    const safeRepoDir = cfg.repo_dir.startsWith('.') ? 'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
+
+                for (const cfg of targetConfigs) {
+                    const safeRepoDir = cfg.repo_dir.startsWith('.') ?
+'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
                     const safeId = safeRepoDir.replace(/-/g, '_');
                     const expectedOut = cfg.out_file || `${safeId}_context.txt`;
                     if (baseFile === expectedOut) return {
@@ -458,8 +643,7 @@ export async function generateDiffs() {
                 const rawModule = baseFile.replace('_context.txt', '');
                 let matchedMeta = null;
                 let parentBucket = null;
-
-                for (const cfg of TARGET_CONFIGS) {
+                for (const cfg of targetConfigs) {
                     if (cfg.sub_buckets) {
                         for (const b of cfg.sub_buckets) {
                             if (b.dynamic_split_prefix) {
@@ -485,20 +669,24 @@ export async function generateDiffs() {
                     displayName: title + " (Diffs)"
                 };
             };
-            data.files.forEach(file => {
-                if (typeof HIDDEN_OUTPUTS !== 'undefined' && HIDDEN_OUTPUTS.includes(file)) return;
+            const { categoryOrder, targetConfigs, hiddenOutputs } = AppStore.getState();
+            data.files.forEach(fileObj => {
+                const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
+                const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
+                if (hiddenOutputs && hiddenOutputs.includes(file)) return;
                 const meta = resolveMetadata(file);
                 if (!categories[meta.cat]) categories[meta.cat] = [];
                 categories[meta.cat].push({
                     filename: file,
                     displayName: meta.displayName,
                     description: meta.desc,
-                    isFS: false
+                    isFS: false,
+                    repoDir: repoDir
                 });
             });
             const sortedCats = Object.keys(categories).sort((a, b) => {
-                let iA = CATEGORY_ORDER.indexOf(a);
-                let iB = CATEGORY_ORDER.indexOf(b);
+                let iA = categoryOrder.indexOf(a);
+                let iB = categoryOrder.indexOf(b);
                 if (iA === -1) iA = 999;
                 if (iB === -1) iB = 999;
                 if (iA !== iB) return iA - iB;
@@ -549,18 +737,46 @@ export let globalGatherOptions = {
     diffs: [],
     prompts: []
 };
-
-export function setGlobalStatus(msg, timeout = 3000) {
+export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
     if (!bar) return;
     bar.innerText = msg;
+    bar.style.color = isError ? '#ef4444' : 'var(--text)';
     if (timeout) {
         setTimeout(() => {
-            if (bar.innerText === msg) bar.innerText = bar.getAttribute('data-default');
+            if (bar.innerText === msg) {
+                bar.innerText = bar.getAttribute('data-default');
+                bar.style.color = 'var(--text)';
+            }
         }, timeout);
     }
 }
 window.setGlobalStatus = setGlobalStatus;
+
+// --- NON-BLOCKING TOAST NOTIFICATIONS ---
+// Hijack native alerts to prevent thread blocking while preserving stack traces
+window.alert = function(msg) {
+    const container = document.getElementById('toast-container') || (function() {
+        const c = document.createElement('div');
+        c.id = 'toast-container';
+        c.style.cssText = 'position: fixed; bottom: 40px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; pointer-events: none;';
+        document.body.appendChild(c);
+        return c;
+    })();
+
+    const toast = document.createElement('div');
+    toast.style.cssText = 'background: var(--input-bg); color: var(--text); border-left: 4px solid #ef4444; padding: 12px 15px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); font-family: var(--font-mono); font-size: 0.85rem; max-width: 400px; white-space: pre-wrap; word-break: break-word; pointer-events: auto; transition: opacity 0.3s; cursor: pointer;';
+    toast.innerText = msg;
+    toast.title = "Click to dismiss";
+
+    toast.onclick = () => toast.remove();
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 6000);
+};
 
 export async function executeWorkspaceMutation(url, payload, options = {}) {
     const {
@@ -619,6 +835,7 @@ export function renderContextFiles(files, msg) {
     downloadContainer.innerHTML = '';
     if (files && files.length > 0) {
         const categories = {};
+        const { categoryOrder, targetConfigs } = AppStore.getState();
         const resolveMetadata = (fileName) => {
             let cat = "Workspaces";
             let desc = "Repository context payload.";
@@ -628,15 +845,16 @@ export function renderContextFiles(files, msg) {
                 desc: "The Master Ingestion Prompt and CLI templates.",
                 displayName: 'prompts_context.txt'
             };
-            if (fileName.includes('tracker')) {
-                const cleanName = fileName.replace('_tracker_context.txt', '').replace(/^dot_/, '.').replace(/_/g, ' ').replace(/\\b\\w/g, c => c.toUpperCase());
-                return {
-                    cat: "Issue Trackers",
-                    desc: "Active bugs, tasks, and planned units of work.",
-                    displayName: `${cleanName} Tracker`
+            const { virtualContexts } = AppStore.getState();
+            if (virtualContexts) {
+                const vMatch = virtualContexts.find(v => v.out_file === fileName);
+                if (vMatch) return {
+                    cat: vMatch.domain || "Extensions",
+                    desc: vMatch.description || `Virtual context payload.`,
+                    displayName: vMatch.title || fileName
                 };
             }
-            for (const cfg of TARGET_CONFIGS) {
+            for (const cfg of targetConfigs) {
                 const safeRepoDir = cfg.repo_dir.startsWith('.') ? 'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
                 const safeId = safeRepoDir.replace(/-/g, '_');
                 const expectedOut = cfg.out_file || `${safeId}_context.txt`;
@@ -659,7 +877,7 @@ export function renderContextFiles(files, msg) {
             let matchedMeta = null;
             let parentBucket = null;
 
-            for (const cfg of TARGET_CONFIGS) {
+            for (const cfg of targetConfigs) {
                 if (cfg.sub_buckets) {
                     for (const b of cfg.sub_buckets) {
                         if (b.dynamic_split_prefix) {
@@ -697,8 +915,8 @@ export function renderContextFiles(files, msg) {
             });
         });
         const sortedCats = Object.keys(categories).sort((a, b) => {
-            let iA = CATEGORY_ORDER.indexOf(a);
-            let iB = CATEGORY_ORDER.indexOf(b);
+            let iA = categoryOrder.indexOf(a);
+            let iB = categoryOrder.indexOf(b);
             if (iA === -1) iA = 999;
             if (iB === -1) iB = 999;
             if (iA !== iB) return iA - iB;
@@ -717,10 +935,8 @@ export function renderContextFiles(files, msg) {
         }
     }
 }
-
-export let contextManifest = {};
 export function setContextManifest(m) {
-    contextManifest = m;
+    AppStore.setState({ manifest: m });
 }
 let contextSearchTimeout = null;
 export function filterContexts(query) {
@@ -746,11 +962,10 @@ export function filterContexts(query) {
         });
     }, 200);
 }
-
 async function finishContextLoad(result) {
     try {
         const mRes = await fetch('/api/manifest?t=' + Date.now());
-        if (mRes.ok) contextManifest = await mRes.json();
+        if (mRes.ok) setContextManifest(await mRes.json());
     } catch (e) {
         console.error("Manifest error", e);
     }
@@ -777,7 +992,44 @@ export function compileContexts() {
                 },
                 body: JSON.stringify({})
             });
-            return await response.json();
+
+            const contentType = response.headers.get('Content-Type');
+            if (contentType && contentType.includes('application/json')) {
+                // Cached response returned immediately due to the compilation lock
+                return await response.json();
+            }
+
+            // Stream processing for NDJSON
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let result = null;
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep the incomplete chunk for the next iteration
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    const data = JSON.parse(line);
+
+                    if (data.status === 'progress') {
+                        setGlobalStatus(`⏳ ${data.message}`, null);
+                        const loadingEl = document.getElementById('context-loading');
+                        if (loadingEl && window.getComputedStyle(loadingEl).display !== 'none') {
+                            loadingEl.innerText = data.message;
+                        }
+                    } else {
+                        result = data;
+                    }
+                }
+            }
+            setGlobalStatus("✅ Sync Complete", 2000);
+            return result;
         } catch (error) {
             throw error;
         } finally {
@@ -821,6 +1073,111 @@ async function simulatePanic() {
         alert("Error triggering panic.");
     }
 }
+async function performSoftRefresh() {
+    const currentWs = localStorage.getItem('insetu_workspace') || 'default';
+
+    // Evict old sub-store data frames instantly to prevent layout bleeding or race mutations
+    if (window.KanbanStore) {
+        window.KanbanStore.setState({ 
+            tasks: [],
+            pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_repos_${currentWs}`)) || ["ALL"]),
+            pinnedBuckets: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_buckets_${currentWs}`)) || ["ALL"]),
+            pinnedTags: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_tags_${currentWs}`)) || ["ALL"])
+        });
+    }
+
+    try {
+        // 1. Update routing topology for the new tenant
+        const rRes = await fetch('/api/repos?t=' + Date.now());
+        if (rRes.ok) {
+            const d = await rRes.json();
+            AppStore.setState({
+                allRepos: d.repos,
+                targetConfigs: d.targets || [],
+                virtualContexts: d.virtual_contexts || [],
+                categoryOrder: d.category_order || [],
+                tabOrder: d.tab_order || [],
+
+                hiddenOutputs: d.hidden_outputs || []
+            });
+        }
+        // 2. JIT Mount any missing JS extension payloads
+        const cRes = await fetch('/api/system/config');
+        if (cRes.ok) {
+            const config = await cRes.json();
+            window.ACTIVE_EXTENSIONS = config.extensions || [];
+            await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
+
+            // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
+            const toggleBtn = document.getElementById('settings-toggle');
+            if (toggleBtn) {
+                toggleBtn.innerText = config.instance_emoji || "⚙️";
+            }
+            const statusBar = document.getElementById('global-status-bar');
+            if (statusBar) {
+                statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
+            }
+
+            // Hide extension tabs that are disabled in the new workspace & execute unloads
+            const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
+            Object.keys(extMap).forEach(tabId => {
+                const extName = extMap[tabId];
+                const isActive = window.ACTIVE_EXTENSIONS.includes(extName);
+
+                const tabEl = document.querySelector(`.tab[data-id="${tabId}"]`) || document.querySelector(`.tab[onclick*="${tabId}"]`);
+                if (tabEl) tabEl.style.display = isActive ? '' : 'none';
+                const subTabEl = document.getElementById(`st-${tabId}`);
+                if (subTabEl) subTabEl.style.display = isActive ? '' : 'none';
+
+                // If the extension is active in the environment we are leaving but disabled in the new one, evict it!
+                if (!isActive && window.ExtensionRegistry.executeUnload) {
+                    window.ExtensionRegistry.executeUnload(extName);
+                }
+            });
+
+            // Enforce valid tab state (prevent ghost pages)
+            const currentWs = localStorage.getItem('insetu_workspace') || 'default';
+            let targetTab = localStorage.getItem(`insetu_tab_${currentWs}`) || 'context';
+
+            // If the target tab is an extension that is now disabled, fallback to core 'context'
+            if (extMap[targetTab] && !window.ACTIVE_EXTENSIONS.includes(extMap[targetTab])) {
+                targetTab = 'context';
+            }
+
+            if (typeof switchTab === 'function') switchTab(targetTab);
+        }
+
+        // 3. Compile context & physical file trees for the new tenant
+        const compileData = await compileContexts();
+        const mRes = await fetch('/api/manifest?t=' + Date.now());
+        if (mRes.ok) setContextManifest(await mRes.json());
+
+        // 4. Hydrate active DOM views
+        if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active') && typeof loadGlobalFS === 'function') loadGlobalFS();
+        if (typeof loadTrackerBoard === 'function') loadTrackerBoard();
+        // Re-render active sub-views if on the context tab
+        if (document.getElementById('tab-context').classList.contains('active')) {
+            if (document.getElementById('st-bundles').classList.contains('active') && typeof renderContextFiles === 'function') {
+                renderContextFiles(compileData.files, compileData.message);
+            }
+            if (document.getElementById('st-prompts').classList.contains('active') && typeof renderPromptsTab === 'function') {
+                renderPromptsTab();
+            }
+            if (document.getElementById('st-diffs').classList.contains('active') && typeof generateDiffs === 'function') {
+                generateDiffs();
+            }
+            if (document.getElementById('st-gather').classList.contains('active') && typeof loadGatherBatches === 'function') {
+                loadGatherBatches();
+            }
+        }
+
+        setGlobalStatus("✅ Workspace Hydrated", 2000);
+    } catch (e) {
+        console.error(e);
+        alert("Soft refresh failed. Falling back to hard reload.");
+        window.location.reload();
+    }
+}
 
 async function fullRefresh() {
     const btn = document.getElementById('full-refresh-btn');
@@ -832,8 +1189,8 @@ async function fullRefresh() {
         localStorage.removeItem('insetu_task_pinned_buckets');
         localStorage.removeItem('insetu_task_pinned_tags');
 
-        await compileContexts();
-        window.location.reload();
+        await performSoftRefresh();
+        if (btn) btn.innerText = "🔄 Full Refresh";
     } catch (error) {
         alert("Error during full refresh.");
         if (btn) btn.innerText = "🔄 Full Refresh";
@@ -842,35 +1199,27 @@ async function fullRefresh() {
 /* ==========================================================================
    BRIDGE LOGIC (Extracted to bridge.js)
    ========================================================================== */
-
-export let ALL_REPOS = [];
-export let TARGET_CONFIGS = [];
-export let CATEGORY_ORDER = [];
-export function setAllRepos(r) {
-    ALL_REPOS = r;
-}
-export function setTargetConfigs(c) {
-    TARGET_CONFIGS = c;
-}
+import { AppStore } from './store.js';
 let HIDDEN_OUTPUTS = [];
-fetch('/api/repos').then(r => r.json()).then(d => {
-ALL_REPOS = d.repos;
-TARGET_CONFIGS = d.targets || [];
-CATEGORY_ORDER = d.category_order || [];
-HIDDEN_OUTPUTS = d.hidden_outputs || [];
 
+fetch('/api/repos').then(r => r.json()).then(d => {
+HIDDEN_OUTPUTS = d.hidden_outputs || [];
+AppStore.setState({
+    allRepos: d.repos,
+    targetConfigs: d.targets || [],
+    virtualContexts: d.virtual_contexts || [],
+    categoryOrder: d.category_order || [],
+    tabOrder: d.tab_order || [],
+    hiddenOutputs: d.hidden_outputs || []
+});
 if (d.config_missing) {
     const banner = document.createElement('div');
     banner.style.cssText = "background: #f59e0b; color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
     banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
     document.body.appendChild(banner);
 }
-
-renderRepoPins();
-if (typeof window.renderTaskRepoPins === 'function') window.renderTaskRepoPins();
 });
-export let pinnedRepos = new Set(JSON.parse(localStorage.getItem('insetu_pinned_repos')) || ["ALL"]);
-export function renderRepoPins() {
+export function renderRepoPins(state) {
     const container = document.getElementById('repo-pins');
     if (!container) return;
     container.innerHTML = '';
@@ -879,35 +1228,43 @@ export function renderRepoPins() {
     lbl.innerText = "📌 Repos:";
     lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap;";
     container.appendChild(lbl);
+
     const createPill = (id, label) => {
         const btn = document.createElement('button');
-        const isActive = pinnedRepos.has(id);
+        const isActive = state.pinnedRepos.has(id);
         btn.className = isActive ? 'repo-pill active' : 'repo-pill';
         btn.innerText = label;
         btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
+
         btn.onclick = () => {
+            const newPins = new Set(state.pinnedRepos);
             if (id === "ALL") {
-                pinnedRepos.clear();
-                pinnedRepos.add("ALL");
+                newPins.clear();
+                newPins.add("ALL");
             } else {
-                pinnedRepos.delete("ALL");
-                if (pinnedRepos.has(id)) {
-                    pinnedRepos.delete(id);
-                    if (pinnedRepos.size === 0) pinnedRepos.add("ALL");
+                newPins.delete("ALL");
+                if (newPins.has(id)) {
+                    newPins.delete(id);
+                    if (newPins.size === 0) newPins.add("ALL");
                 } else {
-                    pinnedRepos.add(id);
+                    newPins.add(id);
                 }
             }
-            localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(pinnedRepos)));
-            renderRepoPins();
+            localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(newPins)));
+            AppStore.setState({ pinnedRepos: newPins });
         };
         return btn;
     };
+
     container.appendChild(createPill("ALL", "All"));
-    ALL_REPOS.forEach(repo => container.appendChild(createPill(repo, repo)));
+    state.allRepos.forEach(repo => container.appendChild(createPill(repo, repo)));
 }
-// Initialize pins
-setTimeout(renderRepoPins, 100);
+// Subscribe the DOM strictly to state updates using Zustand Selectors
+AppStore.subscribe((state) => state.pinnedRepos, () => renderRepoPins(AppStore.getState()));
+AppStore.subscribe((state) => state.allRepos, () => renderRepoPins(AppStore.getState()));
+
+// Zustand doesn't fire an initial blast, trigger manually once
+setTimeout(() => renderRepoPins(AppStore.getState()), 100);
 
 export async function fetchAndCopy(filePath, btnElement) {
     const originalText = btnElement.innerText;
@@ -952,13 +1309,16 @@ export async function fetchAndDownloadState(filePath, btnElement) {
         // Fetch the newly compiled manifest
         const mRes = await fetch('/api/manifest?t=' + Date.now());
         if (mRes.ok) {
-            contextManifest = await mRes.json();
-
+            setContextManifest(await mRes.json());
             // If the user happens to load directly into a tab that needs the manifest, render it
-            if (document.getElementById('tab-edit').classList.contains('active') && document.getElementById('st-files').classList.contains('active')) {
+            const tabEdit = document.getElementById('tab-edit');
+            const stFiles = document.getElementById('st-files');
+            const tabTasks = document.getElementById('tab-tasks');
+
+            if (tabEdit && tabEdit.classList.contains('active') && stFiles && stFiles.classList.contains('active')) {
                 loadGlobalFS();
             }
-            if (document.getElementById('tab-tasks').classList.contains('active')) {
+            if (tabTasks && tabTasks.classList.contains('active')) {
                 loadTrackerBoard();
             }
         }

@@ -1,0 +1,22 @@
+// insetu/static/js/store.js
+// Strict Unidirectional Data Flow (UDF) State Manager
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+
+export const AppStore = createStore(
+    devtools(
+        subscribeWithSelector((set) => ({
+            manifest: {},
+            allRepos: [],
+            targetConfigs: [],
+            virtualContexts: [],
+            categoryOrder: [],
+            tabOrder: [],
+            hiddenOutputs: [],
+
+            pinnedRepos: new Set(JSON.parse(localStorage.getItem('insetu_pinned_repos')) || ["ALL"]),
+            gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" }
+        })),
+        { name: 'AppStore' }
+    )
+);
