@@ -2,6 +2,37 @@ import { mdeInstance } from './app.js';
 import { currentModalIsFS } from './fs.js';
 import { openSelectorModal } from './ui.js';
 import { AppStore } from './store.js';
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+
+const _getActiveWs = () => AppStore.getState().activeWorkspace || 'default';
+const _safeParseSet = (key) => {
+    try {
+        const item = localStorage.getItem(key);
+        return new Set(item ? JSON.parse(item) : ["ALL"]);
+    } catch (e) {
+        return new Set(["ALL"]);
+    }
+};
+
+export const CitationStore = createStore(
+    devtools(
+        subscribeWithSelector((set) => ({
+            localLibrary: [],
+            pinnedRepos: _safeParseSet(`insetu_lib_pinned_repos_${_getActiveWs()}`),
+            pinnedBuckets: _safeParseSet(`insetu_lib_pinned_buckets_${_getActiveWs()}`),
+            cachedPublications: [],
+            cachedAuthors: [],
+            activeAttachCitation: null,
+            activeEditCitation: null,
+            currentEditAuthors: []
+        })),
+        { name: 'CitationStore' }
+    )
+);
+
+// Expose to window for debugging and lifecycle teardowns
+window.CitationStore = CitationStore;
 
 const libraryScreen = window.ExtensionRegistry.registerTab('library', 'Library');
 if (libraryScreen) {
@@ -184,23 +215,11 @@ if (libraryScreen) {
         </div>
     `;
     // --- LOGIC & BINDINGS ---
-    let localLibrary = [];
-    let libRepos = [];
-    let libConfigs = [];
-    let libPinnedRepos = new Set(JSON.parse(localStorage.getItem('insetu_lib_pinned_repos')) || ["ALL"]);
-    let libPinnedBuckets = new Set(JSON.parse(localStorage.getItem('insetu_lib_pinned_buckets')) || ["ALL"]);
-    let cachedPublications = [];
-    let cachedAuthors = [];
 
-    // Fetch repository configs to populate UI
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    fetch(`/api/${activeWs}/repos`).then(r => r.json()).then(d => {
-        libRepos = d.repos || [];
-        libConfigs = d.targets || [];
-        renderLibPins();
-    });
+    const renderLibPins = (state) => {
+        const { allRepos: libRepos, targetConfigs: libConfigs } = AppStore.getState();
+        const { pinnedRepos: libPinnedRepos, pinnedBuckets: libPinnedBuckets } = state;
 
-    const renderLibPins = () => {
         const repoContainer = document.getElementById('lib-repo-pins');
         const bucketContainer = document.getElementById('lib-bucket-pins');
         if (!repoContainer || !bucketContainer) return;

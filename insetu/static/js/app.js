@@ -381,7 +381,7 @@ async function loadWorkspaces() {
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
             // Synchronize the active tenant on load
             localStorage.setItem('insetu_workspace', data.active_workspace);
-
+            AppStore.setState({ activeWorkspace: data.active_workspace });
             document.getElementById('workspaces-header').style.display = 'block';
             const list = document.getElementById('workspaces-list');
             list.style.display = 'flex';
@@ -408,10 +408,10 @@ async function loadWorkspaces() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ active_workspace: key })
                     });
-
                     // THE FIX: Immediately bind the new workspace to local storage 
                     // so the fetch interceptor attaches the correct header.
                     localStorage.setItem('insetu_workspace', key);
+                    AppStore.setState({ activeWorkspace: key });
 
                     // The Stateless Soft-Swap
                     setGlobalStatus(`Switched to ${ws.title || key}. Hydrating UI...`, null);
@@ -460,7 +460,11 @@ function switchTab(event, tabId) {
     const targetContent = document.getElementById('tab-' + tabId);
     if (targetContent) targetContent.classList.add('active');
     localStorage.setItem('insetu_tab', tabId);
-    if (tabId === 'context') loadContext();
+    if (tabId === 'context') {
+        loadContext();
+        const activeSub = document.querySelector('#tab-context .sub-tab.active');
+        if (activeSub && activeSub.id !== 'st-bundles') switchSubTab(activeSub.id.replace('st-', ''));
+    }
     if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
         window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
     }
@@ -599,6 +603,7 @@ export async function generateDiffs() {
         loading.style.display = 'none';
         if (data.status === 'success' && data.files.length > 0) {
             const categories = {};
+            const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
             const resolveMetadata = (fileName) => {
                 let cat = "Workspaces";
                 let desc = "Pending diff payload.";
@@ -609,7 +614,6 @@ export async function generateDiffs() {
                     desc: "Uncommitted prompt or state changes.",
                     displayName: 'prompts_diffs.txt'
                 };
-                const { virtualContexts } = AppStore.getState();
                 if (virtualContexts) {
                     const vMatch = virtualContexts.find(v => v.out_file === fileName);
                     if (vMatch) return {
@@ -661,14 +665,12 @@ export async function generateDiffs() {
                 const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
                 const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
                 desc = matchedMeta?.description ? `Uncommitted changes for ${title} (${matchedMeta.description})` : (parentBucket?.description ? `Uncommitted changes for ${title} (${parentBucket.description})` : `Uncommitted logic changes for ${title}.`);
-
                 return {
                     cat: domain,
                     desc: desc,
                     displayName: title + " (Diffs)"
                 };
             };
-            const { categoryOrder, targetConfigs, hiddenOutputs } = AppStore.getState();
             data.files.forEach(fileObj => {
                 const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
                 const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
@@ -1076,6 +1078,7 @@ async function simulatePanic() {
 async function performSoftRefresh() {
     const currentWs = AppStore.getState().activeWorkspace || 'default';
     // Evict old sub-store data frames instantly to prevent layout bleeding or race mutations
+    BridgeStore.getState().clearPayload();
     if (window.KanbanStore) {
         window.KanbanStore.setState({ 
             tasks: [],
@@ -1133,41 +1136,22 @@ async function performSoftRefresh() {
                     window.ExtensionRegistry.executeUnload(extName);
                 }
             });
-
-            // Enforce valid tab state (prevent ghost pages)
-            const currentWs = localStorage.getItem('insetu_workspace') || 'default';
-            let targetTab = localStorage.getItem(`insetu_tab_${currentWs}`) || 'context';
-
-            // If the target tab is an extension that is now disabled, fallback to core 'context'
-            if (extMap[targetTab] && !window.ACTIVE_EXTENSIONS.includes(extMap[targetTab])) {
-                targetTab = 'context';
-            }
-
-            if (typeof switchTab === 'function') switchTab(targetTab);
         }
+
         // 3. Compile context & physical file trees for the new tenant
-        const compileData = await compileContexts();
-        const mRes = await fetch(`/api/${currentWs}/manifest?t=` + Date.now());
+        await compileContexts();
+        const currentWsSafe = AppStore.getState().activeWorkspace || 'default';
+        const mRes = await fetch(`/api/${currentWsSafe}/manifest?t=` + Date.now());
         if (mRes.ok) setContextManifest(await mRes.json());
 
-        // 4. Hydrate active DOM views
-        if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active') && typeof loadGlobalFS === 'function') loadGlobalFS();
-        if (typeof loadTrackerBoard === 'function') loadTrackerBoard();
-        // Re-render active sub-views if on the context tab
-        if (document.getElementById('tab-context').classList.contains('active')) {
-            if (document.getElementById('st-bundles').classList.contains('active') && typeof renderContextFiles === 'function') {
-                renderContextFiles(compileData.files, compileData.message);
-            }
-            if (document.getElementById('st-prompts').classList.contains('active') && typeof renderPromptsTab === 'function') {
-                renderPromptsTab();
-            }
-            if (document.getElementById('st-diffs').classList.contains('active') && typeof generateDiffs === 'function') {
-                generateDiffs();
-            }
-            if (document.getElementById('st-gather').classList.contains('active') && typeof loadGatherBatches === 'function') {
-                loadGatherBatches();
-            }
+        // 4. Hydrate active DOM views using native routing
+        let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
+        const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
+        if (extMap[targetTab] && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extMap[targetTab])) {
+            targetTab = 'context';
         }
+
+        if (typeof switchTab === 'function') switchTab(null, targetTab);
 
         setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {
