@@ -84,7 +84,7 @@ def _sync_disk_to_db(workspace_id=None):
                     try:
                         with open(abs_path, 'r', encoding='utf-8') as file:
                             content = file.read()
-                        yaml_match = re.search(r'^---\n([\s\S]*?)\n---', content)
+                        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
                         title = f
                         t_id = "UNKNOWN"
                         created_at = "0000-00-00T00:00:00"
@@ -114,13 +114,28 @@ def _sync_disk_to_db(workspace_id=None):
                             desc = content.replace(yaml_match.group(0), '').strip()
                             if desc.startswith('## Description'):
                                 desc = re.sub(r'^## Description\n+', '', desc).strip()
-
                         ticket_type = "bug" if "/bugs/" in rel_path else "queue" if "/queue/" in rel_path else "todo"
                         status = "unknown"
                         if "/open/" in rel_path: status = "open"
                         elif "/active/" in rel_path: status = "active"
                         elif "/closed/" in rel_path: status = "closed"
-                        elif "/archived/" in rel_path: status = "archived"
+                        elif "/archived/" in rel_path or "/log/" in rel_path: status = "archived"
+                        # SSOT: Let YAML override path inference if it exists
+                        if yaml_match:
+                            for line in yaml_match.group(1).split('\n'):
+                                line = line.strip()
+                                if line.startswith('repo:'): repo = line.split('repo:', 1)[1].strip().strip('\'"')
+                                elif line.startswith('type:'):
+                                    raw_t = line.split('type:', 1)[1].strip().strip('\'"').lower()
+                                    if "bug" in raw_t: ticket_type = "bug"
+                                    elif "queue" in raw_t: ticket_type = "queue"
+                                    else: ticket_type = "todo"
+                                elif line.startswith('status:'):
+                                    raw_s = line.split('status:', 1)[1].strip().strip('\'"').lower()
+                                    if "active" in raw_s: status = "active"
+                                    elif "clos" in raw_s: status = "closed"
+                                    elif "archiv" in raw_s: status = "archived"
+                                    else: status = "open"
 
                         conn.execute("""
                             INSERT INTO tracker_tickets 
@@ -162,15 +177,13 @@ def get_tracker_path(repo, ticket_type, status, workspace_id=None):
     """Resolves the physical directory for a ticket based on your taxonomy."""
     _, ws_root, _ = get_workspace_physics(workspace_id)
     base = os.path.join(ws_root, repo, ".tracker")
-    if status == "closed":
-        if ticket_type == "queue": return os.path.join(base, "queue", "closed")
-        return os.path.join(base, "closed")
-    elif status == "archived":
-        if ticket_type == "queue": return os.path.join(base, "queue", "closed")
-        return os.path.join(base, "closed", "archived")
-    if ticket_type == "queue": return os.path.join(base, "queue", status)
-    # For open/active, route to .tracker/todos/open or .tracker/bugs/active
-    return os.path.join(base, f"{ticket_type}s", status)
+    if status == "archived":
+        return os.path.join(base, "log", "archived")
+    elif status == "logged":
+        return os.path.join(base, "log")
+
+    folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
+    return os.path.join(base, folder_type, status)
 def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bucket="None", workspace_id=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     # Create a short prefix dynamically from the repo name
@@ -189,12 +202,16 @@ def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bu
     filepath = os.path.join(target_dir, filename)
     tags_yaml = f"\ntags: [{', '.join(f'{t.strip()}' for t in tags.split(',') if t.strip())}]" if tags else ""
     content = f"""---
+repo: "{repo}"
+type: "{ticket_type}"
+status: "{status}"
 id: {ticket_id}
 title: "{title.replace('"', "'")}"
 created_at: {now.isoformat(timespec='seconds')}
 closed_at: null
 sub_bucket: "{sub_bucket}"{tags_yaml}
 ---
+
 ## Description
 {description}
 
@@ -203,7 +220,8 @@ sub_bucket: "{sub_bucket}"{tags_yaml}
     from insetu.routes_fs import execute_vfs_save
 
     target_ws = workspace_id or "default"
-    ticket_path = f"{repo}/.tracker/{ticket_type}s/{status}/{filename}"
+    folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
+    ticket_path = f"{repo}/.tracker/{folder_type}/{status}/{filename}"
 
     # Synchronously seed the local ledger cache row to guarantee transactional accuracy on immediate CQRS query sweeps
     conn = get_connection('tracker', workspace_id=target_ws)
@@ -237,25 +255,27 @@ def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspa
 
     with open(abs_current, "r", encoding="utf-8") as f:
         content = f.read()
-
     # Calculate updated frontmatter safely in memory
-    if new_status == "closed" and "closed_at: null" in content:
+    if new_status in ["closed", "logged", "archived"] and "closed_at: null" in content:
         now_iso = datetime.now().isoformat(timespec='seconds')
         content = re.sub(r"closed_at:\s*null", f"closed_at: {now_iso}", content)
 
+    # Update declarative YAML fields
+    content = re.sub(r"status:\s*\"?[a-zA-Z]+\"?", f'status: "{new_status}"', content)
+    if new_type:
+        content = re.sub(r"type:\s*\"?[a-zA-Z]+\"?", f'type: "{new_type}"', content)
     # Re-calculate correct relative tracking track targets
-    if new_status in ["closed", "archived"]:
-        if ticket_type == "queue": 
-            new_rel_path = f"{repo}/.tracker/queue/closed/{filename}"
-        else:
-            new_rel_path = f"{repo}/.tracker/closed/{'archived/' if new_status == 'archived' else ''}{filename}"
-    elif ticket_type == "queue": 
-        new_rel_path = f"{repo}/.tracker/queue/{new_status}/{filename}"
+    if new_status == "archived":
+        new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
+    elif new_status == "logged":
+        new_rel_path = f"{repo}/.tracker/log/{filename}"
     else:
-        new_rel_path = f"{repo}/.tracker/{ticket_type}s/{new_status}/{filename}"
+        folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
+        new_rel_path = f"{repo}/.tracker/{folder_type}/{new_status}/{filename}"
+
     from insetu.routes_fs import execute_vfs_save
     # Process modifications asynchronously through our off-thread VFS queue pipeline
-    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": current_rel_path})
+    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": current_rel_path if current_rel_path != new_rel_path else None})
 
     # Synchronously project state transitions inside the SQLite index cache for instant read synchronization
     conn = get_connection('tracker', workspace_id=workspace_id)
@@ -270,142 +290,256 @@ def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspa
 @hooks.on('pre_compile')
 def pre_compile_tracker_housekeeping(workspace_id=None):
     try:
-        rescue_orphan_tickets(workspace_id=workspace_id)
-        reconcile_declared_closures(workspace_id=workspace_id)
+        enforce_declarative_tickets(workspace_id=workspace_id)
         archive_stale_tickets(workspace_id=workspace_id)
     except Exception as e:
         print(f"Tracker housekeeping failed: {e}")
-def rescue_orphan_tickets(workspace_id=None):
-    """Sweeps for loose markdown tickets in .tracker/ or its subdirectories 
-    and places  them in valid status folders."""
+def enforce_declarative_tickets(workspace_id=None):
+    """
+    SSOT Enforcer: Sweeps all .tracker directories. Reads the YAML frontmatter.
+    If the physical path contradicts the YAML, the YAML wins -> file is moved.
+    If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
+    """
+    from insetu.utils_core import load_config
     _, ws_root, _ = get_workspace_physics(workspace_id)
     repos = get_sister_repos(workspace_id)
-    rescued_count = 0
-    for repo in repos:
-        base_dir = os.path.join(ws_root, repo, ".tracker")
+    cfg = load_config(workspace_id)
+    enforced_count = 0
+
+    valid_buckets_by_repo = {}
+    for c in cfg.get("target_repos", []):
+        r = c.get("repo_dir")
+        buckets = {"None", "tracker"}
+        for b in c.get("sub_buckets", []):
+            if b.get("id"): buckets.add(b["id"])
+            if b.get("meta_map"): buckets.update(b["meta_map"].keys())
+        valid_buckets_by_repo[r] = buckets
+
+    for current_repo in repos:
+        base_dir = os.path.join(ws_root, current_repo, ".tracker")
         if not os.path.exists(base_dir): continue
 
-        for root, dirs, files in os.walk(base_dir):
+        for root, _, files in os.walk(base_dir):
             for filename in files:
                 if not filename.endswith('.md'): continue
                 filepath = os.path.join(root, filename)
-
                 rel_dir = os.path.relpath(root, base_dir).replace('\\', '/')
-                parts = rel_dir.split('/')
-                if rel_dir == '.':
-                    # Root of .tracker -> .tracker/queue/open
-                    target_dir = get_tracker_path(repo, "queue", "open", workspace_id=workspace_id)
-                elif parts[-1] not in ['open', 'active', 'closed', 'archived']:
-                    # Subdirectory but no status folder -> Subdirectory/open
-                    target_dir = os.path.join(root, "open")
-                else:
-                    continue # Already safely placed
+                rel_dir_lower = rel_dir.lower()
+                # Infer current state from path as fallback, defaulting to todo
+                inferred_type = "todo"
+                if "bug" in rel_dir_lower: inferred_type = "bug"
+                elif "queue" in rel_dir_lower: inferred_type = "queue"
+                inferred_status = "open"
+                if "active" in rel_dir_lower: inferred_status = "active"
+                elif "close" in rel_dir_lower: inferred_status = "closed"
+                elif "archive" in rel_dir_lower: inferred_status = "archived"
+                elif "log" in rel_dir_lower: inferred_status = "logged"
 
-                # Guardrail: Only move files that actually look like tickets (YAML frontmatter)
+                # Attempt to rescue sub-bucket categorizations from messy AI-generated folders
+                inferred_sub_bucket = "None"
+                standard_dirs = {"todos", "bugs", "queue", "closed", "open", "active", "archived", "logged", "todo", "bug", ".", "log"}
+                for part in rel_dir.split('/'):
+                    if part and part.lower() not in standard_dirs:
+                        inferred_sub_bucket = part
+                        break
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
-                        head = f.read(10)
-                    if not head.startswith('---'): continue
-                except Exception:
-                    continue
+                        content = f.read()
+                    # Heal double-YAML malformations created by prior regex failures
+                    pseudo_match = re.search(r'^\s*---\n[\s\S]*?\n\s*---\n+((?:repo|type|status|id|title|created_at|closed_at|sub_bucket|tags):[\s\S]*?\n\s*---)', content)
+                    yaml_data_rescue = {}
+                    if pseudo_match:
+                        bad_block = pseudo_match.group(1)
+                        for line in bad_block.split('\n'):
+                            if ':' in line and not line.strip().startswith('---'):
+                                k, v = line.split(':', 1)
+                                yaml_data_rescue[k.strip()] = v.strip().strip('\'"')
+                        content = content.replace(bad_block, '').strip()
 
-                os.makedirs(target_dir, exist_ok=True)
-                dest_path = os.path.join(target_dir, filename)
-                # Handle potential filename collisions gracefully
-                if not os.path.exists(dest_path) or os.path.getmtime(filepath) > os.path.getmtime(dest_path):
+                    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+
+                    yaml_data = {}
+                    if yaml_match:
+                        yaml_lines = yaml_match.group(1).split('\n')
+                        for line in yaml_lines:
+                            if ':' in line:
+                                k, v = line.split(':', 1)
+                                yaml_data[k.strip()] = v.strip().strip('\'"')
+
+                    yaml_data.update(yaml_data_rescue)
+
+                    # Read declarative values or fallback to inferred values if missing
+                    raw_repo = yaml_data.get('repo', current_repo)
+                    decl_repo = raw_repo if raw_repo in repos else current_repo
+
+                    hallucinated_tags = []
+                    if raw_repo != decl_repo and raw_repo and raw_repo.lower() != 'none':
+                        hallucinated_tags.append(raw_repo.replace(' ', '-').replace('"', ''))
+
+                    # Strict validation: clamp AI hallucinations back to system enumerations
+                    raw_type = yaml_data.get('type', inferred_type).lower()
+                    if "bug" in raw_type: decl_type = "bug"
+                    elif "todo" in raw_type: decl_type = "todo"
+                    elif "queue" in raw_type: decl_type = "queue"
+                    else: decl_type = inferred_type
+                    raw_status = yaml_data.get('status', inferred_status).lower()
+                    if "active" in raw_status: decl_status = "active"
+                    elif "clos" in raw_status: decl_status = "closed"
+                    elif "archiv" in raw_status: decl_status = "archived"
+                    elif "log" in raw_status: decl_status = "logged"
+                    else: decl_status = "open"
+
+                    decl_id = yaml_data.get('id', filename.replace('.md', ''))
+                    decl_title = yaml_data.get('title', filename.replace('.md', ''))
+                    decl_created = yaml_data.get('created_at', datetime.now().isoformat(timespec='seconds'))
+                    decl_closed = yaml_data.get('closed_at', 'null')
+
+                    decl_sub = yaml_data.get('sub_bucket')
+                    if not decl_sub or decl_sub == 'None':
+                        # If the AI hallucinated a category in 'type', rescue it!
+                        bad_type = yaml_data.get('type', '')
+                        if bad_type.lower() not in ["bug", "todo", "queue"] and bad_type:
+                            decl_sub = bad_type
+                        else:
+                            decl_sub = inferred_sub_bucket
+
+                    # Validate sub_bucket against config.json
+                    valid_buckets = valid_buckets_by_repo.get(decl_repo, {"None", "tracker"})
+                    if decl_sub not in valid_buckets:
+                        if decl_sub and decl_sub.lower() != 'none':
+                            hallucinated_tags.append(decl_sub.replace(' ', '-').replace('"', ''))
+                        decl_sub = "None"
+
+                    decl_tags_raw = yaml_data.get('tags', '[]')
                     try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            f_content = f.read()
-                        new_rel_path = os.path.relpath(dest_path, ws_root).replace('\\', '/')
-                        old_rel_path = os.path.relpath(filepath, ws_root).replace('\\', '/')
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, new_rel_path, f_content, data={"delete_source": old_rel_path})
-                        rescued_count += 1
+                        import json
+                        # Attempt to parse as JSON array, otherwise split by comma
+                        decl_tags_list = json.loads(decl_tags_raw) if decl_tags_raw.startswith('[') else [t.strip() for t in decl_tags_raw.split(',') if t.strip()]
                     except Exception:
-                        pass
-    return rescued_count
-def reconcile_declared_closures(workspace_id=None):
-    """
-    Sweeps active tracking tracks for tickets where an LLM has declaratively
-    set a closed_at timestamp, physically moving them to their correct closed directories.
-    """
+                        decl_tags_list = []
+
+                    for ht in hallucinated_tags:
+                        if ht not in decl_tags_list: decl_tags_list.append(ht)
+
+                    decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
+                    # Special handling for declarative closure timestamp
+                    if decl_status in ('closed', 'logged', 'archived') and decl_closed.lower() == 'null':
+                        decl_closed = datetime.now().isoformat(timespec='seconds')
+                    elif decl_status not in ('closed', 'logged', 'archived'):
+                        decl_closed = 'null'
+                    # Determine if we need to rewrite YAML (fields missing or mismatched)
+                    needs_rewrite = (
+                        'repo' not in yaml_data or 'type' not in yaml_data or 
+                        'status' not in yaml_data or yaml_data.get('closed_at', '').lower() != decl_closed.lower() or
+                        yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type or
+                        bool(pseudo_match)
+                    )
+
+                    # Determine intended physical destination based on declarative state
+                    intended_dir = get_tracker_path(decl_repo, decl_type, decl_status, workspace_id=workspace_id)
+                    intended_filename = f"{decl_id}.md"
+                    intended_path = os.path.join(intended_dir, intended_filename)
+
+                    current_rel_path = os.path.relpath(filepath, ws_root).replace('\\', '/')
+                    intended_rel_path = os.path.relpath(intended_path, ws_root).replace('\\', '/')
+                    if current_rel_path != intended_rel_path or needs_rewrite:
+                        # Reconstruct pristine YAML
+                        new_yaml = (
+                            f"---\n"
+                            f"repo: \"{decl_repo}\"\n"
+                            f"type: \"{decl_type}\"\n"
+                            f"status: \"{decl_status}\"\n"
+                            f"id: {decl_id}\n"
+                            f"title: \"{decl_title}\"\n"
+                            f"created_at: {decl_created}\n"
+                            f"closed_at: {decl_closed}\n"
+                            f"sub_bucket: \"{decl_sub}\"\n"
+                        )
+                        if decl_tags and decl_tags != '[]':
+                            new_yaml += f"tags: {decl_tags}\n"
+                        new_yaml += "---"
+
+                        if yaml_match:
+                            new_content = content.replace(yaml_match.group(0), new_yaml)
+                        else:
+                            new_content = f"{new_yaml}\n\n{content}"
+
+                        from insetu.routes_fs import execute_vfs_save
+                        execute_vfs_save(workspace_id, intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
+                        enforced_count += 1
+
+                except Exception:
+                    pass
+
+        # Post-sweep cleanup: remove empty ghost directories left behind
+        for root, dirs, files in os.walk(base_dir, topdown=False):
+            for d in dirs:
+                dir_path = os.path.join(root, d)
+                try:
+                    if not os.listdir(dir_path):
+                        os.rmdir(dir_path)
+                except OSError:
+                    pass
+
+    return enforced_count
+def archive_stale_tickets(workspace_id=None):
+    """Sweeps all repos for tickets passing the 7-day log and 30-day archive thresholds."""
     _, ws_root, _ = get_workspace_physics(workspace_id)
     repos = get_sister_repos(workspace_id)
-    reconciled_count = 0
+    date_7 = datetime.now() - timedelta(days=7)
+    date_30 = datetime.now() - timedelta(days=30)
+    archived_count = 0
 
     for repo in repos:
-        base_dir = os.path.join(ws_root, repo, ".tracker")
-        if not os.path.exists(base_dir): 
-            continue
+        # Sweep 1: Move >7 day closed tickets to log
+        for folder_type in ["todos", "bugs", "queue"]:
+            closed_dir = os.path.join(ws_root, repo, ".tracker", folder_type, "closed")
+            if not os.path.exists(closed_dir): continue
 
-        # Active scanning targets across both todos and bugs
-        scan_tracks = [
-            ("todo", "open"), ("todo", "active"),
-            ("bug", "open"), ("bug", "active"),
-            ("queue", "open")
-        ]
+            for filename in os.listdir(closed_dir):
+                if not filename.endswith(".md"): continue
 
-        for ticket_type, status in scan_tracks:
-            track_dir = get_tracker_path(repo, ticket_type, status, workspace_id=workspace_id)
-            if not os.path.exists(track_dir): 
-                continue
-
-            for filename in os.listdir(track_dir):
-                if not filename.endswith(".md"): 
-                    continue
-
-                filepath = os.path.join(track_dir, filename)
-                try:
+                filepath = os.path.join(closed_dir, filename)
+                if os.path.isfile(filepath):
                     with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()
                     closed_date_str = _extract_closed_date(content)
                     if closed_date_str:
-                        # Content has declared closure. Resolve physical destination
-                        target_dir = get_tracker_path(repo, ticket_type, "closed", workspace_id=workspace_id)
-                        dest_path = os.path.join(target_dir, filename)
-                        new_rel_path = os.path.relpath(dest_path, ws_root).replace('\\', '/')
-                        old_rel_path = os.path.relpath(filepath, ws_root).replace('\\', '/')
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
-                        reconciled_count += 1
-                except Exception:
-                    pass # Safeguard against structural anomalies during disk read
+                        try:
+                            closed_date = datetime.fromisoformat(closed_date_str)
+                            if closed_date < date_7:
+                                content = re.sub(r"status:\s*\"?closed\"?", 'status: "logged"', content)
+                                new_rel_path = f"{repo}/.tracker/log/{filename}"
+                                old_rel_path = f"{repo}/.tracker/{folder_type}/closed/{filename}"
+                                from insetu.routes_fs import execute_vfs_save
+                                execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                                archived_count += 1
+                        except ValueError:
+                            pass 
 
-    return reconciled_count
-def archive_stale_tickets(workspace_id=None):
-    """Sweeps all repos for closed tickets older than 30 days and archives them."""
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    repos = get_sister_repos(workspace_id)
-    cutoff_date = datetime.now() - timedelta(days=30)
-    archived_count = 0
+        # Sweep 2: Move >30 day logged tickets to archive
+        log_dir = os.path.join(ws_root, repo, ".tracker", "log")
+        if os.path.exists(log_dir):
+            for filename in os.listdir(log_dir):
+                if not filename.endswith(".md"): continue
 
-
-    for repo in repos:
-        closed_dir = os.path.join(ws_root, repo, ".tracker", "closed")
-        if not os.path.exists(closed_dir): continue
-
-        archive_dir = os.path.join(closed_dir, "archived")
-
-        for filename in os.listdir(closed_dir):
-            if not filename.endswith(".md"): continue
-
-            filepath = os.path.join(closed_dir, filename)
-            if os.path.isfile(filepath):
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-                # Extract closed_at from YAML
-                closed_date_str = _extract_closed_date(content)
-                if closed_date_str:
-                    try:
-                        closed_date = datetime.fromisoformat(cutoff_date_str)
-                        if closed_date < cutoff_date:
-                            new_rel_path = f"{repo}/.tracker/closed/archived/{filename}"
-                            old_rel_path = f"{repo}/.tracker/closed/{filename}"
-                            from insetu.routes_fs import execute_vfs_save
-                            execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
-                            archived_count += 1
-                    except ValueError:
-                        pass # Ignore malformed dates
+                filepath = os.path.join(log_dir, filename)
+                if os.path.isfile(filepath):
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    closed_date_str = _extract_closed_date(content)
+                    if closed_date_str:
+                        try:
+                            closed_date = datetime.fromisoformat(closed_date_str)
+                            if closed_date < date_30:
+                                content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
+                                new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
+                                old_rel_path = f"{repo}/.tracker/log/{filename}"
+                                from insetu.routes_fs import execute_vfs_save
+                                execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                                archived_count += 1
+                        except ValueError:
+                            pass
 
     return archived_count
 @tracker_bp.route('/api/tracker/new', methods=['POST'])

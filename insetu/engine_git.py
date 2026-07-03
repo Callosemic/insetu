@@ -73,17 +73,31 @@ def generate_diff_context(workspace_id=None):
                 for f_path, f_status in files_in_bucket:
                     out_lines.append(f"[{f_status.ljust(2)}] {f_path}")
                 out_lines.append("\n\n")
+
+                # OPTIMIZATION: Bulk fetch diffs to eliminate N+1 subprocess bottleneck
+                files_to_diff = [f for f, s in files_in_bucket if s != "??"]
+                bulk_diffs = {}
+                if files_to_diff:
+                    try:
+                        diff_res = subprocess.run(['git', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=repo_path)
+                        for chunk in diff_res.stdout.split('diff --git '):
+                            if not chunk.strip(): continue
+                            first_line = chunk.split('\n')[0]
+                            parts = first_line.split(' b/')
+                            if len(parts) == 2:
+                                fname = parts[1].strip()
+                                fname = fname.strip('"') 
+                                bulk_diffs[fname] = 'diff --git ' + chunk
+                    except Exception as e:
+                        print(f"Bulk diff error: {e}")
+
                 for filepath, status in files_in_bucket:
                     abs_filepath = os.path.join(repo_path, filepath)
                     if 'D' in status:
                         out_lines.append(f"============================================================")
                         out_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{filepath} | PREVIOUSLY TRACKED")
                         out_lines.append(f"============================================================")
-                        try:
-                            diff_res = subprocess.run(['git', 'diff', 'HEAD', '--', filepath], capture_output=True, text=True, cwd=repo_path)
-                            out_lines.append(diff_res.stdout)
-                        except Exception as e:
-                            out_lines.append(f"[Error generating diff: {e}]")
+                        out_lines.append(bulk_diffs.get(filepath, "[No diff available or file is binary]"))
                         out_lines.append("\n\n")
                         continue
                     else:
@@ -102,11 +116,7 @@ def generate_diff_context(workspace_id=None):
                     if status == "??":
                         out_lines.append("[Untracked file - full content above]")
                     else:
-                        try:
-                            diff_res = subprocess.run(['git', 'diff', 'HEAD', '--', filepath], capture_output=True, text=True, cwd=repo_path)
-                            out_lines.append(diff_res.stdout)
-                        except Exception as e:
-                            out_lines.append(f"[Error generating diff: {e}]")
+                        out_lines.append(bulk_diffs.get(filepath, "[No diff available or file is binary]"))
                     out_lines.append("\n\n")
                 if out_lines:
                     out_path = os.path.join(paths["diffs_dir"], out_filename)
@@ -223,6 +233,7 @@ def api_git_push():
     data = request.json
     repo = data.get('repo')
     message = data.get('message')
+    diff_file = data.get('diff_file')
     if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
 
     cfg = load_config(workspace_id)
@@ -235,17 +246,30 @@ def api_git_push():
 
     if not os.path.exists(repo_path): return jsonify({"error": "Repo not found"}), 404
 
-    # Git is the SSOT for repository state. Query it directly instead of parsing artifact files.
-    status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
-    
     files_to_stage = set()
-    for line in status_res.stdout.splitlines():
-        if len(line) >= 3:
-            filepath = line[3:]
-            # Safely handle git renames (e.g., R  old -> new)
-            if '->' in filepath: 
-                filepath = filepath.split('->')[-1]
-            files_to_stage.add(filepath.strip())
+    if diff_file:
+        from insetu.utils_core import get_gather_paths
+        paths = get_gather_paths(workspace_id)
+        diff_path = os.path.join(paths["diffs_dir"], diff_file)
+        if os.path.exists(diff_path):
+            with open(diff_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            summary_section = content.split('\n\n')[0]
+            for line in summary_section.splitlines():
+                if line.startswith('[') and '] ' in line:
+                    filepath = line.split('] ', 1)[1].strip()
+                    files_to_stage.add(filepath)
+
+    if not files_to_stage:
+        # Fallback if diff_file wasn't specified or couldn't be parsed
+        status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
+        for line in status_res.stdout.splitlines():
+            if len(line) >= 3:
+                filepath = line[3:]
+                # Safely handle git renames (e.g., R  old -> new)
+                if '->' in filepath: 
+                    filepath = filepath.split('->')[-1]
+                files_to_stage.add(filepath.strip())
 
     if not files_to_stage:
         return jsonify({"error": "No files found to commit. Working tree is clean."}), 400

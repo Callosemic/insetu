@@ -394,7 +394,6 @@ function openMoveModal() {
         title: 'Move File',
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: '🚚 Move File', style: 'primary', id: 'execute-move-btn', onClick: async (e, modal) => {
                 await executeMove(modal.id);
                 return true;
@@ -461,12 +460,8 @@ async function deleteModalFile() {
         }
     });
 }
-
 function cleanModalFile() {
     if (!confirm("Clean LLM cite and span tags from this file?")) return;
-    let text = document.getElementById('modal-text').value;
-    text = text.replace(/\]+\]/g, '');
-    text = text.replace(/\[span_\d+\]\((start_span|end_span)\)/g, '');
 
     const ext = currentModalFile.split('.').pop().toLowerCase();
     const modeMap = {
@@ -478,11 +473,33 @@ function cleanModalFile() {
     };
     const isSupportedEditor = !!modeMap[ext];
 
+    let text = (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) 
+        ? mdeInstance.value() 
+        : document.getElementById('modal-text').value;
+
+    // Clean Citations: [cite], [cite: 1], [cite: 1, 2]
+    text = text.replace(/\[cite(?:[^\]]*)\]/gi, '');
+
+    // Clean Combined Spans: [span_X](start_span) or [span_X](end_span)
+    text = text.replace(/\[span_\d+\]\((?:start_span|end_span)\)/gi, '');
+    // Clean Orphaned Spans
+    text = text.replace(/\((?:start_span|end_span)\)/gi, '');
+    text = text.replace(/\[span_\d+\]/gi, '');
+
     if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.value(text);
     } else {
         document.getElementById('modal-text').value = text;
         document.getElementById('modal-text').dispatchEvent(new Event('input'));
+    }
+
+    if (ext === 'md' && isPreviewMode) {
+        renderMarkdownPreview();
+    }
+
+    // Persist changes to disk automatically
+    if (currentModalIsFS && window.saveModalFile) {
+        window.saveModalFile(true);
     }
 }
 async function downloadFromModal() {
@@ -881,7 +898,6 @@ function openNewFileModal(overridePath = null) {
         title: 'Create New Workspace File',
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: '💾 Create & Save File', style: 'primary', id: 'temp-save-file-btn', onClick: async (e, modal) => {
                 await saveNewFile(modal.id);
                 return true; // Keep modal open during async operation, saveNewFile handles the close
@@ -934,9 +950,9 @@ async function saveNewFile(modalId = 'new-file-modal') {
         }
     });
 }
-function openNewFolderModal() {
-    const isRoot = globalBrowsePath.length === 0;
-    const prefix = isRoot ? '' : globalBrowsePath.join('/') + '/';
+function openNewFolderModal(overridePath = null) {
+    const isRoot = overridePath === null && globalBrowsePath.length === 0;
+    const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : globalBrowsePath.join('/') + '/');
     const modalTitle = isRoot ? 'Create New Repository' : 'Create New Folder';
     const submitLabel = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
 
@@ -970,7 +986,6 @@ function openNewFolderModal() {
         title: modalTitle,
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: submitLabel, style: 'primary', id: 'btn-submit-new-folder', onClick: async (e, modal) => {
                 await saveNewFolder(modal.id);
                 return true; // Keep open so async operations finish and we close it programmatically
@@ -1014,9 +1029,9 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
     const btn = document.getElementById('btn-submit-new-folder');
     const origText = btn.innerText;
     btn.innerText = "Creating...";
-
     try {
-        const res = await fetch('/api/fs/save', {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/fs/save`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1032,7 +1047,6 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
         if (res.ok) {
             btn.innerText = "Syncing Tree...";
             await compileContexts();
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
             const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
             if (isNewRepo) {
@@ -1245,8 +1259,7 @@ function filterBrowse(query) {
         });
     }, 200);
 }
-
-function buildFileTree(files) {
+export function buildFileTree(files) {
     const tree = {};
     files.forEach(filepath => {
         const parts = filepath.split('/');
@@ -1443,7 +1456,6 @@ export function importFromUrl() {
         title: 'Import from URL',
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: '📥 Fetch & Convert', style: 'primary', onClick: async (e, modal) => {
                 await executeImportUrl(modal.id);
                 return true;
@@ -1575,10 +1587,24 @@ export function openLinkModal() {
         }));
         globalManifest = Array.from(allFiles);
     }
-
-    document.getElementById('link-insert-modal').style.display = 'block';
-    document.getElementById('link-search-input').value = '';
-    document.getElementById('link-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Type to search...</span>';
+    const bodyHtml = `
+        <div class="sub-tabs" style="margin-bottom: 10px; border-bottom: none; padding-bottom: 0;">
+            <div class="sub-tab active" id="lt-filename" onclick="switchLinkTab('filename')">Filename</div>
+            <div class="sub-tab" id="lt-deep" onclick="switchLinkTab('deep')">Deep Search</div>
+        </div>
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <input type="text" id="link-search-input" placeholder="Search files..." style="flex: 1; padding: 8px; margin: 0;" oninput="if(typeof onLinkSearchInput === 'function') onLinkSearchInput(this.value)">
+            <button id="btn-deep-search" onclick="executeDeepLinkSearch()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🔍 Search</button>
+        </div>
+        <div id="link-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
+            <span style="color:#888; font-style:italic;">Type to search...</span>
+        </div>
+    `;
+    window.UIFactory.createModal({
+        id: 'link-insert-modal',
+        title: 'Insert Link',
+        body: bodyHtml
+    });
     switchLinkTab('filename');
 }
 
@@ -1730,9 +1756,9 @@ function insertLinkToEditor(path, name) {
         textArea.selectionStart = textArea.selectionEnd = start + linkText.length;
         textArea.focus();
         textArea.dispatchEvent(new Event('input'));
-    }
+        }
 
-    document.getElementById('link-insert-modal').style.display = 'none';
+        window.UIFactory.closeModal('link-insert-modal');
 }
 
 // Expose new functions to the window so HTML element handlers can reach them
@@ -1741,7 +1767,25 @@ window.switchLinkTab = switchLinkTab;
 window.onLinkSearchInput = onLinkSearchInput;
 window.executeDeepLinkSearch = executeDeepLinkSearch;
 export function openPublishModal() {
-    document.getElementById('publish-modal').style.display = 'block';
+    const bodyHtml = `
+        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
+        <select id="publish-format-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;">
+            <option value="pdf">PDF (Requires LaTeX/pdflatex)</option>
+            <option value="docx">Word Document (.docx)</option>
+            <option value="html">HTML Webpage</option>
+        </select>
+    `;
+    window.UIFactory.createModal({
+        id: 'publish-modal',
+        title: 'Publish Document',
+        body: bodyHtml,
+        actions: [
+            { label: '🚀 Compile & Download', style: 'primary', id: 'execute-publish-btn', onClick: async (e, modal) => {
+                await executePublish();
+                return true;
+            }}
+        ]
+    });
 }
 export async function executePublish() {
     const format = document.getElementById('publish-format-select').value;

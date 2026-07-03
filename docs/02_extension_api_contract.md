@@ -56,7 +56,8 @@ Extensions must respect the ASGI event loop and the Cloud Run Serverless Lock co
 Extensions must be good neighbors on the filesystem.
 * **The SQLite Constraint:** Local persistent state must be vaulted in `{ARTIFACTS_BASE}/{ext_name}.db`. 
 * **The Connection Mandate:** Extensions are strictly forbidden from importing `sqlite3` natively. They must request connections via the core OS orchestrator (e.g., `from insetu.db import get_connection`). The OS kernel enforces Write-Ahead Logging (`WAL`) mode, busy timeouts, and thread-safe connection pooling to prevent fatal database locks between the background ThreadPool and UI HTTP requests.
-* **The VFS Constraint:** If an extension needs to mutate the active codebase (e.g., saving a scraped Markdown file), it must route the payload through `/api/fs/save`. Native `open('file.md', 'w')` inside an extension is banned, as it evades the Cartographer topology triggers and VFS checks.
+* **The VFS Constraint:** If an extension needs to mutate the active codebase (e.g., saving a scraped Markdown file), it must route the payload through the central kernel function `execute_vfs_save` (from `insetu.routes_fs`).
+Native `open('file.md', 'w')` inside an extension is strictly banned, as it evades Cartographer topology triggers and bypasses the asynchronous background commit queues.
 ## 6. Asset Resolution & Namespacing
 To prevent namespace pollution in a zero-bundler environment, extensions manage their own CSS and visual footprints.
 * **Style Injection:** Extensions inject their styling natively via JavaScript (dynamically appending `<style>` tags). 

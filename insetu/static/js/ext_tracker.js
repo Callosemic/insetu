@@ -1,7 +1,8 @@
 import {
     compileContexts,
     viewSourceFile,
-    setContextManifest
+    setContextManifest,
+    getFlattenedBuckets
 } from './app.js';
 import { AppStore } from './store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
@@ -81,6 +82,10 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <h3 style="margin-top: 0;">Active</h3>
                         <div id="todos-active-list"></div>
                     </div>
+                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                        <h3 style="margin-top: 0; color: #10b981;">Closed</h3>
+                        <div id="todos-closed-list"></div>
+                    </div>
                 </div>
             </div>
             <div id="sub-bugs" class="sub-tab-content">
@@ -93,6 +98,10 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <h3 style="margin-top: 0;">Active</h3>
                         <div id="bugs-active-list"></div>
                     </div>
+                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                        <h3 style="margin-top: 0; color: #10b981;">Closed</h3>
+                        <div id="bugs-closed-list"></div>
+                    </div>
                 </div>
             </div>
             <div id="sub-queue" class="sub-tab-content">
@@ -101,10 +110,15 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <h3 style="margin-top: 0;">Open (Research Queue)</h3>
                         <div id="queue-open-list"></div>
                     </div>
+                    <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
+                        <h3 style="margin-top: 0; color: #10b981;">Closed (Resolved)</h3>
+                        <div id="queue-closed-list"></div>
+                    </div>
                 </div>
             </div>
             <div id="sub-log" class="sub-tab-content">
-                <div style="display: flex; justify-content: flex-end; margin-bottom: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="margin: 0; color: #888;">Archived Tickets</h3>
                     <button id="btn-generate-changelog" class="btn-sm" style="background: #8b5cf6; margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
                 </div>
                 <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
@@ -168,8 +182,8 @@ function renderTaskRepoPins(state) {
 
         // If this repo is active, render its buckets right next to it
         if (state.pinnedRepos.has(repo) && repo !== "ALL") {
-            const repoCfg = targetConfigs.find(c => c.repo_dir === repo);
-            if (repoCfg && repoCfg.sub_buckets && repoCfg.sub_buckets.some(b => b.id !== 'tracker')) {
+            const buckets = getFlattenedBuckets(repo);
+            if (buckets.length > 0 && buckets.some(b => b.id !== 'tracker' && b.original.id !== 'tracker')) {
                 const bWrap = document.createElement('span');
                 bWrap.style.cssText = "display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; background: var(--input-bg); padding: 4px; border-radius: 6px; border: 1px solid var(--border); margin-left: 2px;";
 
@@ -192,7 +206,6 @@ function renderTaskRepoPins(state) {
                     bBtn.className = isActive ? 'repo-pill active' : 'repo-pill';
                     bBtn.innerText = bLabel;
                     bBtn.style.cssText = `padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-
                     bBtn.onclick = () => {
                         if (isActive) {
                             const newB = { ...state.bucketsExpanded };
@@ -218,20 +231,11 @@ function renderTaskRepoPins(state) {
 
                 const bAll = createBucketPill("ALL", "All");
                 if (bAll) bWrap.appendChild(bAll);
-
-                repoCfg.sub_buckets.forEach(b => {
-                    if (b.id === 'tracker') return;
-                    if (b.dynamic_split_prefix && b.meta_map) {
-                        Object.keys(b.meta_map).forEach(module => {
-                            const bp = createBucketPill(module, b.meta_map[module].title || module);
-                            if (bp) bWrap.appendChild(bp);
-                        });
-                    } else if (!b.dynamic_split_prefix) {
-                        const bp = createBucketPill(b.id, b.id);
-                        if (bp) bWrap.appendChild(bp);
-                    }
+                buckets.forEach(b => {
+                    if (b.id === 'tracker' || b.original.id === 'tracker') return;
+                    const bp = createBucketPill(b.id, b.title);
+                    if (bp) bWrap.appendChild(bp);
                 });
-
                 repoWrap.appendChild(bWrap);
             }
         }
@@ -342,43 +346,49 @@ function renderTrackerBoard(state) {
         'log-list': [],
         'todos-open-list': [],
         'todos-active-list': [],
+        'todos-closed-list': [],
         'bugs-open-list': [],
         'bugs-active-list': [],
-        'queue-open-list': []
+        'bugs-closed-list': [],
+        'queue-open-list': [],
+        'queue-closed-list': []
     };
-
     Object.keys(targetLists).forEach(id => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '';
     });
-
     const filtered = state.tasks.filter(t => {
         const matchesRepo = state.pinnedRepos.has('ALL') || state.pinnedRepos.has(t.repo);
         const matchesBucket = state.pinnedBuckets.has('ALL') || state.pinnedBuckets.has(t.subBucket);
         const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
         return matchesRepo && matchesBucket && matchesTag;
     });
-
-    // Populate target column buckets
+// Populate target column buckets
     filtered.forEach(t => {
+        if (t.status === 'archived' || t.status === 'closed' || t.status === 'logged') {
+            targetLists['log-list'].push(t);
+        }
+
         let containerId = null;
-        if (t.status === 'closed') containerId = 'log-list';
-        else if (t.isTodo && t.status === 'open') containerId = 'todos-open-list';
+        if (t.isTodo && t.status === 'open') containerId = 'todos-open-list';
         else if (t.isTodo && t.status === 'active') containerId = 'todos-active-list';
+        else if (t.isTodo && t.status === 'closed') containerId = 'todos-closed-list';
         else if (t.isBug && t.status === 'open') containerId = 'bugs-open-list';
         else if (t.isBug && t.status === 'active') containerId = 'bugs-active-list';
+        else if (t.isBug && t.status === 'closed') containerId = 'bugs-closed-list';
         else if (t.isQueue && t.status === 'open') containerId = 'queue-open-list';
+        else if (t.isQueue && t.status === 'closed') containerId = 'queue-closed-list';
 
         if (containerId) targetLists[containerId].push(t);
     });
-
-    // Sort active backlogs oldest-first so debt doesn't get buried
+// Sort active backlogs oldest-first so debt doesn't get buried
     ['todos-open-list', 'todos-active-list', 'bugs-open-list', 'bugs-active-list', 'queue-open-list'].forEach(id => {
         targetLists[id].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     });
-
-    // Sort the completed log column descending by close timestamp
-    targetLists['log-list'].sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+// Sort the completed columns descending by close timestamp
+    ['log-list', 'todos-closed-list', 'bugs-closed-list', 'queue-closed-list'].forEach(id => {
+        targetLists[id].sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+    });
 
     // Batch render to DOM via document fragments
     Object.entries(targetLists).forEach(([id, tasks]) => {
@@ -453,7 +463,7 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
         pauseBtn.onclick = () => transitionTask(task, 'open');
         actions.appendChild(pauseBtn);
     }
-    if (task.status !== 'closed') {
+    if (task.status !== 'closed' && task.status !== 'archived') {
         if (task.isQueue) {
             const acceptBtn = document.createElement('button');
             acceptBtn.className = 'btn-sm';
@@ -464,7 +474,7 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
             const archiveBtn = document.createElement('button');
             archiveBtn.className = 'btn-sm';
             archiveBtn.style.background = '#64748b';
-            archiveBtn.innerText = '📦 Archive';
+            archiveBtn.innerText = '✅ Resolve';
             archiveBtn.onclick = () => transitionTask(task, 'closed');
             actions.appendChild(archiveBtn);
         } else {
@@ -475,6 +485,13 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
             closeBtn.onclick = () => transitionTask(task, 'closed');
             actions.appendChild(closeBtn);
         }
+    } else if (task.status === 'closed') {
+        const reopenBtn = document.createElement('button');
+        reopenBtn.className = 'btn-sm';
+        reopenBtn.style.background = '#8b5cf6';
+        reopenBtn.innerText = '🔄 Re-open';
+        reopenBtn.onclick = () => transitionTask(task, 'open');
+        actions.appendChild(reopenBtn);
     }
 
     card.appendChild(header);
@@ -558,7 +575,6 @@ function openNewTaskModal() {
         title: 'Create New Ticket',
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: '💾 Create Ticket', style: 'primary', id: 'save-task-btn', onClick: async (e, modal) => {
                 await saveNewTask(modal.id);
                 return true;
@@ -580,28 +596,14 @@ function populateNewTaskBuckets() {
     if (!select) return;
     select.innerHTML = '<option value="None">No Bucket</option>';
     const selectedRepo = document.getElementById('new-task-repo').value;
-    const repoConfig = AppStore.getState().targetConfigs.find(c => c.repo_dir === selectedRepo);
-    if (repoConfig && repoConfig.sub_buckets) {
-        repoConfig.sub_buckets.forEach(b => {
-            if (b.id === 'tracker') return;
-
-            if (b.dynamic_split_prefix && b.meta_map) {
-                Object.keys(b.meta_map).forEach(module => {
-                    const opt = document.createElement('option');
-
-                    opt.value = module;
-                    opt.innerText = b.meta_map[module].title || module;
-                    select.appendChild(opt);
-                });
-            } else if (!b.dynamic_split_prefix) {
-                const opt = document.createElement('option');
-
-                opt.value = b.id;
-                opt.innerText = b.title || b.id;
-                select.appendChild(opt);
-            }
-        });
-    }
+    const buckets = getFlattenedBuckets(selectedRepo);
+    buckets.forEach(b => {
+        if (b.id === 'tracker' || b.original.id === 'tracker') return;
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.innerText = b.title;
+        select.appendChild(opt);
+    });
 }
 
 async function saveNewTask(modalId = 'new-task-modal') {
@@ -644,16 +646,16 @@ async function saveNewTask(modalId = 'new-task-modal') {
 }
 async function openEditTaskModal(filepath) {
     try {
-        const res = await fetch('/api/bridge/fetch?file=' + encodeURIComponent(filepath));
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
         if (!res.ok) throw new Error("Failed to load task file.");
         const content = await res.text();
-
         const repo = filepath.split('/')[0];
         let title = filepath.split('/').pop();
         let tags = [];
-        let subBucket = 'None';
+let subBucket = 'None';
 
-        const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        const yamlMatch = content.match(/^\s*---\n([\s\S]*?)\n\s*---/);
         if (yamlMatch) {
             const lines = yamlMatch[1].split('\n');
             lines.forEach(l => {
@@ -701,7 +703,6 @@ async function openEditTaskModal(filepath) {
             title: 'Edit Ticket Metadata',
             body: bodyHtml,
             actions: [
-                { label: 'Cancel', style: 'secondary' },
                 { label: '💾 Save Changes', style: 'primary', id: 'save-edit-task-btn', onClick: async (e, modal) => {
                     await saveEditTask(modal.id);
                     return true;
@@ -711,27 +712,15 @@ async function openEditTaskModal(filepath) {
 
         // Re-hydrate the textarea explicitly to avoid any innerHTML quoting/encoding oddities with Markdown content
         document.getElementById('edit-task-desc').value = desc.trim();
-
         const select = document.getElementById('edit-task-bucket');
-        const repoConfig = AppStore.getState().targetConfigs.find(c => c.repo_dir === repo);
-        if (repoConfig && repoConfig.sub_buckets) {
-            repoConfig.sub_buckets.forEach(b => {
-                if (b.id === 'tracker') return;
-                if (b.dynamic_split_prefix && b.meta_map) {
-                    Object.keys(b.meta_map).forEach(module => {
-                        const opt = document.createElement('option');
-                        opt.value = module;
-                        opt.innerText = b.meta_map[module].title || module;
-                        select.appendChild(opt);
-                    });
-                } else if (!b.dynamic_split_prefix) {
-                    const opt = document.createElement('option');
-                    opt.value = b.id;
-                    opt.innerText = b.title || b.id;
-                    select.appendChild(opt);
-                }
-            });
-        }
+        const buckets = getFlattenedBuckets(repo);
+        buckets.forEach(b => {
+            if (b.id === 'tracker' || b.original.id === 'tracker') return;
+            const opt = document.createElement('option');
+            opt.value = b.id;
+            opt.innerText = b.title;
+            select.appendChild(opt);
+        });
         select.value = subBucket;
 
     } catch (e) {
@@ -786,15 +775,14 @@ async function saveEditTask(modalId = 'edit-task-modal') {
     if (!hasBucket) {
         newLines.push(`sub_bucket: "${bucket}"`);
     }
-
     const newContent = `---\n${newLines.join('\n')}\n---\n\n## Description\n${desc}\n`;
     try {
-        const res = await fetch('/api/fs/save', {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/fs/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filepath: filepath, content: newContent })
         });
-
         if (res.ok) {
             if (window.UIFactory) window.UIFactory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';

@@ -124,10 +124,13 @@ if (researchTab) {
                 <div id="rs-preview-modal" class="fullscreen-modal" style="z-index: 1090; display: none;">
                     <div class="modal-content" style="max-height: 95vh; height: 95vh; width: 95vw; max-width: none; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--bg);">
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 15px;">
-                                <span id="rs-preview-title" style="font-weight: bold; color: #a855f7; font-size: 1.15rem; word-break: break-word;">No item selected</span>
-                                <button id="rs-close-preview-btn" class="btn-sm" style="background: #dc2626; margin: 0; flex-shrink: 0; padding: 4px 12px;">Close</button>
-                            </div>
+<div style="display: flex;
+justify-content: space-between; align-items: flex-start; gap: 15px;">
+    <span id="rs-preview-title" style="font-weight: bold;
+color: #a855f7; font-size: 1.15rem; word-break: break-word;">No item selected</span>
+    <button id="rs-close-preview-btn" class="btn-sm" style="background: #64748b;
+margin: 0; flex-shrink: 0; padding: 4px 12px;">Back</button>
+</div>
                             <div id="rs-disposition-controls" style="display: none; align-items: center; gap: 10px; flex-wrap: wrap;">
                                 <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
                                     <input type="text" id="rs-target-dir" value="research/" placeholder="Target path (e.g. research/)" style="flex: 1; padding: 6px; font-family: monospace;">

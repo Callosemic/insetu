@@ -24,7 +24,6 @@ export async function openPushModal(diffFilename, repoDir) {
         title: `🚀 Commit & Push: <span style="color: #8b5cf6;">${repoDir || "Unknown Repo"}</span>`,
         body: bodyHtml,
         actions: [
-            { label: 'Cancel', style: 'secondary' },
             { label: '🚀 Execute Push', style: 'primary', id: 'execute-push-btn', onClick: async (e, modal) => {
                 await executePush(modal.id);
                 return true;
@@ -87,24 +86,27 @@ export async function executePush(modalId = 'push-modal') {
             } else {
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${data.output}`);
             }
-
             if (window.UIFactory) window.UIFactory.closeModal(modalId);
             else {
                 const m = document.getElementById(modalId);
                 if (m) m.style.display = 'none';
             }
-// Silently re-hydrate the UI manifest and bundles
-            await compileContexts();
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const mRes = await fetch(`/api/${activeWs}/manifest`);
-            if (mRes.ok) setContextManifest(await mRes.json());
-
-            generateDiffs();
+            // Silently re-hydrate the UI manifest and bundles
+            try {
+                await compileContexts();
+                const activeWs = AppStore.getState().activeWorkspace || 'default';
+                const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+                if (mRes.ok) setContextManifest(await mRes.json());
+            } catch (refreshErr) {
+                console.warn("Background refresh failed (likely due to auto-reload):", refreshErr);
+            } finally {
+                generateDiffs();
+            }
         } else {
             alert(`❌ Push failed:\n\n${data.error}`);
         }
     } catch (e) {
-        alert("Network error executing push.");
+        alert("Network error executing push. (The server may be reloading)");
     } finally {
         if (btn) btn.style.display = 'block';
         if (spinner) spinner.style.display = 'none';
@@ -126,7 +128,6 @@ export async function openSweepModal() {
         body: bodyHtml,
         maxWidth: '700px',
         actions: [
-            { label: 'Close', style: 'secondary' },
             { label: '🚀 Commit & Push Selected', style: 'primary', id: 'execute-sweep-btn', onClick: async (e, modal) => {
                 await executeSweepPush(modal.id);
                 return true;

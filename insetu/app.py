@@ -18,9 +18,11 @@ app = Flask(__name__)
 from insetu.routes_fs import fs_bp
 from insetu.routes_bridge import bridge_bp
 from insetu.routes_system import system_bp
+from insetu.engine_gather import gather_bp
 app.register_blueprint(fs_bp)
 app.register_blueprint(bridge_bp)
 app.register_blueprint(system_bp)
+app.register_blueprint(gather_bp)
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
     from insetu.utils_core import load_config, _cwd
@@ -202,102 +204,6 @@ def api_repos(workspace_id):
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
         "config_missing": not os.path.exists(cfg_path)
     })
-@app.route('/api/<workspace_id>/batches', methods=['GET'])
-def api_batches(workspace_id):
-    import os
-    from insetu.utils_core import load_config, load_workflows, get_gather_paths, get_safe_repo_id
-
-    cfg = load_config(workspace_id)
-    w_cfg = load_workflows(workspace_id)
-    paths = get_gather_paths(workspace_id)
-
-    batches = w_cfg.get("context_batches", [])
-
-    # Gather options for the UI batch editor
-    expected_contexts = set()
-    expected_diffs = set()
-
-    for c in cfg.get("target_repos", []):
-        r_dir = c.get("repo_dir", "")
-        safe_r_dir = get_safe_repo_id(r_dir)
-        subs = c.get("sub_buckets", [])
-
-        if subs:
-            for b in subs:
-                if not b.get("dynamic_split_prefix"):
-                    out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
-                    expected_contexts.add(f"contexts/{out}")
-                    expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
-                else:
-                    # Dynamic split prefix - infer from active directories
-                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
-                    if os.path.exists(dyn_dir):
-                        for module in os.listdir(dyn_dir):
-                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
-                                expected_contexts.add(f"contexts/{module}_context.txt")
-                                expected_diffs.add(f"diffs/{module}_diffs.txt")
-        else:
-            out = c.get("out_file", f"{safe_r_dir}_context.txt")
-            expected_contexts.add(f"contexts/{out}")
-            expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
-
-    # Include physically existing files in case of unmapped manual overrides
-    if os.path.exists(paths["contexts_dir"]):
-        for f in os.listdir(paths["contexts_dir"]):
-            if f.endswith('.txt'): expected_contexts.add(f"contexts/{f}")
-
-    if os.path.exists(paths["diffs_dir"]):
-        for f in os.listdir(paths["diffs_dir"]):
-            if f.endswith('.txt'): expected_diffs.add(f"diffs/{f}")
-
-    available_prompts = [f"prompts/{f}" for f in os.listdir(paths["prompts_dir"]) if f.lower().endswith(('.md', '.txt'))] if os.path.exists(paths["prompts_dir"]) else []
-
-    artifacts_abs = paths["artifacts_base"].replace('\\', '/')
-    profile_abs = os.path.dirname(paths["config_path"]).replace('\\', '/')
-
-    return jsonify({
-        "batches": batches,
-        "available_contexts": sorted(list(expected_contexts)),
-        "available_diffs": sorted(list(expected_diffs)),
-        "available_prompts": sorted(available_prompts),
-        "artifacts_dir": artifacts_abs,
-        "profile_dir": profile_abs
-    })
-@app.route('/api/<workspace_id>/batches/save', methods=['POST'])
-def api_batches_save(workspace_id):
-    import json
-    import insetu.utils_core as utils_core
-    from insetu.utils_core import load_workflows, get_gather_paths
-
-    paths = get_gather_paths(workspace_id)
-
-    data = request.json
-    w_cfg = load_workflows(workspace_id)
-    batches = w_cfg.get("context_batches", [])
-    batch_id = data.get("id")
-    existing = next((b for b in batches if b["id"] == batch_id), None)
-
-    if existing:
-        # Clear optional fields if not present in the incoming payload to prevent ghost states
-        for optional_key in ["include_prompt", "response_path", "prompt_text"]:
-            if optional_key in existing and optional_key not in data:
-                del existing[optional_key]
-        existing.update(data)
-    else:
-        batches.append(data)
-
-    w_cfg["context_batches"] = batches
-    utils_core.save_json_file(paths["workflows_path"], w_cfg)
-
-    # Auto-compile the modified batch silently
-    import insetu.engine_gather as engine_gather
-    target_batch = existing if existing else data
-    try:
-        engine_gather.compile_batch(target_batch, workspace_id)
-    except Exception as e:
-        print(f"Warning: Failed to auto-compile batch {batch_id}: {str(e)}")
-
-    return jsonify({"status": "success"})
 @app.route('/')
 def index():
     from insetu.utils_core import load_config
@@ -310,14 +216,23 @@ import threading
 import queue
 import json
 from flask import Response
-_COMPILER_LOCK = threading.Lock()
+_COMPILER_LOCKS = {}
+_COMPILER_GLOBAL_LOCK = threading.Lock()
+
+def get_compiler_lock(wid):
+    with _COMPILER_GLOBAL_LOCK:
+        if wid not in _COMPILER_LOCKS:
+            _COMPILER_LOCKS[wid] = threading.Lock()
+        return _COMPILER_LOCKS[wid]
+
 @app.route('/submit', methods=['POST'])
 def submit():
     workspace_id = request.headers.get('X-Workspace-ID')
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
 
-    if not _COMPILER_LOCK.acquire(blocking=False):
+    ws_lock = get_compiler_lock(workspace_id)
+    if not ws_lock.acquire(blocking=False):
         existing_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')] if os.path.exists(paths["contexts_dir"]) else []
         return jsonify({"status": "success", "message": "Compilation locked. Serving cached context.", "files": sorted(existing_files)})
     def generate():
@@ -351,7 +266,7 @@ def submit():
                 q.put({"status": "error", "message": f"Compilation Error: {str(e)}", "files": []})
             finally:
                 q.put(None) # End of stream
-                _COMPILER_LOCK.release()
+                ws_lock.release()
         threading.Thread(target=compile_worker, args=(workspace_id,), daemon=True).start()
 
         while True:

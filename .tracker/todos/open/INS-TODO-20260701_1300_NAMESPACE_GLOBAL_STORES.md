@@ -1,4 +1,7 @@
 ---
+repo: "insetu"
+type: "todo"
+status: "open"
 id: INS-TODO-20260701_1300_NAMESPACE_GLOBAL_STORES
 title: "Refactor Global Stores to window.inSetu Namespace"
 created_at: 2026-07-01T13:00:00
@@ -20,3 +23,4 @@ We need to establish a unified `window.inSetu` object namespace to cleanly house
 - [ ] Refactor the workspace teardown loop inside `performSoftRefresh()` to blindly iterate over `Object.values(window.inSetu.stores)` and dynamically trigger cache eviction/resets, replacing the hardcoded and brittle `if (window.KanbanStore)` manual checks.
 
 ## Notes / Execution Log
+* **Audit (2026-07-02):** Designated as primary architectural debt. Consolidating state management into the `window.inSetu` namespace is required to finalize Unidirectional Data Flow (UDF) compliance and prevent cross-tenant cache bleeding.

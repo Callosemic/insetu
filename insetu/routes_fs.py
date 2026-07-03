@@ -48,6 +48,18 @@ def stop_vfs_pipeline():
     _VFS_WRITE_QUEUE.put(None) # Poison pill to break blocking lookups
     if _VFS_WORKER_THREAD:
         _VFS_WORKER_THREAD.join(timeout=5.0)
+def _trigger_post_mutation_hooks(workspace_id, old_filepath, new_filepath=None):
+    """DRY helper for triggering cartographer and event bus updates after a VFS mutation."""
+    try:
+        from insetu.cartographer import map_repositories
+        map_repositories(workspace_id)
+    except Exception as e:
+        print(f"Warning: Cartographer failed during VFS mutation: {str(e)}")
+
+    hooks.emit('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
+    if new_filepath:
+        hooks.emit('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
+
 def execute_vfs_move(workspace_id, filepath, dest_path):
     resolved_src = resolve_workspace_path(filepath, workspace_id)
     resolved_dest = resolve_workspace_path(dest_path, workspace_id)
@@ -62,16 +74,8 @@ def execute_vfs_move(workspace_id, filepath, dest_path):
     except Exception as e:
             return {"error": f"OS Move Failed: {str(e)}"}, 500
 
-    try:
-            from insetu.cartographer import map_repositories
-            map_repositories(workspace_id)
-    except Exception as e:
-            print(f"Warning: Cartographer failed during move: {str(e)}")
-
-    hooks.emit('post_file_delete', filepath=filepath, workspace_id=workspace_id)
-    hooks.emit('post_file_save', filepath=dest_path, workspace_id=workspace_id)
+    _trigger_post_mutation_hooks(workspace_id, filepath, dest_path)
     return {"status": "success", "new_filepath": dest_path}, 200
-
 
 def execute_vfs_archive(workspace_id, filepath):
     resolved_path = resolve_workspace_path(filepath, workspace_id)
@@ -87,15 +91,8 @@ def execute_vfs_archive(workspace_id, filepath):
     except Exception as e:
             return {"error": f"OS Move Failed: {str(e)}"}, 500
 
-    try:
-            from insetu.cartographer import map_repositories
-            map_repositories(workspace_id)
-    except Exception as e:
-            print(f"Warning: Cartographer failed during archive: {str(e)}")
-
-    hooks.emit('post_file_delete', filepath=filepath, workspace_id=workspace_id)
+    _trigger_post_mutation_hooks(workspace_id, filepath)
     return {"status": "success"}, 200
-
 
 def execute_vfs_delete(workspace_id, filepath):
     resolved_path = resolve_workspace_path(filepath, workspace_id)
@@ -106,13 +103,7 @@ def execute_vfs_delete(workspace_id, filepath):
     except Exception as e:
             return {"error": f"OS Remove Failed: {str(e)}"}, 500
 
-    try:
-            from insetu.cartographer import map_repositories
-            map_repositories(workspace_id)
-    except Exception as e:
-            print(f"Warning: Cartographer failed during delete: {str(e)}")
-
-    hooks.emit('post_file_delete', filepath=filepath, workspace_id=workspace_id)
+    _trigger_post_mutation_hooks(workspace_id, filepath)
     return {"status": "success"}, 200
 
 
@@ -152,156 +143,30 @@ def api_fs_exists(workspace_id):
     resolved_path = resolve_workspace_path(filename, workspace_id)
     exists = bool(resolved_path and os.path.exists(resolved_path))
     return jsonify({"exists": exists, "path": filename})
-
-
 @fs_bp.route('/api/<workspace_id>/fs/search', methods=['GET'])
 def api_fs_search(workspace_id):
     query = request.args.get('q', '').lower()
     if not query: return jsonify({"results": []})
 
-    terms = [t for t in query.split() if t]
-    if not terms: return jsonify({"results": []})
-
-    import json
-    from insetu.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
-    md_files = set()
-    if os.path.exists(manifest_path):
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            try:
-                manifest = json.load(f)
-                for file_list in manifest.values():
-                    for filepath in file_list:
-                        if filepath.lower().endswith('.md'):
-                            md_files.add(filepath)
-            except Exception:
-                pass
-    results = []
-    for filepath in md_files:
-        abs_path = resolve_workspace_path(filepath, workspace_id)
-        if not os.path.exists(abs_path): continue
-
-        try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            content_lower = content.lower()
-            score = 0
-            snippet = ""
-
-            file_lower = filepath.lower()
-            for term in terms:
-                if term in file_lower:
-                    score += 2
-                if term in content_lower:
-                    score += 1
-
-            if score > 0:
-                first_term = next((t for t in terms if t in content_lower), None)
-                if first_term:
-                    idx = content_lower.find(first_term)
-                    start = max(0, idx - 30)
-                    end = min(len(content), idx + 70)
-                    snippet = content[start:end].replace('\n', ' ').strip()
-
-                results.append({
-                    "path": filepath,
-                    "score": score,
-                    "snippet": snippet
-                })
-        except Exception:
-            pass
-            
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return jsonify({"results": results[:50]})
+    from insetu.utils_core import search_workspace_files
+    results = search_workspace_files(workspace_id, query)
+    return jsonify({"results": results})
 @fs_bp.route('/api/<workspace_id>/fs/compile-document', methods=['POST'])
 def api_fs_compile_document(workspace_id):
-    data = request.json
-    filepath = data.get('filepath')
-    target_format = data.get('format', 'pdf')
+        data = request.json
+        filepath = data.get('filepath')
+        target_format = data.get('format', 'pdf')
 
-    if not filepath: return jsonify({"error": "Filepath required"}), 400
-
-    resolved_path = resolve_workspace_path(filepath, workspace_id)
-    if not os.path.exists(resolved_path): return jsonify({"error": "File not found"}), 404
-
-    with open(resolved_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    import re
-    import tempfile
-    import subprocess
-    import json
-    import sqlite3
-    import shutil
-    import io
-    from insetu.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-
-    backmatter_match = re.search(r'\n+---\n+citations:\n([\s\S]*?)\n---$', content)
-
-    true_ids = []
-    if backmatter_match:
-        lines = backmatter_match.group(1).splitlines()
-        for line in lines:
-            parts = line.split(':')
-            if len(parts) >= 2:
-                true_ids.append(parts[1].replace('"', '').replace("'", "").strip())
-
-    csl_items = []
-    if true_ids:
-        db_path = os.path.join(paths["artifacts_base"], "citations.db")
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            placeholders = ','.join(['?'] * len(true_ids))
-            try:
-                cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
-                for row in cursor.fetchall():
-                    csl_items.append(json.loads(row['raw_json']))
-            except Exception:
-                pass
-            finally:
-                conn.close()
-
-    temp_dir = tempfile.mkdtemp()
-    try:
-        bib_path = os.path.join(temp_dir, 'bibliography.json')
-        with open(bib_path, 'w', encoding='utf-8') as f:
-            json.dump(csl_items, f)
-
-        out_filename = f"compiled_output.{target_format}"
-        out_path = os.path.join(temp_dir, out_filename)
-
-        cmd = ['pandoc', resolved_path, '-o', out_path]
-        if csl_items:
-            cmd.extend(['--citeproc', '--bibliography', bib_path])
+        if not filepath: return jsonify({"error": "Filepath required"}), 400
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
+                from insetu.engine_format import compile_document_payload
+                mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
+                return send_file(mem_file, as_attachment=True, download_name=download_name)
         except FileNotFoundError:
-            return jsonify({"error": "Pandoc is not installed or not in PATH."}), 500
-
-        if res.returncode != 0:
-            err_msg = res.stderr.strip()
-            if "pdflatex not found" in err_msg.lower():
-                err_msg += " (Please install a LaTeX engine like MacTeX, MiKTeX, or TeX Live to generate PDFs)."
-            return jsonify({"error": f"Pandoc failed: {err_msg}"}), 500
-
-        with open(out_path, 'rb') as f:
-            file_data = f.read()
-
-        mem_file = io.BytesIO(file_data)
-        mem_file.seek(0)
-
-        safe_basename = os.path.basename(resolved_path).rsplit('.', 1)[0]
-        return send_file(mem_file, as_attachment=True, download_name=f"{safe_basename}.{target_format}")
-
-    except Exception as e:
-        return jsonify({"error": f"Compilation error: {str(e)}"}), 500
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+                return jsonify({"error": "File not found"}), 404
+        except Exception as e:
+                return jsonify({"error": str(e)}), 500
 def execute_vfs_save(workspace_id, filepath, content, data=None):
         """Enqueues file mutations asynchronously to unlock the HTTP thread instantly."""
         if data is None:
@@ -351,12 +216,21 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 os.makedirs(target_dir, exist_ok=True)
         with open(resolved_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-
         delete_source = data.get("delete_source")
         if delete_source:
                 old_abs_path = resolve_workspace_path(delete_source, workspace_id)
                 if os.path.exists(old_abs_path) and os.path.abspath(old_abs_path) != os.path.abspath(resolved_path):
                         os.remove(old_abs_path)
+
+                        # Clean up empty ghost directories left behind
+                        try:
+                            parent_dir = os.path.dirname(old_abs_path)
+                            # Prune upwards until a directory is not empty
+                            while parent_dir and os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                                os.rmdir(parent_dir)
+                                parent_dir = os.path.dirname(parent_dir)
+                        except OSError:
+                            pass
 
         if data.get("is_new_repo") and data.get("repo_dir"):
                 repo_dir = data.get("repo_dir")

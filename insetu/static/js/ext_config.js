@@ -1,34 +1,5 @@
 // ext_config.js - Workspace Configuration Editor Extension
 
-const CONFIG_MODAL_HTML = `
-<div id="config-editor-modal" class="fullscreen-modal" style="z-index: 1200; display: none;">
-    <div class="modal-content" style="max-height: 90vh; display: flex; flex-direction: column;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h3 style="margin:0; font-size: 1.1rem;">Workspace Configuration</h3>
-            <div style="display: flex; gap: 10px;">
-                <button id="config-editor-save" class="btn-sm" style="background: #10b981; margin: 0;">💾 Save & Reload</button>
-                <button onclick="document.getElementById('config-editor-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
-            </div>
-        </div>
-        <div style="flex: 1; overflow-y: auto; padding-right: 10px;">
-            <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
-                <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #a855f7;">Active Extensions</label>
-                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked to prevent losing access to this menu.</p>
-                <div id="config-editor-extensions" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
-            </div>
-
-            <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
-                <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #38bdf8;">Target Repositories</label>
-                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
-                <div id="config-editor-repos" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;"></div>
-                <button id="config-editor-add-repo" class="btn-sm" style="background: #3b82f6; margin: 0;">➕ Add Repository</button>
-            </div>
-        </div>
-    </div>
-</div>
-`;
-
-document.body.insertAdjacentHTML('beforeend', CONFIG_MODAL_HTML);
 let currentConfig = {};
 
 function renderExtensions() {
@@ -311,52 +282,81 @@ function renderSubBuckets(repoIdx) {
     container.querySelectorAll('.m-title').forEach(el => el.oninput = (e) => updateMetaKey(e, 'title'));
     container.querySelectorAll('.m-domain').forEach(el => el.oninput = (e) => updateMetaKey(e, 'domain'));
 }
-
-document.getElementById('config-editor-add-repo').onclick = () => {
-    if (!currentConfig.target_repos) currentConfig.target_repos = [];
-    currentConfig.target_repos.push({ 
-        repo_dir: '', 
-        title: '', 
-        domain: 'Workspaces', 
-        exts: ['.py', '.json', '.md', '.txt'], 
-        apply_ignore: true,
-        sub_buckets: [] 
-    });
-    renderRepos();
-    const container = document.getElementById('config-editor-repos');
-    container.scrollTo(0, container.scrollHeight);
-};
-
-document.getElementById('config-editor-save').onclick = async () => {
-    const btn = document.getElementById('config-editor-save');
-    const origText = btn.innerText;
-    btn.innerText = "⏳ Saving...";
-    try {
-        const res = await fetch('/api/system/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(currentConfig)
-        });
-        if (res.ok) {
-            window.location.reload();
-        } else {
-            const data = await res.json();
-            alert("Failed to save: " + data.error);
-            btn.innerText = origText;
-        }
-    } catch (e) {
-        alert("Network error: " + e.message);
-        btn.innerText = origText;
-    }
-};
 export async function openConfigEditor() {
     try {
         const res = await fetch('/api/system/config');
         if (res.ok) {
             currentConfig = await res.json();
+
+            const bodyHtml = `
+                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #a855f7;">Active Extensions</label>
+                    <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked to prevent losing access to this menu.</p>
+                    <div id="config-editor-extensions" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
+                </div>
+
+                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #38bdf8;">Target Repositories</label>
+                    <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
+                    <div id="config-editor-repos" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;"></div>
+                    <button id="config-editor-add-repo" class="btn-sm" style="background: #3b82f6; margin: 0;">➕ Add Repository</button>
+                </div>
+            `;
+
+            window.UIFactory.createModal({
+                id: 'config-editor-modal',
+                title: 'Workspace Configuration',
+                body: bodyHtml,
+                maxWidth: '800px',
+                actions: [
+                    { label: '💾 Save & Reload', style: 'primary', id: 'config-editor-save', onClick: async () => {
+                        document.getElementById('config-editor-save').click();
+                        return true;
+                    }}
+                ]
+            });
+
             renderExtensions();
             renderRepos();
-            document.getElementById('config-editor-modal').style.display = 'block';
+
+            document.getElementById('config-editor-add-repo').onclick = () => {
+                if (!currentConfig.target_repos) currentConfig.target_repos = [];
+                currentConfig.target_repos.push({ 
+                    repo_dir: '', 
+                    title: '', 
+                    domain: 'Workspaces', 
+                    exts: ['.py', '.json', '.md', '.txt'], 
+                    apply_ignore: true,
+                    sub_buckets: [] 
+                });
+                renderRepos();
+                const container = document.getElementById('config-editor-repos');
+                if (container) container.parentElement.scrollTo(0, container.parentElement.scrollHeight);
+            };
+
+            document.getElementById('config-editor-save').onclick = async () => {
+                const btn = document.getElementById('config-editor-save');
+                const origText = btn.innerText;
+                btn.innerText = "⏳ Saving...";
+                try {
+                    const res = await fetch('/api/system/config', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(currentConfig)
+                    });
+                    if (res.ok) {
+                        window.location.reload();
+                    } else {
+                        const data = await res.json();
+                        alert("Failed to save: " + data.error);
+                        btn.innerText = origText;
+                    }
+                } catch (e) {
+                    alert("Network error: " + e.message);
+                    btn.innerText = origText;
+                }
+            };
+
         } else {
             alert("Failed to fetch configuration.");
         }

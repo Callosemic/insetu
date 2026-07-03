@@ -164,13 +164,17 @@ def apply_block_in_memory(content, block, silent=False):
 
     if match_idx == -1:
         r_stripped = [l.strip() for l in replace_lines if l.strip()]
+        s_stripped = [l.strip() for l in search_lines if l.strip()]
         f_stripped = [l.strip() for l in file_lines if l.strip()]
         if r_stripped:
             n = len(r_stripped)
-            for i in range(len(f_stripped) - n + 1):
-                if f_stripped[i:i+n] == r_stripped:
-                    if not silent: print("  └─ ℹ️  Idempotency: REPLACE block already present in target. Skipping chunk.")
-                    return True, content
+            # To prevent false positives on deletions, only trust idempotency if the REPLACE block has >= 3 lines,
+            # OR if it's strictly larger than the SEARCH block (a pure addition).
+            if n >= 3 or n > len(s_stripped):
+                for i in range(len(f_stripped) - n + 1):
+                    if f_stripped[i:i+n] == r_stripped:
+                        if not silent: print("  └─ ℹ️  Idempotency: REPLACE block already present in target. Skipping chunk.")
+                        return True, content
                     
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:

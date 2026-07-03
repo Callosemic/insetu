@@ -2,6 +2,7 @@ import { mdeInstance } from './app.js';
 import { currentModalIsFS } from './fs.js';
 import { openSelectorModal } from './ui.js';
 import { AppStore } from './store.js';
+import { getFlattenedBuckets } from './app.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 
@@ -148,10 +149,13 @@ if (libraryScreen) {
 
         <div id="lib-attach-modal" class="fullscreen-modal" style="z-index: 1090;">
             <div class="modal-content" style="max-height: 500px; height: auto;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h3 style="margin:0; font-size: 1.1rem;">Attach: <span id="attach-ref-id" style="color: #8b5cf6; font-family: monospace;"></span></h3>
-                    <button onclick="document.getElementById('lib-attach-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Close</button>
-                </div>
+<div style="display: flex;
+justify-content: space-between; align-items: center; margin-bottom: 15px;">
+    <h3 style="margin:0;
+font-size: 1.1rem;">Attach: <span id="attach-ref-id" style="color: #8b5cf6; font-family: monospace;"></span></h3>
+    <button onclick="document.getElementById('lib-attach-modal').style.display='none'" class="btn-sm" style="background: #64748b;
+margin: 0;">Back</button>
+</div>
                 <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                     <select id="attach-repo-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
                     <select id="attach-bucket-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
@@ -163,10 +167,13 @@ if (libraryScreen) {
         </div>
         <div id="edit-citation-modal" class="fullscreen-modal" style="z-index: 1090;">
             <div class="modal-content" style="max-height: 85vh; height: auto; display: flex; flex-direction: column; overflow-y: auto;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h3 style="margin:0; font-size: 1.1rem;">Edit: <span id="edit-ref-id" style="color: #f59e0b; font-family: monospace;"></span></h3>
-                    <button onclick="document.getElementById('edit-citation-modal').style.display='none'" class="btn-sm" style="background: #dc2626; margin: 0;">Cancel</button>
-                </div>
+<div style="display: flex;
+justify-content: space-between; align-items: center; margin-bottom: 15px;">
+    <h3 style="margin:0;
+font-size: 1.1rem;">Edit: <span id="edit-ref-id" style="color: #f59e0b; font-family: monospace;"></span></h3>
+    <button onclick="document.getElementById('edit-citation-modal').style.display='none'" class="btn-sm" style="background: #64748b;
+margin: 0;">Back</button>
+</div>
                 <div style="display: flex; gap: 10px; margin-bottom: 12px;">
                     <div style="flex: 1;">
                         <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Type:</label>
@@ -262,23 +269,16 @@ if (libraryScreen) {
 
         let reposToShow = libPinnedRepos.has('ALL') ? libRepos : Array.from(libPinnedRepos);
         let hasBuckets = false;
-
         reposToShow.forEach(repoName => {
-            const repoCfg = libConfigs.find(c => c.repo_dir === repoName);
-            if (repoCfg && repoCfg.sub_buckets) {
+            const buckets = getFlattenedBuckets(repoName);
+            if (buckets.length > 0) {
                 hasBuckets = true;
                 const sep = document.createElement('span');
                 sep.innerText = "|";
                 sep.style.cssText = "font-size: 0.85rem; color: var(--text); opacity: 0.5; margin: 0 2px;";
                 bucketContainer.appendChild(sep);
-                repoCfg.sub_buckets.forEach(b => {
-                    if (b.dynamic_split_prefix && b.meta_map) {
-                        Object.keys(b.meta_map).forEach(module => {
-                            bucketContainer.appendChild(createPill(module, b.meta_map[module].title || module, false));
-                        });
-                    } else if (!b.dynamic_split_prefix) {
-                        bucketContainer.appendChild(createPill(b.id, b.id, false));
-                    }
+                buckets.forEach(b => {
+                    bucketContainer.appendChild(createPill(b.id, b.title, false));
                 });
             }
         });
@@ -327,27 +327,15 @@ if (libraryScreen) {
             opt.innerText = r;
             repoSelect.appendChild(opt);
         });
-
         const updateBuckets = () => {
             bucketSelect.innerHTML = '<option value="None">No Bucket</option>';
-            const cfg = libConfigs.find(c => c.repo_dir === repoSelect.value);
-            if (cfg && cfg.sub_buckets) {
-                cfg.sub_buckets.forEach(b => {
-                    if (b.dynamic_split_prefix && b.meta_map) {
-                        Object.keys(b.meta_map).forEach(module => {
-                            const opt = document.createElement('option');
-                            opt.value = module;
-                            opt.innerText = b.meta_map[module].title || module;
-                            bucketSelect.appendChild(opt);
-                        });
-                    } else if (!b.dynamic_split_prefix) {
-                        const opt = document.createElement('option');
-                        opt.value = b.id;
-                        opt.innerText = b.title || b.id;
-                        bucketSelect.appendChild(opt);
-                    }
-                });
-            }
+            const buckets = getFlattenedBuckets(repoSelect.value);
+            buckets.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.innerText = b.title;
+                bucketSelect.appendChild(opt);
+            });
         };
 
         repoSelect.onchange = updateBuckets;
@@ -954,11 +942,18 @@ export async function addFileToLibrary(filename, content, filepath) {
 
 let citationLibraryCache = null;
 let citationSearchTimeout = null;
-
 export async function openCitationModal() {
-    document.getElementById('citation-insert-modal').style.display = 'block';
-    document.getElementById('citation-search-input').value = '';
-    document.getElementById('citation-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Loading library...</span>';
+    const bodyHtml = `
+        <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
+        <div id="citation-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
+            <span style="color:#888; font-style:italic;">Loading library...</span>
+        </div>
+    `;
+    window.UIFactory.createModal({
+        id: 'citation-insert-modal',
+        title: 'Insert Citation',
+        body: bodyHtml
+    });
     try {
         const res = await fetch('/api/citations');
         if (res.ok) {
@@ -1080,10 +1075,10 @@ function insertCitationToEditor(citation) {
         textArea.selectionStart = textArea.selectionEnd = start + linkText.length;
         textArea.focus();
         textArea.dispatchEvent(new Event('input'));
-    }
+        }
 
-    document.getElementById('citation-insert-modal').style.display = 'none';
-    if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
+        window.UIFactory.closeModal('citation-insert-modal');
+        if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
 }
 
 export async function syncDocumentCitations() {

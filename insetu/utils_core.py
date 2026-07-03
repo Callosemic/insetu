@@ -346,10 +346,10 @@ def resolve_workspace_path(path, workspace_id=None):
                         distance += 1
                         d_path = os.path.dirname(d_path)
                     return distance
-
                 dist_kept = get_unmatched_distance(path_kept)
                 dist_stripped = get_unmatched_distance(path_stripped)
                 # Only use path_kept if it explicitly maps closer to an existing physical tree
+
                 if dist_kept < dist_stripped:
                     return path_kept
                 return path_stripped
@@ -357,3 +357,63 @@ def resolve_workspace_path(path, workspace_id=None):
             return path_stripped
     # Mathematically resolve against dynamic root
     return os.path.abspath(os.path.join(workspace_root, norm_path))
+
+
+def search_workspace_files(workspace_id, query):
+    """Globally searches tracked Markdown files in the workspace using the manifest index."""
+    terms = [t for t in query.split() if t]
+    if not terms: return []
+
+    import json
+    paths = get_gather_paths(workspace_id)
+
+    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    md_files = set()
+    if os.path.exists(manifest_path):
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            try:
+                manifest = json.load(f)
+                for file_list in manifest.values():
+                    for filepath in file_list:
+                        if filepath.lower().endswith('.md'):
+                            md_files.add(filepath)
+            except Exception:
+                pass
+    results = []
+    for filepath in md_files:
+        abs_path = resolve_workspace_path(filepath, workspace_id)
+        if not os.path.exists(abs_path): continue
+
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            content_lower = content.lower()
+            score = 0
+            snippet = ""
+            file_lower = filepath.lower()
+
+            for term in terms:
+                if term in file_lower:
+                    score += 2
+                if term in content_lower:
+                    score += 1
+
+            if score > 0:
+                first_term = next((t for t in terms if t in content_lower), None)
+                if first_term:
+                    idx = content_lower.find(first_term)
+                    start = max(0, idx - 30)
+                    end = min(len(content), idx + 70)
+                    snippet = content[start:end].replace('\n', ' ').strip()
+
+                results.append({
+                    "path": filepath,
+                    "score": score,
+                    "snippet": snippet
+                })
+        except Exception:
+            pass
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[:50]

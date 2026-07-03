@@ -4,17 +4,36 @@ import {
     createFileCard,
     downloadFile,
     globalBrowsePath,
-    currentModalOriginalText
+    currentModalOriginalText,
+    buildFileTree
 } from './fs.js';
 import {
     loadGatherBatches
 } from './gather.js';
 import { BridgeStore } from './bridge.js';
 import './ui.js';
+function getFlattenedBuckets(repoDir) {
+    const { targetConfigs } = AppStore.getState();
+    const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
+    if (!repoCfg || !repoCfg.sub_buckets) return [];
+
+    const buckets = [];
+    repoCfg.sub_buckets.forEach(b => {
+        if (b.dynamic_split_prefix && b.meta_map) {
+            Object.keys(b.meta_map).forEach(module => {
+                buckets.push({ id: module, title: b.meta_map[module].title || module, original: b });
+            });
+        } else if (!b.dynamic_split_prefix) {
+            buckets.push({ id: b.id, title: b.title || b.id, original: b });
+        }
+    });
+    return buckets;
+}
 
 export {
     viewSourceFile,
-    createFileCard
+    createFileCard,
+    getFlattenedBuckets
 };
 
 if ('serviceWorker' in navigator) {
@@ -516,6 +535,26 @@ function switchSubTab(subId) {
     if (newFileBtn) newFileBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
     if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
+// Dynamically inject the Copy button onto Prompt cards without cluttering the global file renderer
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
+        if (data.filepath && data.filepath.includes('/prompts/')) {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'btn-sm';
+            copyBtn.style.background = '#10b981';
+            copyBtn.style.margin = '0';
+            copyBtn.innerText = '📋 Copy';
+            copyBtn.onclick = (e) => {
+                e.stopPropagation();
+                fetchAndCopy(data.filepath, copyBtn);
+            };
+            // Prepend so it appears before the Download button
+            data.actionsContainer.insertBefore(copyBtn, data.actionsContainer.firstChild);
+        }
+        return false;
+    });
+}
+
 async function renderPromptsTab() {
     const container = document.getElementById('prompts-list');
     if (!container) return;
@@ -533,59 +572,100 @@ async function renderPromptsTab() {
     }
 
     container.innerHTML = '';
-
-    // Utilize dynamically discovered prompts from the active batches lookup
-    const promptFiles = (globalGatherOptions.prompts || []).map(p => `${globalGatherOptions.profileDir}/${p}`);
-    if (promptFiles.length === 0) {
+    const rawPrompts = globalGatherOptions.prompts || [];
+    if (rawPrompts.length === 0) {
         container.innerHTML = '<p style="color: #888; font-style: italic;">No prompts found in workspace.</p>';
         return;
     }
 
-    promptFiles.forEach(filepath => {
-        const filename = filepath.split('/').pop();
+    // Strip "prompts/" prefix to map the tree relative to the prompts root directory
+    const treePaths = rawPrompts.map(p => p.replace(/^prompts\//, ''));
+    const tree = buildFileTree(treePaths);
 
-        const card = document.createElement('div');
-        card.className = 'file-card';
-        card.style.display = 'flex';
-        card.style.justifyContent = 'space-between';
-        card.style.alignItems = 'center';
+    window.currentPromptsPath = window.currentPromptsPath || [];
+    let current = tree;
 
-        const titleSpan = document.createElement('a');
-        titleSpan.className = 'file-title';
-        titleSpan.innerText = `📄 ${filename}`;
-        titleSpan.style.cursor = 'pointer';
-        titleSpan.style.textDecoration = 'none';
-        titleSpan.title = 'Click to View/Edit';
-        titleSpan.onclick = (e) => {
-            e.preventDefault();
-            viewSourceFile(filepath, true);
+    // Traverse to the user's current nested directory depth
+    for (const p of window.currentPromptsPath) {
+        if (current[p] && !current[p]._isFile) {
+            current = current[p];
+        } else {
+            window.currentPromptsPath = [];
+            current = tree;
+            break;
+        }
+    }
+
+    // Render breadcrumbs & Up button if we're drilled into a folder
+    if (window.currentPromptsPath.length > 0) {
+        const headerDiv = document.createElement('div');
+        headerDiv.style.display = 'flex';
+        headerDiv.style.gap = '10px';
+        headerDiv.style.marginBottom = '15px';
+        headerDiv.style.alignItems = 'center';
+
+        const upBtn = document.createElement('button');
+        upBtn.className = 'btn-sm';
+        upBtn.innerText = '⬆️ Up';
+        upBtn.style.background = '#64748b';
+        upBtn.onclick = () => {
+            window.currentPromptsPath.pop();
+            renderPromptsTab();
         };
 
-        const actions = document.createElement('div');
-        actions.className = 'file-actions';
+        const pathText = document.createElement('span');
+        pathText.style.fontFamily = 'monospace';
+        pathText.style.color = 'var(--text)';
+        pathText.style.opacity = '0.7';
+        pathText.innerText = '/' + window.currentPromptsPath.join('/');
 
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'btn-sm';
-        copyBtn.style.background = '#10b981';
-        copyBtn.style.margin = '0';
-        copyBtn.innerText = '📋 Copy';
-        copyBtn.onclick = () => fetchAndCopy(filepath, copyBtn);
+        headerDiv.appendChild(upBtn);
+        headerDiv.appendChild(pathText);
+        container.appendChild(headerDiv);
+    }
 
-        const dlBtn = document.createElement('button');
-        dlBtn.className = 'btn-sm';
-        dlBtn.style.background = '#0284c7';
-        dlBtn.style.margin = '0';
-        dlBtn.style.color = 'white';
-        dlBtn.style.border = 'none';
-        dlBtn.innerText = '⬇️ DL';
-        dlBtn.onclick = () => fetchAndDownloadState(filepath, dlBtn);
+    // Unify sorting: Folders float to the top, files sort alphabetically underneath
+    const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
+        const aIsDir = !current[a]._isFile;
+        const bIsDir = !current[b]._isFile;
+        if (aIsDir && !bIsDir) return -1;
+        if (!aIsDir && bIsDir) return 1;
+        return a.localeCompare(b);
+    });
 
-        actions.appendChild(copyBtn);
-        actions.appendChild(dlBtn);
+    keys.forEach(key => {
+        const item = current[key];
+        const isDir = !item._isFile;
 
-        card.appendChild(titleSpan);
-        card.appendChild(actions);
-        container.appendChild(card);
+        // Suppress anchor files from the UI, as their parent folders are already rendered by the tree
+        if (!isDir && (key === '.gitkeep' || key === '.keep')) return; 
+
+        if (isDir) {
+            const card = document.createElement('div');
+            card.className = 'file-card';
+            card.style.display = 'flex';
+            card.style.alignItems = 'center';
+            card.style.cursor = 'pointer';
+            card.innerHTML = `<span class="folder-label">📁 ${key}</span>`;
+            card.onclick = () => {
+                window.currentPromptsPath.push(key);
+                renderPromptsTab();
+            };
+            container.appendChild(card);
+            return;
+        }
+
+        // Standard File Rendering via Unified API
+        const pathPrefix = window.currentPromptsPath.length > 0 ? window.currentPromptsPath.join('/') + '/' : '';
+        const filepath = `${globalGatherOptions.profileDir}/prompts/${pathPrefix}${key}`;
+
+        createFileCard({
+            filename: filepath,
+            displayName: key,
+            description: '',
+            isFS: true,
+            isSource: true
+        }, container);
     });
 }
 export async function generateDiffs() {
@@ -599,9 +679,11 @@ export async function generateDiffs() {
             method: 'POST'
         });
         const data = await res.json();
+        const sweepBtn = document.getElementById('btn-sweep-remaining');
 
         loading.style.display = 'none';
         if (data.status === 'success' && data.files.length > 0) {
+            if (sweepBtn) sweepBtn.style.display = 'block';
             const categories = {};
             const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
             const resolveMetadata = (fileName) => {
@@ -705,6 +787,7 @@ export async function generateDiffs() {
                 }
             }
         } else {
+            if (sweepBtn) sweepBtn.style.display = 'none';
             results.innerHTML = '<p style="color: #888;">No pending changes detected across tracked repositories.</p>';
         }
     } catch (error) {
@@ -982,8 +1065,11 @@ async function finishContextLoad(result) {
     document.getElementById('context-results').style.display = 'block';
 }
 let compilePromise = null;
+let compilePromiseWs = null;
 export function compileContexts() {
-    if (compilePromise) return compilePromise;
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
+    compilePromiseWs = activeWs;
 
     compilePromise = (async () => {
         try {

@@ -132,17 +132,23 @@ button:hover { background: var(--btn-hover); }
 .file-actions { display: flex; gap: 10px; }
 .btn-sm { margin-top: 0; padding: 8px 14px; font-size: 14px; }
 /* iOS Modal Fixes */
-.fullscreen-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100dvh; background: rgba(0,0,0,0.9);
+.fullscreen-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100dvh; background: rgba(0,0,0,0.85);
 padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); box-sizing: border-box; z-index: 1000; }
-
-/* Dynamic UI Factory */
+/* Dynamic UI Factory & Legacy Modals */
 .dynamic-modal { display: flex !important; align-items: center; justify-content: center; flex-direction: column; }
-.modal-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; width: 100%; max-width: 600px; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-.modal-header { padding: 15px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); }
-.modal-header h2 { margin: 0; font-size: 1.2rem; color: var(--text); }
-.modal-body { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 15px; }
-.modal-footer { padding: 15px 20px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: flex-end; gap: 10px; }
-.modal-content { background: var(--pane-bg); width: 100%; max-width: 800px; height: 100%; margin: 0 auto; display: flex; flex-direction: column; padding: 15px; border-radius: 8px; box-sizing: border-box;}
+.modal-panel, .modal-content { background: var(--pane-bg); border: 1px solid var(--border); border-radius: 8px; width: 100%; max-width: 800px; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 0; margin: 0 auto; box-sizing: border-box; }
+.modal-panel { max-width: 600px; background: var(--bg); }
+.modal-header { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); border-top: 4px solid var(--btn); z-index: 10; box-shadow: 0 4px 15px rgba(0,0,0,0.15); flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: nowrap; }
+.modal-header h2, .modal-header h3 { margin: 0; font-size: 1.2rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+.modal-body { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 15px; -webkit-overflow-scrolling: touch; }
+.modal-footer { padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; z-index: 10; box-shadow: 0 -4px 15px rgba(0,0,0,0.15); flex-shrink: 0; }
+.modal-footer button { flex: 1; margin: 0 !important; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; border-right: 1px solid var(--border); }
+.modal-footer button:last-child { border-right: none; }
+
+/* Legacy modal specific layout tweaks */
+#modal-edit-toolbar { margin: 15px 20px 0 20px !important; }
+#modal-body-container { padding: 0 20px; margin-bottom: 20px !important; }
 #modal-preview ul { padding-left: 1.2rem; }
 /* Target any list item containing a checkbox to strip the bullet natively */
 #modal-preview li:has(input[type="checkbox"]) { list-style: none; margin-left: -1.2rem; }
@@ -168,22 +174,33 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 .file-label { font-family: monospace; font-weight: bold; cursor: pointer; }
 /* Kanban Board Layout Classes */
 .board-columns { display: flex; gap: 15px; }
-
 /* Force Active columns to render before Open columns via Flexbox ordering */
-.board-columns > div:has(#todos-active-list) { order: 1; }
-.board-columns > div:has(#todos-open-list) { order: 2; }
-.board-columns > div:has(#bugs-active-list) { order: 3; }
-.board-columns > div:has(#bugs-open-list) { order: 4; }
-.board-columns > div:has(#log-list) { order: 5; }
+.board-columns > div:has(#todos-active-list), .board-columns > div:has(#bugs-active-list) { order: 1; }
+.board-columns > div:has(#todos-open-list), .board-columns > div:has(#bugs-open-list), .board-columns > div:has(#queue-open-list) { order: 2; }
+.board-columns > div:has(#todos-closed-list), .board-columns > div:has(#bugs-closed-list), .board-columns > div:has(#queue-closed-list) { order: 3; }
+.board-columns > div:has(#log-list) { order: 4; }
 .tasks-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .tasks-controls { display: flex; gap: 10px; }
 @media (max-width: 1024px), (max-aspect-ratio: 1/1) {
-    .board-columns { flex-direction: column; }
+    /* Fullscreen Edge-to-Edge Modals */
+    .fullscreen-modal { padding: 0 !important; }
+    .modal-panel, .modal-content { border-radius: 0; border: none; width: 100%; max-width: 100%; height: 100dvh !important; max-height: 100dvh !important; }
+    .modal-header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+    .modal-footer { padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+    .board-columns { flex-direction: column;
+}
+    .board-columns > div { padding: 10px 5px !important; }
     .tasks-header { flex-direction: column; align-items: stretch; gap: 15px; }
-    .tasks-controls { display: flex; width: 100%; gap: 10px; }
-    .tasks-controls select { flex: 1; }
-    .screen { padding: 15px; border-radius: 0; min-height: calc(100dvh - 145px); }
-    #tab-term { height: calc(100dvh - 145px); padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box; }
+    .tasks-controls { display: flex;
+width: 100%; gap: 10px; }
+    .tasks-controls select { flex: 1;
+}
+    .screen { padding: 15px 5px; border-radius: 0; min-height: calc(100dvh - 145px); background: transparent; box-shadow: none;
+}
+    .file-card { padding: 12px 10px; border-radius: 4px; margin-bottom: 8px; }
+    #tab-term { height: calc(100dvh - 145px); padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box;
+}
     .tab-content { padding: 0; }
     .top-bar { padding: 0 10px; }
     .sub-tabs-bar { padding: 0 10px; }
