@@ -28,8 +28,14 @@ inSetu supports Dark, Light, and E-Ink modes natively.
 * **No Hardcoded Hex Colors**: Do not hardcode colors like `#fff` or `#000` for backgrounds or text. 
 * **Use System Tokens**: Always bind structural elements to the CSS variables: `--bg`, `--pane-bg`, `--input-bg`, `--text`, `--border`, `--btn`, and `--console-bg`.
 * **Semantic Action Colors**: It is acceptable to use solid semantic colors for action buttons (e.g., `#ef4444` for Delete, `#10b981` for Save/Accept, `#0284c7` for Download) provided they contrast appropriately with white text.
-
 ## 5. State-Driven DOM (UDF)
 As mandated by Engineering Standard 01, the UI is a pure presentation layer.
-* **Zero DOM Reading**: Modules (`kanban.js`, `bridge.js`) are strictly forbidden from reading state out of the DOM (e.g., querying `document.getElementById('...').value` or checking if an element `.classList.contains('active')` to determine business logic)[cite: 2145].
-* **Zustand Supremacy**: Read and write all state exclusively through the centralized state managers (like `AppStore` or `KanbanStore`) which utilize Zustand[cite: 449, 2147].
+* **Zero DOM Reading**: Modules (`kanban.js`, `bridge.js`) are strictly forbidden from reading state out of the DOM (e.g., querying `document.getElementById('...').value` or checking if an element `.classList.contains('active')` to determine business logic).
+* **Zustand Supremacy**: Read and write all state exclusively through the centralized state managers (like `AppStore` or `KanbanStore`) which utilize Zustand.
+
+## 6. The DOM Generation Matrix: HTML vs. JavaScript
+To prevent DOM bloat and spaghetti code, the creation of UI elements must strictly adhere to the following boundary rules:
+
+* **Rule 1: The OS Skeleton (HTML-Bound):** The absolute foundational structure—top navigation bars, the global status bar, main tab container shells, and heavy singletons (specifically the `#file-modal` and its `<textarea>` editor)—must be hardcoded in `index.html`. This guarantees instant First Contentful Paint (FCP) and provides stable, immutable anchor nodes for extensions to hook into upon boot.
+* **Rule 2: Extension Canvases (JS Template Strings):** Extensions (e.g., Research, Tracker) must inject their primary fullscreen layouts into the OS Skeleton using static `innerHTML` template strings during their registration phase (`ExtensionRegistry.registerTab`). This keeps `index.html` strictly agnostic to domain-specific tools.
+* **Rule 3: Transient & Data-Driven Elements (JS Node Creation):** Anything that appears temporarily, layers over the screen, or iterates based on dynamic data (Modals, Dropdowns, Toast notifications, File/Task Cards) MUST be built programmatically via `document.createElement()` or `UIFactory`. Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation.

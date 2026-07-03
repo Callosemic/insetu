@@ -40,8 +40,9 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
     if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
             window.ExtensionRegistry.registerUIHook('zone:file-edit-override', (filepath) => {
                 if (filepath.includes('.tracker/')) {
-                    document.getElementById('copy-modal').style.display = 'none';
+                    document.getElementById('file-modal').style.display = 'none';
                     if (window.openEditTaskModal) window.openEditTaskModal(filepath);
+
                     return true;
                 }
                 return false;
@@ -118,9 +119,16 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
             </div>
             <div id="sub-log" class="sub-tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h3 style="margin: 0; color: #888;">Archived Tickets</h3>
+                    <h3 style="margin: 0; color: #888;">Changelog Logs</h3>
                     <button id="btn-generate-changelog" class="btn-sm" style="background: #8b5cf6; margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
                 </div>
+
+                <h4 class="category-heading" style="margin-top: 10px; margin-bottom: 10px;">Recently Closed</h4>
+                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px; font-style: italic;">(logs not yet archived)</p>
+                <div id="todos-recently-closed-list" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 25px;"></div>
+
+                <h4 class="category-heading" style="margin-top: 20px; margin-bottom: 10px;">Archived Tickets</h4>
+                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px;">(Historical context preserved on disk)</p>
                 <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
         `;
@@ -343,7 +351,8 @@ function renderTaskTagPins(state) {
 }
 function renderTrackerBoard(state) {
     const targetLists = {
-        'log-list': [],
+        'log-list': [],                  // Archived Tickets
+        'todos-recently-closed-list': [], // Recently Closed
         'todos-open-list': [],
         'todos-active-list': [],
         'todos-closed-list': [],
@@ -353,20 +362,28 @@ function renderTrackerBoard(state) {
         'queue-open-list': [],
         'queue-closed-list': []
     };
+
+    // Flush all container elements cleanly before populating
     Object.keys(targetLists).forEach(id => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = '';
     });
+
     const filtered = state.tasks.filter(t => {
         const matchesRepo = state.pinnedRepos.has('ALL') || state.pinnedRepos.has(t.repo);
         const matchesBucket = state.pinnedBuckets.has('ALL') || state.pinnedBuckets.has(t.subBucket);
         const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
         return matchesRepo && matchesBucket && matchesTag;
     });
-// Populate target column buckets
+
+    // Populate target column buckets
     filtered.forEach(t => {
-        if (t.status === 'archived' || t.status === 'closed' || t.status === 'logged') {
+        if (t.status === 'archived') {
             targetLists['log-list'].push(t);
+            return;
+        }
+        if (t.status === 'closed' || t.status === 'logged') {
+            targetLists['todos-recently-closed-list'].push(t);
         }
 
         let containerId = null;
@@ -381,12 +398,14 @@ function renderTrackerBoard(state) {
 
         if (containerId) targetLists[containerId].push(t);
     });
-// Sort active backlogs oldest-first so debt doesn't get buried
+
+    // Sort active backlogs oldest-first so debt doesn't get buried
     ['todos-open-list', 'todos-active-list', 'bugs-open-list', 'bugs-active-list', 'queue-open-list'].forEach(id => {
         targetLists[id].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     });
-// Sort the completed columns descending by close timestamp
-    ['log-list', 'todos-closed-list', 'bugs-closed-list', 'queue-closed-list'].forEach(id => {
+
+    // Sort the completed columns descending by close timestamp
+    ['log-list', 'todos-recently-closed-list', 'todos-closed-list', 'bugs-closed-list', 'queue-closed-list'].forEach(id => {
         targetLists[id].sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
     });
 
@@ -800,7 +819,7 @@ async function saveEditTask(modalId = 'edit-task-modal') {
 export function generateHistoricalChangelog() {
     const state = KanbanStore.getState();
     const closedTasks = state.tasks.filter(t => {
-        const isClosed = t.status === 'closed' || t.status === 'archived';
+        const isClosed = t.status === 'closed' || t.status === 'archived' || t.status === 'logged';
         const matchesRepo = state.pinnedRepos.has('ALL') || state.pinnedRepos.has(t.repo);
         return isClosed && matchesRepo;
     });

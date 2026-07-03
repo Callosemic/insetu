@@ -68,24 +68,42 @@ function renderRepos() {
                 </div>
                 <button class="btn-sm btn-del-repo" data-idx="${idx}" style="background: transparent; border: 1px solid #ef4444; color: #ef4444; margin: 0; padding: 4px 8px;">🗑️ Remove</button>
             </div>
-            
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <div style="flex: 1; min-width: 200px;">
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                <div style="flex: 1; min-width: 150px;">
                     <label style="font-size: 0.8rem; color: #888;">Title</label>
                     <input type="text" value="${repo.title || ''}" placeholder="Display Title" class="repo-title-input" data-idx="${idx}">
                 </div>
-                <div style="flex: 1; min-width: 200px;">
+                <div style="flex: 1; min-width: 150px;">
                     <label style="font-size: 0.8rem; color: #888;">Domain</label>
                     <input type="text" value="${repo.domain || ''}" placeholder="Category" class="repo-domain-input" data-idx="${idx}">
                 </div>
+                <div style="flex: 1; min-width: 150px;">
+                    <label style="font-size: 0.8rem; color: #888;">Archive Type</label>
+                    <select class="repo-archive-type" data-idx="${idx}" style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);">
+                        <option value="repo" ${repo.archive_type === 'repo' || !repo.archive_type ? 'selected' : ''}>Standard Repo</option>
+                        <option value="media-vault" ${repo.archive_type === 'media-vault' ? 'selected' : ''}>Media Vault</option>
+                        <option value="prompt-library" ${repo.archive_type === 'prompt-library' ? 'selected' : ''}>Prompt Library</option>
+                    </select>
+                </div>
             </div>
-            
-            <div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                <div style="flex: 1; min-width: 200px;">
+                    <label style="font-size: 0.8rem; color: #888;">Physical Path (Optional Override)</label>
+                    <input type="text" value="${repo.physical_path || ''}" placeholder="/absolute/path/to/repo" class="repo-physical-input" data-idx="${idx}">
+                </div>
+                <div style="flex: 1; min-width: 200px;">
+                    <label style="font-size: 0.8rem; color: #888;">Custom Out File (Optional)</label>
+                    <input type="text" value="${repo.out_file || ''}" placeholder="custom_context.txt" class="repo-outfile-input" data-idx="${idx}">
+                </div>
+            </div>
+
+            <div style="margin-bottom: 10px;">
                 <label style="font-size: 0.8rem; color: #888;">Tracked Extensions (comma separated)</label>
                 <input type="text" value="${exts}" placeholder=".py, .js, .md" class="repo-exts-input" data-idx="${idx}">
             </div>
-            
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
                 <div style="flex: 1; min-width: 200px;">
                     <label style="font-size: 0.8rem; color: #888;">Ignore Directories (comma separated)</label>
                     <input type="text" value="${ignores}" placeholder="node_modules, build" class="repo-ignores-input" data-idx="${idx}">
@@ -95,6 +113,13 @@ function renderRepos() {
                     <input type="text" value="${ignoreFiles}" placeholder="package-lock.json" class="repo-ignorefiles-input" data-idx="${idx}">
                 </div>
             </div>
+
+            <div style="display: flex; gap: 15px; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
+                <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="repo-exclude-ctx" data-idx="${idx}" ${repo.exclude_from_context ? 'checked' : ''}> Exclude from Context</label>
+                <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="repo-exclude-diffs" data-idx="${idx}" ${repo.exclude_from_diffs ? 'checked' : ''}> Exclude from Diffs</label>
+                <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="repo-exclude-tracker" data-idx="${idx}" ${repo.exclude_from_tracker ? 'checked' : ''}> Exclude from Tracker</label>
+            </div>
+
             <div style="background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                     <label style="font-size: 0.85rem; font-weight: bold; color: #a855f7;">Sub-Buckets</label>
@@ -118,10 +143,17 @@ function renderRepos() {
     document.querySelectorAll('.repo-ignores-input').forEach(el => el.oninput = (e) => {
         currentConfig.target_repos[e.target.dataset.idx].repo_ignore_dirs = e.target.value.split(',').map(s => s.trim()).filter(s => s);
     });
-
     document.querySelectorAll('.repo-ignorefiles-input').forEach(el => el.oninput = (e) => {
         currentConfig.target_repos[e.target.dataset.idx].repo_ignore_files = e.target.value.split(',').map(s => s.trim()).filter(s => s);
     });
+
+    document.querySelectorAll('.repo-archive-type').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.idx].archive_type = e.target.value);
+    document.querySelectorAll('.repo-physical-input').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.idx].physical_path = e.target.value);
+    document.querySelectorAll('.repo-outfile-input').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.idx].out_file = e.target.value);
+
+    document.querySelectorAll('.repo-exclude-ctx').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.idx].exclude_from_context = e.target.checked);
+    document.querySelectorAll('.repo-exclude-diffs').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.idx].exclude_from_diffs = e.target.checked);
+    document.querySelectorAll('.repo-exclude-tracker').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.idx].exclude_from_tracker = e.target.checked);
 
     document.querySelectorAll('.btn-add-bucket').forEach(btn => btn.onclick = (e) => {
         const idx = e.target.dataset.idx;
@@ -173,10 +205,18 @@ function renderSubBuckets(repoIdx) {
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">ID</label><input type="text" value="${b.id || ''}" placeholder="my_bucket" class="b-id" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
                     <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Title</label><input type="text" value="${b.title || ''}" placeholder="Display Name" class="b-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Domain</label><input type="text" value="${b.domain || ''}" placeholder="Category" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div style="flex: 2;"><label style="font-size: 0.75rem; color:#888;">Description</label><input type="text" value="${b.description || ''}" placeholder="What goes here?" class="b-desc" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Custom Out File</label><input type="text" value="${b.out_file || ''}" placeholder="out_context.txt" class="b-outfile" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
                 </div>
                 <div>
                     <label style="font-size: 0.75rem; color:#888;">Match Prefixes (comma separated)</label>
                     <input type="text" value="${(b.match_prefixes || []).join(', ')}" placeholder="path/to/folder, other/path" class="b-prefixes" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                </div>
+                <div style="margin-top: 5px;">
+                    <label style="font-size: 0.8rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="b-catchall" data-ridx="${repoIdx}" data-bidx="${bIdx}" ${b.is_catch_all ? 'checked' : ''}> Designate as Catch-All Bucket</label>
                 </div>
             `;
         } else {
@@ -193,11 +233,16 @@ function renderSubBuckets(repoIdx) {
                     </div>
                 `;
             });
-
             html += `
-                <div>
-                    <label style="font-size: 0.75rem; color:#888;">Dynamic Split Prefix</label>
-                    <input type="text" value="${b.dynamic_split_prefix || ''}" placeholder="e.g. . or docs/" class="b-dyn" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <div style="flex: 1;">
+                        <label style="font-size: 0.75rem; color:#888;">Dynamic Split Prefix</label>
+                        <input type="text" value="${b.dynamic_split_prefix || ''}" placeholder="e.g. . or docs/" class="b-dyn" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="font-size: 0.75rem; color:#888;">Shared Base Domain</label>
+                        <input type="text" value="${b.domain || ''}" placeholder="e.g. Dynamic Modules" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                    </div>
                 </div>
                 <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
@@ -236,8 +281,12 @@ function renderSubBuckets(repoIdx) {
     container.querySelectorAll('.b-prefixes').forEach(el => el.oninput = (e) => {
         currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].match_prefixes = e.target.value.split(',').map(s => s.trim()).filter(s => s);
     });
-
     container.querySelectorAll('.b-dyn').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].dynamic_split_prefix = e.target.value);
+
+    container.querySelectorAll('.b-domain').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].domain = e.target.value);
+    container.querySelectorAll('.b-desc').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].description = e.target.value);
+    container.querySelectorAll('.b-outfile').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].out_file = e.target.value);
+    container.querySelectorAll('.b-catchall').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].is_catch_all = e.target.checked);
 
     container.querySelectorAll('.btn-add-meta').forEach(btn => btn.onclick = (e) => {
         const r = e.target.dataset.ridx;

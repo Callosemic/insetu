@@ -388,11 +388,44 @@ def enforce_declarative_tickets(workspace_id=None):
                     elif "archiv" in raw_status: decl_status = "archived"
                     elif "log" in raw_status: decl_status = "logged"
                     else: decl_status = "open"
-
                     decl_id = yaml_data.get('id', filename.replace('.md', ''))
                     decl_title = yaml_data.get('title', filename.replace('.md', ''))
-                    decl_created = yaml_data.get('created_at', datetime.now().isoformat(timespec='seconds'))
-                    decl_closed = yaml_data.get('closed_at', 'null')
+
+                    # Query the SQLite cache ledger to evaluate historical context metrics
+                    db_status = None
+                    db_created_at = None
+                    db_closed_at = None
+                    try:
+                        conn = get_connection('tracker', workspace_id=workspace_id)
+                        cache_row = conn.execute("SELECT status, created_at, closed_at FROM tracker_tickets WHERE id = ?", (decl_id,)).fetchone()
+                        if cache_row:
+                            db_status = cache_row['status']
+                            db_created_at = cache_row['created_at']
+                            db_closed_at = cache_row['closed_at']
+                    except Exception:
+                        pass
+
+                    # Lock down original creation metrics against LLM omissions or overwrites
+                    if db_created_at:
+                        decl_created = db_created_at
+                    else:
+                        # Fall back to file frontmatter string, or stamp fresh system time if truly new
+                        file_created = yaml_data.get('created_at')
+                        if file_created and file_created.lower() != 'null':
+                            decl_created = file_created
+                        else:
+                            decl_created = datetime.now().isoformat(timespec='seconds')
+
+                    # Enforce the System Clock as the single authority on closure timelines
+                    if decl_status in ('closed', 'logged', 'archived'):
+                        if db_status in ('closed', 'logged', 'archived') and db_closed_at:
+                            # Ticket was already closed historically; retain original system record
+                            decl_closed = db_closed_at
+                        else:
+                            # Status delta detected (new transition or untracked): stamp with current runtime clock
+                            decl_closed = datetime.now().isoformat(timespec='seconds')
+                    else:
+                        decl_closed = 'null'
 
                     decl_sub = yaml_data.get('sub_bucket')
                     if not decl_sub or decl_sub == 'None':
@@ -422,11 +455,6 @@ def enforce_declarative_tickets(workspace_id=None):
                         if ht not in decl_tags_list: decl_tags_list.append(ht)
 
                     decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
-                    # Special handling for declarative closure timestamp
-                    if decl_status in ('closed', 'logged', 'archived') and decl_closed.lower() == 'null':
-                        decl_closed = datetime.now().isoformat(timespec='seconds')
-                    elif decl_status not in ('closed', 'logged', 'archived'):
-                        decl_closed = 'null'
                     # Determine if we need to rewrite YAML (fields missing or mismatched)
                     needs_rewrite = (
                         'repo' not in yaml_data or 'type' not in yaml_data or 

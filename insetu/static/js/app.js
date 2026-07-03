@@ -136,12 +136,11 @@ window.ExtensionRegistry = {
             });
             tabs.forEach(t => container.appendChild(t));
         }
-
         const content = document.createElement('div');
         content.id = 'tab-' + id;
         content.className = 'tab-content';
         content.innerHTML = `<div class="screen active" id="screen-${id}"></div>`;
-        document.body.insertBefore(content, document.getElementById('copy-modal'));
+        document.body.insertBefore(content, document.getElementById('file-modal'));
         return content.querySelector('.screen');
     },
     registerSubTab: (parentId, id, label) => {
@@ -248,9 +247,8 @@ document.addEventListener('input', (e) => {
         e.target.style.height = Math.min(e.target.scrollHeight + 2, 500) + 'px';
     }
 });
-
 // Map Cmd/Ctrl + S contextually depending on which modal is currently visible
-window.ExtensionRegistry.registerShortcut('modal:copy-modal', 'ctrl+s', () => window.saveModalFile && window.saveModalFile(false));
+window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.saveModalFile && window.saveModalFile(false));
 window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.saveNewFile && window.saveNewFile());
 window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => window.saveNewTask && window.saveNewTask());
 window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => window.saveEditTask && window.saveEditTask());
@@ -533,8 +531,11 @@ function switchSubTab(subId) {
         pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ? 'block' : 'none';
     }
     if (newFileBtn) newFileBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
+    const fsMoreBtn = document.getElementById('btn-fs-more');
+    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
     if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
+
 // Dynamically inject the Copy button onto Prompt cards without cluttering the global file renderer
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
@@ -768,6 +769,10 @@ export async function generateDiffs() {
                 });
             });
             const sortedCats = Object.keys(categories).sort((a, b) => {
+                // Force the Clipboard to always float to the absolute top, ignoring config sorts
+                if (a === "Quick-Pack Clipboard") return -1;
+                if (b === "Quick-Pack Clipboard") return 1;
+
                 let iA = categoryOrder.indexOf(a);
                 let iB = categoryOrder.indexOf(b);
                 if (iA === -1) iA = 999;
@@ -924,6 +929,18 @@ export function renderContextFiles(files, msg) {
             let cat = "Workspaces";
             let desc = "Repository context payload.";
             let displayName = fileName;
+
+            if (fileName.startsWith('quick_pack_')) {
+                const parts = fileName.split('_');
+                const dateStr = new Date(parseInt(parts[2]) * 1000).toLocaleString();
+                const target = parts.slice(3).join('_').replace('.txt', '');
+                return {
+                    cat: "Quick-Pack Clipboard",
+                    desc: `Ad-hoc context packed on ${dateStr} (24h TTL)`,
+                    displayName: `📦 ${target}`
+                };
+            }
+
             if (fileName === 'prompts_context.txt') return {
                 cat: "Prompts & State",
                 desc: "The Master Ingestion Prompt and CLI templates.",
@@ -1006,13 +1023,21 @@ export function renderContextFiles(files, msg) {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-
         for (const catName of sortedCats) {
             const catFiles = categories[catName];
             if (catFiles.length > 0) {
                 const heading = document.createElement('div');
                 heading.className = 'category-heading';
-                heading.innerText = catName;
+
+                if (catName === "Quick-Pack Clipboard") {
+                    heading.style.display = 'flex';
+                    heading.style.justifyContent = 'space-between';
+                    heading.style.alignItems = 'center';
+                    heading.innerHTML = `<span>${catName}</span> <button class="btn-sm" style="background: #ef4444; margin: 0; padding: 4px 10px; font-size: 0.8rem;" onclick="if(window.clearQuickPacks) window.clearQuickPacks()">🗑️ Clear</button>`;
+                } else {
+                    heading.innerText = catName;
+                }
+
                 downloadContainer.appendChild(heading);
                 catFiles.forEach(f => createFileCard(f, downloadContainer));
             }
@@ -1410,3 +1435,4 @@ window.fullRefresh = fullRefresh;
 window.simulatePanic = simulatePanic;
 // Context / Gather
 window.filterContexts = filterContexts;
+window.loadContext = loadContext;

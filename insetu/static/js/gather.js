@@ -332,7 +332,7 @@ export function openBatchModal(batch) {
                 </div>
                 <div style="display: flex; gap: 10px;">
                     <button id="batch-copy-context-btn" class="btn-sm" style="background: #10b981; margin: 0; padding: 8px 14px;">📋 Copy Context</button>
-                    <button id="batch-dl-context-btn" class="btn-sm" style="background: #0284c7; margin: 0; padding: 8px 14px;">⬇️ Download .txt</button>
+                    <button id="batch-dl-context-btn" class="btn-sm" draggable="true" style="background: #0284c7; margin: 0; padding: 8px 14px;">⬇️ Download .txt</button>
                 </div>
             </div>
 
@@ -358,9 +358,13 @@ export function openBatchModal(batch) {
         title: `Batch Workflow: ${batch.title || batch.id}`,
         body: bodyHtml
     });
-
     document.getElementById('batch-copy-context-btn').onclick = function() { window.fetchAndCopy(`${artifactsDir}/workflows/${contextFile}`, this); };
-    document.getElementById('batch-dl-context-btn').onclick = function() { window.fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, this); };
+    const dlBtn = document.getElementById('batch-dl-context-btn');
+    dlBtn.onclick = function() { window.fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, this); };
+    dlBtn.addEventListener('dragstart', (e) => {
+        const fetchUrl = `/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(artifactsDir + '/workflows/' + contextFile)}`;
+        if (window.bindDownloadDrag) window.bindDownloadDrag(e, contextFile, fetchUrl);
+    });
 
     if (batch.include_prompt) {
         const promptTextArea = document.getElementById('batch-prompt-text');

@@ -86,12 +86,80 @@ export const UIFactory = {
         setTimeout(() => backdrop.style.display = 'flex', 10);
         return backdrop.id;
     },
-    
     closeModal: function(id) {
         const el = document.getElementById(id);
         if (el) el.remove();
+    },
+
+    createDropdown: function(config) {
+        // Destroy existing generic dropdowns to ensure a singleton instance
+        document.querySelectorAll('.dynamic-dropdown').forEach(el => el.remove());
+
+        const menu = document.createElement('div');
+        menu.className = 'dynamic-dropdown';
+        menu.style.cssText = `
+            position: absolute;
+            background: var(--pane-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px;
+            min-width: 220px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        `;
+
+        // Calculate positioning relative to the triggering anchor
+        const rect = config.anchor.getBoundingClientRect();
+        menu.style.top = (rect.bottom + window.scrollY + 5) + 'px';
+
+        // Prevent horizontal overflow off the right edge of the viewport
+        if (rect.right > window.innerWidth - 250) {
+            menu.style.right = (window.innerWidth - rect.right) + 'px';
+        } else {
+            menu.style.left = rect.left + 'px';
+        }
+
+        config.items.forEach(item => {
+            if (item.divider) {
+                const div = document.createElement('div');
+                div.style.cssText = 'height: 1px; background: var(--border); margin: 4px 0;';
+                menu.appendChild(div);
+                return;
+            }
+            const btn = document.createElement('button');
+            btn.style.cssText = 'background: transparent; color: var(--text); text-align: left; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; font-weight: bold; margin: 0; display: flex; align-items: center; gap: 8px;';
+            btn.innerHTML = (item.icon ? `<span style="font-size: 1.1rem; line-height: 1;">${item.icon}</span> ` : '') + `<span>${item.label}</span>`;
+
+            btn.onmouseover = () => btn.style.background = 'var(--input-bg)';
+            btn.onmouseout = () => btn.style.background = 'transparent';
+
+            btn.onclick = (e) => {
+                menu.remove();
+                if (item.onClick) item.onClick(e);
+            };
+            menu.appendChild(btn);
+        });
+
+        document.body.appendChild(menu);
+
+        // Bind outside click listener to auto-dismiss, with a tiny delay to avoid immediately firing on the triggering click
+        setTimeout(() => {
+            const closer = (e) => {
+                if (!menu.contains(e.target) && e.target !== config.anchor) {
+                    menu.remove();
+                    document.removeEventListener('click', closer);
+                }
+            };
+            document.addEventListener('click', closer);
+        }, 10);
+
+        return menu;
     }
 };
+
 // Bind to window for globally decoupled extensions
 window.UIFactory = UIFactory;
 export function openSelectorModal(title, items, onSelect) {

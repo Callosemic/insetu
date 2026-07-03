@@ -169,7 +169,7 @@ def resolve_file_bucket(filepath, sub_buckets):
                 module_idx = len([p for p in prefix.split('/') if p and p != '.'])
                 if len(parts) > module_idx + 1:
                     return b, parts[module_idx]
-                return b, "misc"
+                continue # Let boundary files fall through to explicit buckets or the catch-all
         elif b.get("match_prefixes") and any(filepath.startswith(p) for p in b["match_prefixes"]):
             return b, None
 
@@ -194,11 +194,18 @@ def generate_context_file(workspace_id=None):
     from insetu.utils_core import load_config, get_gather_paths, get_workspace_physics
     paths = get_gather_paths(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
-
     # Pre-flight purge: destroy all stale contexts to prevent ghost files
+    import time
+    now_ts = time.time()
     for f in os.listdir(paths["contexts_dir"]):
         f_path = os.path.join(paths["contexts_dir"], f)
-        if os.path.isfile(f_path): os.remove(f_path)
+        if os.path.isfile(f_path):
+            if f.startswith("quick_pack_"):
+                # 24-hour TTL (86400 seconds) for ad-hoc clipboard packs
+                if now_ts - os.path.getmtime(f_path) > 86400:
+                    os.remove(f_path)
+            else:
+                os.remove(f_path)
 
     live_cfg = load_config(workspace_id)
     from insetu.utils_core import get_safe_repo_id
@@ -279,7 +286,6 @@ def generate_context_file(workspace_id=None):
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
-
     # --- COMPILE CONTEXT BATCHES ---
     from insetu.utils_core import load_workflows
     w_cfg = load_workflows(workspace_id)
@@ -287,9 +293,118 @@ def generate_context_file(workspace_id=None):
     for batch in context_batches:
         compile_batch(batch, workspace_id)
 
-    with open(os.path.join(paths["contexts_dir"], "manifest.json"), 
+    # Re-inject surviving Quick-Packs into the manifest so they persist through background compiles
+    for f in os.listdir(paths["contexts_dir"]):
+        if f.startswith("quick_pack_") and f.endswith(".txt"):
+            manifest[f] = [f"data/contexts/{f}"]
+
+    with open(os.path.join(paths["contexts_dir"], 
+        "manifest.json"), 
         "w", encoding="utf-8") as f:
         json.dump(manifest, f)
+
+@gather_bp.route('/api/<workspace_id>/gather/quick-pack', methods=['POST'])
+def api_gather_quick_pack(workspace_id):
+    """Stateless generator for ephemeral, ad-hoc context payloads without disk pollution."""
+    data = request.json
+    target_dir = data.get('target_dir', '').strip()
+    recursive = data.get('recursive', False)
+    specific_files = data.get('specific_files', None)
+
+    if not target_dir:
+        return jsonify({"error": "Target directory required."}), 400
+
+    from insetu.utils_core import get_omniscient_workspace_files, get_workspace_physics
+    repo = target_dir.split('/')[0]
+
+    # SSOT Cartography: Pull exclusively from allowed files, protecting .git and node_modules
+    all_files = get_omniscient_workspace_files(workspace_id, [repo])
+
+    matched_files = []
+    target_prefix = target_dir + '/' if target_dir else ''
+
+    for filename, rel_path in all_files:
+        if not rel_path.startswith(target_prefix) and target_dir != repo: 
+            continue
+
+        if specific_files is not None:
+            if rel_path in specific_files:
+                matched_files.append(rel_path)
+            continue
+
+        if not recursive:
+            # Enforce 1-level depth by counting spatial slashes relative to the target
+            target_depth = target_dir.count('/')
+            file_depth = rel_path.count('/')
+            if file_depth > target_depth + (1 if target_dir else 0):
+                continue
+
+        matched_files.append(rel_path)
+
+    if not matched_files:
+        return jsonify({"error": "No valid tracked files found in the specified path."}), 404
+
+    _, ws_root, _ = get_workspace_physics(workspace_id)
+    out_lines = []
+    out_lines.append("="*60)
+    out_lines.append(f"INSETU AD-HOC CONTEXT PAYLOAD ({target_dir})")
+    out_lines.append("="*60)
+    out_lines.append("")
+
+    out_lines.append(generate_ascii_tree(matched_files))
+    out_lines.append("\n")
+    for rel_path in sorted(matched_files):
+        abs_path = os.path.join(ws_root, rel_path)
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n{content}\n\n")
+        except Exception as e:
+            out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
+    import time
+    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
+
+    safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
+    filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
+    paths = get_gather_paths(workspace_id)
+    out_path = os.path.join(paths["contexts_dir"], filename)
+
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write("\n".join(out_lines))
+
+    # Eagerly inject into the manifest using SSOT caching functions
+    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest = load_json_file(manifest_path, {})
+    manifest[filename] = [f"data/contexts/{filename}"]
+    save_json_file(manifest_path, manifest)
+
+    return jsonify({"status": "success", "filename": filename})
+@gather_bp.route('/api/<workspace_id>/gather/quick-pack/clear', methods=['POST'])
+def api_gather_quick_pack_clear(workspace_id):
+    import os
+    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
+    paths = get_gather_paths(workspace_id)
+
+    count = 0
+    if os.path.exists(paths["contexts_dir"]):
+        for f in os.listdir(paths["contexts_dir"]):
+            if f.startswith("quick_pack_") and f.endswith(".txt"):
+                try:
+                    os.remove(os.path.join(paths["contexts_dir"], f))
+                    count += 1
+                except Exception: pass
+
+    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest = load_json_file(manifest_path, {})
+
+    keys_to_remove = [k for k in manifest.keys() if k.startswith("quick_pack_")]
+    if keys_to_remove:
+        for k in keys_to_remove:
+            del manifest[k]
+        save_json_file(manifest_path, manifest)
+
+    return jsonify({"status": "success", "cleared": count})
+
 def compile_batch(batch, workspace_id=None):
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)

@@ -12,6 +12,74 @@ let currentModalFile = '';
 export let currentModalOriginalText = '';
 export let currentModalIsFS = false;
 let isPreviewMode = false;
+let currentModalFullText = '';
+let isModalTruncated = false;
+let currentModalForceEdit = false;
+export let currentModalIsMemoryOnly = false;
+
+window.loadFullModalText = function() {
+    const banner = document.getElementById('modal-truncation-banner');
+    if (banner) banner.style.display = 'none';
+    isModalTruncated = false;
+
+    const ext = currentModalFile.split('.').pop().toLowerCase();
+    const modeMap = { 'md': 'markdown', 'py': 'python', 'js': 'javascript', 'json': 'javascript', 'sh': 'shell' };
+    const isSupportedEditor = !!modeMap[ext] || currentModalForceEdit;
+    const isMarkdown = ext === 'md' || currentModalForceEdit;
+    const shouldBeReadOnly = !(currentModalIsFS || currentModalForceEdit);
+
+    const textArea = document.getElementById('modal-text');
+
+    if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+        mdeInstance.value(currentModalFullText);
+        mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
+    } else {
+        textArea.value = currentModalFullText;
+        textArea.readOnly = shouldBeReadOnly;
+    }
+
+    currentModalOriginalText = currentModalFullText;
+    if (isMarkdown && isPreviewMode) renderMarkdownPreview();
+};
+
+function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
+    const TRUNCATE_LIMIT = 200000;
+    currentModalFullText = text;
+    const banner = document.getElementById('modal-truncation-banner');
+    const textArea = document.getElementById('modal-text');
+    const shouldBeReadOnly = !(isFS || forceAllowEdit);
+
+    if (text.length > TRUNCATE_LIMIT) {
+        isModalTruncated = true;
+        const textToRender = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
+        const kbSize = Math.round(text.length / 1024);
+        document.getElementById('modal-truncation-msg').innerHTML = `⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.`;
+        if (banner) banner.style.display = 'flex';
+
+        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+            mdeInstance.value(textToRender);
+            mdeInstance.codemirror.setOption("readOnly", "nocursor"); // Lock while truncated to prevent accidental overwrites
+        } else {
+            textArea.value = textToRender;
+            textArea.readOnly = true;
+        }
+        currentModalOriginalText = textToRender;
+    } else {
+        isModalTruncated = false;
+        if (banner) banner.style.display = 'none';
+        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+            mdeInstance.value(text);
+            mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
+        } else {
+            textArea.value = text;
+            textArea.readOnly = shouldBeReadOnly;
+        }
+        currentModalOriginalText = text;
+    }
+
+    if (isMarkdown && isPreviewMode) renderMarkdownPreview();
+}
+
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
     const res = await fetch(fetchUrl, fetchOptions);
     if (!res.ok) throw new Error('Download failed from server.');
@@ -227,10 +295,11 @@ function toggleModalMode() {
         toggleBtn.innerText = '👁️ Preview';
     }
 }
-
 async function viewAndCopy(filename) {
     currentModalFile = filename;
     currentModalIsFS = false;
+    currentModalForceEdit = false;
+    currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filename;
 
     const textArea = document.getElementById('modal-text');
@@ -256,9 +325,8 @@ async function viewAndCopy(filename) {
         textArea.value = "Loading...";
         textArea.readOnly = true;
     }
-
     document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('copy-modal').style.display = 'block';
+    document.getElementById('file-modal').style.display = 'block';
     closeBrowseModal();
     document.getElementById('modal-edit-toolbar').style.display = 'none';
 
@@ -290,10 +358,7 @@ async function viewAndCopy(filename) {
         const res = await fetch(`/download/${filename}`);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(text);
-        else textArea.value = text;
-        currentModalOriginalText = text;
-        if (isMarkdown && isPreviewMode) renderMarkdownPreview();
+        injectTextToModal(text, isSupportedEditor, isMarkdown, false);
     } catch (e) {
         const errText = "Error loading file content.";
         if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
@@ -369,11 +434,10 @@ async function saveModalFile(autoSave = false) {
         }
     });
 }
-
 function copyFromModal() {
     const text = document.getElementById('modal-text').value;
     navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('#copy-modal button[style*="10b981"]');
+        const btn = document.querySelector('#file-modal button[style*="10b981"]');
         const origText = btn.innerText;
         btn.innerText = "✅ Copied!";
         setTimeout(() => btn.innerText = origText, 2000);
@@ -415,7 +479,8 @@ async function executeMove(modalId = 'move-modal') {
             if (window.UIFactory) window.UIFactory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
 
-            document.getElementById('copy-modal').style.display = 'none';
+            document.getElementById('file-modal').style.display = 'none';
+
             updateManifestState(currentModalFile, destPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
@@ -433,7 +498,7 @@ async function archiveModalFile() {
     }, {
         onSuccess: () => {
             const oldPath = currentModalFile;
-            document.getElementById('copy-modal').style.display = 'none';
+            document.getElementById('file-modal').style.display = 'none';
             updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
@@ -451,7 +516,7 @@ async function deleteModalFile() {
     }, {
         onSuccess: () => {
             const oldPath = currentModalFile;
-            document.getElementById('copy-modal').style.display = 'none';
+            document.getElementById('file-modal').style.display = 'none';
             updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
@@ -502,15 +567,102 @@ function cleanModalFile() {
         window.saveModalFile(true);
     }
 }
+window.bindDownloadDrag = function(e, filename, fetchUrl) {
+    const absoluteUrl = window.location.origin + fetchUrl;
+    const safeName = filename.split('/').pop();
+    const ext = safeName.split('.').pop().toLowerCase();
+
+    let mime = 'application/octet-stream';
+    if (ext === 'md') mime = 'text/markdown';
+    else if (ext === 'txt') mime = 'text/plain';
+    else if (ext === 'json') mime = 'application/json';
+    else if (ext === 'py') mime = 'text/x-python';
+    else if (ext === 'js') mime = 'text/javascript';
+
+    // 1. Generate a custom File Label ghost image
+    const ghost = document.createElement('div');
+    ghost.style.cssText = 'position: absolute; top: -1000px; left: -1000px; background: var(--pane-bg); color: var(--text); border: 1px solid var(--btn); padding: 8px 12px; border-radius: 4px; font-family: monospace; font-weight: bold; z-index: -1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
+    ghost.innerText = `📄 ${safeName}`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 15, 15);
+
+    // Clean up the DOM immediately after the browser snapshots it
+    setTimeout(() => ghost.remove(), 50);
+
+    // 2. Set OS-Level payload
+    e.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${absoluteUrl}`);
+
+    // 3. Set Browser-to-Browser fallbacks
+    e.dataTransfer.setData('text/uri-list', absoluteUrl);
+    e.dataTransfer.setData('text/plain', absoluteUrl);
+
+    e.dataTransfer.effectAllowed = 'copy';
+};
+
+window.modalDragStart = function(e) {
+    // Memory-only files (like immediate Quick-Packs) don't have a backend route to drag from.
+    if (typeof currentModalIsMemoryOnly !== 'undefined' && currentModalIsMemoryOnly) {
+        e.preventDefault();
+        return;
+    }
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+    window.bindDownloadDrag(e, currentModalFile, fetchUrl);
+};
+
 async function downloadFromModal() {
     const btn = document.getElementById('modal-dl-btn');
     if (!btn) return;
     const origText = btn.innerText;
     btn.innerText = '⏳...';
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
-        await downloadFile(fetchUrl, currentModalFile.split('/').pop());
+        if (currentModalIsMemoryOnly) {
+            let text = '';
+            const mdeWrap = document.querySelector('.EasyMDEContainer');
+            if (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined' && mdeInstance) {
+                text = mdeInstance.value();
+            } else {
+                text = document.getElementById('modal-text').value;
+            }
+
+            // If the UI is currently truncating the text for performance, 
+            // ensure we download the full underlying string instead.
+            if (isModalTruncated) {
+                text = currentModalFullText;
+            }
+
+            const blob = new Blob([text], { type: 'text/plain' });
+
+            // Mobile Device native Share Sheet handler
+            if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                try {
+                    const nativeFile = new File([blob], currentModalFile, { type: 'text/plain' });
+                    await navigator.share({
+                        files: [nativeFile],
+                        title: currentModalFile,
+                        text: `inSetu Developer OS Context Matrix: ${currentModalFile}`
+                    });
+                    btn.innerText = origText;
+                    return;
+                } catch (shareError) {
+                    if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
+                }
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = currentModalFile;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        } else {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+            await downloadFile(fetchUrl, currentModalFile.split('/').pop());
+        }
     } catch (e) {
         alert("Error downloading file: " + e.message);
     } finally {
@@ -562,7 +714,6 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
             actionsContainer: actions
         });
     }
-
     const dlBtn = document.createElement('button');
     dlBtn.className = 'btn-sm';
     dlBtn.style.background = '#0284c7';
@@ -570,6 +721,17 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     dlBtn.style.border = 'none';
     dlBtn.style.cursor = 'pointer';
     dlBtn.innerText = '⬇️ DL';
+    // Native Desktop Drag-and-Drop (Out of Browser)
+    dlBtn.draggable = true;
+    dlBtn.addEventListener('dragstart', (e) => {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const fetchUrl = fileInfo.isSource ?
+            `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+        const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
+
+        window.bindDownloadDrag(e, safeName, fetchUrl);
+    });
+
     dlBtn.onclick = async () => {
         const origText = dlBtn.innerText;
         dlBtn.innerText = '⏳...';
@@ -722,10 +884,14 @@ function renderGlobalFSLevel() {
     if (btnNewFolder) {
         btnNewFolder.innerText = globalBrowsePath.length === 0 ? '+ Repo' : '+ Folder';
     }
-
     const btnNewFile = document.getElementById('btn-new-file');
     if (btnNewFile) {
         btnNewFile.style.display = globalBrowsePath.length === 0 ? 'none' : 'block';
+    }
+
+    const btnFsMore = document.getElementById('btn-fs-more');
+    if (btnFsMore) {
+        btnFsMore.style.display = globalBrowsePath.length === 0 ? 'none' : 'block';
     }
 
     const upBtn = document.getElementById('global-fs-up-btn');
@@ -1075,10 +1241,11 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
         btn.innerText = origText;
     }
 }
-
 export async function viewSourceFile(filepath, isFS = false) {
     currentModalFile = filepath;
     currentModalIsFS = isFS;
+    currentModalForceEdit = false;
+    currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filepath;
     const textArea = document.getElementById('modal-text');
     const preview = document.getElementById('modal-preview');
@@ -1104,7 +1271,7 @@ export async function viewSourceFile(filepath, isFS = false) {
         textArea.readOnly = !isFS;
     }
     document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('copy-modal').style.display = 'block';
+    document.getElementById('file-modal').style.display = 'block';
     closeBrowseModal();
     const tb = document.getElementById('modal-edit-toolbar');
     if (isFS) {
@@ -1155,10 +1322,7 @@ export async function viewSourceFile(filepath, isFS = false) {
         const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(text);
-        else textArea.value = text;
-        currentModalOriginalText = text;
-        if (isMarkdown && isPreviewMode) renderMarkdownPreview();
+        injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
         const errText = "Error loading file content.";
         if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
@@ -1397,22 +1561,20 @@ export function openBrowseModal(contextFilename) {
 export function openVirtualFile(filename, content) {
     currentModalFile = filename;
     currentModalIsFS = false;
+    currentModalIsMemoryOnly = true;
     document.getElementById('modal-title').innerText = filename;
     const textArea = document.getElementById('modal-text');
     const preview = document.getElementById('modal-preview');
     const toggleBtn = document.getElementById('modal-toggle-btn');
 
     if (typeof mdeInstance !== 'undefined' && mdeInstance) {
-        mdeInstance.value(content);
         mdeInstance.codemirror.setOption("mode", "markdown");
-        mdeInstance.codemirror.setOption("readOnly", false);
-    } else {
-        textArea.value = content;
-        textArea.readOnly = false;
     }
 
+    currentModalForceEdit = true;
+    injectTextToModal(content, (typeof mdeInstance !== 'undefined' && !!mdeInstance), true, false, true);
     document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('copy-modal').style.display = 'block';
+    document.getElementById('file-modal').style.display = 'block';
     closeBrowseModal();
     document.getElementById('modal-edit-toolbar').style.display = 'none';
 
@@ -1428,8 +1590,6 @@ export function openVirtualFile(filename, content) {
     } else {
         textArea.style.display = 'block';
     }
-
-    currentModalOriginalText = content;
 }
 
 // Window Bindings
@@ -1574,6 +1734,129 @@ window.openFolderBrowser = openFolderBrowser;
 window.confirmFolderSelection = confirmFolderSelection;
 window.clearBrowseSearch = clearBrowseSearch;
 window.filterBrowse = filterBrowse;
+export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
+    setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
+    try {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/gather/quick-pack`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_dir: targetDir,
+                recursive: recursive,
+                specific_files: specificFiles
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to generate context.");
+
+        // Open the physical file that was just written to disk natively
+        viewAndCopy(data.filename);
+
+        // Silently re-hydrate the manifest state to reactively update the UI without hitting the heavy `/submit` compiler
+        const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+        if (mRes.ok) {
+            AppStore.setState({ manifest: await mRes.json() });
+        }
+
+        setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
+    } catch (e) {
+        alert("Error creating quick-pack: " + e.message);
+        setGlobalStatus("❌ Quick-Pack failed", 3000, true);
+    }
+}
+export async function openQuickPackModal(targetDir) {
+    let current = globalFileTree;
+    for (const p of globalBrowsePath) {
+        if (current[p]) current = current[p];
+        else break;
+    }
+
+    const fileKeys = Object.keys(current).filter(k => k !== '_isFile' && current[k]._isFile).sort();
+
+    if (fileKeys.length === 0) {
+        alert("No files available in this directory to pack.");
+        return;
+    }
+
+    // State Tracking (Zero DOM Reading)
+    const selectedFiles = new Set();
+
+    let checkboxesHtml = '';
+    fileKeys.forEach((key, index) => {
+        const fullPath = current[key].fullPath;
+        selectedFiles.add(fullPath); // Default all to checked
+
+        checkboxesHtml += `
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
+                <input type="checkbox" id="qp-cb-${index}" value="${fullPath}" style="cursor: pointer; transform: scale(1.2);" checked 
+                    onchange="if(this.checked) { window._qpSet.add(this.value); } else { window._qpSet.delete(this.value); }">
+                <label for="qp-cb-${index}" style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);">${key}</label>
+            </div>
+        `;
+    });
+
+    // Expose transient state to the DOM string handlers
+    window._qpSet = selectedFiles;
+
+    window.UIFactory.createModal({
+        id: 'quick-pack-modal-' + Date.now(),
+        title: `Quick-Pack Select: ${targetDir}`,
+        body: `<div style="display: flex; flex-direction: column; gap: 5px; max-height: 50vh; overflow-y: auto; padding-right: 10px;">${checkboxesHtml}</div>`,
+        actions: [
+            { label: '📦 Pack Selected', style: 'primary', onClick: (e, modal) => {
+                const selectedArray = Array.from(window._qpSet);
+                if (selectedArray.length === 0) {
+                    alert("Please select at least one file.");
+                    return true;
+                }
+                executeQuickPack(targetDir, false, selectedArray);
+                delete window._qpSet; // Clean up transient state
+                return false;
+            }}
+        ]
+    });
+}
+export function openFsDropdown(anchorElement) {
+    if (!window.UIFactory || !window.UIFactory.createDropdown) return;
+
+    const currentPath = globalBrowsePath.join('/');
+
+    window.UIFactory.createDropdown({
+        anchor: anchorElement,
+        items: [
+            { label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) },
+            { label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) },
+            { divider: true },
+            { label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) }
+        ]
+    });
+}
+
+window.openFsDropdown = openFsDropdown;
+export async function clearQuickPacks() {
+    if (!confirm("Clear all Quick-Pack clipboard items?")) return;
+    setGlobalStatus("⏳ Clearing Clipboard...", null);
+    try {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/gather/quick-pack/clear`, {
+            method: 'POST'
+        });
+        if (!res.ok) throw new Error("Failed to clear quick-packs.");
+
+        const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+        if (mRes.ok) {
+            AppStore.setState({ manifest: await mRes.json() });
+        }
+
+        setGlobalStatus("✅ Clipboard cleared!", 2000);
+    } catch (e) {
+        alert("Error clearing clipboard: " + e.message);
+        setGlobalStatus("❌ Clear failed", 3000, true);
+    }
+}
+
+window.clearQuickPacks = clearQuickPacks;
 
 let activeLinkTab = 'filename';
 let linkSearchTimeout = null;

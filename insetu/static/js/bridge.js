@@ -185,17 +185,17 @@ export function sync(dryRunActive, bypassSandwich = false) {
         .then(res => res.text())
         .then(data => {
             let safeData = data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \| (.*?) \| (.*?) \]/g, (match, p1, p2) => {
-                const safeP1 = p1.replace(/\\/g, '\\\\');
-                const safeP2 = p2.replace(/\\/g, '\\\\');
+            safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
+                const safeP1 = p1.trim().replace(/\\/g, '\\\\');
+                const safeP2 = p2.trim().replace(/\\/g, '\\\\');
                 if (safeP1 === safeP2) return `<br><span style="color: #ef4444; font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
                 return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: #0284c7; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
             });
-            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \| (.*?) \]/g, (match, b64err) => {
-                return `<br><button type="button" onclick="navigator.clipboard.writeText(atob('${b64err}')); this.innerText='✅ Error Copied!'; setTimeout(()=>this.innerText='📋 Copy Error', 2000)" class="btn-sm" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">📋 Copy Error</button>`;
+            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
+                return `<br><button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Error Copied!'; setTimeout(()=>this.innerText='📋 Copy Error', 2000)" class="btn-sm" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">📋 Copy Error</button>`;
             });
-            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \| (.*?) \]/g, (match, p1) => {
-                const safeP1 = p1.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
+                const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
                 <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: #10b981; margin: 0;">📋 Copy State</button>
                 <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7; margin: 0;">⬇️ Download State</button>

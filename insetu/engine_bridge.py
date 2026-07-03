@@ -1,6 +1,16 @@
 import os
 import re
-from insetu.utils_core import resolve_workspace_path, get_sister_repos
+import io
+import random
+import datetime
+import ast
+import json
+import subprocess
+import base64
+import difflib
+from contextlib import redirect_stdout
+from insetu.utils_core import resolve_workspace_path, get_sister_repos, get_workspace_physics, load_config, get_omniscient_workspace_files
+
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., {{ ` * 3 }} or {{ = * 7 }}
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)
@@ -8,6 +18,9 @@ def expand_macros(text):
     text = re.sub(r'_(?:[^_\n]_){3,}', lambda m: m.group(0).replace('_', ''), text)
     text = re.sub(r'\x5b\x73\x6f\x75\x72\x63\x65\x3a\x5c\x73\x2a\x5c\x64\x2b\x5d', '', text)
     text = re.sub(r'\x5b\x63\x69\x74\x65\x3a\x5c\x73\x2a\x5b\x5c\x64\x5c\x73\x2c\x5d\x2b\x5d', '', text)
+    text = re.sub(r'\x5b\x63\x69\x74\x65\x5f\x73\x74\x61\x72\x74\x5d', '', text)
+    text = re.sub(r'\x5b\x63\x69\x74\x65\x5f\x65\x6e\x64\x5d', '', text)
+    text = re.sub(r'\x5b\x63\x69\x74\x65\x5d', '', text)
     return text
 
 def parse_blocks(text):
@@ -175,7 +188,6 @@ def apply_block_in_memory(content, block, silent=False):
                     if f_stripped[i:i+n] == r_stripped:
                         if not silent: print("  └─ ℹ️  Idempotency: REPLACE block already present in target. Skipping chunk.")
                         return True, content
-                    
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
             import re
@@ -193,6 +205,20 @@ def apply_block_in_memory(content, block, silent=False):
                     return True, content[:start_idx] + replace_str.lstrip('\n') + content[match.end():]
             except Exception:
                 pass
+        if not silent:
+            # Heuristic Error Analysis: Find the closest matching window via optimized SequenceMatcher
+            matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
+            match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
+
+            best_f_idx = match.a
+            actual_lines = file_lines[best_f_idx : best_f_idx + len(search_lines)]
+
+            diff = list(difflib.ndiff(actual_lines, search_lines))
+            diff_str = "\n".join(diff)
+
+            err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
+            print("  └─ 🔍 DIFF ANALYSIS: The closest block on disk differed from your SEARCH block.")
+            print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
 
         return False, content
     llm_base_indent = len(search_lines[baseline_s_idx]) - len(search_lines[baseline_s_idx].lstrip()) if baseline_s_idx != -1 else 0
@@ -241,20 +267,7 @@ def apply_block_in_memory(content, block, silent=False):
         new_replace_lines.append((" " * target_indent) + r_line.lstrip())
 
     return True, "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:])
-
-
 def execute_bridge_sync(workspace_id, data):
-    import io
-    import random
-    import datetime
-    import os
-    import ast
-    import json
-    import subprocess
-    import base64
-    from contextlib import redirect_stdout
-    from insetu.utils_core import resolve_workspace_path, get_sister_repos, get_workspace_physics, load_config, get_omniscient_workspace_files
-
     out = io.StringIO()
     sister_repos = get_sister_repos(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
@@ -402,20 +415,15 @@ def execute_bridge_sync(workspace_id, data):
                             print(f"  [ACTION_REQUIRED: COPY_STATE |\n{target_file} ]")
                         file_success = False
                         break
-
                 # --- PRE-FLIGHT SYNTAX VALIDATION ---
                 if file_success:
                     ext = os.path.splitext(target_file)[1].lower()
                     try:
                         if ext == '.py':
-                            import ast
                             ast.parse(working_content)
                         elif ext == '.json':
-                            import json
                             json.loads(working_content)
                         elif ext == '.js':
-                            import subprocess
-                            import base64
                             try:
                                 res = subprocess.run(
                                     ['node', '--input-type=module', '-c'], 
@@ -434,7 +442,6 @@ def execute_bridge_sync(workspace_id, data):
                             except FileNotFoundError:
                                 print(f"  [~] Warning: Node.js not found in PATH. Skipping JS syntax validation for {target_file}.")
                     except SyntaxError as e:
-                        import base64
                         err_str = f"Line {e.lineno}: {e.msg}"
                         err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
                         print(f"  [!] SYNTAX ERROR: Patch introduces invalid Python syntax in {target_file}.")
@@ -443,7 +450,6 @@ def execute_bridge_sync(workspace_id, data):
                         print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
                         file_success = False
                     except ValueError as e:
-                        import base64
                         err_str = str(e)
                         err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
                         print(f"  [!] SYNTAX ERROR: Patch introduces invalid JSON syntax in {target_file}.")
