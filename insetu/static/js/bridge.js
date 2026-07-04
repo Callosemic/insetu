@@ -41,6 +41,34 @@ export const BridgeStore = createStore(
         { name: 'BridgeStore' }
     )
 );
+export function renderRepoPins(state) {
+    const container = document.getElementById('repo-pins');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const lbl = document.createElement('span');
+    lbl.innerText = "📌 Repos:";
+    lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap;";
+    container.appendChild(lbl);
+
+    const onChange = (newPins) => {
+        localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(newPins)));
+        AppStore.setState({ pinnedRepos: newPins });
+    };
+
+    const allPill = window.UIFactory.createFilterPill({ id: "ALL", label: "All", activeSet: state.pinnedRepos, onChange });
+    if (allPill) container.appendChild(allPill);
+
+    state.allRepos.forEach(repo => {
+        const p = window.UIFactory.createFilterPill({ id: repo, label: repo, activeSet: state.pinnedRepos, onChange });
+        if (p) container.appendChild(p);
+    });
+}
+
+// Subscribe the DOM strictly to state updates using Zustand Selectors
+AppStore.subscribe((state) => state.pinnedRepos, () => renderRepoPins(AppStore.getState()));
+AppStore.subscribe((state) => state.allRepos, () => renderRepoPins(AppStore.getState()));
+setTimeout(() => renderRepoPins(AppStore.getState()), 100);
 
 export function resetStatus() {
     const sb = document.getElementById('status-box');
@@ -192,7 +220,10 @@ export function sync(dryRunActive, bypassSandwich = false) {
                 return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: #0284c7; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
             });
             safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
-                return `<br><button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Error Copied!'; setTimeout(()=>this.innerText='📋 Copy Error', 2000)" class="btn-sm" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">📋 Copy Error</button>`;
+                return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
+                    <button type="button" onclick="if(window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob('${b64err.trim()}'));" class="btn-sm" style="background: #ef4444; margin: 0;">👁️ View Diff</button>
+                    <button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Diff', 2000)" class="btn-sm" style="background: #64748b; margin: 0;">📋 Copy Diff</button>
+                </div>`;
             });
             safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
                 const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");

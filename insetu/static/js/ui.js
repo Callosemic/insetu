@@ -90,6 +90,132 @@ export const UIFactory = {
         const el = document.getElementById(id);
         if (el) el.remove();
     },
+    createNestedRepoFilters: function(config) {
+        const {
+            container,
+            label = "📌 Repos:",
+            repos,
+            activeRepos,
+            reposExpanded,
+            onRepoChange,
+            onRepoExpandToggle,
+            extraRepos = [],
+            enableBuckets = false,
+            activeBuckets = new Set(),
+            bucketsExpandedMap = {},
+            onBucketChange,
+            onBucketExpandToggle,
+            getBucketsFn
+        } = config;
+
+        container.innerHTML = '';
+        const wrap = document.createElement('div');
+        wrap.style.cssText = "display: flex; align-items: center; flex-wrap: wrap; gap: 6px;";
+
+        const lbl = document.createElement('span');
+        lbl.innerText = label;
+        lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; cursor: pointer;";
+        if (onRepoExpandToggle) lbl.onclick = onRepoExpandToggle;
+        wrap.appendChild(lbl);
+        const createRPill = (id, text, forceVisible = false) => {
+            const isVisible = forceVisible || activeRepos.has(id) || reposExpanded;
+            return this.createFilterPill({
+                id: id, label: text, activeSet: activeRepos, isVisible,
+                onChange: (newSet, changedId, wasActive) => {
+                    if (wasActive && !reposExpanded) {
+                        if (onRepoExpandToggle) onRepoExpandToggle();
+                    } else {
+                        if (onRepoChange) onRepoChange(newSet);
+                    }
+                }
+            });
+        };
+
+        const allPill = createRPill("ALL", "All", true);
+        if (allPill) wrap.appendChild(allPill);
+
+        extraRepos.forEach(ex => {
+            const p = createRPill(ex.id, ex.label);
+            if (p) wrap.appendChild(p);
+        });
+
+        repos.forEach(repo => {
+            const p = createRPill(repo, repo);
+            if (p) wrap.appendChild(p);
+
+            if (enableBuckets && activeRepos.has(repo) && repo !== "ALL") {
+                const buckets = getBucketsFn ? getBucketsFn(repo) : [];
+                if (buckets.length > 0) {
+                    const bWrap = document.createElement('span');
+                    bWrap.style.cssText = "display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; background: var(--input-bg); padding: 4px; border-radius: 6px; border: 1px solid var(--border); margin-left: 2px;";
+
+                    const bLbl = document.createElement('span');
+                    bLbl.innerText = "🗂️";
+                    bLbl.style.cssText = "font-size: 0.75rem; margin-right: 2px; cursor: pointer;";
+                    const isBExpanded = bucketsExpandedMap[repo] || false;
+
+                    if (onBucketExpandToggle) bLbl.onclick = () => onBucketExpandToggle(repo, !isBExpanded);
+                    bWrap.appendChild(bLbl);
+                    const createBPill = (bId, bLabel, forceVisible = false) => {
+                        const isVisible = forceVisible || activeBuckets.has(bId) || isBExpanded;
+                        return this.createFilterPill({
+                            id: bId, label: bLabel, activeSet: activeBuckets, isVisible,
+                            styleOverride: { padding: '2px 6px', fontSize: '0.7rem' },
+                            onChange: (newSet, changedId, wasActive) => {
+                                if (wasActive && !isBExpanded) {
+                                    if (onBucketExpandToggle) onBucketExpandToggle(repo, true);
+                                } else {
+                                    if (onBucketChange) onBucketChange(newSet, repo);
+                                }
+                            }
+                        });
+                    };
+
+                    const bAll = createBPill("ALL", "All", true);
+                    if (bAll) bWrap.appendChild(bAll);
+                    buckets.forEach(b => {
+                        const bp = createBPill(b.id, b.title);
+                        if (bp) bWrap.appendChild(bp);
+                    });
+                    wrap.appendChild(bWrap);
+                }
+            }
+        });
+        container.appendChild(wrap);
+    },
+
+    createFilterPill: function(config) {
+        if (config.isVisible === false) return null;
+        const isActive = config.activeSet.has(config.id);
+        const btn = document.createElement('button');
+        btn.className = isActive ? 'repo-pill active' : 'repo-pill';
+        btn.innerText = config.label;
+        btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
+
+        if (config.styleOverride) {
+            for (let prop in config.styleOverride) {
+                btn.style[prop] = config.styleOverride[prop];
+            }
+        }
+
+        btn.onclick = () => {
+            const newSet = new Set(config.activeSet);
+            if (config.id === "ALL") {
+                newSet.clear();
+                newSet.add("ALL");
+            } else {
+                newSet.delete("ALL");
+                if (newSet.has(config.id)) {
+                    newSet.delete(config.id);
+                    if (newSet.size === 0) newSet.add("ALL");
+                } else {
+                    newSet.add(config.id);
+                }
+            }
+            if (config.onChange) config.onChange(newSet, config.id, isActive);
+        };
+        return btn;
+    },
 
     createDropdown: function(config) {
         // Destroy existing generic dropdowns to ensure a singleton instance

@@ -151,22 +151,6 @@ def api_fs_search(workspace_id):
     from insetu.utils_core import search_workspace_files
     results = search_workspace_files(workspace_id, query)
     return jsonify({"results": results})
-@fs_bp.route('/api/<workspace_id>/fs/compile-document', methods=['POST'])
-def api_fs_compile_document(workspace_id):
-        data = request.json
-        filepath = data.get('filepath')
-        target_format = data.get('format', 'pdf')
-
-        if not filepath: return jsonify({"error": "Filepath required"}), 400
-
-        try:
-                from insetu.engine_format import compile_document_payload
-                mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
-                return send_file(mem_file, as_attachment=True, download_name=download_name)
-        except FileNotFoundError:
-                return jsonify({"error": "File not found"}), 404
-        except Exception as e:
-                return jsonify({"error": str(e)}), 500
 def execute_vfs_save(workspace_id, filepath, content, data=None):
         """Enqueues file mutations asynchronously to unlock the HTTP thread instantly."""
         if data is None:
@@ -180,12 +164,8 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
         # Push to the background commit pipeline worker
         _VFS_WRITE_QUEUE.put((workspace_id, filepath, content, data))
         return {"status": "accepted", "message": f"File {filepath} queued for atomic background commit."}
-
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
         """Handles the synchronous physical I/O execution loop off-thread."""
-        if "sotu/sotu_" in filepath.lower() and filepath.lower().endswith(".md"):
-                engine_gather.rotate_sotus()
-
         if data.get("is_new_repo"):
                 from insetu.utils_core import get_workspace_physics
                 _, ws_root, _ = get_workspace_physics(workspace_id)

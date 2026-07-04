@@ -168,22 +168,6 @@ def load_config(workspace_id=None):
     from insetu.hooks import hooks
     hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
 
-    # Implicit Repo Injection: Mount  .insetu for the UI, but exclude it from compilers
-    targets = cfg.get("target_repos", [])
-    if not any(r.get("repo_dir") == ".insetu" for r in targets):
-        targets.append({
-            "repo_dir": ".insetu",
-            "title": "inSetu OS",
-            "domain": "System Configuration",
-            "exts": [".json", ".md", ".txt"],
-            "apply_ignore": True,
-            "repo_ignore_dirs": ["data"],
-            "archive_type": "prompt-library",
-            "exclude_from_diffs": True,
-            "exclude_from_tracker": True
-        })
-        cfg["target_repos"] = targets
-        
     return cfg
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
@@ -270,6 +254,7 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
     live_cfg = load_config(workspace_id)
     ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
+    managed_dirs = set(live_cfg.get("managed_dirs", []))
 
     search_roots = [os.path.dirname(cfg_path)]
     for repo in allowed_repos:
@@ -281,16 +266,15 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     candidates = []
     for s_root in search_roots:
         for root, dirs, files in os.walk(s_root):
-            dirs[:] = [d for d in dirs if (not d.startswith('.') or d == '.tracker') and d not in ignore_dirs]
+            dirs[:] = [d for d in dirs if (not d.startswith('.') or d in managed_dirs) and d not in ignore_dirs]
             for f in files:
                 cand_abs = os.path.abspath(os.path.join(root, f)).replace('\\', '/')
                 cand_rel = os.path.relpath(cand_abs, ws_root).replace('\\', '/')
                 candidates.append((f, cand_rel))
     return candidates
-
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
-    return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir") and not repo.get("exclude_from_tracker")]
+    return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
 def resolve_workspace_path(path, workspace_id=None):
     _, workspace_root, _ = get_workspace_physics(workspace_id)
 

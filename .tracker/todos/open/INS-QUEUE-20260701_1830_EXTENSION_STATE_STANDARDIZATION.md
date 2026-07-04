@@ -30,7 +30,7 @@ The standardized extension state model must mirror the structure established in 
     * Relocate ongoing scraping progress meters, search constraints, and active triage data rows out of volatile local script boundaries into the managed state tree.
 - [ ] **Streamline Workspace Eviction Loops (`app.js`):**
     * Catalog all newly generated standalone extension stores, allowing the core `performSoftRefresh` workflow to systematically iterate and clear payload caches without relying on fragile hardcoded checks.
-
 ## Notes / Execution Log
 * **Audit (2026-07-02):** Designated as primary architectural debt alongside the `window.inSetu` namespace consolidation. Fragmented DOM state extraction is required to maintain strict UDF compliance.
 * **Status Update (2026-07-02):** Partially completed. `KanbanStore` and `CitationStore` have successfully implemented Vanilla Zustand configurations. However, `ext_research.js` relies on a custom `ResearchStore` object that lacks the required `devtools` and `subscribeWithSelector` middleware substrates.
+* **Status Update (2026-07-03):** Verified `KanbanStore` and `CitationStore` subscriptions successfully executing DOM rendering, but `ext_research.js` remains a bespoke listener array. Ticket remains open pending complete Zustand migration.

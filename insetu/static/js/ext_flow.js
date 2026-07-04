@@ -1,48 +1,45 @@
-import {
-    executeWorkspaceMutation,
-    compileContexts,
-    fetchAndCopy,
-    fetchAndDownloadState
-} from './app.js';
+// ext_flow.js - Flow (Workflows & Batches) Extension
+import { executeWorkspaceMutation, compileContexts, fetchAndCopy, fetchAndDownloadState } from './app.js';
 import { AppStore } from './store.js';
-window.addEventListener('DOMContentLoaded', () => {
-    const gatherScreen = window.ExtensionRegistry?.registerSubTab('context', 'gather', 'Gather');
-    if (gatherScreen) {
-        gatherScreen.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                <h2 style="margin: 0;">Context Batches & Workflows</h2>
-                <button class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openEditBatchModal()">+ New Batch</button>
-            </div>
-            <div id="gather-loading" class="spinner" style="display: none;">Loading batches...</div>
-            <div id="gather-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
-        `;
-    }
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-        window.ExtensionRegistry.registerUIHook('zone:subtab-changed', (data) => {
-            if (data.parentId === 'context' && data.subId === 'gather') {
-                loadGatherBatches();
-            }
-            return false;
-        });
-        window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
-            if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'gather') {
-                loadGatherBatches();
-            }
-            return false;
-        });
-    }
-});
+const flowScreen = window.ExtensionRegistry?.registerSubTab('context', 'flow', 'Flow');
+if (flowScreen) {
+    flowScreen.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+            <h2 style="margin: 0;">Context Batches & Workflows</h2>
+            <button class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openEditBatchModal()">+ New Batch</button>
+        </div>
+        <div id="flow-loading" class="spinner" style="display: none;">Loading batches...</div>
+        <div id="flow-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
+    `;
+}
 
-export async function loadGatherBatches() {
-    const container = document.getElementById('gather-list');
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:subtab-changed', (data) => {
+        if (data.parentId === 'context' && data.subId === 'flow') {
+            loadFlowBatches();
+        }
+        return false;
+    });
+    window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+        if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'flow') {
+            loadFlowBatches();
+        }
+        return false;
+    });
+}
+
+export async function loadFlowBatches() {
+    const container = document.getElementById('flow-list');
+    if (!container) return;
     container.innerHTML = '<div class="spinner" style="display:block;">Loading batches...</div>';
     try {
         const { activeWorkspace } = AppStore.getState();
-        const res = await fetch(`/api/${activeWorkspace}/batches`);
+        const res = await fetch(`/api/${activeWorkspace}/flow/batches`);
         const data = await res.json();
         AppStore.setState({
             gatherOptions: {
+                ...AppStore.getState().gatherOptions,
                 contexts: data.available_contexts || [],
                 diffs: data.available_diffs || [],
                 prompts: data.available_prompts || [],
@@ -52,7 +49,7 @@ export async function loadGatherBatches() {
         });
         container.innerHTML = '';
         if (!data.batches || data.batches.length === 0) {
-            container.innerHTML = '<p style="color: #888;">No context batches defined in workflows.json.</p>';
+            container.innerHTML = '<p style="color: #888;">No workflow batches defined.</p>';
             return;
         }
 
@@ -62,6 +59,7 @@ export async function loadGatherBatches() {
             if (!categories[domain]) categories[domain] = [];
             categories[domain].push(b);
         });
+        
         const { categoryOrder } = AppStore.getState();
         const sortedCats = Object.keys(categories).sort((a, b) => {
             let iA = categoryOrder.indexOf(a);
@@ -71,12 +69,12 @@ export async function loadGatherBatches() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
+        
         sortedCats.forEach(catName => {
             const heading = document.createElement('div');
             heading.className = 'category-heading';
             heading.innerText = catName;
             container.appendChild(heading);
-
             categories[catName].forEach(b => {
                 const card = document.createElement('div');
                 card.className = 'file-card';
@@ -90,12 +88,12 @@ export async function loadGatherBatches() {
                     </div>
                     <div class="file-desc">${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}</div>
                 `;
-                card.onclick = () => openBatchModal(b);
+                card.onclick = () => window.openBatchModal(b);
 
                 const editBtn = card.querySelector('.edit-batch-btn');
                 editBtn.onclick = (e) => {
                     e.stopPropagation();
-                    openEditBatchModal(b);
+                    window.openEditBatchModal(b);
                 };
 
                 container.appendChild(card);
@@ -105,7 +103,8 @@ export async function loadGatherBatches() {
         container.innerHTML = `<p style="color:red;">Error loading batches: ${e.message}</p>`;
     }
 }
-export function openEditBatchModal(batch = null) {
+
+window.openEditBatchModal = function(batch = null) {
     const { gatherOptions } = AppStore.getState();
     const allFiles = [...gatherOptions.diffs, ...gatherOptions.contexts];
     let currentIncludes = batch && batch.includes ? [...batch.includes] : [];
@@ -124,6 +123,7 @@ export function openEditBatchModal(batch = null) {
             </div>
         `).join('');
     };
+
     window._tempOpenSelectPrompt = () => {
         const { gatherOptions } = AppStore.getState();
         import('./ui.js').then(module => {
@@ -132,7 +132,6 @@ export function openEditBatchModal(batch = null) {
             });
         });
     };
-
     window._tempOpenSelectContexts = () => {
         let checkboxesHtml = '';
         allFiles.forEach((file, index) => {
@@ -227,7 +226,7 @@ onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt
             id: 'eb-delete-btn',
             onClick: async (e, modal) => {
                 if (!confirm("Delete this workflow batch?")) return true;
-                await deleteEditBatch(batch.id, modal.id);
+                await window.deleteEditBatch(batch.id, modal.id);
                 return false;
             }
         });
@@ -237,11 +236,10 @@ onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt
         style: 'primary',
         id: 'eb-save-btn',
         onClick: async (e, modal) => {
-            await saveEditBatch(modal.id, !!batch);
+            await window.saveEditBatch(modal.id, !!batch);
             return true;
         }
     });
-
     window.UIFactory.createModal({
         id: 'edit-batch-modal-' + Date.now(),
         title: batch ? `Edit Batch: ${batch.title || batch.id}` : 'Create New Batch',
@@ -249,39 +247,38 @@ onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt
         actions: actions
     });
 
-    renderSelectedIncludes(); // Initial population
+    renderSelectedIncludes();
 
     const titleInput = document.getElementById('eb-title');
     const idInput = document.getElementById('eb-id');
     titleInput.addEventListener('keyup', (e) => {
-        if (!batch) { // Only update ID if this is a new batch
+        if (!batch) {
             idInput.value = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
         }
     });
-}
-
-export async function deleteEditBatch(batchId, modalId) {
+};
+window.deleteEditBatch = async function(batchId, modalId) {
     const btn = document.getElementById('eb-delete-btn');
     if (btn) btn.innerText = 'Deleting...';
     try {
         const { activeWorkspace } = AppStore.getState();
-        const res = await fetch(`/api/${activeWorkspace}/batches/delete`, {
+        const res = await fetch(`/api/${activeWorkspace}/flow/batches/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: batchId })
         });
         if (res.ok) {
             window.UIFactory.closeModal(modalId);
-            loadGatherBatches();
+            loadFlowBatches();
         } else {
             alert("Failed to delete batch.");
         }
     } catch (e) {
         alert("Network error: " + e.message);
     }
-}
+};
 
-export async function saveEditBatch(modalId, isEditing) {
+window.saveEditBatch = async function(modalId, isEditing) {
     const id = document.getElementById('eb-id').value.trim();
     const title = document.getElementById('eb-title').value.trim();
     const domain = document.getElementById('eb-domain').value.trim() || "Workflows";
@@ -291,12 +288,7 @@ export async function saveEditBatch(modalId, isEditing) {
     const includes = [];
     document.querySelectorAll('.eb-hidden-include').forEach(el => includes.push(el.value));
 
-    const payload = {
-        id: id,
-        title: title,
-        domain: domain,
-        includes: includes
-    };
+    const payload = { id, title, domain, includes };
 
     if (document.getElementById('eb-has-prompt').checked) {
         const promptVal = document.getElementById('eb-prompt-select').value;
@@ -306,26 +298,22 @@ export async function saveEditBatch(modalId, isEditing) {
     if (document.getElementById('eb-has-response').checked) {
         const resVal = document.getElementById('eb-response-path').value.trim();
         if (resVal) payload.response_path = resVal;
-
         const archVal = document.getElementById('eb-archive-path').value.trim();
         if (archVal) payload.archive_path = archVal;
     }
-
     const btn = document.getElementById('eb-save-btn');
     const origText = btn ? btn.innerText : 'Save';
     if (btn) btn.innerText = 'Saving...';
     try {
         const { activeWorkspace } = AppStore.getState();
-        const res = await fetch(`/api/${activeWorkspace}/batches/save`, {
+        const res = await fetch(`/api/${activeWorkspace}/flow/batches/save`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (res.ok) {
             window.UIFactory.closeModal(modalId);
-            loadGatherBatches();
+            loadFlowBatches();
         } else {
             alert("Failed to save batch.");
         }
@@ -334,11 +322,11 @@ export async function saveEditBatch(modalId, isEditing) {
     } finally {
         if (document.getElementById('eb-save-btn')) document.getElementById('eb-save-btn').innerText = origText;
     }
-}
-export function openBatchModal(batch) {
+};
+window.openBatchModal = function(batch) {
     const { gatherOptions, activeWorkspace } = AppStore.getState();
-    const artifactsDir = ".insetu/data";
-    const profileDir = ".insetu";
+    const artifactsDir = gatherOptions.artifactsDir || ".insetu/profiles/default/data";
+    const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
     const contextFile = `${batch.id}_context.txt`;
 
     const now = new Date();
@@ -389,15 +377,17 @@ export function openBatchModal(batch) {
     document.getElementById('batch-copy-context-btn').onclick = function() { window.fetchAndCopy(`${artifactsDir}/workflows/${contextFile}`, this); };
     const dlBtn = document.getElementById('batch-dl-context-btn');
     dlBtn.onclick = function() { window.fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, this); };
+
     dlBtn.addEventListener('dragstart', (e) => {
         const fetchUrl = `/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(artifactsDir + '/workflows/' + contextFile)}`;
         if (window.bindDownloadDrag) window.bindDownloadDrag(e, contextFile, fetchUrl);
     });
+
     if (batch.include_prompt) {
         const promptTextArea = document.getElementById('batch-prompt-text');
         const promptPath = profileDir + '/' + batch.include_prompt;
         fetch(`/api/${activeWorkspace}/prompts/resolve?file=${encodeURIComponent(promptPath)}`)
-            .then(res => res.ok ? res.text() : Promise.reject(new Error("File not found")))
+            .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed or Prompts extension is inactive")))
             .then(text => promptTextArea.value = text)
             .catch(err => promptTextArea.value = `[Error: ${err.message}]`);
     }
@@ -419,15 +409,9 @@ export function openBatchModal(batch) {
                 loadingText: 'Saving...',
                 onSuccess: () => {
                     window.UIFactory.closeModal(modalId);
-                    window.compileContexts();
+                    if(window.compileContexts) window.compileContexts();
                 }
             });
         };
     }
-}
-
-// Bind HTML click handlers to the global scope
-window.openEditBatchModal = openEditBatchModal;
-window.saveEditBatch = saveEditBatch;
-window.deleteEditBatch = deleteEditBatch;
-window.openBatchModal = openBatchModal;
+};

@@ -9,138 +9,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 gather_bp = Blueprint('gather', __name__)
 
-@gather_bp.route('/api/<workspace_id>/batches', methods=['GET'])
-def api_batches(workspace_id):
-    import os
-    from insetu.utils_core import load_config, load_workflows, get_gather_paths, get_safe_repo_id
-
-    cfg = load_config(workspace_id)
-    w_cfg = load_workflows(workspace_id)
-    paths = get_gather_paths(workspace_id)
-
-    batches = w_cfg.get("context_batches", [])
-
-    # Gather options for the UI batch editor
-    expected_contexts = set()
-    expected_diffs = set()
-
-    for c in cfg.get("target_repos", []):
-        r_dir = c.get("repo_dir", "")
-        safe_r_dir = get_safe_repo_id(r_dir)
-    
-        subs = c.get("sub_buckets", [])
-
-        if subs:
-            for b in subs:
-                if not b.get("dynamic_split_prefix"):
-                    out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
-                    expected_contexts.add(f"contexts/{out}")
-        
-                    expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
-                else:
-                    # Dynamic split prefix - infer from active directories
-                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
-                   
-                    if os.path.exists(dyn_dir):
-                        for module in os.listdir(dyn_dir):
-                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
-                                expected_contexts.add(f"contexts/{module}_context.txt")
-      
-                                expected_diffs.add(f"diffs/{module}_diffs.txt")
-        else:
-            out = c.get("out_file", f"{safe_r_dir}_context.txt")
-            expected_contexts.add(f"contexts/{out}")
-            expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
-
-    # Include physically existing files in case of unmapped manual overrides
-    if os.path.exists(paths["contexts_dir"]):
-       
-        for f in os.listdir(paths["contexts_dir"]):
-            if f.endswith('.txt'): expected_contexts.add(f"contexts/{f}")
-    if os.path.exists(paths["diffs_dir"]):
-
-        for f in os.listdir(paths["diffs_dir"]):
-            if f.endswith('.txt'): expected_diffs.add(f"diffs/{f}")
-    available_prompts = []
-    if os.path.exists(paths["prompts_dir"]):
-        for root, _, files in os.walk(paths["prompts_dir"]):
-            for f in files:
-                if f.lower().endswith(('.md', '.txt')) or f.lower() in ('.gitkeep', '.keep'):
-                    rel_path = os.path.relpath(os.path.join(root, f), paths["prompts_dir"]).replace('\\', '/')
-                    available_prompts.append(f"prompts/{rel_path}")
-
-    artifacts_abs = paths["artifacts_base"].replace('\\', '/')
-    profile_abs = os.path.dirname(paths["config_path"]).replace('\\', '/')
-
-    return jsonify({
-        "batches": batches,
-       
-        "available_contexts": sorted(list(expected_contexts)),
-        "available_diffs": sorted(list(expected_diffs)),
-        "available_prompts": sorted(available_prompts),
-        "artifacts_dir": artifacts_abs,
-        "profile_dir": profile_abs
-    })
-
-@gather_bp.route('/api/<workspace_id>/batches/save', methods=['POST'])
-def api_batches_save(workspace_id):
-    import json
-    import insetu.utils_core as utils_core
-    from insetu.utils_core import load_workflows, get_gather_paths
-
-    paths = get_gather_paths(workspace_id)
-
-    data = request.json
-    w_cfg = load_workflows(workspace_id)
-    batches = w_cfg.get("context_batches", [])
-    batch_id = data.get("id")
-    existing = next((b for b in batches if b["id"] == batch_id), None)
-
-    if existing:
-        # Clear optional fields if not present in the incoming payload to prevent ghost states
-        for optional_key in ["include_prompt", "response_path", "prompt_text"]:
-            if optional_key in existing and optional_key not in data:
-                del existing[optional_key]
-        existing.update(data)
-    else:
-        batches.append(data)
-
-    w_cfg["context_batches"] = batches
-    utils_core.save_json_file(paths["workflows_path"], w_cfg)
-
-    # Auto-compile the modified batch silently
-    target_batch = existing if existing else data
-    try:
-        compile_batch(target_batch, workspace_id)
-    except Exception as e:
-        print(f"Warning: Failed to auto-compile batch {batch_id}: {str(e)}")
-
-    return jsonify({"status": "success"})
-
-@gather_bp.route('/api/<workspace_id>/batches/delete', methods=['POST'])
-def api_batches_delete(workspace_id):
-    import insetu.utils_core as utils_core
-    from insetu.utils_core import load_workflows, get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    data = request.json
-    batch_id = data.get("id")
-
-    w_cfg = load_workflows(workspace_id)
-    batches = w_cfg.get("context_batches", [])
-    w_cfg["context_batches"] = [b for b in batches if b.get("id") != batch_id]
-
-    utils_core.save_json_file(paths["workflows_path"], w_cfg)
-
-    import os
-    try:
-        out_path = os.path.join(paths["gather_dir"], f"{batch_id}_context.txt")
-        if os.path.exists(out_path):
-            os.remove(out_path)
-    except Exception:
-        pass
-
-    return jsonify({"status": "success"})
-
 def generate_ascii_tree(file_paths):
     tree = {}
     for path in file_paths:
@@ -229,8 +97,7 @@ def generate_context_file(workspace_id=None):
             manifest[f"{config['repo_dir']}_vault.json"] = [f"{config['repo_dir']}/{f}" for f in final_list]
             continue
         elif archive_type == "prompt-library":
-            # Inject into UI under the Prompts & State category without dumping context payloads
-            manifest["prompts_context.txt"] = [f"{config['repo_dir']}/{f}" for f in final_list]
+            # Handled upstream via the compile_contexts Event Hook
             continue
         sub_buckets = config.get("sub_buckets", [])
         if sub_buckets:
@@ -286,13 +153,6 @@ def generate_context_file(workspace_id=None):
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
-    # --- COMPILE CONTEXT BATCHES ---
-    from insetu.utils_core import load_workflows
-    w_cfg = load_workflows(workspace_id)
-    context_batches = w_cfg.get("context_batches", [])
-    for batch in context_batches:
-        compile_batch(batch, workspace_id)
-
     # Re-inject surviving Quick-Packs into the manifest so they persist through background compiles
     for f in os.listdir(paths["contexts_dir"]):
         if f.startswith("quick_pack_") and f.endswith(".txt"):
@@ -404,22 +264,3 @@ def api_gather_quick_pack_clear(workspace_id):
         save_json_file(manifest_path, manifest)
 
     return jsonify({"status": "success", "cleared": count})
-
-def compile_batch(batch, workspace_id=None):
-    from insetu.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    batch_id = batch.get("id")
-    if not batch_id: return
-    includes = batch.get("includes", [])
-    out_path = os.path.join(paths["gather_dir"], f"{batch_id}_context.txt")
-    with open(out_path, "w", encoding="utf-8") as out_f:
-        out_f.write(f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n")
-        for inc in includes:
-            inc_path = os.path.join(paths["artifacts_base"], inc)
-            if os.path.exists(inc_path):
-                with open(inc_path, "r", encoding="utf-8") as in_f:
-                    out_f.write(f"--- {inc} ---\n")
-                    out_f.write(in_f.read())
-                    out_f.write("\n\n")
-            else:
-                out_f.write(f"--- {inc} (NOT FOUND) ---\n\n")

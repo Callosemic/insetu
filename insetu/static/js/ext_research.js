@@ -839,6 +839,12 @@ Output your response as a raw JSON object containing three arrays of \`id\` stri
         }
     }, 3000);
 
-    // Initial load
+    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+        window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+            if (tabId === 'research') fetchState();
+        });
+    }
+
+// Initial load
     fetchState();
 }

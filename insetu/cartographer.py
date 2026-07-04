@@ -15,7 +15,7 @@ def extract_existing_comments(index_path, repo_path=None):
                 clean_name = parts[0].lstrip(' │├└─\t').rstrip(' \t')
                 comment = parts[1].strip()
                 # Ignore system placeholders to prevent placeholder lock-in
-                if clean_name and comment not in ("[comment required]", "[managed file]", "[Tracker File]"):
+                if clean_name and comment not in ("[comment required]", "[managed file]"):
                     cmap[clean_name] = comment
         return cmap
 

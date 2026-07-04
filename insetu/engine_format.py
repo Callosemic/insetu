@@ -1,6 +1,28 @@
 import os
 import sys
 import json
+from flask import Blueprint, request, jsonify, send_file
+from insetu.utils_core import extension_auth
+
+format_bp = Blueprint('format', __name__)
+
+@format_bp.route('/api/<workspace_id>/format/compile-document', methods=['POST'])
+@extension_auth('format')
+def api_format_compile_document(workspace_id):
+    data = request.json
+    filepath = data.get('filepath')
+    target_format = data.get('format', 'pdf')
+
+    if not filepath: return jsonify({"error": "Filepath required"}), 400
+
+    try:
+        mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
+        return send_file(mem_file, as_attachment=True, download_name=download_name)
+    except FileNotFoundError:
+        return jsonify({"error": "File not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, sqlite3, shutil, io
     from insetu.utils_core import get_gather_paths, resolve_workspace_path
@@ -22,35 +44,32 @@ def compile_document_payload(workspace_id, filepath, target_format):
             parts = line.split(':')
             if len(parts) >= 2:
                 true_ids.append(parts[1].replace('"', '').replace("'", "").strip())
+    # 1. Initialize generic compiler payload
+    temp_files = {}
+    compiler_flags = []
 
-    csl_items = []
-    if true_ids:
-        db_path = os.path.join(paths["artifacts_base"], "citations.db")
-        if os.path.exists(db_path):
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            placeholders = ','.join(['?'] * len(true_ids))
-            try:
-                cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
-                for row in cursor.fetchall():
-                    csl_items.append(json.loads(row['raw_json']))
-            except Exception:
-                pass
-            finally:
-                conn.close()
-
+    # 2. Broadcast to all extensions: "Inject your middleware now"
+    from insetu.hooks import hooks
+    try:
+        results = hooks.emit('pre_compile_document', filepath=filepath, text=doc_text, workspace_id=workspace_id)
+        for res in results:
+            if res and isinstance(res, dict):
+                temp_files.update(res.get('temp_files', {}))
+                compiler_flags.extend(res.get('compiler_flags', []))
+    except Exception as e:
+        print(f"Warning: Extension middleware failed during document compilation: {e}")
     temp_dir = tempfile.mkdtemp()
     try:
-        bib_path = os.path.join(temp_dir, 'bibliography.json')
-        with open(bib_path, 'w', encoding='utf-8') as f:
-            json.dump(csl_items, f)
+        # Write injected middleware temp files to disk
+        for filename, file_content in temp_files.items():
+            with open(os.path.join(temp_dir, filename), 'w', encoding='utf-8') as f:
+                f.write(file_content)
 
         out_filename = f"compiled_output.{target_format}"
         out_path = os.path.join(temp_dir, out_filename)
 
         cmd = ['pandoc', resolved_path, '-o', out_path]
-        if csl_items:
-            cmd.extend(['--citeproc', '--bibliography', bib_path])
+        cmd.extend(compiler_flags)
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True)

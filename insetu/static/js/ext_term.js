@@ -1,6 +1,6 @@
 // ext_term.js - Terminal Extension
 import { AppStore } from './store.js';
-const termScreen = window.ExtensionRegistry.registerTab('term', 'Term');
+const termScreen = window.ExtensionRegistry.registerTab('term', 'Term', 'term');
 
 if (termScreen) {
     // 1. Inject custom CSS rules for the terminal canvas

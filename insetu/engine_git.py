@@ -17,10 +17,13 @@ def generate_diff_context(workspace_id=None):
     from insetu.engine_gather import resolve_file_bucket
     paths = get_gather_paths(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
-
     for f in os.listdir(paths["diffs_dir"]):
         f_path = os.path.join(paths["diffs_dir"], f)
-        if os.path.isfile(f_path): os.remove(f_path)
+        if os.path.isfile(f_path):
+            try:
+                os.remove(f_path)
+            except Exception as e:
+                print(f"Warning: Failed to clear old diff file {f_path}: {e}")
 
     live_cfg = load_config(workspace_id)
     diff_manifest = []
@@ -56,7 +59,7 @@ def generate_diff_context(workspace_id=None):
                     if b and module:
                         b_id = f"{module}_diffs.txt"
                     elif b:
-                        b_id = b["out_file"].replace("_context.txt", "_diffs.txt")
+                        b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
                     else:
                         b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
                     if b_id not in bucketed_files: bucketed_files[b_id] = []
@@ -204,27 +207,15 @@ def api_git_changelogs():
     workspace_id = request.headers.get('X-Workspace-ID')
     repo = request.args.get('repo', '')
     changelogs = []
-
-    # Safeguard horizontal cross-talk using the central SSOT helper
-    from insetu.utils_core import is_extension_enabled
-    if not is_extension_enabled('tracker', workspace_id):
-        return jsonify({"repo": repo, "changelogs": changelogs})
-
+    # Abstracted horizontal cross-talk using the Event Bus
+    from insetu.hooks import hooks
     try:
-        from insetu.db import get_connection
-        conn = get_connection('tracker', workspace_id=workspace_id)
-        cursor = conn.execute("""
-            SELECT title 
-            FROM tracker_tickets 
-            WHERE repo = ? AND status = 'closed' 
-            ORDER BY COALESCE(closed_at, created_at) DESC 
-            LIMIT 5
-        """, (repo,))
-
-        for row in cursor.fetchall():
-            changelogs.append({"title": row['title']})
+        results = hooks.emit('request_changelog_suggestions', repo=repo, workspace_id=workspace_id)
+        for res in results:
+            if res:
+                changelogs.extend(res)
     except Exception as e:
-        print(f"Warning: Failed to fetch release log suggestions from cache ledger: {e}")
+        print(f"Warning: Failed to fetch release log suggestions via Event Bus: {e}")
 
     return jsonify({"repo": repo, "changelogs": changelogs})
 @git_bp.route('/api/git/push', methods=['POST'])
@@ -277,12 +268,12 @@ def api_git_push():
         # Guarantee topology is perfectly mapped before staging
         from insetu.cartographer import map_repositories
         map_repositories(workspace_id)
-
-        # Auto-include the updated Code Index and Tracker states so metadata stays synced
+        # Auto-include the updated Code Index and managed extension states so metadata stays synced
         if os.path.exists(os.path.join(repo_path, "CODE_INDEX.md")): files_to_stage.add("CODE_INDEX.md")
         if os.path.exists(os.path.join(repo_path, "docs", "CODE_INDEX.md")): files_to_stage.add("docs/CODE_INDEX.md")
-        if os.path.exists(os.path.join(repo_path, ".tracker")): files_to_stage.add(".tracker/")
-        
+        for m_dir in cfg.get("managed_dirs", []):
+            if os.path.exists(os.path.join(repo_path, m_dir)): files_to_stage.add(f"{m_dir}/")
+
         # Surgically add only the parsed files + metadata
         subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
         

@@ -210,9 +210,12 @@ def apply_block_in_memory(content, block, silent=False):
             matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
             match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
 
-            best_f_idx = match.a
-            actual_lines = file_lines[best_f_idx : best_f_idx + len(search_lines)]
+            # Align the comparison window by offsetting the match starting points
+            start_idx = max(0, match.a - match.b)
+            end_idx = min(len(file_lines), start_idx + len(search_lines))
+            actual_lines = file_lines[start_idx:end_idx]
 
+            # Use ndiff to show exact character-level discrepancies (indicated by ? and ^)
             diff = list(difflib.ndiff(actual_lines, search_lines))
             diff_str = "\n".join(diff)
 

@@ -7,18 +7,18 @@ import {
     currentModalOriginalText,
     buildFileTree
 } from './fs.js';
-import {
-    loadGatherBatches
-} from './gather.js';
 import { BridgeStore } from './bridge.js';
 import './ui.js';
-function getFlattenedBuckets(repoDir) {
+
+function getFlattenedBuckets(repoDir, includeSystem = false) {
     const { targetConfigs } = AppStore.getState();
     const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
     if (!repoCfg || !repoCfg.sub_buckets) return [];
 
     const buckets = [];
     repoCfg.sub_buckets.forEach(b => {
+        if (!includeSystem && b.is_system) return;
+
         if (b.dynamic_split_prefix && b.meta_map) {
             Object.keys(b.meta_map).forEach(module => {
                 buckets.push({ id: module, title: b.meta_map[module].title || module, original: b });
@@ -29,11 +29,11 @@ function getFlattenedBuckets(repoDir) {
     });
     return buckets;
 }
-
 export {
     viewSourceFile,
     createFileCard,
-    getFlattenedBuckets
+    getFlattenedBuckets,
+    buildFileTree
 };
 
 if ('serviceWorker' in navigator) {
@@ -108,13 +108,14 @@ window.ExtensionRegistry = {
         };
         container.appendChild(btn);
     },
-    registerTab: (id, label) => {
+    registerTab: (id, label, extName = null) => {
         const container = document.getElementById('main-tabs-container');
         if (!container) return null;
 
         const tab = document.createElement('div');
         tab.className = 'tab';
         tab.dataset.id = id;
+        if (extName) tab.dataset.ext = extName;
         tab.onclick = (e) => switchTab(e, id);
         tab.innerText = label;
         container.appendChild(tab);
@@ -314,23 +315,41 @@ document.addEventListener('click', (e) => {
 });
 // Restore UI State on Load
 window.addEventListener('DOMContentLoaded', async () => {
-    setTimeout(() => {
-        const ws = localStorage.getItem('insetu_workspace') || 'default';
-        const savedTab = localStorage.getItem(`insetu_tab_${ws}`);
-        if (savedTab && typeof switchTab === 'function') {
-            const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
-            if (!extMap[savedTab] || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(extMap[savedTab]))) {
-
-                switchTab(null, savedTab);
-            }
-        }
-    }, 150);
     // The JS engine successfully booted. Hide the pure-HTML panic switch.
     clearTimeout(window.panicTimeout);
     const panicBtn = document.getElementById('js-panic-button');
     if (panicBtn) panicBtn.style.display = 'none';
 
+    // Fetch tenant-specific configuration to override the server's stateless HTML injection
+    try {
+        const cRes = await fetch('/api/system/config');
+        if (cRes.ok) {
+            const config = await cRes.json();
+            window.ACTIVE_EXTENSIONS = config.extensions || [];
+
+            // Synchronize branding tokens while we have the config
+            const toggleBtn = document.getElementById('settings-toggle');
+            if (toggleBtn) toggleBtn.innerText = config.instance_emoji || "⚙️";
+            const statusBar = document.getElementById('global-status-bar');
+            if (statusBar) statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
+        }
+    } catch (e) {
+        console.warn("Failed to fetch tenant configuration on boot.", e);
+    }
+
     await bootExtensions();
+
+    setTimeout(() => {
+        const ws = localStorage.getItem('insetu_workspace') || 'default';
+        const savedTab = localStorage.getItem(`insetu_tab_${ws}`);
+        if (savedTab && typeof switchTab === 'function') {
+            const targetTabEl = document.querySelector(`.tab[data-id="${savedTab}"]`);
+            const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
+            if (!requiredExt || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(requiredExt))) {
+                switchTab(null, savedTab);
+            }
+        }
+    }, 50);
 
     const textArea = document.getElementById('modal-text');
     if (textArea && typeof EasyMDE !== 'undefined') {
@@ -396,9 +415,13 @@ async function loadWorkspaces() {
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
-            // Synchronize the active tenant on load
-            localStorage.setItem('insetu_workspace', data.active_workspace);
-            AppStore.setState({ activeWorkspace: data.active_workspace });
+            // Strictly prioritize the browser's local state for multi-tenant concurrency
+            let activeWs = localStorage.getItem('insetu_workspace');
+            if (!activeWs || !data.workspaces[activeWs]) {
+                activeWs = data.active_workspace || Object.keys(data.workspaces)[0] || 'default';
+                localStorage.setItem('insetu_workspace', activeWs);
+            }
+            AppStore.setState({ activeWorkspace: activeWs });
             document.getElementById('workspaces-header').style.display = 'block';
             const list = document.getElementById('workspaces-list');
             list.style.display = 'flex';
@@ -406,12 +429,11 @@ async function loadWorkspaces() {
 
             Object.entries(data.workspaces).forEach(([key, ws]) => {
                 const btn = document.createElement('button');
-                const isActive = data.active_workspace === key;
+                const isActive = activeWs === key; // Check against frontend local state
                 btn.innerText = (isActive ? '🟢 ' : '⚪ ') + (ws.title || key);
                 btn.style.cssText = `margin: 0; background: ${isActive ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; cursor: pointer; border-radius: 4px; font-weight: ${isActive ? 'bold' : 'normal'};`;
                 btn.onclick = async () => {
-                    if (isActive) return;
-                    btn.innerText = '⏳ Switching...';
+                    btn.innerText = isActive ? '⏳ Refreshing...' : '⏳ Switching...';
 
                     // Clear aggressive Service Worker caches to prevent ghost states
                     if ('caches' in window) {
@@ -500,29 +522,23 @@ function switchSubTab(subId) {
 
     activeTabContent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
     activeTabContent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
-
     const parentTabId = activeTabContent.id.replace('tab-', '');
     localStorage.setItem('insetu_subtab_' + parentTabId, subId);
+
+    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId });
+    }
+
     const targetSt = document.getElementById('st-' + subId);
     const targetSub = document.getElementById('sub-' + subId);
     if (targetSt) targetSt.classList.add('active');
     if (targetSub) targetSub.classList.add('active');
+
     if (subId === 'files') loadGlobalFS();
     const pasteBtn = document.getElementById('btn-paste');
     const newFileBtn = document.getElementById('btn-new-file');
     const newFolderBtn = document.getElementById('btn-new-folder');
-    if (subId === 'diffs') {
-        generateDiffs();
-    }
 
-    if (subId === 'prompts') {
-        renderPromptsTab();
-    }
-
-    if (subId === 'gather') {
-        loadGatherBatches();
-    }
-    
     // Bridge UI Hardening: Guarantee Paste button visibility using computed styles
     const consoleArea = document.getElementById('bridge-console-area');
     const isConsoleActive = consoleArea && window.getComputedStyle(consoleArea).display !== 'none';
@@ -535,272 +551,6 @@ function switchSubTab(subId) {
     if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
     if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
-
-// Dynamically inject the Copy button onto Prompt cards without cluttering the global file renderer
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
-        if (data.filepath && data.filepath.includes('/prompts/')) {
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'btn-sm';
-            copyBtn.style.background = '#10b981';
-            copyBtn.style.margin = '0';
-            copyBtn.innerText = '📋 Copy';
-            copyBtn.onclick = (e) => {
-                e.stopPropagation();
-                fetchAndCopy(data.filepath, copyBtn);
-            };
-            // Prepend so it appears before the Download button
-            data.actionsContainer.insertBefore(copyBtn, data.actionsContainer.firstChild);
-        }
-        return false;
-    });
-}
-
-async function renderPromptsTab() {
-    const container = document.getElementById('prompts-list');
-    if (!container) return;
-    container.innerHTML = '<div class="spinner" style="display:block;">Loading prompts...</div>';
-    try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/batches`);
-        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-        const data = await res.json();
-        globalGatherOptions.prompts = data.available_prompts || [];
-        globalGatherOptions.artifactsDir = data.artifacts_dir || ".insetu/profiles/default/data";
-        globalGatherOptions.profileDir = data.profile_dir || ".insetu/profiles/default";
-    } catch (e) {
-        console.error("Failed to fetch prompts:", e);
-    }
-
-    container.innerHTML = '';
-    const rawPrompts = globalGatherOptions.prompts || [];
-    if (rawPrompts.length === 0) {
-        container.innerHTML = '<p style="color: #888; font-style: italic;">No prompts found in workspace.</p>';
-        return;
-    }
-
-    // Strip "prompts/" prefix to map the tree relative to the prompts root directory
-    const treePaths = rawPrompts.map(p => p.replace(/^prompts\//, ''));
-    const tree = buildFileTree(treePaths);
-
-    window.currentPromptsPath = window.currentPromptsPath || [];
-    let current = tree;
-
-    // Traverse to the user's current nested directory depth
-    for (const p of window.currentPromptsPath) {
-        if (current[p] && !current[p]._isFile) {
-            current = current[p];
-        } else {
-            window.currentPromptsPath = [];
-            current = tree;
-            break;
-        }
-    }
-
-    // Render breadcrumbs & Up button if we're drilled into a folder
-    if (window.currentPromptsPath.length > 0) {
-        const headerDiv = document.createElement('div');
-        headerDiv.style.display = 'flex';
-        headerDiv.style.gap = '10px';
-        headerDiv.style.marginBottom = '15px';
-        headerDiv.style.alignItems = 'center';
-
-        const upBtn = document.createElement('button');
-        upBtn.className = 'btn-sm';
-        upBtn.innerText = '⬆️ Up';
-        upBtn.style.background = '#64748b';
-        upBtn.onclick = () => {
-            window.currentPromptsPath.pop();
-            renderPromptsTab();
-        };
-
-        const pathText = document.createElement('span');
-        pathText.style.fontFamily = 'monospace';
-        pathText.style.color = 'var(--text)';
-        pathText.style.opacity = '0.7';
-        pathText.innerText = '/' + window.currentPromptsPath.join('/');
-
-        headerDiv.appendChild(upBtn);
-        headerDiv.appendChild(pathText);
-        container.appendChild(headerDiv);
-    }
-
-    // Unify sorting: Folders float to the top, files sort alphabetically underneath
-    const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
-        const aIsDir = !current[a]._isFile;
-        const bIsDir = !current[b]._isFile;
-        if (aIsDir && !bIsDir) return -1;
-        if (!aIsDir && bIsDir) return 1;
-        return a.localeCompare(b);
-    });
-
-    keys.forEach(key => {
-        const item = current[key];
-        const isDir = !item._isFile;
-
-        // Suppress anchor files from the UI, as their parent folders are already rendered by the tree
-        if (!isDir && (key === '.gitkeep' || key === '.keep')) return; 
-
-        if (isDir) {
-            const card = document.createElement('div');
-            card.className = 'file-card';
-            card.style.display = 'flex';
-            card.style.alignItems = 'center';
-            card.style.cursor = 'pointer';
-            card.innerHTML = `<span class="folder-label">📁 ${key}</span>`;
-            card.onclick = () => {
-                window.currentPromptsPath.push(key);
-                renderPromptsTab();
-            };
-            container.appendChild(card);
-            return;
-        }
-
-        // Standard File Rendering via Unified API
-        const pathPrefix = window.currentPromptsPath.length > 0 ? window.currentPromptsPath.join('/') + '/' : '';
-        const filepath = `${globalGatherOptions.profileDir}/prompts/${pathPrefix}${key}`;
-
-        createFileCard({
-            filename: filepath,
-            displayName: key,
-            description: '',
-            isFS: true,
-            isSource: true
-        }, container);
-    });
-}
-export async function generateDiffs() {
-    const loading = document.getElementById('diff-loading');
-    const results = document.getElementById('diff-results');
-    loading.style.display = 'block';
-    results.innerHTML = '';
-    try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/diffs/generate`, {
-            method: 'POST'
-        });
-        const data = await res.json();
-        const sweepBtn = document.getElementById('btn-sweep-remaining');
-
-        loading.style.display = 'none';
-        if (data.status === 'success' && data.files.length > 0) {
-            if (sweepBtn) sweepBtn.style.display = 'block';
-            const categories = {};
-            const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
-            const resolveMetadata = (fileName) => {
-                let cat = "Workspaces";
-                let desc = "Pending diff payload.";
-                let displayName = fileName;
-                const baseFile = fileName.replace('_diffs.txt', '_context.txt');
-                if (baseFile === 'prompts_context.txt') return {
-                    cat: "Prompts & State",
-                    desc: "Uncommitted prompt or state changes.",
-                    displayName: 'prompts_diffs.txt'
-                };
-                if (virtualContexts) {
-                    const vMatch = virtualContexts.find(v => v.out_file === fileName);
-                    if (vMatch) return {
-                        cat: vMatch.domain || "Extensions",
-                        desc: vMatch.description || `Virtual context payload.`,
-                        displayName: vMatch.title || fileName
-                    };
-                }
-
-                for (const cfg of targetConfigs) {
-                    const safeRepoDir = cfg.repo_dir.startsWith('.') ?
-'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
-                    const safeId = safeRepoDir.replace(/-/g, '_');
-                    const expectedOut = cfg.out_file || `${safeId}_context.txt`;
-                    if (baseFile === expectedOut) return {
-                        cat: cfg.domain || "Workspaces",
-                        desc: `Uncommitted changes for ${cfg.title || cfg.repo_dir}.`,
-                        displayName: (cfg.title || baseFile) + " (Diffs)"
-                    };
-                    if (cfg.sub_buckets) {
-                        for (const b of cfg.sub_buckets) {
-                            if (baseFile === b.out_file) return {
-                                cat: b.domain || cfg.domain || "Workspaces",
-                                desc: `Uncommitted changes for ${b.title || b.id}.`,
-                                displayName: (b.title || baseFile) + " (Diffs)"
-                            };
-                        }
-                    }
-                }
-                const rawModule = baseFile.replace('_context.txt', '');
-                let matchedMeta = null;
-                let parentBucket = null;
-                for (const cfg of targetConfigs) {
-                    if (cfg.sub_buckets) {
-                        for (const b of cfg.sub_buckets) {
-                            if (b.dynamic_split_prefix) {
-                                if (b.meta_map && b.meta_map[rawModule]) {
-                                    matchedMeta = b.meta_map[rawModule];
-                                    parentBucket = b;
-                                    break;
-                                }
-                                if (!parentBucket) parentBucket = b;
-                            }
-                        }
-                    }
-                    if (matchedMeta) break;
-                }
-
-                const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
-                desc = matchedMeta?.description ? `Uncommitted changes for ${title} (${matchedMeta.description})` : (parentBucket?.description ? `Uncommitted changes for ${title} (${parentBucket.description})` : `Uncommitted logic changes for ${title}.`);
-                return {
-                    cat: domain,
-                    desc: desc,
-                    displayName: title + " (Diffs)"
-                };
-            };
-            data.files.forEach(fileObj => {
-                const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
-                const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
-                if (hiddenOutputs && hiddenOutputs.includes(file)) return;
-                const meta = resolveMetadata(file);
-                if (!categories[meta.cat]) categories[meta.cat] = [];
-                categories[meta.cat].push({
-                    filename: file,
-                    displayName: meta.displayName,
-                    description: meta.desc,
-                    isFS: false,
-                    repoDir: repoDir
-                });
-            });
-            const sortedCats = Object.keys(categories).sort((a, b) => {
-                // Force the Clipboard to always float to the absolute top, ignoring config sorts
-                if (a === "Quick-Pack Clipboard") return -1;
-                if (b === "Quick-Pack Clipboard") return 1;
-
-                let iA = categoryOrder.indexOf(a);
-                let iB = categoryOrder.indexOf(b);
-                if (iA === -1) iA = 999;
-                if (iB === -1) iB = 999;
-                if (iA !== iB) return iA - iB;
-                return a.localeCompare(b);
-            });
-
-            for (const catName of sortedCats) {
-                const catFiles = categories[catName];
-                if (catFiles.length > 0) {
-                    const heading = document.createElement('div');
-                    heading.className = 'category-heading';
-                    heading.innerText = catName;
-                    results.appendChild(heading);
-                    catFiles.forEach(f => createFileCard(f, results));
-                }
-            }
-        } else {
-            if (sweepBtn) sweepBtn.style.display = 'none';
-            results.innerHTML = '<p style="color: #888;">No pending changes detected across tracked repositories.</p>';
-        }
-    } catch (error) {
-        loading.style.display = 'none';
-        results.innerHTML = `<p style="color: red;">Error analyzing diffs: ${error.message}</p>`;
-    }
-}
-
 let lastRefreshed = null;
 let refreshInterval = null;
 
@@ -821,11 +571,6 @@ export function normalizeAccentText(str) {
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
-export let globalGatherOptions = {
-    contexts: [],
-    diffs: [],
-    prompts: []
-};
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
     if (!bar) return;
@@ -940,12 +685,12 @@ export function renderContextFiles(files, msg) {
                     displayName: `📦 ${target}`
                 };
             }
+            // Let extensions claim the file metadata first
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', fileName);
+                if (extMeta) return extMeta;
+            }
 
-            if (fileName === 'prompts_context.txt') return {
-                cat: "Prompts & State",
-                desc: "The Master Ingestion Prompt and CLI templates.",
-                displayName: 'prompts_context.txt'
-            };
             const { virtualContexts } = AppStore.getState();
             if (virtualContexts) {
                 const vMatch = virtualContexts.find(v => v.out_file === fileName);
@@ -1190,13 +935,9 @@ async function performSoftRefresh() {
     const currentWs = AppStore.getState().activeWorkspace || 'default';
     // Evict old sub-store data frames instantly to prevent layout bleeding or race mutations
     BridgeStore.getState().clearPayload();
-    if (window.KanbanStore) {
-        window.KanbanStore.setState({ 
-            tasks: [],
-            pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_repos_${currentWs}`)) || ["ALL"]),
-            pinnedBuckets: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_buckets_${currentWs}`)) || ["ALL"]),
-            pinnedTags: new Set(JSON.parse(localStorage.getItem(`insetu_task_pinned_tags_${currentWs}`)) || ["ALL"])
-        });
+
+    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        window.ExtensionRegistry.executeUIHook('zone:soft-refresh', currentWs);
     }
 
     try {
@@ -1230,15 +971,14 @@ async function performSoftRefresh() {
             if (statusBar) {
                 statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
             }
-
             // Hide extension tabs that are disabled in the new workspace & execute unloads
-            const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
-            Object.keys(extMap).forEach(tabId => {
-                const extName = extMap[tabId];
+            document.querySelectorAll('.tab[data-ext]').forEach(tabEl => {
+                const extName = tabEl.dataset.ext;
+                const tabId = tabEl.dataset.id;
                 const isActive = window.ACTIVE_EXTENSIONS.includes(extName);
 
-                const tabEl = document.querySelector(`.tab[data-id="${tabId}"]`) || document.querySelector(`.tab[onclick*="${tabId}"]`);
-                if (tabEl) tabEl.style.display = isActive ? '' : 'none';
+                tabEl.style.display = isActive ? '' : 'none';
+
                 const subTabEl = document.getElementById(`st-${tabId}`);
                 if (subTabEl) subTabEl.style.display = isActive ? '' : 'none';
 
@@ -1256,13 +996,15 @@ async function performSoftRefresh() {
         if (mRes.ok) setContextManifest(await mRes.json());
 
         // 4. Hydrate active DOM views using native routing
-        let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
-        const extMap = { 'tasks': 'tracker', 'research': 'research', 'library': 'citations', 'term': 'term' };
-        if (extMap[targetTab] && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extMap[targetTab])) {
-            targetTab = 'context';
-        }
+let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
+const targetTabEl = document.querySelector(`.tab[data-id="${targetTab}"]`);
+const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
 
-        if (typeof switchTab === 'function') switchTab(null, targetTab);
+if (requiredExt && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(requiredExt)) {
+    targetTab = 'context';
+}
+
+if (typeof switchTab === 'function') switchTab(null, targetTab);
 
         setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {
@@ -1276,13 +1018,15 @@ async function fullRefresh() {
     if (btn) btn.innerText = "⏳ Syncing...";
     try {
         // Purge stale UI state before syncing
-        localStorage.removeItem('insetu_pinned_repos');
-        localStorage.removeItem('insetu_task_pinned_repos');
-        localStorage.removeItem('insetu_task_pinned_buckets');
-        localStorage.removeItem('insetu_task_pinned_tags');
+        const keys = Object.keys(localStorage);
+        keys.forEach(k => {
+            if (k.startsWith('insetu_pinned_') || k.startsWith('insetu_task_') || k.startsWith('insetu_lib_')) {
+                localStorage.removeItem(k);
+            }
+        });
 
-        await performSoftRefresh();
-        if (btn) btn.innerText = "🔄 Full Refresh";
+        // We skip performSoftRefresh here because the hard reload will natively  
+        // fetch the correct tenant configuration on boot via the interceptor.
         window.location.reload();
     } catch (error) {
         alert("Error during full refresh.");
@@ -1313,52 +1057,7 @@ if (d.config_missing) {
     document.body.appendChild(banner);
 }
 });
-export function renderRepoPins(state) {
-    const container = document.getElementById('repo-pins');
-    if (!container) return;
-    container.innerHTML = '';
 
-    const lbl = document.createElement('span');
-    lbl.innerText = "📌 Repos:";
-    lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap;";
-    container.appendChild(lbl);
-
-    const createPill = (id, label) => {
-        const btn = document.createElement('button');
-        const isActive = state.pinnedRepos.has(id);
-        btn.className = isActive ? 'repo-pill active' : 'repo-pill';
-        btn.innerText = label;
-        btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-
-        btn.onclick = () => {
-            const newPins = new Set(state.pinnedRepos);
-            if (id === "ALL") {
-                newPins.clear();
-                newPins.add("ALL");
-            } else {
-                newPins.delete("ALL");
-                if (newPins.has(id)) {
-                    newPins.delete(id);
-                    if (newPins.size === 0) newPins.add("ALL");
-                } else {
-                    newPins.add(id);
-                }
-            }
-            localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(newPins)));
-            AppStore.setState({ pinnedRepos: newPins });
-        };
-        return btn;
-    };
-
-    container.appendChild(createPill("ALL", "All"));
-    state.allRepos.forEach(repo => container.appendChild(createPill(repo, repo)));
-}
-// Subscribe the DOM strictly to state updates using Zustand Selectors
-AppStore.subscribe((state) => state.pinnedRepos, () => renderRepoPins(AppStore.getState()));
-AppStore.subscribe((state) => state.allRepos, () => renderRepoPins(AppStore.getState()));
-
-// Zustand doesn't fire an initial blast, trigger manually once
-setTimeout(() => renderRepoPins(AppStore.getState()), 100);
 export async function fetchAndCopy(filePath, btnElement) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
@@ -1409,13 +1108,16 @@ export async function fetchAndDownloadState(filePath, btnElement) {
             // If the user happens to load directly into a tab that needs the manifest, render it
             const tabEdit = document.getElementById('tab-edit');
             const stFiles = document.getElementById('st-files');
-            const tabTasks = document.getElementById('tab-tasks');
-
             if (tabEdit && tabEdit.classList.contains('active') && stFiles && stFiles.classList.contains('active')) {
                 loadGlobalFS();
             }
-            if (tabTasks && tabTasks.classList.contains('active')) {
-                loadTrackerBoard();
+            // Emit a global hydrate event so extensions can refresh their states
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                const activeTab = document.querySelector('.tab-content.active');
+                if (activeTab) {
+                    const tabId = activeTab.id.replace('tab-', '');
+                    window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
+                }
             }
         }
     } catch (e) {

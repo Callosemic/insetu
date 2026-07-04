@@ -65,9 +65,6 @@
         <div class="sub-tabs-bar">
             <div class="sub-tabs">
                 <div class="sub-tab active" id="st-bundles" onclick="switchSubTab('bundles')">Main</div>
-                <div class="sub-tab" id="st-prompts" onclick="switchSubTab('prompts')">Prompts</div>
-                <div class="sub-tab" id="st-diffs" onclick="switchSubTab('diffs')">Diffs</div>
-                <div class="sub-tab" id="st-gather" onclick="switchSubTab('gather')">Gather</div>
             </div>
         </div>
         <div class="screen active" style="min-height: 80vh;">
@@ -81,45 +78,11 @@
                 </div>
                 <div id="context-loading" class="spinner">Compiling ecosystem contexts... please wait.</div>
                 <div id="context-results" style="display: none;">
-                    <h3 id="result-message" style="color: #4CAF50; margin-top: 0; font-size: 1rem;"></h3>
-                    <div id="context-download-links" style="display: flex; flex-direction: column;"></div>
+                    <h3 id="result-message" style="color: #4CAF50;
+margin-top: 0; font-size: 1rem;"></h3>
+                    <div id="context-download-links" style="display: flex;
+flex-direction: column;"></div>
                 </div>
-            </div>
-            <div id="sub-diffs" class="sub-tab-content">
-                <div style="display: flex;
-justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                    <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
-                    <button id="btn-sweep-remaining" class="btn-sm" style="background: #f59e0b;
-margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
-                </div>
-                <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
-                <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
-                    <p style="color: #888; font-style: italic;">Diffs automatically map when this tab is opened.</p>
-                </div>
-            </div>
-            <div id="sub-prompts" class="sub-tab-content">
-                <div style="display: flex;
-justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                    <h2 style="margin: 0;">Prompt Library</h2>
-                    <div style="display: flex; gap: 10px;">
-                        <button class="btn-sm" style="background: #3b82f6;
-margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptFolderModal()">+ Folder</button>
-                        <button class="btn-sm" style="background: #10b981;
-margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptModal()">+ Prompt</button>
-                    </div>
-                </div>
-                <div id="prompts-list" style="display: flex;
-flex-direction: column;">
-                    <p style="color: #888; font-style: italic;">Compile contexts to view available prompts.</p>
-                </div>
-            </div>
-            <div id="sub-gather" class="sub-tab-content">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                    <h2 style="margin: 0;">Context Batches & Workflows</h2>
-                    <button class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openEditBatchModal()">+ New Batch</button>
-                </div>
-                <div id="gather-loading" class="spinner" style="display: none;">Loading batches...</div>
-                <div id="gather-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
         </div>
     </div>
@@ -206,34 +169,39 @@ title="File Content">File Content</h3>
 
         </div>
         </div>
-        <div id="modal-edit-toolbar" style="display: none; gap: 10px; margin: 0 !important; padding: 10px 20px 12px 20px; background: var(--input-bg); border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0; align-items: flex-start; position: relative; flex-shrink: 0;">
-            <div id="toolbar-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; overflow: hidden; max-height: 32px; flex: 1; transition: max-height 0.2s;">
-                <button onclick="openLinkModal()" class="btn-sm" style="background: #10b981; margin: 0;">🔗 Insert Link</button>
-                <button id="btn-insert-citation" onclick="openCitationModal()" class="btn-sm" style="background: #a855f7; margin: 0; display: none;">📚 Cite</button>
-                <button id="btn-sync-citations" onclick="syncDocumentCitations()" class="btn-sm" style="background: #eab308; margin: 0; display: none;">🔄 Sync Refs</button>
-                <button id="btn-publish-doc" onclick="openPublishModal()" class="btn-sm" style="background: #ea580c; margin: 0; display: none;">📄 Publish</button>
-                <button onclick="openMoveModal()" class="btn-sm" style="background: #3b82f6; margin: 0;">🚚 Move</button>
-                <button onclick="archiveModalFile()" class="btn-sm" style="background: #f59e0b; margin: 0;">📦 Archive</button>
-                <button onclick="deleteModalFile()" class="btn-sm" style="background: #dc2626; margin: 0;">🗑️ Delete</button>
-                <button id="modal-clean-btn" onclick="cleanModalFile()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🧹 Clean AI Tags</button>
+        <div id="modal-action-toolbar" style="display: none; gap: 10px; margin: 0 !important; padding: 10px 20px 12px 20px; background: var(--input-bg); border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0; align-items: flex-start; position: relative; flex-shrink: 0;">
+            <div id="toolbar-buttons" style="display: flex; gap: 15px; flex-wrap: wrap; overflow: hidden; max-height: 32px; flex: 1; transition: max-height 0.2s;">
+                <div id="file-zone-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <button onclick="openMoveModal()" class="btn-sm" style="background: #3b82f6; margin: 0;">🚚 Move</button>
+                    <button onclick="archiveModalFile()" class="btn-sm" style="background: #f59e0b; margin: 0;">📦 Archive</button>
+                    <button onclick="deleteModalFile()" class="btn-sm" style="background: #dc2626; margin: 0;">🗑️ Delete</button>
+                </div>
+                <div id="edit-zone-divider" style="width: 2px; background: var(--border); border-radius: 2px; margin: 2px 0;"></div>
+                <div id="edit-zone-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <button onclick="openLinkModal()" class="btn-sm" style="background: #10b981; margin: 0;">🔗 Insert Link</button>
+                    <button id="modal-clean-btn" onclick="cleanModalFile()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🧹 Clean AI Tags</button>
+                </div>
             </div>
             <button id="toolbar-more-btn" onclick="const tb = document.getElementById('toolbar-buttons'); tb.style.maxHeight = tb.style.maxHeight === '32px' ? '500px' : '32px';" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0;">...</button>
         </div>
-
         <script>
-            window.addEventListener('DOMContentLoaded', () => {
+            window.checkToolbarOverflow = () => {
                 const tb = document.getElementById('toolbar-buttons');
                 const moreBtn = document.getElementById('toolbar-more-btn');
-                if (tb && moreBtn) {
-                    new ResizeObserver(() => {
-                        // If the scroll height exceeds a single ~32px row, show the button
-                        if (tb.scrollHeight > 40) {
-                            moreBtn.style.display = 'block';
-                        } else {
-                            moreBtn.style.display = 'none';
-                            tb.style.maxHeight = '32px'; // Reset state if it drops back to 1 row
-                        }
-                    }).observe(tb);
+                if (!tb || !moreBtn) return;
+                if (tb.scrollHeight > 40) {
+                    moreBtn.style.display = 'block';
+                } else {
+                    moreBtn.style.display = 'none';
+                    tb.style.maxHeight = '32px'; // Reset state if it drops back to 1 row
+                }
+            };
+
+            window.addEventListener('DOMContentLoaded', () => {
+                const tb = document.getElementById('toolbar-buttons');
+                if (tb) {
+                    new ResizeObserver(window.checkToolbarOverflow).observe(tb);
+                    new MutationObserver(window.checkToolbarOverflow).observe(tb, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
                 }
             });
         </script>

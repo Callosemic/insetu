@@ -1,6 +1,7 @@
 import urllib.request
 import urllib.parse
 from flask import Blueprint, request, jsonify
+from insetu.utils_core import extension_auth
 
 ingest_bp = Blueprint('ingest', __name__)
 
@@ -116,8 +117,8 @@ def extract_markdown_from_url(target_url, method="jina"):
         "published_time": published_time,
         "clean_markdown": final_markdown
     }
-
 @ingest_bp.route('/api/ingest/url', methods=['POST'])
+@extension_auth('ingest')
 def api_ingest_url():
     data = request.json
     target_url = data.get("url", "").strip()

@@ -115,7 +115,7 @@ def main():
             # Import after scaffolding to ensure paths resolve correctly
             from insetu.app import run_app
             run_app()
-        except (SyntaxError, ImportError) as e:
+        except Exception as e:
             print(f"\n[!] KERNEL PANIC: {type(e).__name__} detected during boot.")
             print(f"[!] Details: {str(e)}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")

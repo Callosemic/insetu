@@ -22,6 +22,8 @@ export const CitationStore = createStore(
             localLibrary: [],
             pinnedRepos: _safeParseSet(`insetu_lib_pinned_repos_${_getActiveWs()}`),
             pinnedBuckets: _safeParseSet(`insetu_lib_pinned_buckets_${_getActiveWs()}`),
+            reposExpanded: false,
+            bucketsExpanded: {},
             cachedPublications: [],
             cachedAuthors: [],
             activeAttachCitation: null,
@@ -34,8 +36,7 @@ export const CitationStore = createStore(
 
 // Expose to window for debugging and lifecycle teardowns
 window.CitationStore = CitationStore;
-
-const libraryScreen = window.ExtensionRegistry.registerTab('library', 'Library');
+const libraryScreen = window.ExtensionRegistry.registerTab('library', 'Library', 'citations');
 if (libraryScreen) {
     libraryScreen.innerHTML = `
         <style>
@@ -222,67 +223,46 @@ margin: 0;">Back</button>
         </div>
     `;
     // --- LOGIC & BINDINGS ---
-
     const renderLibPins = (state) => {
-        const { allRepos: libRepos, targetConfigs: libConfigs } = AppStore.getState();
-        const { pinnedRepos: libPinnedRepos, pinnedBuckets: libPinnedBuckets } = state;
+        const { allRepos: libRepos } = AppStore.getState();
+        const container = document.getElementById('lib-repo-pins');
+        if (!container) return;
 
-        const repoContainer = document.getElementById('lib-repo-pins');
-        const bucketContainer = document.getElementById('lib-bucket-pins');
-        if (!repoContainer || !bucketContainer) return;
+        // Hide legacy bucket container if it exists
+        const bContainer = document.getElementById('lib-bucket-pins');
+        if (bContainer) bContainer.style.display = 'none';
 
-        repoContainer.innerHTML = '<span style="font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px;">📌 Repos:</span>';
-
-        const createPill = (id, label, isRepo) => {
-            const btn = document.createElement('button');
-            const isActive = isRepo ? libPinnedRepos.has(id) : libPinnedBuckets.has(id);
-            btn.className = isActive ? 'repo-pill active' : 'repo-pill';
-            btn.innerText = label;
-            btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-            btn.onclick = () => {
-                const targetSet = isRepo ? libPinnedRepos : libPinnedBuckets;
-                if (id === "ALL") {
-                    targetSet.clear();
-                    targetSet.add("ALL");
-                } else {
-                    targetSet.delete("ALL");
-                    if (targetSet.has(id)) {
-                        targetSet.delete(id);
-                        if (targetSet.size === 0) targetSet.add("ALL");
-                    } else {
-                        targetSet.add(id);
-                    }
-                }
-                localStorage.setItem(isRepo ? 'insetu_lib_pinned_repos' : 'insetu_lib_pinned_buckets', JSON.stringify(Array.from(targetSet)));
-                renderLibPins();
-                document.getElementById('lib-main-search').dispatchEvent(new Event('input')); // trigger filter
-            };
-            return btn;
-        };
-        repoContainer.appendChild(createPill("ALL", "All", true));
-        repoContainer.appendChild(createPill("ORPHANS", "👻 Orphans", true));
-        libRepos.forEach(repo => repoContainer.appendChild(createPill(repo, repo, true)));
-
-        // Buckets
-        bucketContainer.innerHTML = '<span style="font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px;">🗂️ Buckets:</span>';
-        bucketContainer.appendChild(createPill("ALL", "All", false));
-
-        let reposToShow = libPinnedRepos.has('ALL') ? libRepos : Array.from(libPinnedRepos);
-        let hasBuckets = false;
-        reposToShow.forEach(repoName => {
-            const buckets = getFlattenedBuckets(repoName);
-            if (buckets.length > 0) {
-                hasBuckets = true;
-                const sep = document.createElement('span');
-                sep.innerText = "|";
-                sep.style.cssText = "font-size: 0.85rem; color: var(--text); opacity: 0.5; margin: 0 2px;";
-                bucketContainer.appendChild(sep);
-                buckets.forEach(b => {
-                    bucketContainer.appendChild(createPill(b.id, b.title, false));
-                });
+        window.UIFactory.createNestedRepoFilters({
+            container: container,
+            repos: libRepos,
+            activeRepos: state.pinnedRepos,
+            reposExpanded: state.reposExpanded,
+            onRepoChange: (newSet) => {
+                const activeWs = AppStore.getState().activeWorkspace || 'default';
+                localStorage.setItem(`insetu_lib_pinned_repos_${activeWs}`, JSON.stringify(Array.from(newSet)));
+                CitationStore.setState({ pinnedRepos: newSet, reposExpanded: false });
+                document.getElementById('lib-main-search').dispatchEvent(new Event('input'));
+            },
+            onRepoExpandToggle: () => CitationStore.setState({ reposExpanded: !state.reposExpanded }),
+            extraRepos: [{id: "ORPHANS", label: "👻 Orphans"}],
+            enableBuckets: true,
+            activeBuckets: state.pinnedBuckets,
+            bucketsExpandedMap: state.bucketsExpanded,
+            getBucketsFn: getFlattenedBuckets,
+            onBucketChange: (newSet, repo) => {
+                const activeWs = AppStore.getState().activeWorkspace || 'default';
+                localStorage.setItem(`insetu_lib_pinned_buckets_${activeWs}`, JSON.stringify(Array.from(newSet)));
+                const newB = { ...state.bucketsExpanded };
+                newB[repo] = false;
+                CitationStore.setState({ pinnedBuckets: newSet, bucketsExpanded: newB });
+                document.getElementById('lib-main-search').dispatchEvent(new Event('input'));
+            },
+            onBucketExpandToggle: (repo, newState) => {
+                const newB = { ...state.bucketsExpanded };
+                newB[repo] = newState;
+                CitationStore.setState({ bucketsExpanded: newB });
             }
         });
-        bucketContainer.style.display = hasBuckets ? 'flex' : 'none';
     };
     const openCitationNotes = async (cslId) => {
         const btn = document.getElementById(`btn-notes-${cslId}`);
@@ -587,9 +567,11 @@ margin: 0;">Back</button>
             let actionHtml = '';
             if (isExplore) {
               // Check if the citation ID or URL already exists in the local library
-              const alreadyExists = localLibrary.some(libItem => 
+              const libState = CitationStore.getState().localLibrary;
+              const alreadyExists = libState.some(libItem => 
                 libItem.id === c.id || 
-                (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase())
+                (libItem.URL && c.URL 
+&& libItem.URL.toLowerCase() === c.URL.toLowerCase())
               );
 
               if (alreadyExists) {
@@ -666,17 +648,17 @@ margin: 0;">Back</button>
     };
     const loadMainLibrary = async () => {
         document.getElementById('lib-main-loading').style.display = 'block';
-        // Fetch metadata index for the generic UI selector
+// Fetch metadata index for the generic UI selector
         fetch('/api/citations/index').then(r => r.json()).then(d => {
-            if(d.publications) cachedPublications = d.publications;
-            if(d.authors) cachedAuthors = d.authors;
+            if(d.publications) CitationStore.setState({ cachedPublications: d.publications });
+            if(d.authors) CitationStore.setState({ cachedAuthors: d.authors });
         }).catch(e=>{});
-        try {
+try {
             const res = await fetch('/api/citations');
-            if (res.ok) {
+if (res.ok) {
                 const data = await res.json();
-                localLibrary = data.citations || [];
-                renderCards(localLibrary, document.getElementById('lib-main-list'));
+                CitationStore.setState({ localLibrary: data.citations || [] });
+                renderCards(CitationStore.getState().localLibrary, document.getElementById('lib-main-list'));
             }
         } catch (e) {
             console.error(e);
@@ -686,10 +668,11 @@ margin: 0;">Back</button>
     };
     // Main Tab Search & Filter
     document.getElementById('lib-main-search').addEventListener('input', (e) => {
+        const state = CitationStore.getState();
         const norm = window.normalizeAccentText || (str => str.toLowerCase());
         const q = norm(e.target.value);
-        const filtered = localLibrary.filter(c => {
-            const matchesSearch = norm(c.title || "").includes(q) || 
+        const filtered = state.localLibrary.filter(c => {
+            const matchesSearch = norm(c.title || "").includes(q) ||  
                                   norm(c.id || "").includes(q) || 
                                   norm(c.author ? c.author.map(a => a.family).join(" ") : "").includes(q);
 
@@ -834,6 +817,30 @@ margin: 0;">Back</button>
     });
     // Initial Load
     loadMainLibrary();
+    // Bind UI strictly to state updates via Selectors
+    const updatePins = () => renderLibPins(CitationStore.getState());
+    AppStore.subscribe((state) => state.allRepos, updatePins);
+    AppStore.subscribe((state) => state.targetConfigs, updatePins);
+    CitationStore.subscribe((state) => state.pinnedRepos, updatePins);
+    CitationStore.subscribe((state) => state.pinnedBuckets, updatePins);
+
+    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+        window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+            if (tabId === 'library') {
+                const ws = AppStore.getState().activeWorkspace || 'default';
+                CitationStore.setState({
+                    pinnedRepos: _safeParseSet(`insetu_lib_pinned_repos_${ws}`),
+                    pinnedBuckets: _safeParseSet(`insetu_lib_pinned_buckets_${ws}`),
+                    reposExpanded: false,
+                    bucketsExpanded: {}
+                });
+                loadMainLibrary();
+            }
+        });
+    }
+
+    // Initial render
+    setTimeout(updatePins, 100);
 }
 export async function addFileToLibrary(filename, content, filepath) {
     let title = filename.replace('.md', '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -1186,11 +1193,39 @@ export async function syncDocumentCitations() {
         setTimeout(() => btn.innerText = origText, 2000);
     }
 }
-
 window.addFileToLibrary = addFileToLibrary;
 window.syncDocumentCitations = syncDocumentCitations;
 window.openCitationModal = openCitationModal;
 window.onCitationSearchInput = onCitationSearchInput;
+// Inject Toolbar Buttons natively into Edit Zone
+const tb = document.getElementById('edit-zone-buttons');
+if (tb && !document.getElementById('btn-insert-citation')) {
+    const citeBtn = document.createElement('button');
+    citeBtn.id = 'btn-insert-citation';
+    citeBtn.className = 'btn-sm';
+    citeBtn.style.cssText = 'background: #a855f7; margin: 0; display: none;';
+    citeBtn.innerText = '📚 Cite';
+    citeBtn.onclick = window.openCitationModal;
+    tb.appendChild(citeBtn);
+
+    const syncBtn = document.createElement('button');
+    syncBtn.id = 'btn-sync-citations';
+    syncBtn.className = 'btn-sm';
+    syncBtn.style.cssText = 'background: #eab308; margin: 0; display: none;';
+    syncBtn.innerText = '🔄 Sync Refs';
+    syncBtn.onclick = window.syncDocumentCitations;
+    tb.appendChild(syncBtn);
+}
+
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:modal-edit-toolbar', (data) => {
+        const citeBtn = document.getElementById('btn-insert-citation');
+        const syncBtn = document.getElementById('btn-sync-citations');
+        if (citeBtn) citeBtn.style.display = data.isMarkdown ? 'block' : 'none';
+        if (syncBtn) syncBtn.style.display = data.isMarkdown ? 'block' : 'none';
+        return false;
+    });
+}
 
 // --- REGISTER LIFECYCLE UNLOAD HOOK ---
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {

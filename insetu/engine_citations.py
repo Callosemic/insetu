@@ -355,7 +355,30 @@ def delete_citation(csl_id):
         conn.commit()
 
         _rebuild_metadata_cache()
-
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@hooks.on('pre_compile_document')
+def inject_citation_middleware(text, workspace_id=None, **kwargs):
+    """Parses text for citation macros and injects bibliography temp files and citeproc flags into the compiler."""
+    import re
+    true_ids = list(set(re.findall(r'\[@([^\]]+)\]', text)))
+    if not true_ids:
+        return None
+
+    csl_items = []
+    try:
+        conn = get_db()
+        placeholders = ','.join(['?'] * len(true_ids))
+        cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
+        for row in cursor.fetchall():
+            csl_items.append(json.loads(row['raw_json']))
+
+        if csl_items:
+            return {
+                "temp_files": { "bibliography.json": json.dumps(csl_items) },
+                "compiler_flags": ["--citeproc", "--bibliography=bibliography.json"]
+            }
+    except Exception:
+        pass
+    return None

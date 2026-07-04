@@ -1,8 +1,10 @@
 import {
     compileContexts,
-    generateDiffs,
-    setContextManifest
+    setContextManifest,
+    createFileCard
 } from './app.js';
+import { AppStore } from './store.js';
+
 let currentPushRepo = '';
 let currentPushDiffFile = '';
 export async function openPushModal(diffFilename, repoDir) {
@@ -265,6 +267,164 @@ window.openPushModal = openPushModal;
 window.executePush = executePush;
 window.openSweepModal = openSweepModal;
 window.executeSweepPush = executeSweepPush;
+
+export async function generateDiffs() {
+    const loading = document.getElementById('diff-loading');
+    const results = document.getElementById('diff-results');
+    if (!loading || !results) return;
+
+    loading.style.display = 'block';
+    results.innerHTML = '';
+    try {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/diffs/generate`, { method: 'POST' });
+        const data = await res.json();
+        const sweepBtn = document.getElementById('btn-sweep-remaining');
+
+        loading.style.display = 'none';
+        if (data.status === 'success' && data.files.length > 0) {
+            if (sweepBtn) sweepBtn.style.display = 'block';
+            const categories = {};
+            const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
+
+            const resolveMetadata = (fileName) => {
+                let cat = "Workspaces";
+                let desc = "Pending diff payload.";
+                let displayName = fileName;
+                const baseFile = fileName.replace('_diffs.txt', '_context.txt');
+                if (baseFile === 'prompts_context.txt') return {
+                    cat: "Prompts & State",
+                    desc: "Uncommitted prompt or state changes.",
+                    displayName: 'prompts_diffs.txt'
+                };
+                if (virtualContexts) {
+                    const vMatch = virtualContexts.find(v => v.out_file === fileName);
+                    if (vMatch) return {
+                        cat: vMatch.domain || "Extensions",
+                        desc: vMatch.description || "Virtual context payload.",
+                        displayName: vMatch.title || fileName
+                    };
+                }
+
+                for (const cfg of targetConfigs) {
+                    const safeRepoDir = cfg.repo_dir.startsWith('.') ? 'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
+                    const safeId = safeRepoDir.replace(/-/g, '_');
+                    const expectedOut = cfg.out_file || `${safeId}_context.txt`;
+                    if (baseFile === expectedOut) return {
+                        cat: cfg.domain || "Workspaces",
+                        desc: `Uncommitted changes for ${cfg.title || cfg.repo_dir}.`,
+                        displayName: (cfg.title || baseFile) + " (Diffs)"
+                    };
+                    if (cfg.sub_buckets) {
+                        for (const b of cfg.sub_buckets) {
+                            if (baseFile === b.out_file) return {
+                                cat: b.domain || cfg.domain || "Workspaces",
+                                desc: `Uncommitted changes for ${b.title || b.id}.`,
+                                displayName: (b.title || baseFile) + " (Diffs)"
+                            };
+                        }
+                    }
+                }
+                const rawModule = baseFile.replace('_context.txt', '');
+                let matchedMeta = null;
+                let parentBucket = null;
+                for (const cfg of targetConfigs) {
+                    if (cfg.sub_buckets) {
+                        for (const b of cfg.sub_buckets) {
+                            if (b.dynamic_split_prefix) {
+                                if (b.meta_map && b.meta_map[rawModule]) {
+                                    matchedMeta = b.meta_map[rawModule];
+                                    parentBucket = b;
+                                    break;
+                                }
+                                if (!parentBucket) parentBucket = b;
+                            }
+                        }
+                    }
+                    if (matchedMeta) break;
+                }
+
+                const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
+                desc = matchedMeta?.description ? `Uncommitted changes for ${title} (${matchedMeta.description})` : (parentBucket?.description ? `Uncommitted changes for ${title} (${parentBucket.description})` : `Uncommitted logic changes for ${title}.`);
+                return { cat: domain, desc: desc, displayName: title + " (Diffs)" };
+            };
+
+            data.files.forEach(fileObj => {
+                const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
+                const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
+                if (hiddenOutputs && hiddenOutputs.includes(file)) return;
+                const meta = resolveMetadata(file);
+                if (!categories[meta.cat]) categories[meta.cat] = [];
+                categories[meta.cat].push({
+                    filename: file,
+                    displayName: meta.displayName,
+                    description: meta.desc,
+                    isFS: false,
+                    repoDir: repoDir
+                });
+            });
+
+            const sortedCats = Object.keys(categories).sort((a, b) => {
+                if (a === "Quick-Pack Clipboard") return -1;
+                if (b === "Quick-Pack Clipboard") return 1;
+                let iA = categoryOrder.indexOf(a);
+                let iB = categoryOrder.indexOf(b);
+                if (iA === -1) iA = 999;
+                if (iB === -1) iB = 999;
+                if (iA !== iB) return iA - iB;
+                return a.localeCompare(b);
+            });
+
+            for (const catName of sortedCats) {
+                const catFiles = categories[catName];
+                if (catFiles.length > 0) {
+                    const heading = document.createElement('div');
+                    heading.className = 'category-heading';
+                    heading.innerText = catName;
+                    results.appendChild(heading);
+                    catFiles.forEach(f => createFileCard(f, results));
+                }
+            }
+        } else {
+            if (sweepBtn) sweepBtn.style.display = 'none';
+            results.innerHTML = '<p style="color: #888;">No pending changes detected across tracked repositories.</p>';
+        }
+    } catch (error) {
+        loading.style.display = 'none';
+        results.innerHTML = `<p style="color: red;">Error analyzing diffs: ${error.message}</p>`;
+    }
+}
+window.generateDiffs = generateDiffs;
+
+const diffsScreen = window.ExtensionRegistry.registerSubTab('context', 'diffs', 'Diffs');
+if (diffsScreen) {
+    diffsScreen.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+            <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
+            <button id="btn-sweep-remaining" class="btn-sm" style="background: #f59e0b; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+        </div>
+        <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
+        <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
+            <p style="color: #888; font-style: italic;">Diffs automatically map when this tab is opened.</p>
+        </div>
+    `;
+}
+
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:subtab-changed', (data) => {
+        if (data.parentId === 'context' && data.subId === 'diffs') {
+            generateDiffs();
+        }
+        return false;
+    });
+    window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+        if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'diffs') {
+            generateDiffs();
+        }
+        return false;
+    });
+}
 
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {

@@ -171,7 +171,8 @@ def inject_tracker_config(cfg, **kwargs):
                 "title": f"ISSUE TRACKER ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": "Active bugs, tasks, and planned units of work",
                 "match_prefixes": [".tracker/"],
-                "out_file": f"{safe_r_dir}_tracker_context.txt"
+                "out_file": f"{safe_r_dir}_tracker_context.txt",
+                "is_system": True
             })
 def get_tracker_path(repo, ticket_type, status, workspace_id=None):
     """Resolves the physical directory for a ticket based on your taxonomy."""
@@ -635,3 +636,20 @@ def api_tracker_transition():
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@hooks.on('request_changelog_suggestions')
+def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
+    """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""
+    changelogs = []
+    try:
+        conn = get_connection('tracker', workspace_id=workspace_id)
+        cursor = conn.execute("""
+            SELECT title FROM tracker_tickets 
+            WHERE repo = ? AND status = 'closed' 
+            ORDER BY COALESCE(closed_at, created_at) DESC LIMIT 5
+        """, (repo,))
+        for row in cursor.fetchall():
+            changelogs.append({"title": row['title']})
+    except Exception:
+        pass
+    return changelogs

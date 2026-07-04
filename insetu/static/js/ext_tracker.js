@@ -52,8 +52,7 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                 return false;
             });
         }
-
-        const tasksScreen = window.ExtensionRegistry.registerTab('tasks', 'Tasks');
+        const tasksScreen = window.ExtensionRegistry.registerTab('tasks', 'Tasks', 'tracker');
         if (tasksScreen) {
         const subTabBar = document.createElement('div');
         subTabBar.className = 'sub-tabs-bar';
@@ -134,122 +133,38 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
         `;
         }
     }
-
 function renderTaskRepoPins(state) {
     const container = document.getElementById('task-repo-pins');
     if (!container) return;
-    container.innerHTML = '';
 
-    const { allRepos, targetConfigs } = AppStore.getState();
+    const { allRepos } = AppStore.getState();
 
-    // -- REPOS --
-    const repoWrap = document.createElement('div');
-    repoWrap.style.cssText = "display: flex; align-items: center; flex-wrap: wrap; gap: 6px;";
-
-    const rLbl = document.createElement('span');
-    rLbl.innerText = "📌 Repos:";
-    rLbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; cursor: pointer;";
-    rLbl.onclick = () => KanbanStore.setState({ reposExpanded: !state.reposExpanded });
-    repoWrap.appendChild(rLbl);
-
-    const createRepoPill = (id, label) => {
-        const isActive = state.pinnedRepos.has(id);
-        if (!isActive && !state.reposExpanded) return null; // Hide unselected if collapsed
-
-        const btn = document.createElement('button');
-        btn.className = isActive ? 'repo-pill active' : 'repo-pill';
-        btn.innerText = label;
-        btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-
-        btn.onclick = () => {
-            if (isActive) {
-                // If clicking an already active pill, toggle expansion
-                KanbanStore.setState({ reposExpanded: !state.reposExpanded });
-            } else {
-                // If clicking a new pill, select it and collapse
-                const newPins = new Set(state.pinnedRepos);
-                if (id === "ALL") {
-                    newPins.clear();
-                    newPins.add("ALL");
-                } else {
-                    newPins.delete("ALL");
-                    newPins.add(id);
-                }
-                localStorage.setItem(`insetu_task_pinned_repos_${_getActiveWs()}`, JSON.stringify(Array.from(newPins)));
-                KanbanStore.setState({ pinnedRepos: newPins, reposExpanded: false });
-            }
-        };
-        return btn;
-    };
-
-    const allPill = createRepoPill("ALL", "All");
-    if (allPill) repoWrap.appendChild(allPill);
-    allRepos.forEach(repo => {
-        const p = createRepoPill(repo, repo);
-        if (p) repoWrap.appendChild(p);
-
-        // If this repo is active, render its buckets right next to it
-        if (state.pinnedRepos.has(repo) && repo !== "ALL") {
-            const buckets = getFlattenedBuckets(repo);
-            if (buckets.length > 0 && buckets.some(b => b.id !== 'tracker' && b.original.id !== 'tracker')) {
-                const bWrap = document.createElement('span');
-                bWrap.style.cssText = "display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; background: var(--input-bg); padding: 4px; border-radius: 6px; border: 1px solid var(--border); margin-left: 2px;";
-
-                const bLbl = document.createElement('span');
-                bLbl.innerText = "🗂️";
-                bLbl.style.cssText = "font-size: 0.75rem; margin-right: 2px; cursor: pointer;";
-                const isBExpanded = state.bucketsExpanded[repo] || false;
-                bLbl.onclick = () => {
-                    const newB = { ...state.bucketsExpanded };
-                    newB[repo] = !isBExpanded;
-                    KanbanStore.setState({ bucketsExpanded: newB });
-                };
-                bWrap.appendChild(bLbl);
-
-                const createBucketPill = (bId, bLabel) => {
-                    const isActive = state.pinnedBuckets.has(bId);
-                    if (!isActive && !isBExpanded) return null;
-
-                    const bBtn = document.createElement('button');
-                    bBtn.className = isActive ? 'repo-pill active' : 'repo-pill';
-                    bBtn.innerText = bLabel;
-                    bBtn.style.cssText = `padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-                    bBtn.onclick = () => {
-                        if (isActive) {
-                            const newB = { ...state.bucketsExpanded };
-                            newB[repo] = !isBExpanded;
-                            KanbanStore.setState({ bucketsExpanded: newB });
-                        } else {
-                            const newPins = new Set(state.pinnedBuckets);
-                            if (bId === "ALL") {
-                                newPins.clear();
-                                newPins.add("ALL");
-                            } else {
-                                newPins.delete("ALL");
-                                newPins.add(bId);
-                            }
-                            localStorage.setItem(`insetu_task_pinned_buckets_${_getActiveWs()}`, JSON.stringify(Array.from(newPins)));
-                            const newB = { ...state.bucketsExpanded };
-                            newB[repo] = false;
-                            KanbanStore.setState({ pinnedBuckets: newPins, bucketsExpanded: newB });
-                        }
-                    };
-                    return bBtn;
-                };
-
-                const bAll = createBucketPill("ALL", "All");
-                if (bAll) bWrap.appendChild(bAll);
-                buckets.forEach(b => {
-                    if (b.id === 'tracker' || b.original.id === 'tracker') return;
-                    const bp = createBucketPill(b.id, b.title);
-                    if (bp) bWrap.appendChild(bp);
-                });
-                repoWrap.appendChild(bWrap);
-            }
+    window.UIFactory.createNestedRepoFilters({
+        container: container,
+        repos: allRepos,
+        activeRepos: state.pinnedRepos,
+        reposExpanded: state.reposExpanded,
+        onRepoChange: (newSet) => {
+            localStorage.setItem(`insetu_task_pinned_repos_${_getActiveWs()}`, JSON.stringify(Array.from(newSet)));
+            KanbanStore.setState({ pinnedRepos: newSet, reposExpanded: false });
+        },
+        onRepoExpandToggle: () => KanbanStore.setState({ reposExpanded: !state.reposExpanded }),
+        enableBuckets: true,
+        activeBuckets: state.pinnedBuckets,
+        bucketsExpandedMap: state.bucketsExpanded,
+        getBucketsFn: getFlattenedBuckets,
+        onBucketChange: (newSet, repo) => {
+            localStorage.setItem(`insetu_task_pinned_buckets_${_getActiveWs()}`, JSON.stringify(Array.from(newSet)));
+            const newB = { ...state.bucketsExpanded };
+            newB[repo] = false;
+            KanbanStore.setState({ pinnedBuckets: newSet, bucketsExpanded: newB });
+        },
+        onBucketExpandToggle: (repo, newState) => {
+            const newB = { ...state.bucketsExpanded };
+            newB[repo] = newState;
+            KanbanStore.setState({ bucketsExpanded: newB });
         }
     });
-
-    container.appendChild(repoWrap);
 
     // Update Changelog Button text
     const logBtn = document.getElementById('btn-generate-changelog');
@@ -273,11 +188,7 @@ export async function loadTrackerBoard() {
         KanbanStore.setState({ tasks: data.tasks || [] });
     }
 }
-function renderTaskBucketPins(state) {
-    // Deprecated: Buckets are now nested directly inside the renderTaskRepoPins component layout
-    const oldContainer = document.getElementById('task-bucket-pins');
-    if (oldContainer) oldContainer.remove();
-}
+// renderTaskBucketPins is deprecated; logic absorbed by createNestedRepoFilters
 
 function renderTaskTagPins(state) {
     let container = document.getElementById('task-tag-pins');
@@ -313,36 +224,25 @@ function renderTaskTagPins(state) {
     lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; cursor: pointer;";
     lbl.onclick = () => KanbanStore.setState({ tagsExpanded: !state.tagsExpanded });
     container.appendChild(lbl);
-
-    const createPill = (id, label) => {
-        const isActive = state.pinnedTags.has(id);
-        if (!isActive && !state.tagsExpanded) return null;
-
-        const btn = document.createElement('button');
-        btn.className = isActive ? 'repo-pill active' : 'repo-pill';
-        btn.innerText = label;
-        btn.style.cssText = `padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid var(--border); cursor: pointer; background: ${isActive ? 'var(--btn)' : 'transparent'}; color: ${isActive ? '#fff' : 'var(--text)'}; font-weight: bold; margin: 0;`;
-
-        btn.onclick = () => {
-            if (isActive) {
-                KanbanStore.setState({ tagsExpanded: !state.tagsExpanded });
-            } else {
-                const newPins = new Set(state.pinnedTags);
-                if (id === "ALL") {
-                    newPins.clear();
-                    newPins.add("ALL");
+    const createPill = (id, label, forceVisible = false) => {
+        const isVisible = forceVisible || state.pinnedTags.has(id) || state.tagsExpanded;
+        return window.UIFactory.createFilterPill({
+            id: id,
+            label: label,
+            activeSet: state.pinnedTags,
+            isVisible: isVisible,
+            onChange: (newSet, changedId, wasActive) => {
+                if (wasActive && !state.tagsExpanded) {
+                    KanbanStore.setState({ tagsExpanded: true });
                 } else {
-                    newPins.delete("ALL");
-                    newPins.add(id);
+                    localStorage.setItem(`insetu_task_pinned_tags_${_getActiveWs()}`, JSON.stringify(Array.from(newSet)));
+                    KanbanStore.setState({ pinnedTags: newSet, tagsExpanded: false });
                 }
-                localStorage.setItem(`insetu_task_pinned_tags_${_getActiveWs()}`, JSON.stringify(Array.from(newPins)));
-                KanbanStore.setState({ pinnedTags: newPins, tagsExpanded: false });
             }
-        };
-        return btn;
+        });
     };
 
-    const allPill = createPill("ALL", "All");
+    const allPill = createPill("ALL", "All", true);
     if (allPill) container.appendChild(allPill);
     Array.from(allTags).sort().forEach(tag => {
         const p = createPill(tag, `#${tag}`);
@@ -616,8 +516,7 @@ function populateNewTaskBuckets() {
     select.innerHTML = '<option value="None">No Bucket</option>';
     const selectedRepo = document.getElementById('new-task-repo').value;
     const buckets = getFlattenedBuckets(selectedRepo);
-    buckets.forEach(b => {
-        if (b.id === 'tracker' || b.original.id === 'tracker') return;
+buckets.forEach(b => {
         const opt = document.createElement('option');
         opt.value = b.id;
         opt.innerText = b.title;
@@ -734,7 +633,6 @@ let subBucket = 'None';
         const select = document.getElementById('edit-task-bucket');
         const buckets = getFlattenedBuckets(repo);
         buckets.forEach(b => {
-            if (b.id === 'tracker' || b.original.id === 'tracker') return;
             const opt = document.createElement('option');
             opt.value = b.id;
             opt.innerText = b.title;
@@ -880,10 +778,19 @@ window.loadTrackerBoard = loadTrackerBoard;
 // Sync explicitly to dynamic multi-tenant topology updates
 AppStore.subscribe((state) => state.allRepos, renderAll);
 AppStore.subscribe((state) => state.targetConfigs, renderAll);
-
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
         if (tabId === 'tasks') loadTrackerBoard();
+    });
+
+    window.ExtensionRegistry.registerUIHook('zone:soft-refresh', (ws) => {
+        KanbanStore.setState({ 
+            tasks: [],
+            pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${ws}`),
+            pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${ws}`),
+            pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${ws}`)
+        });
+        return false;
     });
 }
 // Bind UI strictly to state updates via Selectors
@@ -891,7 +798,6 @@ function renderAll() {
     if (!document.getElementById('task-repo-pins')) return; // Board not mounted yet
     const state = KanbanStore.getState();
     renderTaskRepoPins(state);
-    renderTaskBucketPins(state);
     renderTaskTagPins(state);
     renderTrackerBoard(state);
 };

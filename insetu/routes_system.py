@@ -30,9 +30,9 @@ def get_system_config(workspace_id):
             data = json.load(f)
     except Exception:
         data = load_config(workspace_id)
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    core_engines = {"bridge", "gather", "format", "ingest"}
+    core_engines = {"bridge", "gather"}
+
     available = []
     for file in os.listdir(script_dir):
         if file.startswith("engine_") and file.endswith(".py"):
@@ -79,13 +79,10 @@ def api_workspaces():
             return jsonify({"error": "workspaces.json not found."}), 404
 
         w_data = utils_core.load_json_file(index_path, {})
-
         if new_active not in w_data.get("workspaces", {}):
             return jsonify({"error": "Workspace ID not found."}), 400
-        w_data["active_workspace"] = new_active
-        utils_core.save_json_file(index_path, w_data)
-
-        # STATELESS ARCHITECTURE: The backend no longer restarts! 
-        # The frontend UI orchestrates the context swap dynamically.
+            
+        # UDF & STATELESS ARCHITECTURE: The backend no longer tracks active_workspace globally.
+        # The frontend UI orchestrates the context swap dynamically via localStorage.
 
     return jsonify({"status": "success", "message": f"Switched to {new_active}"})
