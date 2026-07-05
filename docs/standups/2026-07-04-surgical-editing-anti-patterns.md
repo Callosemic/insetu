@@ -77,8 +77,12 @@ By enforcing surgical editing, the system footprint remains O(1) relative to the
 * **The Debt:** In `ext_research.js`, `handleDisposition()` calls `fetchState()` after accepting, rejecting, or force-scraping a single inbox item.
 * **The Bomb:** `fetchState()` hits the backend to fetch ALL jobs and ALL inbox items simultaneously. If a user is manually triaging a batch of 50 links, hitting "Accept" 50 times triggers 50 redundant network requests that pull the entire database table into memory, blowing out the UI with full-re-renders each time.
 * **The Fix:** The UI must surgically splice the item out of `ResearchStore.getState().inbox` via Zustand, avoiding backend fetches entirely unless a manual refresh is requested.
-
 ### 12. Context Tab Over-Fetching
 * **The Debt:** In `app.js`, `switchTab(..., 'context')` unconditionally fires `loadContext()`.
 * **The Bomb:** Navigating away from the Context tab to Edit, and then back, forces the entire RAG pipeline to re-compile the context matrix. This locks the compiler and burns CPU cycles purely for UI navigation.
 * **The Fix:** Only compile contexts when explicitly requested (e.g., clicking the refresh button) or when a dirty state flag indicates physical files have changed. Tab navigation must rely on the localized Zustand `manifest` cache.
+
+### 13. Global Repository Sweeps on Localized File Events
+* **The Debt:** When a file is saved or deleted, listeners trigger global workspace refreshes (e.g., flipping a global `_isDiffsDirty = true` flag causing the backend to run `git status` on *every* tracked repo).
+* **The Bomb:** If a multi-tenant workspace tracks 5 repositories, saving a single Python file in Repo A forces the backend to spin up heavy subprocesses or deep `os.walk()` scans for Repos B, C, D, and E just to verify they haven't changed. This creates massive overhead and starves the event loop.
+* **The Fix:** Lifecycle hooks (`post_file_save`, `post_file_delete`) must extract the target repository boundary from the emitted `filepath`. The frontend and backend must use a Set of `target_repos` to surgically run sweeps (e.g., `git diff`) *only* against the affected folders, splicing the updated fragments back into the global RAM cache.
