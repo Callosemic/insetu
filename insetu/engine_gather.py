@@ -8,6 +8,7 @@ from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 gather_bp = Blueprint('gather', __name__)
+__depends__ = []
 
 def generate_ascii_tree(file_paths):
     tree = {}

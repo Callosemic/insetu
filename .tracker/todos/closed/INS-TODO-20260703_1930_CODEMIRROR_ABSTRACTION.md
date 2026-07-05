@@ -1,11 +1,11 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-TODO-20260703_1930_CODEMIRROR_ABSTRACTION
 title: "Ecosystem Generalization: Abstract CodeMirror Mode Mapping"
 created_at: 2026-07-03T19:30:56
-closed_at: null
+closed_at: 2026-07-04T17:30:00
 sub_bucket: "None"
 tags: ["Frontend", "Refactor", "DRY"]
 ---
@@ -24,5 +24,5 @@ To comply with our DRY (Don't Repeat Yourself) engineering standards, this liter
 - [ ] Sweep `fs.js` and strip out all localized `modeMap` dictionary definitions.
 - [ ] Refactor the four target methods to funnel their extension resolution through the new centralized utility.
 - [ ] Expand the centralized dictionary to gracefully support upcoming backend language formats (e.g., `.ts`, `.rs`, `.go`).
-
 ## Notes / Execution Log
+* **Resolution (2026-07-04):** Created central `resolveEditorMode` utility inside `app.js`. Refactored `fs.js` to remove fragmented dictionary map implementations and utilize this unified interface across the OS.

@@ -5,7 +5,8 @@ import {
     compileContexts,
     fetchAndCopy,
     fetchAndDownloadState,
-    normalizeAccentText
+    normalizeAccentText,
+    resolveEditorMode
 } from './app.js';
 import { AppStore } from './store.js';
 let currentModalFile = '';
@@ -16,16 +17,14 @@ let currentModalFullText = '';
 let isModalTruncated = false;
 let currentModalForceEdit = false;
 export let currentModalIsMemoryOnly = false;
-
 window.loadFullModalText = function() {
     const banner = document.getElementById('modal-truncation-banner');
     if (banner) banner.style.display = 'none';
     isModalTruncated = false;
 
-    const ext = currentModalFile.split('.').pop().toLowerCase();
-    const modeMap = { 'md': 'markdown', 'py': 'python', 'js': 'javascript', 'json': 'javascript', 'sh': 'shell' };
-    const isSupportedEditor = !!modeMap[ext] || currentModalForceEdit;
-    const isMarkdown = ext === 'md' || currentModalForceEdit;
+    const { ext, isSupported, isMarkdown: extIsMd } = resolveEditorMode(currentModalFile);
+    const isSupportedEditor = isSupported || currentModalForceEdit;
+    const isMarkdown = extIsMd || currentModalForceEdit;
     const shouldBeReadOnly = !(currentModalIsFS || currentModalForceEdit);
 
     const textArea = document.getElementById('modal-text');
@@ -127,13 +126,17 @@ function renderMarkdownPreview() {
     const yamlRegex = /^---\n([\s\S]*?)\n---/;
     text = text.replace(yamlRegex, (match, p1) => {
         // Auto-link URLs inside the frontmatter
-        const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: #38bdf8; text-decoration: underline;">$1</a>');
+        const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: var(--intent-primary); text-decoration: underline;">$1</a>');
         return '<pre class="yaml-frontmatter">' + linkedP1 + '</pre>';
 });
-
-// Sanitize raw text vectors against script tag injection to enforce I/O safety bounds
-const sanitizedText = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '⚠️ [Script Blocked]');
-preview.innerHTML = marked.parse(sanitizedText);
+// Sanitize raw text vectors against script tag injection using DOMPurify
+let htmlContent = marked.parse(text);
+if (typeof DOMPurify !== 'undefined') {
+    htmlContent = DOMPurify.sanitize(htmlContent, { ADD_ATTR: ['target'] });
+} else {
+    htmlContent = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '⚠️ [Script Blocked]');
+}
+preview.innerHTML = htmlContent;
 
 const checkboxes = preview.querySelectorAll('input[type="checkbox"]');
     checkboxes.forEach((cb, index) => {
@@ -253,8 +256,8 @@ function showWikiPopup(e, href, title) {
     }, 10);
 }
 function toggleModalMode() {
-    if (isPreviewMode && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        const override = window.ExtensionRegistry.executeUIHook('zone:file-edit-override', currentModalFile);
+    if (isPreviewMode && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', currentModalFile);
         if (override) return;
     }
 
@@ -265,16 +268,7 @@ function toggleModalMode() {
     const editZone = document.getElementById('edit-zone-buttons');
     const editDivider = document.getElementById('edit-zone-divider');
 
-    const ext = currentModalFile.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown',
-        'py': 'python',
-        'js': 'javascript',
-        'json': 'javascript',
-        'sh': 'shell'
-    };
-    const isSupportedEditor = !!modeMap[ext];
-    const isMarkdown = ext === 'md';
+    const { ext, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(currentModalFile);
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
     if (isPreviewMode) {
@@ -312,17 +306,8 @@ async function viewAndCopy(filename) {
     const preview = document.getElementById('modal-preview');
     const toggleBtn = document.getElementById('modal-toggle-btn');
 
-    const ext = filename.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown',
-        'py': 'python',
-        'js': 'javascript',
-        'json': 'javascript',
-        'sh': 'shell'
-    };
-    const codeMode = modeMap[ext];
-    const isSupportedEditor = !!codeMode;
-    const isMarkdown = ext === 'md';
+    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
+    
     if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.value("Loading...");
         mdeInstance.codemirror.setOption("mode", codeMode);
@@ -435,8 +420,8 @@ async function saveModalFile(autoSave = false) {
             document.getElementById('modal-save-btn').style.display = 
 'none';
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (autoSave && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:post-file-save', currentModalFile);
+            if (autoSave && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', currentModalFile);
             }
         }
     });
@@ -461,7 +446,7 @@ function openMoveModal() {
             <div class="spinner" style="display:block;">Loading folders...</div>
         </div>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'move-modal',
         title: 'Move File',
         body: bodyHtml,
@@ -500,7 +485,7 @@ export function mountFolderBrowser(container, onSelect) {
         upBtn.className = 'btn-sm';
         upBtn.innerText = '⬆️ Up';
         upBtn.disabled = currentPath.length === 0;
-        upBtn.style.background = upBtn.disabled ? 'transparent' : '#64748b';
+        upBtn.style.background = upBtn.disabled ? 'transparent' : 'var(--intent-neutral)';
         upBtn.style.color = upBtn.disabled ? 'var(--border)' : '#fff';
         upBtn.style.border = upBtn.disabled ? '1px solid var(--border)' : 'none';
         upBtn.onclick = () => { currentPath.pop(); render(); onSelect(currentPath.join('/')); };
@@ -519,14 +504,14 @@ export function mountFolderBrowser(container, onSelect) {
         const keys = Object.keys(current).filter(k => k !== '_isFile' && !current[k]._isFile).sort((a, b) => a.localeCompare(b));
 
         if (keys.length === 0) {
-            container.innerHTML += '<div style="color: #888; font-style: italic; font-size: 0.9rem; margin-top: 10px;">No sub-folders available.</div>';
+            container.innerHTML += '<div style="color: var(--text-muted); font-style: italic; font-size: 0.9rem; margin-top: 10px;">No sub-folders available.</div>';
             return;
         }
 
         keys.forEach(key => {
             const card = document.createElement('div');
             card.style.cssText = 'padding: 8px 10px; cursor: pointer; display: flex; align-items: center; border-radius: 4px; transition: background 0.2s; margin-bottom: 4px;';
-            card.innerHTML = `<span style="font-family: monospace; font-weight: bold; color: #facc15; margin-right: 8px;">📁</span><span style="color: var(--text); font-size: 0.9rem; font-weight: bold;">${key}</span>`;
+            card.innerHTML = `<span style="font-family: monospace; font-weight: bold; color: var(--intent-warning); margin-right: 8px;">📁</span><span style="color: var(--text); font-size: 0.9rem; font-weight: bold;">${key}</span>`;
 
             card.onmouseover = () => card.style.background = 'var(--input-bg)';
             card.onmouseout = () => card.style.background = 'transparent';
@@ -552,15 +537,15 @@ async function executeMove(modalId = 'move-modal') {
         btnId: 'execute-move-btn',
         loadingText: 'Moving...',
         onSuccess: () => {
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
 
             document.getElementById('file-modal').style.display = 'none';
 
             updateManifestState(currentModalFile, destPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:post-file-save', currentModalFile);
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', currentModalFile);
             }
         }
     });
@@ -577,8 +562,8 @@ async function archiveModalFile() {
             document.getElementById('file-modal').style.display = 'none';
             updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:post-file-save', oldPath);
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
             }
         }
     });
@@ -595,8 +580,8 @@ async function deleteModalFile() {
             document.getElementById('file-modal').style.display = 'none';
             updateManifestState(oldPath);
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:post-file-save', oldPath);
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
             }
         }
     });
@@ -776,14 +761,14 @@ export function createFileCard(fileInfo, container) {
 if (!fileInfo.isSource && manifest[fileInfo.filename]) {
         const browseBtn = document.createElement('button');
         browseBtn.className = 'btn-sm';
-        browseBtn.style.background = '#8b5cf6';
+        browseBtn.style.background = 'var(--intent-highlight)';
         browseBtn.innerText = '📁 Browse';
         browseBtn.onclick = () => openBrowseModal(fileInfo.filename);
         actions.appendChild(browseBtn);
 }
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:file-card-actions', {
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        window.inSetu.extensions.Registry.executeUIHook('zone:file-card-actions', {
             filepath: fileInfo.filename,
             repoDir: fileInfo.repoDir,
             isFS: fileInfo.isFS,
@@ -792,7 +777,7 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     }
     const dlBtn = document.createElement('button');
     dlBtn.className = 'btn-sm';
-    dlBtn.style.background = '#0284c7';
+    dlBtn.style.background = 'var(--intent-primary)';
     dlBtn.style.color = 'white';
     dlBtn.style.border = 'none';
     dlBtn.style.cursor = 'pointer';
@@ -857,7 +842,7 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
                         a.href = url;
                         a.download = `${baseName}_pt${idx + 1}.txt`;
                         a.className = 'btn-sm';
-                        a.style.cssText = 'background: #0ea5e9; color: white; text-decoration: none; padding: 4px 8px; font-size: 0.75rem; border-radius: 4px;';
+                        a.style.cssText = 'background: var(--intent-primary); color: white; text-decoration: none; padding: 4px 8px; font-size: 0.75rem; border-radius: 4px;';
                         a.innerText = `📄 Part ${idx + 1} (${(c.length/1024).toFixed(0)} kb)`;
                         partsContainer.appendChild(a);
                     });
@@ -936,7 +921,7 @@ export function loadGlobalFS() {
     }
 
     if (Object.keys(globalFileTree).length === 0) {
-        container.innerHTML = '<p style="padding: 15px; color: #888;">No repositories configured.</p>';
+        container.innerHTML = '<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>';
         return;
     }
 
@@ -973,7 +958,7 @@ function renderGlobalFSLevel() {
     const upBtn = document.getElementById('global-fs-up-btn');
     upBtn.disabled = globalBrowsePath.length === 0;
     if (!upBtn.disabled) {
-        upBtn.style.background = '#64748b';
+        upBtn.style.background = 'var(--intent-neutral)';
     } else {
         upBtn.style.background = 'transparent';
         upBtn.style.color = 'var(--border)';
@@ -1058,7 +1043,7 @@ function filterGlobalFS(query) {
         });
 
         if (matches.length === 0) {
-            container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
+            container.innerHTML = '<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>';
             return;
         }
         matches.forEach(filepath => {
@@ -1068,7 +1053,7 @@ function filterGlobalFS(query) {
                 card.className = 'file-card';
                 card.style.cursor = 'pointer';
                 card.style.padding = '8px 15px';
-                card.innerHTML = `<span class="file-title" style="color: #10b981;">📄 ${filename}</span><div class="file-desc">${filepath}</div>`;
+                card.innerHTML = `<span class="file-title" style="color: var(--intent-success);">📄 ${filename}</span><div class="file-desc">${filepath}</div>`;
                 card.onclick = () => {
                     if (browserConfig.callback) browserConfig.callback(filepath);
                     closeBrowseModal();
@@ -1127,19 +1112,19 @@ function openNewFileModal(overridePath = null) {
     const prefix = typeof overridePath === 'string' ? overridePath : (globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '');
 
     const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: #8b5cf6;">${prefix}</span></label>
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: var(--intent-highlight);">${prefix}</span></label>
         <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
-        <div id="new-file-ext-warning" style="display: none; color: #f59e0b; font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+        <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
         <div id="new-file-toolbar" style="display: none; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-            <button onclick="if(window.importFromUrl) window.importFromUrl()" class="btn-sm" style="background: #3b82f6; margin: 0;">🌐 Import from URL</button>
-            <span id="import-url-status" style="font-size: 0.8rem; color: #888; display: none;">Fetching...</span>
+            <button onclick="if(window.importFromUrl) window.importFromUrl()" class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
+            <span id="import-url-status" style="font-size: 0.8rem; color: var(--text-muted); display: none;">Fetching...</span>
         </div>
 
         <div id="zone-new-file-options" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;"></div>
 
         <textarea id="new-file-content" style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box; min-height: 200px;" placeholder="Enter file content here..."></textarea>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'new-file-modal',
         title: 'Create New Workspace File',
         body: bodyHtml,
@@ -1152,8 +1137,8 @@ function openNewFileModal(overridePath = null) {
         ]
     });
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:new-file-options', null);
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        window.inSetu.extensions.Registry.executeUIHook('zone:new-file-options', null);
     }
 }
 
@@ -1168,9 +1153,9 @@ async function saveNewFile(modalId = 'new-file-modal') {
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         // Let extensions intercept the payload and inject metadata/headers before writing to disk
-        content = await window.ExtensionRegistry.executeUIHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
+        content = await window.inSetu.extensions.Registry.executeUIHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
     }
 
     const btn = document.getElementById('temp-save-file-btn');
@@ -1188,7 +1173,7 @@ async function saveNewFile(modalId = 'new-file-modal') {
             const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
             if (mRes.ok) setContextManifest(await mRes.json());
 
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
 
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
@@ -1207,31 +1192,31 @@ function openNewFolderModal(overridePath = null) {
     const submitLabel = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
 
     const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: #8b5cf6;">${prefix}</span></label>
+        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: var(--intent-highlight);">${prefix}</span></label>
         <input type="text" id="new-folder-name" placeholder="Directory name..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
 
         <div id="new-repo-fields" style="display: ${isRoot ? 'flex' : 'none'}; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-            <h4 style="margin: 0; margin-bottom: 5px; color: #38bdf8;">Repository Configuration</h4>
+            <h4 style="margin: 0; margin-bottom: 5px; color: var(--intent-primary);">Repository Configuration</h4>
             <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Repository Title</label>
+                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository Title</label>
                 <input type="text" id="new-repo-title" placeholder="e.g., Core API" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
             </div>
             <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Domain Category</label>
+                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Domain Category</label>
                 <input type="text" id="new-repo-domain" value="Workspaces" placeholder="e.g., Workspaces" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
             </div>
             <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Description</label>
+                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Description</label>
                 <input type="text" id="new-repo-desc" placeholder="Short summary..." style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
             </div>
             <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px;">Tracked Extensions</label>
+                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Tracked Extensions</label>
                 <input type="text" id="new-repo-exts" value=".py, .json, .md, .sh, .txt, .html, .css, .js" placeholder="e.g., .py, .json, .md" style="padding: 8px; margin: 0; width: 100%; font-family: monospace; box-sizing: border-box;">
             </div>
         </div>
     `;
 
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'new-folder-modal',
         title: modalTitle,
         body: bodyHtml,
@@ -1246,7 +1231,7 @@ function openNewFolderModal(overridePath = null) {
     if (!isRoot) {
         setTimeout(() => {
             const btn = document.getElementById('btn-submit-new-folder');
-            if (btn) btn.style.background = '#3b82f6'; // Preserve the legacy blue button for generic folders
+            if (btn) btn.style.background = 'var(--intent-primary)'; // Preserve the legacy blue button for generic folders
         }, 50);
     }
 }
@@ -1307,7 +1292,7 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
                 }
             }
 
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else {
                 const m = document.getElementById(modalId);
                 if (m) m.style.display = 'none';
@@ -1365,9 +1350,9 @@ export async function viewSourceFile(filepath, isFS = false) {
         tb.style.display = 'flex';
         document.getElementById('modal-clean-btn').style.display = (isMarkdown || ext === 'txt') ? 'block' : 'none';
 
-        if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-            window.ExtensionRegistry.executeUIHook('zone:modal-file-toolbar', { filepath, isMarkdown, ext });
-            window.ExtensionRegistry.executeUIHook('zone:modal-edit-toolbar', { filepath, isMarkdown, ext });
+        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+            window.inSetu.extensions.Registry.executeUIHook('zone:modal-file-toolbar', { filepath, isMarkdown, ext });
+            window.inSetu.extensions.Registry.executeUIHook('zone:modal-edit-toolbar', { filepath, isMarkdown, ext });
         }
     } else {
         tb.style.display = 'none';
@@ -1522,7 +1507,7 @@ function filterBrowse(query) {
         });
 
         if (matches.length === 0) {
-            container.innerHTML = '<div style="padding: 15px; color: #888;">No matching files found.</div>';
+            container.innerHTML = '<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>';
             return;
         }
         matches.forEach(filepath => {
@@ -1576,7 +1561,7 @@ function renderBrowseLevel() {
     upBtn.innerText = '⬆️ Up';
     upBtn.disabled = currentBrowsePath.length === 0;
     if (!upBtn.disabled) {
-        upBtn.style.background = '#64748b';
+        upBtn.style.background = 'var(--intent-neutral)';
         upBtn.onclick = () => {
             currentBrowsePath.pop();
             renderBrowseLevel();
@@ -1623,7 +1608,7 @@ function renderBrowseLevel() {
                 card.className = 'file-card';
                 card.style.cursor = 'pointer';
                 card.style.padding = '8px 15px';
-                card.innerHTML = `<span class="file-title" style="color: #10b981;">📄 ${key}</span>`;
+                card.innerHTML = `<span class="file-title" style="color: var(--intent-success);">📄 ${key}</span>`;
                 card.onclick = () => {
                     if (browserConfig.callback) browserConfig.callback(item.fullPath);
                     closeBrowseModal();
@@ -1791,7 +1776,7 @@ export async function openQuickPackModal(targetDir) {
     // Expose transient state to the DOM string handlers
     window._qpSet = selectedFiles;
 
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'quick-pack-modal-' + Date.now(),
         title: `Quick-Pack Select: ${targetDir}`,
         body: `<div style="display: flex; flex-direction: column; gap: 5px; max-height: 50vh; overflow-y: auto; padding-right: 10px;">${checkboxesHtml}</div>`,
@@ -1810,11 +1795,11 @@ export async function openQuickPackModal(targetDir) {
     });
 }
 export function openFsDropdown(anchorElement) {
-    if (!window.UIFactory || !window.UIFactory.createDropdown) return;
+    if (!window.inSetu.ui.Factory || !window.inSetu.ui.Factory.createDropdown) return;
 
     const currentPath = globalBrowsePath.join('/');
 
-    window.UIFactory.createDropdown({
+    window.inSetu.ui.Factory.createDropdown({
         anchor: anchorElement,
         items: [
             { label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) },
@@ -1871,13 +1856,13 @@ export function openLinkModal() {
         </div>
         <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-shrink: 0;">
             <input type="text" id="link-search-input" placeholder="Search files..." style="flex: 1; padding: 8px;  margin: 0;" oninput="if(typeof onLinkSearchInput === 'function') onLinkSearchInput(this.value)">
-            <button id="btn-deep-search" onclick="executeDeepLinkSearch()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🔍 Search</button>
+            <button id="btn-deep-search" onclick="executeDeepLinkSearch()" class="btn-sm" style="background: var(--intent-highlight); margin: 0; display: none;">🔍 Search</button>
         </div>
         <div id="link-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
-            <span style="color:#888; font-style:italic;">Type to search...</span>
+            <span style="color:var(--text-muted); font-style:italic;">Type to search...</span>
         </div>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'link-insert-modal',
         title: 'Insert Link',
         body: bodyHtml
@@ -1895,7 +1880,7 @@ export function switchLinkTab(tab) {
         onLinkSearchInput(document.getElementById('link-search-input').value);
     } else {
         document.getElementById('btn-deep-search').style.display = 'block';
-        document.getElementById('link-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Hit search to rank by multi-word matching...</span>';
+        document.getElementById('link-results-list').innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Hit search to rank by multi-word matching...</span>';
     }
 }
 
@@ -1912,7 +1897,7 @@ export async function executeDeepLinkSearch() {
     const q = val.toLowerCase().trim();
 
     if (!q) {
-        container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search contents...</span>';
+        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search contents...</span>';
         return;
     }
     container.innerHTML = '<div class="spinner" style="display:block; margin-top:0;">Searching file contents across workspace...</div>';
@@ -1926,7 +1911,7 @@ export async function executeDeepLinkSearch() {
 
         container.innerHTML = '';
         if (data.results.length === 0) {
-            container.innerHTML = '<span style="color:#888; font-style:italic;">No files found matching contents.</span>';
+            container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No files found matching contents.</span>';
             return;
         }
 
@@ -1942,9 +1927,9 @@ export async function executeDeepLinkSearch() {
             row.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-weight: bold; color: var(--text);">${name}</span>
-                    <span style="font-size: 0.7rem; color: #10b981; border: 1px solid #10b981; padding: 2px 6px; border-radius: 10px;">Score: ${item.score}</span>
+                    <span style="font-size: 0.7rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px;">Score: ${item.score}</span>
                 </div>
-                <span style="font-size: 0.75rem; color: #888; font-family: monospace;">${item.path}</span>
+                <span style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">${item.path}</span>
                 ${item.snippet ? `<span style="font-size: 0.8rem; color: var(--text); margin-top: 4px; opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><i>"...${item.snippet.replace(/</g, '&lt;')}"</i></span>` : ''}
             `;
 
@@ -1963,7 +1948,7 @@ function executeLinkSearch(query) {
     const q = query.toLowerCase().trim();
 
     if (!q) {
-        container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search...</span>';
+        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
         return;
     }
 
@@ -1971,7 +1956,7 @@ function executeLinkSearch(query) {
 
     container.innerHTML = '';
     if (results.length === 0) {
-        container.innerHTML = '<span style="color:#888; font-style:italic;">No markdown files found.</span>';
+        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No markdown files found.</span>';
         return;
     }
 
@@ -1986,7 +1971,7 @@ function executeLinkSearch(query) {
 
         row.innerHTML = `
             <span style="font-weight: bold; color: var(--text);">${name}</span>
-            <span style="font-size: 0.75rem; color: #888; font-family: monospace;">${path}</span>
+            <span style="font-size: 0.75rem; color: var(--text-muted); font-family: monospace;">${path}</span>
         `;
 
         row.onclick = () => insertLinkToEditor(path, name);
@@ -2035,7 +2020,7 @@ function insertLinkToEditor(path, name) {
         textArea.dispatchEvent(new Event('input'));
         }
 
-        window.UIFactory.closeModal('link-insert-modal');
+        window.inSetu.ui.Factory.closeModal('link-insert-modal');
 }
 
 // Expose new functions to the window so HTML element handlers can reach them

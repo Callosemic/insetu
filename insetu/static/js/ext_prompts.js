@@ -2,18 +2,18 @@
 import { createFileCard, buildFileTree, mdeInstance } from './app.js';
 import { AppStore } from './store.js';
 
-const promptsScreen = window.ExtensionRegistry?.registerSubTab('context', 'prompts', 'Prompts');
+const promptsScreen = window.inSetu.extensions.Registry?.registerSubTab('context', 'prompts', 'Prompts');
 if (promptsScreen) {
     promptsScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h2 style="margin: 0;">Prompt Library</h2>
             <div style="display: flex; gap: 10px;">
-                <button class="btn-sm" style="background: #3b82f6; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptFolderModal()">+ Folder</button>
-                <button class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptModal()">+ Prompt</button>
+                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptFolderModal()">+ Folder</button>
+                <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewPromptModal()">+ Prompt</button>
             </div>
         </div>
         <div id="prompts-list" style="display: flex; flex-direction: column;">
-            <p style="color: #888; font-style: italic;">Compile contexts to view available prompts.</p>
+            <p style="color: var(--text-muted); font-style: italic;">Compile contexts to view available prompts.</p>
         </div>
     `;
 }
@@ -43,7 +43,7 @@ export async function renderPromptsTab() {
     const rawPrompts = gatherOptions.prompts || [];
     
     if (rawPrompts.length === 0) {
-        container.innerHTML = '<p style="color: #888; font-style: italic;">No prompts found in workspace.</p>';
+        container.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">No prompts found in workspace.</p>';
         return;
     }
 
@@ -73,7 +73,7 @@ export async function renderPromptsTab() {
         const upBtn = document.createElement('button');
         upBtn.className = 'btn-sm';
         upBtn.innerText = '⬆️ Up';
-        upBtn.style.background = '#64748b';
+        upBtn.style.background = 'var(--intent-neutral)';
         upBtn.onclick = () => {
             window.currentPromptsPath.pop();
             renderPromptsTab();
@@ -132,9 +132,9 @@ export async function renderPromptsTab() {
 }
 window.renderPromptsTab = renderPromptsTab;
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     // 1. Claim the Prompts Context payload metadata
-    window.ExtensionRegistry.registerUIHook('zone:context-metadata', (fileName) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:context-metadata', (fileName) => {
         if (fileName === 'prompts_context.txt') return {
             cat: "Prompts & State",
             desc: "The Master Ingestion Prompt and CLI templates.",
@@ -144,13 +144,13 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     });
 
     // 2. React to Tab Routing
-    window.ExtensionRegistry.registerUIHook('zone:subtab-changed', (data) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
         if (data.parentId === 'context' && data.subId === 'prompts') {
             renderPromptsTab();
         }
         return false;
     });
-    window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
         if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'prompts') {
             renderPromptsTab();
         }
@@ -162,34 +162,46 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
         const embedBtn = document.createElement('button');
         embedBtn.id = 'btn-embed-prompt';
         embedBtn.className = 'btn-sm';
-        embedBtn.style.cssText = 'background: #3b82f6; margin: 0; display: none;';
+        embedBtn.style.cssText = 'background: var(--intent-primary); margin: 0; display: none;';
         embedBtn.innerText = '🧩 Embed';
         embedBtn.onclick = openPromptEmbedModal;
         tb.appendChild(embedBtn);
     }
 
-    window.ExtensionRegistry.registerUIHook('zone:modal-edit-toolbar', (data) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:modal-edit-toolbar', (data) => {
         const embedBtn = document.getElementById('btn-embed-prompt');
         if (embedBtn) embedBtn.style.display = (data.isMarkdown && data.filepath && data.filepath.includes('/prompts/')) ? 'block' : 'none';
         return false;
     });
 
-    window.ExtensionRegistry.registerUnloadHook('prompts', () => {
+    window.inSetu.extensions.Registry.registerUnloadHook('prompts', () => {
         const embedBtn = document.getElementById('btn-embed-prompt');
         if (embedBtn) embedBtn.remove();
     });
 
     // 4. Inject the copy button onto prompt file cards
-    window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {
         if (data.filepath && data.filepath.includes('/prompts/')) {
             const copyBtn = document.createElement('button');
             copyBtn.className = 'btn-sm';
-            copyBtn.style.background = '#10b981';
+            copyBtn.style.background = 'var(--intent-success)';
             copyBtn.style.margin = '0';
             copyBtn.innerText = '📋 Copy';
-            copyBtn.onclick = (e) => {
+            copyBtn.onclick = async (e) => {
                 e.stopPropagation();
-                if (window.fetchAndCopy) window.fetchAndCopy(data.filepath, copyBtn);
+                const originalText = copyBtn.innerText;
+                copyBtn.innerText = "Fetching...";
+                try {
+                    const activeWs = window.inSetu.stores.App.getState().activeWorkspace || 'default';
+                    const res = await fetch(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(data.filepath));
+                    if (!res.ok) throw new Error("Resolution failed.");
+                    const text = await res.text();
+                    await navigator.clipboard.writeText(text);
+                    copyBtn.innerText = "✅ Copied!";
+                } catch (err) {
+                    copyBtn.innerText = "❌ Error";
+                }
+                setTimeout(() => { copyBtn.innerText = originalText; }, 3000);
             };
             data.actionsContainer.insertBefore(copyBtn, data.actionsContainer.firstChild);
         }
@@ -228,7 +240,8 @@ export function openPromptEmbedModal() {
             files: prompts,
             autoDrilldown: true,
             callback: (val) => {
-                const embedString = `{{include: ${val}}}`;
+                const embedString = `{{include_prompt: ${val}}}`;
+
                 const textArea = document.getElementById('modal-text');
                 const mdeWrap = document.querySelector('.EasyMDEContainer');
                 const isMDE = (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined' && mdeInstance);

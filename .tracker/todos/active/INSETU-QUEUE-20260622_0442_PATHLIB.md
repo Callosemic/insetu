@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "active"
 id: INSETU-QUEUE-20260622_0442_PATHLIB
 title: "Backend Maintainability: Migrate to Pathlib"
 created_at: 2026-06-22T04:42:00

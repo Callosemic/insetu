@@ -21,9 +21,9 @@ export async function openPushModal(diffFilename, repoDir) {
         <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
     `;
 
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'push-modal',
-        title: `🚀 Commit & Push: <span style="color: #8b5cf6;">${repoDir || "Unknown Repo"}</span>`,
+        title: `🚀 Commit & Push: <span style="color: var(--intent-highlight);">${repoDir || "Unknown Repo"}</span>`,
         body: bodyHtml,
         actions: [
             { label: '🚀 Execute Push', style: 'primary', id: 'execute-push-btn', onClick: async (e, modal) => {
@@ -88,7 +88,7 @@ export async function executePush(modalId = 'push-modal') {
             } else {
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${data.output}`);
             }
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else {
                 const m = document.getElementById(modalId);
                 if (m) m.style.display = 'none';
@@ -124,7 +124,7 @@ export async function openSweepModal() {
         <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
     `;
 
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'sweep-modal',
         title: '🧹 Selective Sweep',
         body: bodyHtml,
@@ -157,7 +157,7 @@ async function loadSweepFiles() {
         loading.style.display = 'none';
 
         if (Object.keys(data.repos).length === 0) {
-            container.innerHTML = '<p style="color: #10b981; font-weight: bold; text-align: center; margin-top: 20px;">✨ Working tree clean! Nothing to sweep.</p>';
+            container.innerHTML = '<p style="color: var(--intent-success); font-weight: bold; text-align: center; margin-top: 20px;">✨ Working tree clean! Nothing to sweep.</p>';
             return;
         }
 
@@ -166,7 +166,7 @@ async function loadSweepFiles() {
         for (const [repo, files] of Object.entries(data.repos)) {
             const repoHeader = document.createElement('h4');
             repoHeader.innerText = `📦 ${repo}`;
-            repoHeader.style.cssText = "margin: 10px 0 5px 0; color: #38bdf8; border-bottom: 1px solid var(--border); padding-bottom: 3px;";
+            repoHeader.style.cssText = "margin: 10px 0 5px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 3px;";
 
             // "Select All" toggle for the repo
             const selectAllWrap = document.createElement('div');
@@ -179,7 +179,7 @@ async function loadSweepFiles() {
             };
             const selectAllLbl = document.createElement('label');
             selectAllLbl.innerText = "Select All";
-            selectAllLbl.style.cssText = "font-size: 0.8rem; font-weight: bold; color: #888; cursor: pointer;";
+            selectAllLbl.style.cssText = "font-size: 0.8rem; font-weight: bold; color: var(--text-muted); cursor: pointer;";
             selectAllLbl.onclick = () => selectAllCb.click();
 
             selectAllWrap.appendChild(selectAllCb);
@@ -388,7 +388,7 @@ export async function generateDiffs() {
             }
         } else {
             if (sweepBtn) sweepBtn.style.display = 'none';
-            results.innerHTML = '<p style="color: #888;">No pending changes detected across tracked repositories.</p>';
+            results.innerHTML = '<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>';
         }
     } catch (error) {
         loading.style.display = 'none';
@@ -397,28 +397,28 @@ export async function generateDiffs() {
 }
 window.generateDiffs = generateDiffs;
 
-const diffsScreen = window.ExtensionRegistry.registerSubTab('context', 'diffs', 'Diffs');
+const diffsScreen = window.inSetu.extensions.Registry.registerSubTab('context', 'diffs', 'Diffs');
 if (diffsScreen) {
     diffsScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
-            <button id="btn-sweep-remaining" class="btn-sm" style="background: #f59e0b; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+            <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
         </div>
         <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
         <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
-            <p style="color: #888; font-style: italic;">Diffs automatically map when this tab is opened.</p>
+            <p style="color: var(--text-muted); font-style: italic;">Diffs automatically map when this tab is opened.</p>
         </div>
     `;
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:subtab-changed', (data) => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
         if (data.parentId === 'context' && data.subId === 'diffs') {
             generateDiffs();
         }
         return false;
     });
-    window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
         if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'diffs') {
             generateDiffs();
         }
@@ -426,12 +426,12 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     });
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:file-card-actions', (data) => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {
         if (data.filepath && data.filepath.endsWith('_diffs.txt')) {
             const pushBtn = document.createElement('button');
             pushBtn.className = 'btn-sm';
-            pushBtn.style.background = '#8b5cf6';
+            pushBtn.style.background = 'var(--intent-highlight)';
             pushBtn.innerText = '🚀 Push';
             pushBtn.onclick = () => openPushModal(data.filepath, data.repoDir);
             data.actionsContainer.appendChild(pushBtn);

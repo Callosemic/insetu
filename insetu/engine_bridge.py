@@ -11,6 +11,8 @@ import difflib
 from contextlib import redirect_stdout
 from insetu.utils_core import resolve_workspace_path, get_sister_repos, get_workspace_physics, load_config, get_omniscient_workspace_files
 
+__depends__ = []
+
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., {{ ` * 3 }} or {{ = * 7 }}
     text = re.sub(r'\{\{\s*(.)\s*\*\s*(\d+)\s*\}\}', lambda m: m.group(1) * int(m.group(2)), text)

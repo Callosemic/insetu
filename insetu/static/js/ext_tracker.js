@@ -19,6 +19,7 @@ const _safeParseLocalStorageSet = (key) => {
         return new Set(["ALL"]);
     }
 };
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 export const KanbanStore = createStore(
     devtools(
@@ -28,17 +29,19 @@ export const KanbanStore = createStore(
             pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${_getActiveWs()}`),
             pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${_getActiveWs()}`),
             reposExpanded: false,
-
             bucketsExpanded: {},
-            tagsExpanded: false
+            tagsExpanded: false,
+            resetState: () => set({ tasks: [] })
         })),
         { name: 'KanbanStore' }
     )
 );
 
+window.inSetu.stores.Kanban = KanbanStore;
+
 if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
-    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-            window.ExtensionRegistry.registerUIHook('zone:file-edit-override', (filepath) => {
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+            window.inSetu.extensions.Registry.registerUIHook('zone:file-edit-override', (filepath) => {
                 if (filepath.includes('.tracker/')) {
                     document.getElementById('file-modal').style.display = 'none';
                     if (window.openEditTaskModal) window.openEditTaskModal(filepath);
@@ -47,12 +50,12 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                 }
                 return false;
             });
-            window.ExtensionRegistry.registerUIHook('zone:post-file-save', (filepath) => {
+            window.inSetu.extensions.Registry.registerUIHook('zone:post-file-save', (filepath) => {
                 if (filepath.includes('.tracker/') && window.loadTrackerBoard) window.loadTrackerBoard();
                 return false;
             });
         }
-        const tasksScreen = window.ExtensionRegistry.registerTab('tasks', 'Tasks', 'tracker');
+        const tasksScreen = window.inSetu.extensions.Registry.registerTab('tasks', 'Tasks', 'tracker');
         if (tasksScreen) {
         const subTabBar = document.createElement('div');
         subTabBar.className = 'sub-tabs-bar';
@@ -63,7 +66,7 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                 <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
                 <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
             </div>
-            <button class="btn-sm" style="background: #8b5cf6; margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
+            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
         `;
         tasksScreen.parentElement.insertBefore(subTabBar, tasksScreen);
 
@@ -83,7 +86,7 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <div id="todos-active-list"></div>
                     </div>
                     <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                        <h3 style="margin-top: 0; color: #10b981;">Closed</h3>
+                        <h3 style="margin-top: 0; color: var(--intent-success);">Closed</h3>
                         <div id="todos-closed-list"></div>
                     </div>
                 </div>
@@ -99,7 +102,7 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <div id="bugs-active-list"></div>
                     </div>
                     <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                        <h3 style="margin-top: 0; color: #10b981;">Closed</h3>
+                        <h3 style="margin-top: 0; color: var(--intent-success);">Closed</h3>
                         <div id="bugs-closed-list"></div>
                     </div>
                 </div>
@@ -111,23 +114,23 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                         <div id="queue-open-list"></div>
                     </div>
                     <div style="flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px;">
-                        <h3 style="margin-top: 0; color: #10b981;">Closed (Resolved)</h3>
+                        <h3 style="margin-top: 0; color: var(--intent-success);">Closed (Resolved)</h3>
                         <div id="queue-closed-list"></div>
                     </div>
                 </div>
             </div>
             <div id="sub-log" class="sub-tab-content">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <h3 style="margin: 0; color: #888;">Changelog Logs</h3>
-                    <button id="btn-generate-changelog" class="btn-sm" style="background: #8b5cf6; margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
+                    <h3 style="margin: 0; color: var(--text-muted);">Changelog Logs</h3>
+                    <button id="btn-generate-changelog" class="btn-sm" style="background: var(--intent-highlight); margin: 0;" onclick="generateHistoricalChangelog()">📜 Generate Multi-Repo Changelog</button>
                 </div>
 
                 <h4 class="category-heading" style="margin-top: 10px; margin-bottom: 10px;">Recently Closed</h4>
-                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px; font-style: italic;">(logs not yet archived)</p>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px; font-style: italic;">(logs not yet archived)</p>
                 <div id="todos-recently-closed-list" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 25px;"></div>
 
                 <h4 class="category-heading" style="margin-top: 20px; margin-bottom: 10px;">Archived Tickets</h4>
-                <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px;">(Historical context preserved on disk)</p>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">(Historical context preserved on disk)</p>
                 <div id="log-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
         `;
@@ -139,7 +142,7 @@ function renderTaskRepoPins(state) {
 
     const { allRepos } = AppStore.getState();
 
-    window.UIFactory.createNestedRepoFilters({
+    window.inSetu.ui.Factory.createNestedRepoFilters({
         container: container,
         repos: allRepos,
         activeRepos: state.pinnedRepos,
@@ -226,7 +229,7 @@ function renderTaskTagPins(state) {
     container.appendChild(lbl);
     const createPill = (id, label, forceVisible = false) => {
         const isVisible = forceVisible || state.pinnedTags.has(id) || state.tagsExpanded;
-        return window.UIFactory.createFilterPill({
+        return window.inSetu.ui.Factory.createFilterPill({
             id: id,
             label: label,
             activeSet: state.pinnedTags,
@@ -368,7 +371,7 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
     if (task.status === 'open' && !task.isQueue) {
         const startBtn = document.createElement('button');
         startBtn.className = 'btn-sm';
-        startBtn.style.background = '#f59e0b';
+        startBtn.style.background = 'var(--intent-warning)';
         startBtn.innerText = '▶️ Start';
         startBtn.onclick = () => transitionTask(task, 'active');
         actions.appendChild(startBtn);
@@ -377,7 +380,7 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
     if (task.status === 'active') {
         const pauseBtn = document.createElement('button');
         pauseBtn.className = 'btn-sm';
-        pauseBtn.style.background = '#64748b';
+        pauseBtn.style.background = 'var(--intent-neutral)';
         pauseBtn.innerText = '⏸️ Pause';
         pauseBtn.onclick = () => transitionTask(task, 'open');
         actions.appendChild(pauseBtn);
@@ -386,20 +389,20 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
         if (task.isQueue) {
             const acceptBtn = document.createElement('button');
             acceptBtn.className = 'btn-sm';
-            acceptBtn.style.background = '#10b981';
+            acceptBtn.style.background = 'var(--intent-success)';
             acceptBtn.innerText = '✅ Accept';
             acceptBtn.onclick = () => transitionTask(task, 'open', 'todo');
             actions.appendChild(acceptBtn);
             const archiveBtn = document.createElement('button');
             archiveBtn.className = 'btn-sm';
-            archiveBtn.style.background = '#64748b';
+            archiveBtn.style.background = 'var(--intent-neutral)';
             archiveBtn.innerText = '✅ Resolve';
             archiveBtn.onclick = () => transitionTask(task, 'closed');
             actions.appendChild(archiveBtn);
         } else {
             const closeBtn = document.createElement('button');
             closeBtn.className = 'btn-sm';
-            closeBtn.style.background = '#10b981';
+            closeBtn.style.background = 'var(--intent-success)';
             closeBtn.innerText = '✅ Close';
             closeBtn.onclick = () => transitionTask(task, 'closed');
             actions.appendChild(closeBtn);
@@ -407,7 +410,7 @@ ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}`;
     } else if (task.status === 'closed') {
         const reopenBtn = document.createElement('button');
         reopenBtn.className = 'btn-sm';
-        reopenBtn.style.background = '#8b5cf6';
+        reopenBtn.style.background = 'var(--intent-highlight)';
         reopenBtn.innerText = '🔄 Re-open';
         reopenBtn.onclick = () => transitionTask(task, 'open');
         actions.appendChild(reopenBtn);
@@ -489,7 +492,7 @@ function openNewTaskModal() {
     <textarea id="new-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0; min-height: 150px; width: 100%; box-sizing: border-box;" placeholder="Markdown description..."></textarea>
     `;
 
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'new-task-modal',
         title: 'Create New Ticket',
         body: bodyHtml,
@@ -549,7 +552,7 @@ async function saveNewTask(modalId = 'new-task-modal') {
         });
 
         if (res.ok) {
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
 
             loadTrackerBoard();
@@ -616,7 +619,7 @@ let subBucket = 'None';
         <textarea id="edit-task-desc" style="flex: 1; margin-bottom: 10px; font-size: 13px; margin-top:0; min-height: 150px; width: 100%; box-sizing: border-box;" placeholder="Markdown description..."></textarea>
         `;
 
-        window.UIFactory.createModal({
+        window.inSetu.ui.Factory.createModal({
             id: 'edit-task-modal',
             title: 'Edit Ticket Metadata',
             body: bodyHtml,
@@ -701,7 +704,7 @@ async function saveEditTask(modalId = 'edit-task-modal') {
             body: JSON.stringify({ filepath: filepath, content: newContent })
         });
         if (res.ok) {
-            if (window.UIFactory) window.UIFactory.closeModal(modalId);
+            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
 
             loadTrackerBoard();
@@ -778,12 +781,12 @@ window.loadTrackerBoard = loadTrackerBoard;
 // Sync explicitly to dynamic multi-tenant topology updates
 AppStore.subscribe((state) => state.allRepos, renderAll);
 AppStore.subscribe((state) => state.targetConfigs, renderAll);
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
         if (tabId === 'tasks') loadTrackerBoard();
     });
 
-    window.ExtensionRegistry.registerUIHook('zone:soft-refresh', (ws) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:soft-refresh', (ws) => {
         KanbanStore.setState({ 
             tasks: [],
             pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${ws}`),

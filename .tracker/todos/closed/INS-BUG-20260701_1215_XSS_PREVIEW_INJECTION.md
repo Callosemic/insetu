@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-BUG-20260701_1215_XSS_PREVIEW_INJECTION
 title: "Security Hardening: Replace Naive Regex Script Stripping with DOMPurify Sanitization"
 created_at: 2026-07-01T12:15:00
-closed_at: null
+closed_at: 2026-07-04T17:30:00
 sub_bucket: "None"
-tags: [security, frontend, vulnerability, bugs]
 ---
 
 ## Description
@@ -20,6 +19,6 @@ Because inSetu operates as a local-first platform with absolute read/write file 
 - [ ] Strip out the hardcoded script regex replacements inside `renderMarkdownPreview()` in `fs.js`.
 - [ ] Route the parsed marked token output through a strict DOMPurify hook before setting innerHTML properties on the modal container.
 - [ ] Audit all visual extension cards to verify complete safety boundaries when rendering untrusted scraped data fields.
-
 ## Notes / Execution Log
 * **Audit (2026-07-02):** Designated as critical security debt. Replacing the naive regex filter with DOMPurify sanitization is required to ensure safe rendering boundaries.
+* **Resolution (2026-07-04):** Integrated DOMPurify natively into `index.html`. Refactored `renderMarkdownPreview()` in `fs.js` to securely process marked token outputs against XSS injection vectors before manipulating the DOM layer.

@@ -8,6 +8,8 @@ from insetu.utils_core import get_gather_paths
 from insetu.hooks import hooks
 
 citations_bp = Blueprint('citations', __name__)
+__depends__ = []
+
 @hooks.on('mutate_workspace_config')
 def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     """Dynamically injects virtual UI metadata for citation payloads."""

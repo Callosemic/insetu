@@ -71,9 +71,11 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+
 export let mdeInstance = null;
 // --- EXTENSION REGISTRY ---
-window.ExtensionRegistry = {
+window.inSetu.extensions.Registry = {
     uiHooks: {},
     shortcuts: {},
     registerShortcut: function(context, keyCombo, callback) {
@@ -167,6 +169,7 @@ window.ExtensionRegistry = {
         return subContent;
     }
 };
+window.ExtensionRegistry = window.inSetu.extensions.Registry; // Legacy alias
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 window.addEventListener('keydown', (e) => {
@@ -219,7 +222,7 @@ window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
     const dynamicModals = Array.from(document.querySelectorAll('.dynamic-modal'));
     if (dynamicModals.length > 0) {
         const topModal = dynamicModals[dynamicModals.length - 1]; // Get last appended
-        window.UIFactory.closeModal(topModal.id);
+        window.inSetu.ui.Factory.closeModal(topModal.id);
         return;
     }
 
@@ -270,20 +273,50 @@ async function bootExtensions() {
 // --- EXTENSION LIFECYCLE REGISTRY & TEARDOWN ENGINE ---
 if (!window.ExtensionRegistry) window.ExtensionRegistry = {};
 window.ExtensionRegistry._unloadHooks = new Map();
+window.ExtensionRegistry._ticks = new Map();
 
 window.ExtensionRegistry.registerUnloadHook = function(extName, callback) {
     this._unloadHooks.set(extName, callback);
 };
 
+window.ExtensionRegistry.registerTick = function(extName, intervalMs, callback) {
+    if (!this._ticks.has(extName)) this._ticks.set(extName, []);
+    this._ticks.get(extName).push({ interval: intervalMs, lastRun: Date.now(), cb: callback });
+};
+
 window.ExtensionRegistry.executeUnload = function(extName) {
+    // 1. Execute custom teardown logic
     if (this._unloadHooks.has(extName)) {
         try {
             this._unloadHooks.get(extName)();
         } catch (e) {
             console.error(`Error unloading extension [${extName}]:`, e);
         }
+        this._unloadHooks.delete(extName);
+    }
+
+    // 2. Instantly garbage collect all polling loops for this extension
+    if (this._ticks.has(extName)) {
+        this._ticks.delete(extName);
     }
 };
+
+// --- THE CENTRALIZED FRONTEND METRONOME ---
+setInterval(() => {
+    const now = Date.now();
+    window.ExtensionRegistry._ticks.forEach((tasks, extName) => {
+        tasks.forEach(task => {
+            if (now - task.lastRun >= task.interval) {
+                task.lastRun = now;
+                try { 
+                    task.cb(); 
+                } catch (e) { 
+                    console.error(`Tick error in extension [${extName}]:`, e); 
+                }
+            }
+        });
+    });
+}, 1000);
 
 // --- STATELESS TENANT ROUTING (Fetch Interceptor) ---
 const originalFetch = window.fetch;
@@ -566,6 +599,17 @@ function updateRefreshText() {
     const el = document.getElementById('refresh-time');
     if (el) el.innerText = `Refreshed ${text}`;
 }
+export function resolveEditorMode(filename) {
+    if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
+    const ext = filename.split('.').pop().toLowerCase();
+    const modeMap = {
+        'md': 'markdown', 'py': 'python', 'js': 'javascript',
+        'json': 'javascript', 'sh': 'shell', 'ts': 'javascript',
+        'rs': 'rust', 'go': 'go'
+    };
+    return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
+}
+
 export function normalizeAccentText(str) {
     if (!str) return '';
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -575,7 +619,7 @@ export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
     if (!bar) return;
     bar.innerText = msg;
-    bar.style.color = isError ? '#ef4444' : 'var(--text)';
+    bar.style.color = isError ? 'var(--intent-danger)' : 'var(--text)';
     if (timeout) {
         setTimeout(() => {
             if (bar.innerText === msg) {
@@ -599,7 +643,7 @@ window.alert = function(msg) {
     })();
 
     const toast = document.createElement('div');
-    toast.style.cssText = 'background: var(--input-bg); color: var(--text); border-left: 4px solid #ef4444; padding: 12px 15px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); font-family: var(--font-mono); font-size: 0.85rem; max-width: 400px; white-space: pre-wrap; word-break: break-word; pointer-events: auto; transition: opacity 0.3s; cursor: pointer;';
+    toast.style.cssText = 'background: var(--input-bg); color: var(--text); border-left: 4px solid var(--intent-danger); padding: 12px 15px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); font-family: var(--font-mono); font-size: 0.85rem; max-width: 400px; white-space: pre-wrap; word-break: break-word; pointer-events: auto; transition: opacity 0.3s; cursor: pointer;';
     toast.innerText = msg;
     toast.title = "Click to dismiss";
 
@@ -778,7 +822,7 @@ export function renderContextFiles(files, msg) {
                     heading.style.display = 'flex';
                     heading.style.justifyContent = 'space-between';
                     heading.style.alignItems = 'center';
-                    heading.innerHTML = `<span>${catName}</span> <button class="btn-sm" style="background: #ef4444; margin: 0; padding: 4px 10px; font-size: 0.8rem;" onclick="if(window.clearQuickPacks) window.clearQuickPacks()">🗑️ Clear</button>`;
+                    heading.innerHTML = `<span>${catName}</span> <button class="btn-sm" style="background: var(--intent-danger); margin: 0; padding: 4px 10px; font-size: 0.8rem;" onclick="if(window.clearQuickPacks) window.clearQuickPacks()">🗑️ Clear</button>`;
                 } else {
                     heading.innerText = catName;
                 }
@@ -933,11 +977,15 @@ async function simulatePanic() {
 }
 async function performSoftRefresh() {
     const currentWs = AppStore.getState().activeWorkspace || 'default';
-    // Evict old sub-store data frames instantly to prevent layout bleeding or race mutations
-    BridgeStore.getState().clearPayload();
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:soft-refresh', currentWs);
+    // Dynamically iterate over all mounted global stores to trigger resets
+    Object.values(window.inSetu.stores).forEach(store => {
+        if (store.getState().clearPayload) store.getState().clearPayload();
+        if (store.getState().resetState) store.getState().resetState();
+    });
+
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        window.inSetu.extensions.Registry.executeUIHook('zone:soft-refresh', currentWs);
     }
 
     try {
@@ -1052,7 +1100,7 @@ AppStore.setState({
 });
 if (d.config_missing) {
     const banner = document.createElement('div');
-    banner.style.cssText = "background: #f59e0b; color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
+    banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
     banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
     document.body.appendChild(banner);
 }
@@ -1135,6 +1183,7 @@ window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
 window.simulatePanic = simulatePanic;
+window.resolveEditorMode = resolveEditorMode;
 // Context / Gather
 window.filterContexts = filterContexts;
 window.loadContext = loadContext;

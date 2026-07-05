@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from insetu.utils_core import load_config, get_workspace_physics
 from insetu.hooks import hooks
 git_bp = Blueprint('git', __name__)
+__depends__ = []
 
 @hooks.on('pre_compile')
 def on_pre_compile_generate_diffs(workspace_id=None):

@@ -12,7 +12,7 @@ export function openPublishModal() {
             <option value="html">HTML Webpage</option>
         </select>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'publish-modal',
         title: 'Publish Document',
         body: bodyHtml,
@@ -43,7 +43,7 @@ export async function executePublish() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filepath: currentFormatTarget, format: format })
         });
-        window.UIFactory.closeModal('publish-modal');
+        window.inSetu.ui.Factory.closeModal('publish-modal');
     } catch (e) {
         alert("Network error: " + e.message);
     } finally {
@@ -62,8 +62,8 @@ if (tb && !document.getElementById('btn-publish-doc')) {
     tb.appendChild(pubBtn);
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:modal-file-toolbar', (data) => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:modal-file-toolbar', (data) => {
         if (data.filepath) currentFormatTarget = data.filepath;
         const pubBtn = document.getElementById('btn-publish-doc');
         if (pubBtn) pubBtn.style.display = data.isMarkdown ? 'block' : 'none';
@@ -71,8 +71,8 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     });
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {
-    window.ExtensionRegistry.registerUnloadHook('format', () => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
+    window.inSetu.extensions.Registry.registerUnloadHook('format', () => {
         const pubBtn = document.getElementById('btn-publish-doc');
         if (pubBtn) pubBtn.remove();
     });

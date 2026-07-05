@@ -54,15 +54,14 @@ def provide_available_prompts(workspace_id=None, **kwargs):
 def resolve_prompt_includes(text, current_filepath, workspace_id, depth=0):
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
-
     def replacer(match):
         include_path = match.group(1).strip()
-        if not include_path.startswith('/'):
-            # Relative to current prompt's directory
+        # By default, treat paths as workspace-relative unless they explicitly use dot-notation for relative traversal
+        if include_path.startswith('./') or include_path.startswith('../'):
             base_dir = os.path.dirname(current_filepath)
             target_path = os.path.normpath(os.path.join(base_dir, include_path)).replace('\\', '/')
         else:
-            # Absolute to workspace root (stripping the leading slash)
+            # Absolute to workspace root
             target_path = include_path.lstrip('/')
 
         resolved_abs = resolve_workspace_path(target_path, workspace_id)
@@ -71,9 +70,9 @@ def resolve_prompt_includes(text, current_filepath, workspace_id, depth=0):
                 inc_content = f.read()
             return resolve_prompt_includes(inc_content, target_path, workspace_id, depth + 1)
         else:
-            return f"[!] INCLUDE NOT FOUND: {include_path}"
+            return f"[!] INCLUDE_PROMPT NOT FOUND: {include_path}"
 
-    return re.sub(r'\{\{\s*include\s*:\s*(.+?)\s*\}\}', replacer, text)
+    return re.sub(r'\{\{\s*include_prompt\s*:\s*(.+?)\s*\}\}', replacer, text)
 @prompts_bp.route('/api/<workspace_id>/prompts/list', methods=['GET'])
 def api_prompts_list(workspace_id):
     """Provides a list of available prompts for the UI."""

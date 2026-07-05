@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "open"
+status: "active"
 id: INS-BUG-20260703_0028_GIT_SWEEP_BLOCKING
 title: "I/O Block Ban Violation: Async Git Sweep Operations"
 created_at: 2026-07-03T00:28:00

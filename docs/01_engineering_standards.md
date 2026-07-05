@@ -32,6 +32,16 @@ The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to di
     * **Object Engine**: `.json` bypasses text diffs entirely, recursively applying object tree mutations.
     * **Fuzzy Engine**: `.md` and `.txt` utilize flattened Levenshtein distances to survive LLM token-wrapping hallucination.
 
+## 7. Architectural Fitness Functions (Automated Compliance)
+Human discipline scales poorly. To guarantee that these engineering standards are never compromised by fatigue or rapid prototyping, this codebase is guarded by automated Static Analysis.
+
+* **The Validator (`tests/fitness_functions.py`)**: A zero-dependency Python script utilizing native `ast` and `re` modules to parse the codebase and mathematically fail if an anti-pattern is detected.
+* **Execution**: Run `python tests/fitness_functions.py` from the root directory to audit the workspace.
+* **Extending the Rules**: When a new anti-pattern is identified and documented in a standup or ADR, it MUST be codified into the validator.
+    * Add Python structural bans to the `BackendFitnessVisitor` (e.g., catching rogue `open()` or `subprocess.run` calls).
+    * Add JavaScript frontend bans to `check_javascript_files()` (e.g., catching `setInterval` or `document.getElementById` violations).
+* **The Whitelist Bypass**: If a core engine (like the VFS) legitimately requires a banned function, it must be explicitly added to the whitelists at the top of the script. Do not disable the rule globally.
+
 ## 4. Frontend: Unidirectional Data Flow (UDF)
 The frontend UI must be highly resilient, reactive, and entirely decoupled from HTML DOM states.
 * **The DOM Read Ban**: Modules (`kanban.js`, `bridge.js`) are strictly forbidden from reading state out of the DOM (e.g., querying `document.getElementById('...').value` or checking if an element `.classList.contains('active')` to determine business logic).

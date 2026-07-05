@@ -9,6 +9,8 @@ from insetu.hooks import hooks
 from insetu.db import get_connection
 
 tracker_bp = Blueprint('tracker', __name__)
+__depends__ = []
+
 @hooks.on('system_boot')
 def init_tracker_db():
     import json

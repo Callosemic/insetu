@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, send_file
 from insetu.utils_core import extension_auth
 
 format_bp = Blueprint('format', __name__)
+__depends__ = []
 
 @format_bp.route('/api/<workspace_id>/format/compile-document', methods=['POST'])
 @extension_auth('format')

@@ -7,15 +7,15 @@ export function importFromUrl() {
         <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
             <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
                 <input type="radio" name="import-method" value="jina" checked> 
-                <b>Jina Reader API</b> <span style="color: #888; font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
+                <b>Jina Reader API</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
             </label>
             <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
                 <input type="radio" name="import-method" value="bs4"> 
-                <b>BeautifulSoup Local</b> <span style="color: #888; font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
+                <b>BeautifulSoup Local</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
             </label>
         </div>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'import-url-modal',
         title: 'Import from URL',
         body: bodyHtml,
@@ -37,7 +37,7 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
     if (!url) return alert("Please enter a valid URL.");
     const method = document.querySelector('input[name="import-method"]:checked').value;
 
-    if (window.UIFactory) window.UIFactory.closeModal(modalId);
+    if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
     else {
         const m = document.getElementById(modalId);
         if (m) m.style.display = 'none';
@@ -49,7 +49,7 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
     if(statusEl) {
         statusEl.style.display = 'inline-block';
         statusEl.innerText = "Fetching and converting...";
-        statusEl.style.color = "#888";
+        statusEl.style.color = "var(--text-muted)";
     }
 
     try {
@@ -72,8 +72,8 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
                 contentEl.value = data.markdown;
             }
 
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:post-import-url', data);
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', data);
             }
 
             // Try to auto-guess a clean filename if the user hasn't typed one
@@ -98,19 +98,19 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
 
             if(statusEl) {
                 statusEl.innerText = "✅ Success";
-                statusEl.style.color = "#10b981";
+                statusEl.style.color = "var(--intent-success)";
             }
         } else {
             if(statusEl) {
                 statusEl.innerText = "❌ Error";
-                statusEl.style.color = "#dc2626";
+                statusEl.style.color = "var(--intent-danger)";
             }
             alert(data.error || "Failed to import URL.");
         }
     } catch (e) {
         if(statusEl) {
             statusEl.innerText = "❌ Error";
-            statusEl.style.color = "#dc2626";
+            statusEl.style.color = "var(--intent-danger)";
         }
         alert("Network error: " + e.message);
     }
@@ -126,16 +126,16 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
 window.importFromUrl = importFromUrl;
 window.executeImportUrl = executeImportUrl;
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:new-file-options', () => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:new-file-options', () => {
         const toolbar = document.getElementById('new-file-toolbar');
         if (toolbar) toolbar.style.display = 'flex';
         return false;
     });
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {
-    window.ExtensionRegistry.registerUnloadHook('ingest', () => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
+    window.inSetu.extensions.Registry.registerUnloadHook('ingest', () => {
         const toolbar = document.getElementById('new-file-toolbar');
         if (toolbar) toolbar.style.display = 'none';
     });

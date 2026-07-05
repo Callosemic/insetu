@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-QUEUE-20260701_1830_EXTENSION_STATE_STANDARDIZATION
 title: "Standardization: Replicate ext_citations Vanilla Zustand Architecture across Remaining Extensions"
 created_at: 2026-07-01T18:30:00
-closed_at: null
+closed_at: 2026-07-04T17:30:00
 sub_bucket: "None"
-tags: [frontend, architecture, extensions, state-hardening, standardization]
 ---
 
 ## Description
@@ -34,3 +33,4 @@ The standardized extension state model must mirror the structure established in 
 * **Audit (2026-07-02):** Designated as primary architectural debt alongside the `window.inSetu` namespace consolidation. Fragmented DOM state extraction is required to maintain strict UDF compliance.
 * **Status Update (2026-07-02):** Partially completed. `KanbanStore` and `CitationStore` have successfully implemented Vanilla Zustand configurations. However, `ext_research.js` relies on a custom `ResearchStore` object that lacks the required `devtools` and `subscribeWithSelector` middleware substrates.
 * **Status Update (2026-07-03):** Verified `KanbanStore` and `CitationStore` subscriptions successfully executing DOM rendering, but `ext_research.js` remains a bespoke listener array. Ticket remains open pending complete Zustand migration.
+* **Resolution (2026-07-04):** Fully refactored `ext_research.js` to utilize a `ResearchStore` backed by the `zustand/vanilla` core stack. Subscribed rendering modules correctly via selectors, completing the ecosystem-wide state standardization.

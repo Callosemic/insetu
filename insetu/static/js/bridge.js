@@ -8,6 +8,8 @@ import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+
 export const BridgeStore = createStore(
     devtools(
         subscribeWithSelector((set) => ({
@@ -41,6 +43,8 @@ export const BridgeStore = createStore(
         { name: 'BridgeStore' }
     )
 );
+
+window.inSetu.stores.Bridge = BridgeStore;
 export function renderRepoPins(state) {
     const container = document.getElementById('repo-pins');
     if (!container) return;
@@ -56,11 +60,11 @@ export function renderRepoPins(state) {
         AppStore.setState({ pinnedRepos: newPins });
     };
 
-    const allPill = window.UIFactory.createFilterPill({ id: "ALL", label: "All", activeSet: state.pinnedRepos, onChange });
+    const allPill = window.inSetu.ui.Factory.createFilterPill({ id: "ALL", label: "All", activeSet: state.pinnedRepos, onChange });
     if (allPill) container.appendChild(allPill);
 
     state.allRepos.forEach(repo => {
-        const p = window.UIFactory.createFilterPill({ id: repo, label: repo, activeSet: state.pinnedRepos, onChange });
+        const p = window.inSetu.ui.Factory.createFilterPill({ id: repo, label: repo, activeSet: state.pinnedRepos, onChange });
         if (p) container.appendChild(p);
     });
 }
@@ -129,7 +133,7 @@ function syncDOMToBridgeState(state) {
                 if (data.exists) {
                     const viewBtn = document.createElement('button');
                     viewBtn.className = 'btn-sm';
-                    viewBtn.style.cssText = 'margin: 0; padding: 4px 8px; font-size: 0.8rem; background: #0ea5e9;';
+                    viewBtn.style.cssText = 'margin: 0; padding: 4px 8px; font-size: 0.8rem; background: var(--intent-primary);';
                     viewBtn.innerText = '📋 View';
                     viewBtn.onclick = (e) => {
                         e.preventDefault();
@@ -138,7 +142,7 @@ function syncDOMToBridgeState(state) {
                     actionContainer.appendChild(viewBtn);
                 } else {
                     const badge = document.createElement('span');
-                    badge.style.cssText = 'font-size: 0.75rem; color: #f59e0b; font-weight: bold; padding: 4px 8px;';
+                    badge.style.cssText = 'font-size: 0.75rem; color: var(--intent-warning); font-weight: bold; padding: 4px 8px;';
                     badge.innerText = '❓ Unknown';
                     actionContainer.appendChild(badge);
                 }
@@ -190,7 +194,7 @@ export function sync(dryRunActive, bypassSandwich = false) {
 
     showConsole();
     if (!globalBypassSandwich && !isPatchSandwich(textVal)) {
-        statusBox.innerHTML = `<span style="color: #f59e0b; font-weight: bold;">[!] WARNING: Patch lacks leading/trailing context (Not a "Patch Sandwich").</span><br><br>Your SEARCH and REPLACE blocks do not share the exact same top and bottom context lines.<br><br><button type="button" onclick="sync(${dryRunActive}, true)" style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">⚠️ Do it anyway</button>`;
+        statusBox.innerHTML = `<span style="color: var(--intent-warning); font-weight: bold;">[!] WARNING: Patch lacks leading/trailing context (Not a "Patch Sandwich").</span><br><br>Your SEARCH and REPLACE blocks do not share the exact same top and bottom context lines.<br><br><button type="button" onclick="sync(${dryRunActive}, true)" style="background: var(--intent-danger); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">⚠️ Do it anyway</button>`;
         return;
     }
 
@@ -216,20 +220,20 @@ export function sync(dryRunActive, bypassSandwich = false) {
             safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
                 const safeP1 = p1.trim().replace(/\\/g, '\\\\');
                 const safeP2 = p2.trim().replace(/\\/g, '\\\\');
-                if (safeP1 === safeP2) return `<br><span style="color: #ef4444; font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
-                return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: #0284c7; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
+                if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
+                return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
             });
             safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
                 return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                    <button type="button" onclick="if(window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob('${b64err.trim()}'));" class="btn-sm" style="background: #ef4444; margin: 0;">👁️ View Diff</button>
-                    <button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Diff', 2000)" class="btn-sm" style="background: #64748b; margin: 0;">📋 Copy Diff</button>
+                    <button type="button" onclick="if(window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob('${b64err.trim()}'));" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
+                    <button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Diff', 2000)" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
                 </div>`;
             });
             safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
                 const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: #10b981; margin: 0;">📋 Copy State</button>
-                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: #0284c7; margin: 0;">⬇️ Download State</button>
+                <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
+                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
             </div>`;
             });
 

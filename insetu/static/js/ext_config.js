@@ -35,7 +35,7 @@ function renderExtensions() {
         text.innerText = ext;
         text.style.fontWeight = "bold";
         text.style.fontSize = "0.9rem";
-        text.style.color = isConfig ? "#888" : "var(--text)";
+        text.style.color = isConfig ? "var(--text-muted)" : "var(--text)";
 
         wrap.appendChild(cb);
         wrap.appendChild(text);
@@ -66,19 +66,19 @@ function renderRepos() {
                     <span style="font-size: 1.2rem;">📦</span>
                     <input type="text" value="${repo.repo_dir || ''}" placeholder="Directory Name (e.g. my-repo)" class="repo-dir-input" data-idx="${idx}" style="font-weight: bold; width: 60%; background: var(--input-bg);">
                 </div>
-                <button class="btn-sm btn-del-repo" data-idx="${idx}" style="background: transparent; border: 1px solid #ef4444; color: #ef4444; margin: 0; padding: 4px 8px;">🗑️ Remove</button>
+                <button class="btn-sm btn-del-repo" data-idx="${idx}" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 4px 8px;">🗑️ Remove</button>
             </div>
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
                 <div style="flex: 1; min-width: 150px;">
-                    <label style="font-size: 0.8rem; color: #888;">Title</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Title</label>
                     <input type="text" value="${repo.title || ''}" placeholder="Display Title" class="repo-title-input" data-idx="${idx}">
                 </div>
                 <div style="flex: 1; min-width: 150px;">
-                    <label style="font-size: 0.8rem; color: #888;">Domain</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Domain</label>
                     <input type="text" value="${repo.domain || ''}" placeholder="Category" class="repo-domain-input" data-idx="${idx}">
                 </div>
                 <div style="flex: 1; min-width: 150px;">
-                    <label style="font-size: 0.8rem; color: #888;">Archive Type</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Archive Type</label>
                     <select class="repo-archive-type" data-idx="${idx}" style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);">
                         <option value="repo" ${repo.archive_type === 'repo' || !repo.archive_type ? 'selected' : ''}>Standard Repo</option>
                         <option value="media-vault" ${repo.archive_type === 'media-vault' ? 'selected' : ''}>Media Vault</option>
@@ -89,27 +89,27 @@ function renderRepos() {
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
                 <div style="flex: 1; min-width: 200px;">
-                    <label style="font-size: 0.8rem; color: #888;">Physical Path (Optional Override)</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Physical Path (Optional Override)</label>
                     <input type="text" value="${repo.physical_path || ''}" placeholder="/absolute/path/to/repo" class="repo-physical-input" data-idx="${idx}">
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label style="font-size: 0.8rem; color: #888;">Custom Out File (Optional)</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Custom Out File (Optional)</label>
                     <input type="text" value="${repo.out_file || ''}" placeholder="custom_context.txt" class="repo-outfile-input" data-idx="${idx}">
                 </div>
             </div>
 
             <div style="margin-bottom: 10px;">
-                <label style="font-size: 0.8rem; color: #888;">Tracked Extensions (comma separated)</label>
+                <label style="font-size: 0.8rem; color: var(--text-muted);">Tracked Extensions (comma separated)</label>
                 <input type="text" value="${exts}" placeholder=".py, .js, .md" class="repo-exts-input" data-idx="${idx}">
             </div>
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
                 <div style="flex: 1; min-width: 200px;">
-                    <label style="font-size: 0.8rem; color: #888;">Ignore Directories (comma separated)</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Directories (comma separated)</label>
                     <input type="text" value="${ignores}" placeholder="node_modules, build" class="repo-ignores-input" data-idx="${idx}">
                 </div>
                 <div style="flex: 1; min-width: 200px;">
-                    <label style="font-size: 0.8rem; color: #888;">Ignore Files (comma separated)</label>
+                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Files (comma separated)</label>
                     <input type="text" value="${ignoreFiles}" placeholder="package-lock.json" class="repo-ignorefiles-input" data-idx="${idx}">
                 </div>
             </div>
@@ -122,8 +122,8 @@ function renderRepos() {
 
             <div style="background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                    <label style="font-size: 0.85rem; font-weight: bold; color: #a855f7;">Sub-Buckets</label>
-                    <button class="btn-sm btn-add-bucket" data-idx="${idx}" style="background: #a855f7; margin: 0; padding: 2px 8px; font-size: 0.75rem;">➕ Add Bucket</button>
+                    <label style="font-size: 0.85rem; font-weight: bold; color: var(--intent-highlight);">Sub-Buckets</label>
+                    <button class="btn-sm btn-add-bucket" data-idx="${idx}" style="background: var(--intent-highlight); margin: 0; padding: 2px 8px; font-size: 0.75rem;">➕ Add Bucket</button>
                 </div>
                 <div id="sub-buckets-container-${idx}" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
@@ -180,7 +180,7 @@ function renderSubBuckets(repoIdx) {
     const buckets = repo.sub_buckets || [];
 
     if (buckets.length === 0) {
-        container.innerHTML = '<span style="color: #888; font-size: 0.8rem; font-style: italic;">No sub-buckets defined.</span>';
+        container.innerHTML = '<span style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">No sub-buckets defined.</span>';
         return;
     }
 
@@ -196,23 +196,23 @@ function renderSubBuckets(repoIdx) {
                     <option value="explicit" ${!isImplicit ? 'selected' : ''}>Explicit (Match Prefixes)</option>
                     <option value="implicit" ${isImplicit ? 'selected' : ''}>Implicit (Dynamic Folders)</option>
                 </select>
-                <button class="btn-sm btn-del-bucket" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: transparent; border: 1px solid #ef4444; color: #ef4444; margin: 0; padding: 2px 8px; font-size: 0.75rem;">🗑️</button>
+                <button class="btn-sm btn-del-bucket" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;">🗑️</button>
             </div>
         `;
 
         if (!isImplicit) {
             html += `
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">ID</label><input type="text" value="${b.id || ''}" placeholder="my_bucket" class="b-id" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Title</label><input type="text" value="${b.title || ''}" placeholder="Display Name" class="b-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Domain</label><input type="text" value="${b.domain || ''}" placeholder="Category" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" value="${b.id || ''}" placeholder="my_bucket" class="b-id" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" value="${b.title || ''}" placeholder="Display Name" class="b-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" value="${b.domain || ''}" placeholder="Category" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
                 </div>
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 2;"><label style="font-size: 0.75rem; color:#888;">Description</label><input type="text" value="${b.description || ''}" placeholder="What goes here?" class="b-desc" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:#888;">Custom Out File</label><input type="text" value="${b.out_file || ''}" placeholder="out_context.txt" class="b-outfile" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" value="${b.description || ''}" placeholder="What goes here?" class="b-desc" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" value="${b.out_file || ''}" placeholder="out_context.txt" class="b-outfile" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
                 </div>
                 <div>
-                    <label style="font-size: 0.75rem; color:#888;">Match Prefixes (comma separated)</label>
+                    <label style="font-size: 0.75rem; color:var(--text-muted);">Match Prefixes (comma separated)</label>
                     <input type="text" value="${(b.match_prefixes || []).join(', ')}" placeholder="path/to/folder, other/path" class="b-prefixes" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
                 </div>
                 <div style="margin-top: 5px;">
@@ -229,25 +229,25 @@ function renderSubBuckets(repoIdx) {
                         <input type="text" value="${dirKey}" placeholder="Folder Name" class="m-dir" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
                         <input type="text" value="${meta.title || ''}" placeholder="Title" class="m-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
                         <input type="text" value="${meta.domain || ''}" placeholder="Domain" class="m-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
-                        <button class="btn-sm btn-del-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-key="${dirKey}" style="background: transparent; color: #ef4444; border: none; font-size: 1rem; padding: 0 5px; cursor: pointer;">×</button>
+                        <button class="btn-sm btn-del-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-key="${dirKey}" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1rem; padding: 0 5px; cursor: pointer;">×</button>
                     </div>
                 `;
             });
             html += `
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <div style="flex: 1;">
-                        <label style="font-size: 0.75rem; color:#888;">Dynamic Split Prefix</label>
+                        <label style="font-size: 0.75rem; color:var(--text-muted);">Dynamic Split Prefix</label>
                         <input type="text" value="${b.dynamic_split_prefix || ''}" placeholder="e.g. . or docs/" class="b-dyn" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
                     </div>
                     <div style="flex: 1;">
-                        <label style="font-size: 0.75rem; color:#888;">Shared Base Domain</label>
+                        <label style="font-size: 0.75rem; color:var(--text-muted);">Shared Base Domain</label>
                         <input type="text" value="${b.domain || ''}" placeholder="e.g. Dynamic Modules" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
                     </div>
                 </div>
                 <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                        <label style="font-size: 0.75rem; color:#888;">Meta Map (Folder Overrides)</label>
-                        <button class="btn-sm btn-add-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: #3b82f6; margin: 0; padding: 2px 6px; font-size: 0.7rem;">+ Folder Meta</button>
+                        <label style="font-size: 0.75rem; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
+                        <button class="btn-sm btn-add-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: var(--intent-primary); margin: 0; padding: 2px 6px; font-size: 0.7rem;">+ Folder Meta</button>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 5px;">
                         ${metaHtml}
@@ -339,20 +339,20 @@ export async function openConfigEditor() {
 
             const bodyHtml = `
                 <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
-                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #a855f7;">Active Extensions</label>
-                    <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked to prevent losing access to this menu.</p>
+                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-highlight);">Active Extensions</label>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked to prevent losing access to this menu.</p>
                     <div id="config-editor-extensions" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
                 </div>
 
                 <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
-                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: #38bdf8;">Target Repositories</label>
-                    <p style="font-size: 0.85rem; color: #888; margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
+                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-primary);">Target Repositories</label>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
                     <div id="config-editor-repos" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;"></div>
-                    <button id="config-editor-add-repo" class="btn-sm" style="background: #3b82f6; margin: 0;">➕ Add Repository</button>
+                    <button id="config-editor-add-repo" class="btn-sm" style="background: var(--intent-primary); margin: 0;">➕ Add Repository</button>
                 </div>
             `;
 
-            window.UIFactory.createModal({
+            window.inSetu.ui.Factory.createModal({
                 id: 'config-editor-modal',
                 title: 'Workspace Configuration',
                 body: bodyHtml,
@@ -415,6 +415,6 @@ export async function openConfigEditor() {
 }
 
 // Bind explicitly to the Event Zone for the Settings Modal
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerSettingsAction) {
-    window.ExtensionRegistry.registerSettingsAction('config_editor', 'Configure Workspace', '🛠️', openConfigEditor);
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerSettingsAction) {
+    window.inSetu.extensions.Registry.registerSettingsAction('config_editor', 'Configure Workspace', '🛠️', openConfigEditor);
 }

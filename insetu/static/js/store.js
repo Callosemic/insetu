@@ -2,6 +2,7 @@
 // Strict Unidirectional Data Flow (UDF) State Manager
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 export const AppStore = createStore(
     devtools(
@@ -21,3 +22,5 @@ export const AppStore = createStore(
         { name: 'AppStore' }
     )
 );
+
+window.inSetu.stores.App = AppStore;

@@ -298,12 +298,14 @@ def gather_next_page(job_id, workspace_id=None):
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
 
         prior_cit = None
-        try:
-          cit_conn = get_connection("citations", workspace_id=workspace_id)
-          # Utilize SQLite JSON1 extension to natively query the CSL-JSON matrix
-          prior_cit = cit_conn.execute("SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?", (link['url'],)).fetchone()
-        except Exception:
-          pass
+        from insetu.utils_core import is_extension_enabled
+        if is_extension_enabled("citations", workspace_id=workspace_id):
+          try:
+            cit_conn = get_connection("citations", workspace_id=workspace_id)
+            # Utilize SQLite JSON1 extension to natively query the CSL-JSON matrix
+            prior_cit = cit_conn.execute("SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?", (link['url'],)).fetchone()
+          except Exception as e:
+            print(f"⚠️ [Research] Citation check failed gracefully: {e}")
 
         inbox_status = 'pending'
         if prior_cit:

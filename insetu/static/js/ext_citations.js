@@ -15,6 +15,7 @@ const _safeParseSet = (key) => {
         return new Set(["ALL"]);
     }
 };
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 export const CitationStore = createStore(
     devtools(
@@ -28,15 +29,16 @@ export const CitationStore = createStore(
             cachedAuthors: [],
             activeAttachCitation: null,
             activeEditCitation: null,
-            currentEditAuthors: []
+            currentEditAuthors: [],
+            resetState: () => set({ localLibrary: [], cachedPublications: [], cachedAuthors: [], activeAttachCitation: null, activeEditCitation: null, currentEditAuthors: [] })
         })),
         { name: 'CitationStore' }
     )
 );
 
-// Expose to window for debugging and lifecycle teardowns
-window.CitationStore = CitationStore;
-const libraryScreen = window.ExtensionRegistry.registerTab('library', 'Library', 'citations');
+window.inSetu.stores.Citations = CitationStore;
+window.CitationStore = CitationStore; // Legacy alias
+const libraryScreen = window.inSetu.extensions.Registry.registerTab('library', 'Library', 'citations');
 if (libraryScreen) {
     libraryScreen.innerHTML = `
         <style>
@@ -89,7 +91,7 @@ if (libraryScreen) {
             <div style="display: flex; flex-direction: column; height: 100%;">
                 <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
                     <div>
-                        <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Catalog Source</label>
+                        <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Catalog Source</label>
                         <select id="lib-explore-source" style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-weight: bold;">
                             <option value="openalex">OpenAlex (Recommended)</option>
                             <option value="crossref">Crossref (DOIs & Exact Titles)</option>
@@ -98,13 +100,13 @@ if (libraryScreen) {
                     </div>
 
                     <div id="wrap-explore-query">
-                        <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Search Query</label>
+                        <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Search Query</label>
                         <input type="text" id="lib-explore-search" placeholder="Keywords, titles, or authors..." style="width: 100%; padding: 8px 10px; box-sizing: border-box; margin: 0;">
                     </div>
 
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div id="wrap-explore-field" style="flex: 1; min-width: 150px;">
-                            <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Target Field</label>
+                            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Target Field</label>
                             <select id="lib-explore-field" style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);">
                                 <option value="all">All Fields</option>
                                 <option value="title">Title Only</option>
@@ -112,16 +114,16 @@ if (libraryScreen) {
                         </div>
 
                         <div id="wrap-explore-category" style="flex: 1; min-width: 150px;">
-                            <label style="font-weight:bold; font-size:0.85rem; color:#a855f7; display:block; margin-bottom:4px;">Topic Filter</label>
-                            <input type="text" id="lib-explore-category" placeholder="e.g., Ethnomusicology..." style="width: 100%; padding: 8px 10px; box-sizing: border-box; margin: 0; border-color: #a855f7;">
+                            <label style="font-weight:bold; font-size:0.85rem; color:var(--intent-highlight); display:block; margin-bottom:4px;">Topic Filter</label>
+                            <input type="text" id="lib-explore-category" placeholder="e.g., Ethnomusicology..." style="width: 100%; padding: 8px 10px; box-sizing: border-box; margin: 0; border-color: var(--intent-highlight);">
                         </div>
                     </div>
 
-                    <button id="btn-explore-search" class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 10px; font-size: 1rem;">🔍 Search Catalog</button>
+                    <button id="btn-explore-search" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px; font-size: 1rem;">🔍 Search Catalog</button>
                 </div>
                 <div id="lib-explore-loading" class="spinner" style="display: none;">Querying global catalogs...</div>
                 <div id="lib-explore-list" style="display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1;">
-                    <p style="color: #888; font-style: italic;">Search the open science index to discover and import citations.</p>
+                    <p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>
                 </div>
             </div>
         </div>
@@ -129,8 +131,8 @@ if (libraryScreen) {
         <div id="sub-lib-import" class="sub-tab-content" style="height: 100%;">
             <div style="display: flex; flex-direction: column; height: 100%;">
             <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 15px;">
-                <h3 style="margin-top: 0; color: #38bdf8;">Import CSL-JSON</h3>
-                <p style="font-size: 0.9rem; color: #888;">Select a JSON export from Zotero or Better BibTeX.</p>
+                <h3 style="margin-top: 0; color: var(--intent-primary);">Import CSL-JSON</h3>
+                <p style="font-size: 0.9rem; color: var(--text-muted);">Select a JSON export from Zotero or Better BibTeX.</p>
                 
                 <div style="margin: 15px 0;">
                     <label style="font-weight: bold; font-size: 0.9rem; display: block; margin-bottom: 5px;">Conflict Strategy:</label>
@@ -141,7 +143,7 @@ if (libraryScreen) {
                     </div>
                 </div>
                 
-                <button id="btn-trigger-file" class="btn-sm" style="background: #10b981; margin: 0; padding: 8px 16px;">📁 Choose File</button>
+                <button id="btn-trigger-file" class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 8px 16px;">📁 Choose File</button>
                 <input type="file" id="lib-file-picker" accept=".json,application/json" style="display: none;">
             </div>
                 <div id="lib-import-log" style="font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; color: var(--text);"></div>
@@ -153,16 +155,16 @@ if (libraryScreen) {
 <div style="display: flex;
 justify-content: space-between; align-items: center; margin-bottom: 15px;">
     <h3 style="margin:0;
-font-size: 1.1rem;">Attach: <span id="attach-ref-id" style="color: #8b5cf6; font-family: monospace;"></span></h3>
-    <button onclick="document.getElementById('lib-attach-modal').style.display='none'" class="btn-sm" style="background: #64748b;
+font-size: 1.1rem;">Attach: <span id="attach-ref-id" style="color: var(--intent-highlight); font-family: monospace;"></span></h3>
+    <button onclick="document.getElementById('lib-attach-modal').style.display='none'" class="btn-sm" style="background: var(--intent-neutral);
 margin: 0;">Back</button>
 </div>
                 <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                     <select id="attach-repo-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
                     <select id="attach-bucket-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
-                    <button id="btn-add-attachment" class="btn-sm" style="background:#10b981; margin: 0;">➕ Add</button>
+                    <button id="btn-add-attachment" class="btn-sm" style="background:var(--intent-success); margin: 0;">➕ Add</button>
                 </div>
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:5px;">Current Attachments:</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Current Attachments:</label>
                 <div id="current-attachments-list" style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;"></div>
             </div>
         </div>
@@ -171,13 +173,13 @@ margin: 0;">Back</button>
 <div style="display: flex;
 justify-content: space-between; align-items: center; margin-bottom: 15px;">
     <h3 style="margin:0;
-font-size: 1.1rem;">Edit: <span id="edit-ref-id" style="color: #f59e0b; font-family: monospace;"></span></h3>
-    <button onclick="document.getElementById('edit-citation-modal').style.display='none'" class="btn-sm" style="background: #64748b;
+font-size: 1.1rem;">Edit: <span id="edit-ref-id" style="color: var(--intent-warning); font-family: monospace;"></span></h3>
+    <button onclick="document.getElementById('edit-citation-modal').style.display='none'" class="btn-sm" style="background: var(--intent-neutral);
 margin: 0;">Back</button>
 </div>
                 <div style="display: flex; gap: 10px; margin-bottom: 12px;">
                     <div style="flex: 1;">
-                        <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Type:</label>
+                        <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Type:</label>
                         <select id="edit-cit-type" style="width: 100%; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
                             <option value="article-journal">Journal Article</option>
                             <option value="book">Book</option>
@@ -192,32 +194,32 @@ margin: 0;">Back</button>
                         </select>
                     </div>
                 </div>
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Item Title:</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Item Title:</label>
                 <input type="text" id="edit-cit-title" style="width: 100%; padding: 8px; margin-bottom: 12px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
 
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Publication Title <span style="font-weight:normal;">(e.g., Journal Name)</span>:</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Publication Title <span style="font-weight:normal;">(e.g., Journal Name)</span>:</label>
                 <div style="display: flex; gap: 8px; margin-bottom: 12px;">
                     <input type="text" id="edit-cit-pub-title" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-                    <button id="btn-pick-pub" class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 8px 12px;" type="button">...</button>
+                    <button id="btn-pick-pub" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
                 </div>
 
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Authors:</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Authors:</label>
                 <div id="edit-cit-author-pills" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
                 <div style="display: flex; gap: 8px; margin-bottom: 12px;">
                     <input type="text" id="edit-cit-author-input" placeholder="Last, First" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-                    <button id="btn-pick-author" class="btn-sm" style="background: #8b5cf6; margin: 0; padding: 8px 12px;" type="button">...</button>
-                    <button id="btn-add-cit-author" class="btn-sm" style="background: #3b82f6; margin: 0; padding: 8px 12px;" type="button">➕ Add</button>
+                    <button id="btn-pick-author" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
+                    <button id="btn-add-cit-author" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 12px;" type="button">➕ Add</button>
                 </div>
 
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:4px;">Date <span style="font-weight:normal;">(YYYY or YYYY-MM-DD)</span>:</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Date <span style="font-weight:normal;">(YYYY or YYYY-MM-DD)</span>:</label>
                 <input type="text" id="edit-cit-date" style="width: 100%; padding: 8px; margin-bottom: 15px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
 
-                <label style="font-weight:bold; font-size:0.85rem; color:#888; display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
+                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
                 <textarea id="edit-citation-json" style="flex: 1; min-height: 200px; margin-bottom: 15px; font-family: monospace; font-size: 13px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical;"></textarea>
 
                 <div style="display: flex; gap: 10px; margin-top: auto;">
-                    <button id="btn-delete-citation" class="btn-sm" style="background:#ef4444; margin: 0; padding: 10px; font-size: 1rem; font-weight: bold;">🗑️ Delete</button>
-                    <button id="btn-save-citation" class="btn-sm" style="background:#10b981; margin: 0; padding: 10px; font-size: 1rem; font-weight: bold; flex: 1;">💾 Save Changes</button>
+                    <button id="btn-delete-citation" class="btn-sm" style="background:var(--intent-danger); margin: 0; padding: 10px; font-size: 1rem; font-weight: bold;">🗑️ Delete</button>
+                    <button id="btn-save-citation" class="btn-sm" style="background:var(--intent-success); margin: 0; padding: 10px; font-size: 1rem; font-weight: bold; flex: 1;">💾 Save Changes</button>
                 </div>
             </div>
         </div>
@@ -232,7 +234,7 @@ margin: 0;">Back</button>
         const bContainer = document.getElementById('lib-bucket-pins');
         if (bContainer) bContainer.style.display = 'none';
 
-        window.UIFactory.createNestedRepoFilters({
+        window.inSetu.ui.Factory.createNestedRepoFilters({
             container: container,
             repos: libRepos,
             activeRepos: state.pinnedRepos,
@@ -331,7 +333,7 @@ margin: 0;">Back</button>
         const atts = activeAttachCitation._attachments || [];
 
         if (atts.length === 0) {
-            list.innerHTML = '<span style="color: #888; font-style: italic;">No attachments.</span>';
+            list.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No attachments.</span>';
             return;
         }
 
@@ -379,7 +381,7 @@ margin: 0;">Back</button>
         currentEditAuthors.forEach((a, idx) => {
             const pill = document.createElement('span');
             pill.className = 'task-tag';
-            pill.style.cssText = 'background: #3b82f6; color: white; border: none; display: flex; align-items: center; gap: 6px; font-size: 0.8rem; padding: 4px 8px; border-radius: 12px;';
+            pill.style.cssText = 'background: var(--intent-primary); color: white; border: none; display: flex; align-items: center; gap: 6px; font-size: 0.8rem; padding: 4px 8px; border-radius: 12px;';
 
             const name = a.given ? `${a.family}, ${a.given}` : a.family;
             const txt = document.createElement('span');
@@ -554,7 +556,7 @@ margin: 0;">Back</button>
     const renderCards = (items, container, isExplore = false, append = false) => {
         if (!append) container.innerHTML = '';
         if (items.length === 0 && !append) {
-            container.innerHTML = '<p style="color: #888; font-style: italic;">No results.</p>';
+            container.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">No results.</p>';
             return;
         }
 
@@ -576,14 +578,14 @@ margin: 0;">Back</button>
 
               if (alreadyExists) {
                 actionHtml = `<div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 0.75rem; color: #f59e0b; font-weight: bold;">⚠️ In Library</span>
-                        <button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: transparent; border: 1px solid #f59e0b; color: #f59e0b; padding: 2px 8px; margin: 0; font-size: 0.75rem;">Force Import</button>
+                        <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
+                        <button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;">Force Import</button>
                         </div>`;
               } else {
-                actionHtml = `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: #10b981; margin: 0; padding: 2px 8px;">📥 Import</button>`;
+                actionHtml = `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: var(--intent-success); margin: 0; padding: 2px 8px;">📥 Import</button>`;
               }
             } else {
-              actionHtml = `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: #8b5cf6; margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: #f59e0b; margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: #3b82f6; margin: 0; padding: 2px 8px;">📎 Attach</button>`;
+              actionHtml = `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;">📎 Attach</button>`;
             }
 
             const attTags = !isExplore && c._attachments && c._attachments.length > 0
@@ -593,11 +595,11 @@ margin: 0;">Back</button>
             card.innerHTML = `
                 <div style="order: 1; display: flex; flex-direction: column;">
                     <div class="file-card-header">
-                        <span class="file-title cit-title-push" style="color: #a855f7;">📄 ${c.title || 'Untitled'}</span>
+                        <span class="file-title cit-title-push" style="color: var(--intent-highlight);">📄 ${c.title || 'Untitled'}</span>
                     </div>
                     <div class="file-desc" style="color: var(--text); font-weight: bold; margin-top: 5px;">${authors} (${year})</div>
-                    <div class="file-desc" style="font-size: 0.8rem; margin-top: 8px;">ID: <span style="font-family: monospace; color: #38bdf8;">[@${c.id}]</span> ${c.open_access ? '🔓 OA' : ''}</div>
-                    ${c.URL ? `<div class="file-desc" style="font-size: 0.8rem; margin-top: 4px;">🌐 <a href="${c.URL}" target="_blank" style="color: #10b981; text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
+                    <div class="file-desc" style="font-size: 0.8rem; margin-top: 8px;">ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span> ${c.open_access ? '🔓 OA' : ''}</div>
+                    ${c.URL ? `<div class="file-desc" style="font-size: 0.8rem; margin-top: 4px;">🌐 <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
                     ${attTags ? `<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${attTags}</div>` : ''}
                 </div>
                 <div class="cit-card-actions">${actionHtml}</div>
@@ -623,7 +625,7 @@ margin: 0;">Back</button>
                             body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
                         });
                         e.target.innerText = "✅ Saved";
-                        e.target.style.background = "#64748b";
+                        e.target.style.background = "var(--intent-neutral)";
                         e.target.disabled = true;
                         loadMainLibrary(); // refresh background cache
                     } catch (err) {
@@ -753,7 +755,7 @@ if (res.ok) {
                     const loadMoreBtn = document.createElement('button');
                     loadMoreBtn.id = 'btn-explore-load-more';
                     loadMoreBtn.className = 'btn-sm';
-                    loadMoreBtn.style.background = '#64748b';
+                    loadMoreBtn.style.background = 'var(--intent-neutral)';
                     loadMoreBtn.style.margin = '10px auto';
                     loadMoreBtn.style.display = 'block';
                     loadMoreBtn.innerText = '⬇️ Load More';
@@ -824,8 +826,8 @@ if (res.ok) {
     CitationStore.subscribe((state) => state.pinnedRepos, updatePins);
     CitationStore.subscribe((state) => state.pinnedBuckets, updatePins);
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-        window.ExtensionRegistry.registerUIHook('zone:tab-changed', (tabId) => {
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+        window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
             if (tabId === 'library') {
                 const ws = AppStore.getState().activeWorkspace || 'default';
                 CitationStore.setState({
@@ -953,10 +955,10 @@ export async function openCitationModal() {
     const bodyHtml = `
         <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
         <div id="citation-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
-            <span style="color:#888; font-style:italic;">Loading library...</span>
+            <span style="color:var(--text-muted); font-style:italic;">Loading library...</span>
         </div>
     `;
-    window.UIFactory.createModal({
+    window.inSetu.ui.Factory.createModal({
         id: 'citation-insert-modal',
         title: 'Insert Citation',
         body: bodyHtml
@@ -966,7 +968,7 @@ export async function openCitationModal() {
         if (res.ok) {
             const data = await res.json();
             citationLibraryCache = data.citations || [];
-            document.getElementById('citation-results-list').innerHTML = '<span style="color:#888; font-style:italic;">Library loaded. Type to search...</span>';
+            document.getElementById('citation-results-list').innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Library loaded. Type to search...</span>';
         }
     } catch(e) {
         document.getElementById('citation-results-list').innerHTML = '<span style="color:red;">Failed to load library.</span>';
@@ -981,7 +983,7 @@ export function onCitationSearchInput(val) {
         const q = norm(val.trim());
 
         if (!q || !citationLibraryCache) {
-            container.innerHTML = '<span style="color:#888; font-style:italic;">Type to search...</span>';
+            container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
             return;
         }
 
@@ -994,7 +996,7 @@ export function onCitationSearchInput(val) {
 
         container.innerHTML = '';
         if (results.length === 0) {
-            container.innerHTML = '<span style="color:#888; font-style:italic;">No citations found.</span>';
+            container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No citations found.</span>';
             return;
         }
 
@@ -1009,7 +1011,7 @@ export function onCitationSearchInput(val) {
 
             row.innerHTML = `
                 <div style="font-weight: bold; color: var(--text); margin-bottom: 4px;">${c.title || 'Untitled'}</div>
-                <div style="font-size: 0.75rem; color: #888;">${authors} (${year})</div>
+                <div style="font-size: 0.75rem; color: var(--text-muted);">${authors} (${year})</div>
             `;
             row.onclick = () => insertCitationToEditor(c);
             container.appendChild(row);
@@ -1084,7 +1086,7 @@ function insertCitationToEditor(citation) {
         textArea.dispatchEvent(new Event('input'));
         }
 
-        window.UIFactory.closeModal('citation-insert-modal');
+        window.inSetu.ui.Factory.closeModal('citation-insert-modal');
         if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
 }
 
@@ -1203,7 +1205,7 @@ if (tb && !document.getElementById('btn-insert-citation')) {
     const citeBtn = document.createElement('button');
     citeBtn.id = 'btn-insert-citation';
     citeBtn.className = 'btn-sm';
-    citeBtn.style.cssText = 'background: #a855f7; margin: 0; display: none;';
+    citeBtn.style.cssText = 'background: var(--intent-highlight); margin: 0; display: none;';
     citeBtn.innerText = '📚 Cite';
     citeBtn.onclick = window.openCitationModal;
     tb.appendChild(citeBtn);
@@ -1211,14 +1213,14 @@ if (tb && !document.getElementById('btn-insert-citation')) {
     const syncBtn = document.createElement('button');
     syncBtn.id = 'btn-sync-citations';
     syncBtn.className = 'btn-sm';
-    syncBtn.style.cssText = 'background: #eab308; margin: 0; display: none;';
+    syncBtn.style.cssText = 'background: var(--intent-warning); margin: 0; display: none;';
     syncBtn.innerText = '🔄 Sync Refs';
     syncBtn.onclick = window.syncDocumentCitations;
     tb.appendChild(syncBtn);
 }
 
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:modal-edit-toolbar', (data) => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    window.inSetu.extensions.Registry.registerUIHook('zone:modal-edit-toolbar', (data) => {
         const citeBtn = document.getElementById('btn-insert-citation');
         const syncBtn = document.getElementById('btn-sync-citations');
         if (citeBtn) citeBtn.style.display = data.isMarkdown ? 'block' : 'none';
@@ -1228,8 +1230,8 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
 }
 
 // --- REGISTER LIFECYCLE UNLOAD HOOK ---
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {
-    window.ExtensionRegistry.registerUnloadHook('citations', () => {
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
+    window.inSetu.extensions.Registry.registerUnloadHook('citations', () => {
         console.log("🧹 Evicting Citations Extension UI Canvas...");
         
         // Clear out personal library listings to prevent cross-tenant view bleeding
@@ -1239,7 +1241,7 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUnloadHook) {
         // Reset explore panel back to its default pristine state
         const exploreList = document.getElementById('lib-explore-list');
         if (exploreList) {
-            exploreList.innerHTML = '<p style="color: #888; font-style: italic;">Search the open science index to discover and import citations.</p>';
+            exploreList.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>';
         }
         
         // Clean out raw text import console log traces

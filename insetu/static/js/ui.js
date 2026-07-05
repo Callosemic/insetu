@@ -1,3 +1,5 @@
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+
 // --- DYNAMIC UI FACTORY ---
 export const UIFactory = {
     createModal: function(config) {
@@ -30,7 +32,7 @@ export const UIFactory = {
         titleEl.innerHTML = config.title;
         const closeBtn = document.createElement('button');
         closeBtn.className = 'btn-sm';
-        closeBtn.style.background = '#64748b';
+        closeBtn.style.background = 'var(--intent-neutral)';
         closeBtn.style.margin = '0';
         closeBtn.style.flexShrink = '0';
         closeBtn.innerText = 'Back';
@@ -53,8 +55,8 @@ export const UIFactory = {
         if (config.actions) {
             config.actions.forEach(act => {
                 const btn = document.createElement('button');
-                btn.style.background = act.style === 'primary' ? 'var(--primary, #8b5cf6)' : 
-                                        act.style === 'danger' ? '#ef4444' : 'var(--input-bg)';
+                btn.style.background = act.style === 'primary' ? 'var(--primary, var(--intent-highlight))' : 
+                                        act.style === 'danger' ? 'var(--intent-danger)' : 'var(--input-bg)';
                 btn.style.color = (act.style === 'primary' || act.style === 'danger') ? '#fff' : 'var(--text)';
                 if (act.id) btn.id = act.id;
                 btn.innerText = act.label;
@@ -285,9 +287,10 @@ export const UIFactory = {
         return menu;
     }
 };
-
 // Bind to window for globally decoupled extensions
-window.UIFactory = UIFactory;
+window.inSetu.ui.Factory = UIFactory;
+window.UIFactory = UIFactory; // Legacy alias
+
 export function openSelectorModal(title, items, onSelect) {
     const bodyHtml = `
         <div style="flex-shrink: 0; margin-bottom: 10px;">
@@ -323,7 +326,7 @@ export function openSelectorModal(title, items, onSelect) {
         const filtered = items.filter(i => i.toLowerCase().includes(lowerFilter)).slice(0, 50);
 
         if (filtered.length === 0) {
-            listEl.innerHTML = '<span style="color: #888; font-style: italic;">No matches found.</span>';
+            listEl.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No matches found.</span>';
             return;
         }
         filtered.forEach(item => {

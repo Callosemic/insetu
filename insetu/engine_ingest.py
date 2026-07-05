@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify
 from insetu.utils_core import extension_auth
 
 ingest_bp = Blueprint('ingest', __name__)
+__depends__ = []
 
 def extract_markdown_from_url(target_url, method="jina"):
     # Intercept and unwrap Google search redirect links

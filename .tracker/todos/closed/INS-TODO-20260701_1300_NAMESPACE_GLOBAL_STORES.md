@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-TODO-20260701_1300_NAMESPACE_GLOBAL_STORES
 title: "Refactor Global Stores to window.inSetu Namespace"
 created_at: 2026-07-01T13:00:00
-closed_at: null
+closed_at: 2026-07-04T17:30:00
 sub_bucket: "None"
-tags: [frontend, architecture, refactor, namespace]
 ---
 
 ## Description
@@ -21,6 +20,6 @@ We need to establish a unified `window.inSetu` object namespace to cleanly house
 - [ ] Refactor all dynamic extensions (`ext_tracker.js`, `ext_citations.js`, `ext_research.js`) to mount their Zustand stores under `window.inSetu.stores` rather than `window.KanbanStore`, etc.
 - [ ] Update `app.js` to migrate `UIFactory` and `ExtensionRegistry` into the `window.inSetu` namespace.
 - [ ] Refactor the workspace teardown loop inside `performSoftRefresh()` to blindly iterate over `Object.values(window.inSetu.stores)` and dynamically trigger cache eviction/resets, replacing the hardcoded and brittle `if (window.KanbanStore)` manual checks.
-
 ## Notes / Execution Log
 * **Audit (2026-07-02):** Designated as primary architectural debt. Consolidating state management into the `window.inSetu` namespace is required to finalize Unidirectional Data Flow (UDF) compliance and prevent cross-tenant cache bleeding.
+* **Resolution (2026-07-04):** Bootstrapped `window.inSetu = { stores: {}, extensions: {}, ui: {} };` globally. Successfully migrated `UIFactory`, `ExtensionRegistry`, and all local Zustand state stores into this singular, trackable namespace to orchestrate reliable UDF teardowns.
