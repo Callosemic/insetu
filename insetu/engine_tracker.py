@@ -49,13 +49,90 @@ def init_tracker_db():
 @hooks.on('post_file_save')
 def handle_tracker_file_save(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
-        _sync_disk_to_db(workspace_id)
-
+        _, ws_root, _ = get_workspace_physics(workspace_id)
+        abs_path = os.path.join(ws_root, filepath)
+        if os.path.exists(abs_path):
+            _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
 
 @hooks.on('post_file_delete')
 def handle_tracker_file_delete(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
-        _sync_disk_to_db(workspace_id)
+        conn = get_connection('tracker', workspace_id=workspace_id)
+        conn.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
+        conn.commit()
+
+def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
+    """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
+    try:
+        with open(abs_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+
+        filename = os.path.basename(rel_path)
+        title = filename
+        t_id = "UNKNOWN"
+        created_at = "0000-00-00T00:00:00"
+        closed_at = None
+        sub_bucket = "None"
+        tags = "[]"
+
+        if yaml_match:
+            for line in yaml_match.group(1).split('\n'):
+                line = line.strip()
+                if line.startswith('title:'): title = line.split('title:', 1)[1].strip().strip('\'"')
+                elif line.startswith('id:'): t_id = line.split('id:', 1)[1].strip().strip('\'"')
+                elif line.startswith('created_at:'): created_at = line.split('created_at:', 1)[1].strip().strip('\'"')
+                elif line.startswith('closed_at:'):  
+                    val = line.split('closed_at:', 1)[1].strip()
+                    if val.lower() != 'null': closed_at = val.strip('\'"')
+                elif line.startswith('sub_bucket:'): sub_bucket = line.split('sub_bucket:', 1)[1].strip().strip('\'"')
+                elif line.startswith('tags:'):
+                    tags_raw = line.split('tags:', 1)[1].strip()
+                    if tags_raw.startswith('['):
+                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.strip('[]').split(',') if t.strip()])
+                    else:
+                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.split(',') if t.strip()])
+
+        desc = content
+        if yaml_match:
+            desc = content.replace(yaml_match.group(0), '').strip()
+            if desc.startswith('## Description'):
+                desc = re.sub(r'^## Description\n+', '', desc).strip()
+
+        ticket_type = "bug" if "/bugs/" in rel_path else "queue" if "/queue/" in rel_path else "todo"
+        status = "unknown"
+        if "/open/" in rel_path: status = "open"
+        elif "/active/" in rel_path: status = "active"
+        elif "/closed/" in rel_path: status = "closed"
+        elif "/archived/" in rel_path or "/log/" in rel_path: status = "archived"
+
+        repo = rel_path.split('/')[0] if '/' in rel_path else "unknown"
+        if yaml_match:
+            for line in yaml_match.group(1).split('\n'):
+                line = line.strip()
+                if line.startswith('repo:'): repo = line.split('repo:', 1)[1].strip().strip('\'"')
+                elif line.startswith('type:'):
+                    raw_t = line.split('type:', 1)[1].strip().strip('\'"').lower()
+                    if "bug" in raw_t: ticket_type = "bug"
+                    elif "queue" in raw_t: ticket_type = "queue"
+                    else: ticket_type = "todo"
+                elif line.startswith('status:'):
+                    raw_s = line.split('status:', 1)[1].strip().strip('\'"').lower()
+                    if "active" in raw_s: status = "active"
+                    elif "clos" in raw_s: status = "closed"
+                    elif "archiv" in raw_s: status = "archived"
+                    else: status = "open"
+
+        conn = get_connection('tracker', workspace_id=workspace_id)
+        conn.execute("""
+            INSERT OR REPLACE INTO tracker_tickets 
+            (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, filepath)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (t_id, repo, ticket_type, status, title, desc, tags, sub_bucket, created_at, closed_at, rel_path))
+        conn.commit()
+    except Exception as e:
+        print(f"Error parsing ticket {rel_path}: {e}")
+
 def _sync_disk_to_db(workspace_id=None):
     _, ws_root, _ = get_workspace_physics(workspace_id)
     conn = get_connection('tracker', workspace_id=workspace_id)
@@ -83,69 +160,7 @@ def _sync_disk_to_db(workspace_id=None):
                 if f.endswith('.md'):
                     abs_path = os.path.join(root, f)
                     rel_path = os.path.relpath(abs_path, ws_root).replace('\\', '/')
-                    try:
-                        with open(abs_path, 'r', encoding='utf-8') as file:
-                            content = file.read()
-                        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-                        title = f
-                        t_id = "UNKNOWN"
-                        created_at = "0000-00-00T00:00:00"
-                        closed_at = None
-                        sub_bucket = "None"
-                        tags = "[]"
-
-                        if yaml_match:
-                            for line in yaml_match.group(1).split('\n'):
-                                line = line.strip()
-                                if line.startswith('title:'): title = line.split('title:', 1)[1].strip().strip('\'"')
-                                elif line.startswith('id:'): t_id = line.split('id:', 1)[1].strip().strip('\'"')
-                                elif line.startswith('created_at:'): created_at = line.split('created_at:', 1)[1].strip().strip('\'"')
-                                elif line.startswith('closed_at:'):  
-                                    val = line.split('closed_at:', 1)[1].strip()
-                                    if val.lower() != 'null': closed_at = val.strip('\'"')
-                                elif line.startswith('sub_bucket:'): sub_bucket = line.split('sub_bucket:', 1)[1].strip().strip('\'"')
-                                elif line.startswith('tags:'):
-                                    tags_raw = line.split('tags:', 1)[1].strip()
-                                    if tags_raw.startswith('['):
-                                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.strip('[]').split(',') if t.strip()])
-                                    else:
-                                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.split(',') if t.strip()])
-
-                        desc = content
-                        if yaml_match:
-                            desc = content.replace(yaml_match.group(0), '').strip()
-                            if desc.startswith('## Description'):
-                                desc = re.sub(r'^## Description\n+', '', desc).strip()
-                        ticket_type = "bug" if "/bugs/" in rel_path else "queue" if "/queue/" in rel_path else "todo"
-                        status = "unknown"
-                        if "/open/" in rel_path: status = "open"
-                        elif "/active/" in rel_path: status = "active"
-                        elif "/closed/" in rel_path: status = "closed"
-                        elif "/archived/" in rel_path or "/log/" in rel_path: status = "archived"
-                        # SSOT: Let YAML override path inference if it exists
-                        if yaml_match:
-                            for line in yaml_match.group(1).split('\n'):
-                                line = line.strip()
-                                if line.startswith('repo:'): repo = line.split('repo:', 1)[1].strip().strip('\'"')
-                                elif line.startswith('type:'):
-                                    raw_t = line.split('type:', 1)[1].strip().strip('\'"').lower()
-                                    if "bug" in raw_t: ticket_type = "bug"
-                                    elif "queue" in raw_t: ticket_type = "queue"
-                                    else: ticket_type = "todo"
-                                elif line.startswith('status:'):
-                                    raw_s = line.split('status:', 1)[1].strip().strip('\'"').lower()
-                                    if "active" in raw_s: status = "active"
-                                    elif "clos" in raw_s: status = "closed"
-                                    elif "archiv" in raw_s: status = "archived"
-                                    else: status = "open"
-
-                        conn.execute("""
-                            INSERT INTO tracker_tickets 
-                            (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, filepath)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (t_id, repo, ticket_type, status, title, desc, tags, sub_bucket, created_at, closed_at, rel_path))
-                    except Exception:
-                        pass
+                    _parse_and_upsert_ticket(abs_path, rel_path, workspace_id)
     conn.commit()
 @hooks.on('mutate_workspace_config')
 def inject_tracker_config(cfg, **kwargs):

@@ -4,12 +4,8 @@ import {
     createFileCard
 } from './app.js';
 import { AppStore } from './store.js';
-
-let currentPushRepo = '';
-let currentPushDiffFile = '';
 export async function openPushModal(diffFilename, repoDir) {
-    currentPushDiffFile = diffFilename;
-    currentPushRepo = repoDir;
+    AppStore.setState({ currentPushDiffFile: diffFilename, currentPushRepo: repoDir });
 
     const bodyHtml = `
         <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
@@ -53,9 +49,10 @@ export async function openPushModal(diffFilename, repoDir) {
         console.error("Failed to load changelogs.");
     }
 }
-
 export async function executePush(modalId = 'push-modal') {
     const msg = document.getElementById('push-message').value.trim();
+    const { currentPushRepo, currentPushDiffFile } = AppStore.getState();
+
     if (!msg) {
         alert("Please enter a commit message.");
         return;

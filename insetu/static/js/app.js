@@ -3,7 +3,6 @@ import {
     loadGlobalFS,
     createFileCard,
     downloadFile,
-    globalBrowsePath,
     currentModalOriginalText,
     buildFileTree
 } from './fs.js';
@@ -300,8 +299,9 @@ window.ExtensionRegistry.executeUnload = function(extName) {
         this._ticks.delete(extName);
     }
 };
-
 // --- THE CENTRALIZED FRONTEND METRONOME ---
+window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
+
 setInterval(() => {
     const now = Date.now();
     window.ExtensionRegistry._ticks.forEach((tasks, extName) => {
@@ -575,17 +575,19 @@ function switchSubTab(subId) {
     // Bridge UI Hardening: Guarantee Paste button visibility using computed styles
     const consoleArea = document.getElementById('bridge-console-area');
     const isConsoleActive = consoleArea && window.getComputedStyle(consoleArea).display !== 'none';
-    
     if (pasteBtn) {
-        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ? 'block' : 'none';
+        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ?
+'block' : 'none';
     }
-    if (newFileBtn) newFileBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    if (newFileBtn) newFileBtn.style.display = (subId === 'files' && gbPath.length > 0) ?
+'block' : 'none';
     const fsMoreBtn = document.getElementById('btn-fs-more');
-    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files' && globalBrowsePath.length > 0) ? 'block' : 'none';
+    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files' && gbPath.length > 0) ?
+'block' : 'none';
     if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
 let lastRefreshed = null;
-let refreshInterval = null;
 
 function updateRefreshText() {
     if (!lastRefreshed) return;
@@ -868,12 +870,9 @@ async function finishContextLoad(result) {
     } catch (e) {
         console.error("Manifest error", e);
     }
-
     renderContextFiles(result.files, result.message);
     lastRefreshed = new Date();
     updateRefreshText();
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(updateRefreshText, 1000);
 
     document.getElementById('context-loading').style.display = 'none';
     document.getElementById('context-results').style.display = 'block';

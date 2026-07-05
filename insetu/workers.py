@@ -35,12 +35,128 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}",
         args_json = json.dumps(args_payload)
     except Exception:
         pass
-
     conn.execute("""
-        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+        INSERT OR REPLACE 
+INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, interval_ms, jitter_ms, now, args_json))
     conn.commit()
+
+def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
+    """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
+    if not workspace_id:
+        try:
+            from flask import request
+            if request:
+                workspace_id = request.headers.get('X-Workspace-ID')
+        except RuntimeError:
+            pass
+    workspace_id = workspace_id or "default"
+
+    conn = get_connection("workers", workspace_id=workspace_id)
+    now = time.time()
+    try:
+        args_payload = json.loads(args_json)
+        if "_workspace_id" not in args_payload:
+            args_payload["_workspace_id"] = workspace_id
+        args_json = json.dumps(args_payload)
+    except Exception:
+        pass
+
+    conn.execute("""
+        INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
+        VALUES (?, ?, ?, 'processing', 'Initializing...', '{}', ?, ?, ?)
+    """, (job_id, ext_name, callback_name, now, now, args_json))
+    conn.commit()
+
+    _executor.submit(_execute_immediate_job, job_id, ext_name, callback_name, args_json, workspace_id)
+
+def update_immediate_job_status(job_id, status, message=None, artifact=None, workspace_id="default"):
+    """Helper for workers to update their streaming status."""
+    conn = get_connection("workers", workspace_id=workspace_id)
+    now = time.time()
+
+    updates = ["updated_at=?"]
+    params = [now]
+
+    if status is not None:
+        updates.append("status=?")
+        params.append(status)
+    if message is not None:
+        updates.append("status_message=?")
+        params.append(message)
+    if artifact is not None:
+        updates.append("artifact_json=?")
+        params.append(json.dumps(artifact))
+
+    params.append(job_id)
+    query = f"UPDATE immediate_jobs SET {', '.join(updates)} WHERE id=?"
+    conn.execute(query, tuple(params))
+    conn.commit()
+
+def _execute_immediate_job(job_id, ext_name, callback_name, args_json, target_ws):
+    """Executes an immediate job and manages its lifecycle in the ledger."""
+    func = _callbacks.get(f"{ext_name}:{callback_name}")
+    try:
+        kwargs = json.loads(args_json)
+        if "_workspace_id" in kwargs:
+            target_ws = kwargs.pop("_workspace_id")
+    except Exception:
+        kwargs = {}
+
+    if func:
+        try:
+            import inspect
+            sig = inspect.signature(func)
+            if 'workspace_id' in sig.parameters:
+                kwargs['workspace_id'] = target_ws
+            if 'job_id' in sig.parameters:
+                kwargs['job_id'] = job_id
+            func(**kwargs)
+
+            # If the function didn't already mark it completed/failed, do it here gracefully
+            conn = get_connection("workers", workspace_id=target_ws)
+            current = conn.execute("SELECT status FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
+            if current and current['status'] == 'processing':
+                update_immediate_job_status(job_id, 'completed', 'Execution finished.', None, target_ws)
+        except Exception as e:
+            print(f"❌ [Worker] Immediate Job {job_id} failed on workspace [{target_ws}]: {e}")
+            update_immediate_job_status(job_id, 'failed', f"Error: {str(e)}", None, target_ws)
+    else:
+        update_immediate_job_status(job_id, 'failed', f"Callback {ext_name}:{callback_name} not found.", None, target_ws)
+def register_ephemeral_artifact(filepath, owner, ttl_seconds, workspace_id="default"):
+    conn = get_connection("workers", workspace_id=workspace_id)
+    now = time.time()
+    import uuid
+    art_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO ephemeral_artifacts (id, filepath, module_owner, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (art_id, filepath, owner, now, now + ttl_seconds)
+    )
+    conn.commit()
+
+def sweep_ephemeral_artifacts(workspace_id="default"):
+    """Sweeps and deletes expired temporary files and old immediate jobs."""
+    conn = get_connection("workers", workspace_id=workspace_id)
+    now = time.time()
+
+    # 1. Sweep Ephemeral Artifacts
+    cursor = conn.execute("SELECT id, filepath FROM ephemeral_artifacts WHERE expires_at < ?", (now,))
+    for row in cursor.fetchall():
+        try:
+            import os
+            if os.path.exists(row['filepath']):
+                os.remove(row['filepath'])
+            conn.execute("DELETE FROM ephemeral_artifacts WHERE id=?", (row['id'],))
+        except Exception as e:
+            print(f"⚠️ Failed to garbage collect ephemeral artifact {row['filepath']}: {e}")
+
+    # 2. Sweep Old Immediate Jobs (> 24 hours)
+    cutoff = now - 86400
+    conn.execute("DELETE FROM immediate_jobs WHERE updated_at < ? AND status IN ('completed', 'failed')", (cutoff,))
+    conn.commit()
+
+register_callback("workers", "sweep_ephemeral_artifacts", sweep_ephemeral_artifacts)
 
 def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_json, fallback_ws="default"):
     """Executes the mapped Python callback inside the ThreadPool ensuring contextual tenant forwarding."""
@@ -128,16 +244,45 @@ def start_workers():
             args_json TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ephemeral_artifacts (
+            id TEXT PRIMARY KEY,
+            filepath TEXT,
+            module_owner TEXT,
+            created_at REAL,
+            expires_at REAL
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS immediate_jobs (
+            id TEXT PRIMARY KEY,
+            ext_name TEXT,
+            callback_name TEXT,
+            status TEXT,
+            status_message TEXT,
+            artifact_json TEXT,
+            created_at REAL,
+            updated_at REAL,
+            args_json TEXT
+        )
+    """)
+
     try:
         conn.execute("ALTER TABLE jobs ADD COLUMN jitter_ms INTEGER DEFAULT 0")
         conn.commit()
     except Exception:
         pass
-
     # Heal the ledger: Demote any jobs left 'running' from a prior kernel panic back to 'pending'
     conn.execute("UPDATE jobs SET status='pending' WHERE status='running'")
+
+    # Register the universal garbage collector (ticks every 5 minutes)
+    conn.execute("""
+        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+        VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
+    """)
     conn.commit()
-    
+
     _executor = ThreadPoolExecutor(max_workers=3)
     _shutdown_event.clear()
     _metronome_thread = threading.Thread(target=_metronome_loop, daemon=True)

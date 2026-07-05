@@ -46,36 +46,42 @@ export async function renderPromptsTab() {
         container.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">No prompts found in workspace.</p>';
         return;
     }
-
     const treePaths = rawPrompts.map(p => p.replace(/^prompts\//, ''));
     const tree = buildFileTree(treePaths);
 
-    window.currentPromptsPath = window.currentPromptsPath || [];
+    let cpPath = AppStore.getState().currentPromptsPath || [];
     let current = tree;
-    
-    for (const p of window.currentPromptsPath) {
+    let resetPath = false;
+
+    for (const p of cpPath) {
         if (current[p] && !current[p]._isFile) {
             current = current[p];
         } else {
-            window.currentPromptsPath = [];
+            resetPath = true;
             current = tree;
             break;
         }
     }
 
-    if (window.currentPromptsPath.length > 0) {
+    if (resetPath) {
+        cpPath = [];
+        AppStore.setState({ currentPromptsPath: cpPath });
+    }
+
+    if (cpPath.length > 0) {
         const headerDiv = document.createElement('div');
         headerDiv.style.display = 'flex';
         headerDiv.style.gap = '10px';
         headerDiv.style.marginBottom = '15px';
         headerDiv.style.alignItems = 'center';
-
         const upBtn = document.createElement('button');
         upBtn.className = 'btn-sm';
         upBtn.innerText = '⬆️ Up';
         upBtn.style.background = 'var(--intent-neutral)';
         upBtn.onclick = () => {
-            window.currentPromptsPath.pop();
+            const p = [...(AppStore.getState().currentPromptsPath || [])];
+            p.pop();
+            AppStore.setState({ currentPromptsPath: p });
             renderPromptsTab();
         };
 
@@ -83,7 +89,7 @@ export async function renderPromptsTab() {
         pathText.style.fontFamily = 'monospace';
         pathText.style.color = 'var(--text)';
         pathText.style.opacity = '0.7';
-        pathText.innerText = '/' + window.currentPromptsPath.join('/');
+        pathText.innerText = '/' + cpPath.join('/');
         headerDiv.appendChild(upBtn);
         headerDiv.appendChild(pathText);
         container.appendChild(headerDiv);
@@ -102,7 +108,6 @@ export async function renderPromptsTab() {
         const isDir = !item._isFile;
 
         if (!isDir && (key === '.gitkeep' || key === '.keep')) return; 
-
         if (isDir) {
             const card = document.createElement('div');
             card.className = 'file-card';
@@ -111,14 +116,16 @@ export async function renderPromptsTab() {
             card.style.cursor = 'pointer';
             card.innerHTML = `<span class="folder-label">📁 ${key}</span>`;
             card.onclick = () => {
-                window.currentPromptsPath.push(key);
+                const p = [...(AppStore.getState().currentPromptsPath || [])];
+                p.push(key);
+                AppStore.setState({ currentPromptsPath: p });
                 renderPromptsTab();
             };
             container.appendChild(card);
             return;
         }
 
-        const pathPrefix = window.currentPromptsPath.length > 0 ? window.currentPromptsPath.join('/') + '/' : '';
+        const pathPrefix = cpPath.length > 0 ? cpPath.join('/') + '/' : '';
         const filepath = `${gatherOptions.profileDir}/prompts/${pathPrefix}${key}`;
 
         createFileCard({
@@ -208,21 +215,18 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return false;
     });
 }
-
 export function openNewPromptFolderModal() {
     if (window.openNewFolderModal) {
-        const prefix = window.currentPromptsPath && window.currentPromptsPath.length > 0 
-            ? `.insetu/prompts/${window.currentPromptsPath.join('/')}/` 
-            : ".insetu/prompts/";
+        const cpPath = AppStore.getState().currentPromptsPath || [];
+        const prefix = cpPath.length > 0 ? `.insetu/prompts/${cpPath.join('/')}/` : ".insetu/prompts/";
         window.openNewFolderModal(prefix);
     }
 }
 
 export function openNewPromptModal() {
     if (window.openNewFileModal) {
-        const prefix = window.currentPromptsPath && window.currentPromptsPath.length > 0 
-            ? `.insetu/prompts/${window.currentPromptsPath.join('/')}/` 
-            : ".insetu/prompts/";
+        const cpPath = AppStore.getState().currentPromptsPath || [];
+        const prefix = cpPath.length > 0 ? `.insetu/prompts/${cpPath.join('/')}/` : ".insetu/prompts/";
         window.openNewFileModal(prefix);
     }
 }

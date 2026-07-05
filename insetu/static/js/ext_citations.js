@@ -366,7 +366,16 @@ margin: 0;">Back</button>
             if (res.ok) {
                 activeAttachCitation._attachments = newAtts;
                 renderAttachmentList();
-                document.getElementById('lib-main-search').dispatchEvent(new Event('input')); // Refresh main UI
+
+                // Surgical DOM Reconciliation
+                const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${activeAttachCitation.id}"]`);
+                if (card) {
+                    const tempFragment = document.createElement('div');
+                    renderCards([activeAttachCitation], tempFragment, false, true);
+                    if (tempFragment.firstElementChild) {
+                        card.replaceWith(tempFragment.firstElementChild);
+                    }
+                }
             }
         } catch(e) {
             alert('Error saving attachment.');
@@ -513,10 +522,27 @@ margin: 0;">Back</button>
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
             });
-
             if (res.ok) {
                 document.getElementById('edit-citation-modal').style.display = 'none';
-                loadMainLibrary(); // Refreshes the list to show new data
+
+                // Surgical DOM Reconciliation
+                const stateLib = CitationStore.getState().localLibrary;
+                const idx = stateLib.findIndex(c => c.id === payload.id);
+                if (idx !== -1) {
+                    payload._attachments = stateLib[idx]._attachments; // Preserve local attachments
+                    stateLib[idx] = payload;
+
+                    const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${payload.id}"]`);
+                    if (card) {
+                        const tempFragment = document.createElement('div');
+                        renderCards([payload], tempFragment, false, true);
+                        if (tempFragment.firstElementChild) {
+                            card.replaceWith(tempFragment.firstElementChild);
+                        }
+                    }
+                } else {
+                    loadMainLibrary(); // Fallback if it wasn't in state
+                }
             } else {
                 const err = await res.json();
                 alert("Failed to save: " + (err.error || "Unknown error"));
@@ -542,7 +568,14 @@ margin: 0;">Back</button>
             });
             if (res.ok) {
                 document.getElementById('edit-citation-modal').style.display = 'none';
-                loadMainLibrary();
+
+                // Surgical DOM Reconciliation
+                const stateLib = CitationStore.getState().localLibrary;
+                const idx = stateLib.findIndex(c => c.id === activeEditCitation.id);
+                if (idx !== -1) stateLib.splice(idx, 1);
+
+                const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${activeEditCitation.id}"]`);
+                if (card) card.remove();
             } else {
                 alert("Failed to delete citation. Please verify the API endpoint exists.");
             }
@@ -559,10 +592,10 @@ margin: 0;">Back</button>
             container.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">No results.</p>';
             return;
         }
-
         items.forEach(c => {
             const card = document.createElement('div');
             card.className = 'file-card cit-card-wrapper';
+            card.dataset.citId = c.id;
 
             const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
             const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
@@ -627,7 +660,22 @@ margin: 0;">Back</button>
                         e.target.innerText = "✅ Saved";
                         e.target.style.background = "var(--intent-neutral)";
                         e.target.disabled = true;
-                        loadMainLibrary(); // refresh background cache
+
+                        // Surgically inject into local library state
+                        const currentLib = CitationStore.getState().localLibrary;
+                        if (!currentLib.some(c => c.id === payload.id)) {
+                            currentLib.unshift(payload);
+
+                            // Surgically prepend to DOM if the main library is visible
+                            const mainList = document.getElementById('lib-main-list');
+                            if (mainList) {
+                                const tempFragment = document.createElement('div');
+                                renderCards([payload], tempFragment, false, true);
+                                if (tempFragment.firstElementChild) {
+                                    mainList.prepend(tempFragment.firstElementChild);
+                                }
+                            }
+                        }
                     } catch (err) {
                         e.target.innerText = "❌ Error";
                     }

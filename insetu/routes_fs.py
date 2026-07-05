@@ -56,9 +56,9 @@ def _trigger_post_mutation_hooks(workspace_id, old_filepath, new_filepath=None):
     except Exception as e:
         print(f"Warning: Cartographer failed during VFS mutation: {str(e)}")
 
-    hooks.emit('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
+    hooks.emit_background('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
     if new_filepath:
-        hooks.emit('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
+        hooks.emit_background('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
 
 def execute_vfs_move(workspace_id, filepath, dest_path):
     resolved_src = resolve_workspace_path(filepath, workspace_id)
@@ -240,7 +240,8 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 except Exception as e:
                         print(f"Warning: Cartographer failed during save: {str(e)}")
 
-        hooks.emit('post_file_save', filepath=filepath, workspace_id=workspace_id)
+        hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
+
 @fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])
 def api_fs_save(workspace_id):
         """Universal save-back endpoint with explicit path routing guardrails."""

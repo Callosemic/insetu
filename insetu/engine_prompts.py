@@ -64,7 +64,12 @@ def resolve_prompt_includes(text, current_filepath, workspace_id, depth=0):
             # Absolute to workspace root
             target_path = include_path.lstrip('/')
 
-        resolved_abs = resolve_workspace_path(target_path, workspace_id)
+        if target_path.startswith('prompts/'):
+            paths = get_gather_paths(workspace_id)
+            resolved_abs = os.path.normpath(os.path.join(paths["prompts_dir"], target_path[8:])).replace('\\', '/')
+        else:
+            resolved_abs = resolve_workspace_path(target_path, workspace_id)
+
         if os.path.exists(resolved_abs):
             with open(resolved_abs, 'r', encoding='utf-8') as f:
                 inc_content = f.read()

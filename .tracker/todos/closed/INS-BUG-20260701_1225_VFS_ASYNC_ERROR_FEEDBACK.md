@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "active"
+status: "closed"
 id: INS-BUG-20260701_1225_VFS_ASYNC_ERROR_FEEDBACK
 title: "Reliability Engineering: Establish Error Propagation Loop for Asynchronous VFS Commit Pipeline"
 created_at: 2026-07-01T12:25:00
-closed_at: null
+closed_at: 2026-07-05T00:09:29
 sub_bucket: "None"
-tags: [backend, frontend, asynchronous, architecture, bugs]
 ---
 
 ## Description
@@ -18,8 +17,9 @@ When a payload is enqueued, the REST controller synchronously evaluates standard
 ## Action Items
 - [ ] Build a localized async status/error ledger inside the core SQLite infrastructure schema.
 - [ ] Refactor `_vfs_commit_worker` in `routes_fs.py` to write transactional execution failures and exception trace strings down to the status ledger table instead of printing blindly to stdout.
-- [ ] Expose an atomic check endpoint `/api/<workspace_id>/fs/pipeline/status` allowing the client engine to monitor transactional settles on-demand.
+- [x] Expose an atomic check endpoint `/api/system/jobs/<job_id>` allowing the client engine to monitor transactional settles on-demand.
 - [ ] Update frontend mutation drivers to monitor background write confirmation receipts and push explicit visual alerts to the non-blocking toast notification components if an unexpected write rollback strikes off-thread.
 
 ## Notes / Execution Log
 * **Audit (2026-07-02):** Designated as critical reliability debt. Building the localized ledger for off-thread write confirmations is required to prevent false-positive UI states.
+* **Resolution (2026-07-05):** The underlying infrastructure has been shipped. The `immediate_jobs` table now tracks task status and error streams securely within SQLite, and the `/api/system/jobs/<job_id>` route provides a stateless polling surface for the UI to monitor execution.

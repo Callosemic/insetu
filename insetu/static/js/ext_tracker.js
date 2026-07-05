@@ -322,10 +322,10 @@ function renderTrackerBoard(state) {
         }
     });
 }
-
 function createTaskCard(task, container) {
     const card = document.createElement('div');
     card.className = 'file-card';
+    card.dataset.taskId = task.id;
     card.style.marginBottom = '10px';
     const header = document.createElement('div');
     header.className = 'file-card-header';
@@ -444,7 +444,36 @@ async function transitionTask(task, newStatus, newType = null) {
 
         });
         if (res.ok) {
-            loadTrackerBoard();
+            // Surgical DOM Reconciliation
+            const cardNode = document.querySelector(`[data-task-id="${task.id}"]`);
+            if (cardNode) cardNode.remove();
+
+            // Mutate state in-place to update truth without triggering Zustand's global re-render check
+            const stateTask = KanbanStore.getState().tasks.find(t => t.id === task.id);
+            if (stateTask) {
+                stateTask.status = newStatus;
+                if (newType) {
+                    stateTask.ticket_type = newType;
+                    stateTask.isTodo = newType === 'todo';
+                    stateTask.isBug = newType === 'bug';
+                    stateTask.isQueue = newType === 'queue';
+                }
+
+                let containerId = null;
+                if (stateTask.status === 'archived') containerId = 'log-list';
+                else if (stateTask.status === 'closed' || stateTask.status === 'logged') containerId = 'todos-recently-closed-list';
+                else if (stateTask.isTodo && stateTask.status === 'open') containerId = 'todos-open-list';
+                else if (stateTask.isTodo && stateTask.status === 'active') containerId = 'todos-active-list';
+                else if (stateTask.isTodo && stateTask.status === 'closed') containerId = 'todos-closed-list';
+                else if (stateTask.isBug && stateTask.status === 'open') containerId = 'bugs-open-list';
+                else if (stateTask.isBug && stateTask.status === 'active') containerId = 'bugs-active-list';
+                else if (stateTask.isBug && stateTask.status === 'closed') containerId = 'bugs-closed-list';
+                else if (stateTask.isQueue && stateTask.status === 'open') containerId = 'queue-open-list';
+                else if (stateTask.isQueue && stateTask.status === 'closed') containerId = 'queue-closed-list';
+
+                const newContainer = document.getElementById(containerId);
+                if (newContainer) createTaskCard(stateTask, newContainer);
+            }
         } else {
             alert("Failed to transition task.");
         }

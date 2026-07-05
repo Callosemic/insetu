@@ -64,6 +64,26 @@ def api_system_config():
             return jsonify({"status": "success", "message": "Configuration saved successfully."})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+@system_bp.route('/api/system/jobs/<job_id>', methods=['GET'])
+def api_job_status(job_id):
+    workspace_id = request.headers.get('X-Workspace-ID', 'default')
+    from insetu.db import get_connection
+    try:
+        conn = get_connection("workers", workspace_id=workspace_id)
+        job = conn.execute("SELECT status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+
+        return jsonify({
+            "id": job_id,
+            "status": job['status'],
+            "message": job['status_message'],
+            "artifact": json.loads(job['artifact_json']) if job['artifact_json'] else {},
+            "created_at": job['created_at'],
+            "updated_at": job['updated_at']
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @system_bp.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():

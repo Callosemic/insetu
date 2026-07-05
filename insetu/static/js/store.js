@@ -17,10 +17,27 @@ export const AppStore = createStore(
             hiddenOutputs: [],
 
             pinnedRepos: new Set(JSON.parse(localStorage.getItem('insetu_pinned_repos')) || ["ALL"]),
-            gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" }
+            gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
+
+            globalBrowsePath: [],
+            currentBrowsePath: [],
+            browserConfig: { mode: 'view', callback: null },
+            currentPushRepo: '',
+            currentPushDiffFile: '',
+            currentFormatTarget: '',
+            currentPromptsPath: [],
+
+            resetState: () => set({
+                globalBrowsePath: [],
+                currentBrowsePath: [],
+                browserConfig: { mode: 'view', callback: null },
+                currentPushRepo: '',
+                currentPushDiffFile: '',
+                currentFormatTarget: '',
+                currentPromptsPath: []
+            })
         })),
         { name: 'AppStore' }
     )
 );
-
 window.inSetu.stores.App = AppStore;

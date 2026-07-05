@@ -1,8 +1,6 @@
 import { downloadFile } from './fs.js';
 import { AppStore } from './store.js';
 
-let currentFormatTarget = "";
-
 export function openPublishModal() {
     const bodyHtml = `
         <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
@@ -24,18 +22,16 @@ export function openPublishModal() {
         ]
     });
 }
-
 export async function executePublish() {
     const formatSelect = document.getElementById('publish-format-select');
     if (!formatSelect) return;
     const format = formatSelect.value;
-    
     const btn = document.getElementById('execute-publish-btn');
     const origText = btn ? btn.innerText : 'Compile & Download';
     if (btn) btn.innerText = "⏳ Compiling...";
-
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const { activeWorkspace, currentFormatTarget } = AppStore.getState();
+        const activeWs = activeWorkspace || 'default';
         const dlName = currentFormatTarget.split('/').pop().split('.')[0] + '.' + format;
 
         await downloadFile(`/api/${activeWs}/format/compile-document`, dlName, {
@@ -61,10 +57,9 @@ if (tb && !document.getElementById('btn-publish-doc')) {
     pubBtn.onclick = openPublishModal;
     tb.appendChild(pubBtn);
 }
-
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     window.inSetu.extensions.Registry.registerUIHook('zone:modal-file-toolbar', (data) => {
-        if (data.filepath) currentFormatTarget = data.filepath;
+        if (data.filepath) AppStore.setState({ currentFormatTarget: data.filepath });
         const pubBtn = document.getElementById('btn-publish-doc');
         if (pubBtn) pubBtn.style.display = data.isMarkdown ? 'block' : 'none';
         return false;

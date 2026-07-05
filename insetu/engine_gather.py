@@ -63,18 +63,21 @@ def generate_context_file(workspace_id=None):
     from insetu.utils_core import load_config, get_gather_paths, get_workspace_physics
     paths = get_gather_paths(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
-    # Pre-flight purge: destroy all stale contexts to prevent ghost files
+    # Pre-flight purge: destroy all stale contexts to prevent ghost files (excluding active ephemerals)
     import time
-    now_ts = time.time()
-    for f in os.listdir(paths["contexts_dir"]):
-        f_path = os.path.join(paths["contexts_dir"], f)
-        if os.path.isfile(f_path):
-            if f.startswith("quick_pack_"):
-                # 24-hour TTL (86400 seconds) for ad-hoc clipboard packs
-                if now_ts - os.path.getmtime(f_path) > 86400:
-                    os.remove(f_path)
-            else:
-                os.remove(f_path)
+    from insetu.db import get_connection
+    w_conn = get_connection("workers", workspace_id=workspace_id)
+    active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
+
+    if os.path.exists(paths["contexts_dir"]):
+        for f in os.listdir(paths["contexts_dir"]):
+            f_path = os.path.join(paths["contexts_dir"], f)
+            if os.path.isfile(f_path):
+                if f_path not in active_ephemerals:
+                    try:
+                        os.remove(f_path)
+                    except Exception:
+                        pass
 
     live_cfg = load_config(workspace_id)
     from insetu.utils_core import get_safe_repo_id
@@ -154,12 +157,13 @@ def generate_context_file(workspace_id=None):
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
-    # Re-inject surviving Quick-Packs into the manifest so they persist through background compiles
-    for f in os.listdir(paths["contexts_dir"]):
-        if f.startswith("quick_pack_") and f.endswith(".txt"):
-            manifest[f] = [f"data/contexts/{f}"]
+    # Re-inject surviving Ephemeral Artifacts into the manifest so they persist through background compiles
+    for f_path in active_ephemerals:
+        if f_path.startswith(paths["contexts_dir"]):
+            f_name = os.path.basename(f_path)
+            manifest[f_name] = [f"data/contexts/{f_name}"]
 
-    with open(os.path.join(paths["contexts_dir"], 
+    with open(os.path.join(paths["contexts_dir"],  
         "manifest.json"), 
         "w", encoding="utf-8") as f:
         json.dump(manifest, f)
@@ -229,9 +233,12 @@ def api_gather_quick_pack(workspace_id):
     filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
     paths = get_gather_paths(workspace_id)
     out_path = os.path.join(paths["contexts_dir"], filename)
-
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write("\n".join(out_lines))
+
+    # Register with the Ephemeral Ledger (24h TTL)
+    from insetu.workers import register_ephemeral_artifact
+    register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
 
     # Eagerly inject into the manifest using SSOT caching functions
     manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
@@ -243,22 +250,32 @@ def api_gather_quick_pack(workspace_id):
 @gather_bp.route('/api/<workspace_id>/gather/quick-pack/clear', methods=['POST'])
 def api_gather_quick_pack_clear(workspace_id):
     import os
+    from insetu.db import get_connection
     from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
-    paths = get_gather_paths(workspace_id)
+
+    conn = get_connection("workers", workspace_id=workspace_id)
+    cursor = conn.execute("SELECT id, filepath FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
 
     count = 0
-    if os.path.exists(paths["contexts_dir"]):
-        for f in os.listdir(paths["contexts_dir"]):
-            if f.startswith("quick_pack_") and f.endswith(".txt"):
-                try:
-                    os.remove(os.path.join(paths["contexts_dir"], f))
-                    count += 1
-                except Exception: pass
+    ephemeral_basenames = []
 
+    for row in cursor.fetchall():
+        try:
+            if os.path.exists(row['filepath']):
+                os.remove(row['filepath'])
+            ephemeral_basenames.append(os.path.basename(row['filepath']))
+            conn.execute("DELETE FROM ephemeral_artifacts WHERE id=?", (row['id'],))
+            count += 1
+        except Exception: 
+            pass
+
+    conn.commit()
+
+    paths = get_gather_paths(workspace_id)
     manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
     manifest = load_json_file(manifest_path, {})
 
-    keys_to_remove = [k for k in manifest.keys() if k.startswith("quick_pack_")]
+    keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
     if keys_to_remove:
         for k in keys_to_remove:
             del manifest[k]

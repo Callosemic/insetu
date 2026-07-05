@@ -900,7 +900,6 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     container.appendChild(card);
 }
 let globalFileTree = {};
-export let globalBrowsePath = [];
 let globalManifest = [];
 export function loadGlobalFS() {
     const container = document.getElementById('global-fs-list');
@@ -924,39 +923,44 @@ export function loadGlobalFS() {
         container.innerHTML = '<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>';
         return;
     }
-
     let current = globalFileTree;
-    for (const p of globalBrowsePath) {
+    let gbPath = AppStore.getState().globalBrowsePath || [];
+    let resetPath = false;
+    for (const p of gbPath) {
         if (current[p] && !current[p]._isFile) {
             current = current[p];
         } else {
-            globalBrowsePath = [];
+            resetPath = true;
             break;
         }
     }
 
+    if (resetPath) {
+        AppStore.setState({ globalBrowsePath: [] });
+    }
+
     renderGlobalFSLevel();
 }
-
 function renderGlobalFSLevel() {
+    const gbPath = AppStore.getState().globalBrowsePath || [];
     const container = document.getElementById('global-fs-list');
     container.innerHTML = '';
     const btnNewFolder = document.getElementById('btn-new-folder');
     if (btnNewFolder) {
-        btnNewFolder.innerText = globalBrowsePath.length === 0 ? '+ Repo' : '+ Folder';
+        btnNewFolder.innerText = gbPath.length === 0 ? '+ Repo' : '+ Folder';
     }
     const btnNewFile = document.getElementById('btn-new-file');
     if (btnNewFile) {
-        btnNewFile.style.display = globalBrowsePath.length === 0 ? 'none' : 'block';
+        btnNewFile.style.display = gbPath.length === 0 ? 'none' : 'block';
     }
 
     const btnFsMore = document.getElementById('btn-fs-more');
     if (btnFsMore) {
-        btnFsMore.style.display = globalBrowsePath.length === 0 ? 'none' : 'block';
+        btnFsMore.style.display = gbPath.length === 0 ? 'none' : 'block';
     }
 
     const upBtn = document.getElementById('global-fs-up-btn');
-    upBtn.disabled = globalBrowsePath.length === 0;
+    upBtn.disabled = gbPath.length === 0;
     if (!upBtn.disabled) {
         upBtn.style.background = 'var(--intent-neutral)';
     } else {
@@ -966,10 +970,9 @@ function renderGlobalFSLevel() {
     }
 
     const pathText = document.getElementById('global-fs-path');
-    pathText.innerText = '/' + globalBrowsePath.join('/');
-
+    pathText.innerText = '/' + gbPath.join('/');
     let current = globalFileTree;
-    for (const p of globalBrowsePath) {
+    for (const p of gbPath) {
         current = current[p];
     }
     const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
@@ -999,7 +1002,8 @@ function renderGlobalFSLevel() {
             card.style.alignItems = 'center';
             card.innerHTML = `<span class="folder-label">📁 ${key}</span>`;
             card.onclick = () => {
-                globalBrowsePath.push(key);
+                const gbPath = AppStore.getState().globalBrowsePath || [];
+                AppStore.setState({ globalBrowsePath: [...gbPath, key] });
                 renderGlobalFSLevel();
             };
             fragment.appendChild(card);
@@ -1007,10 +1011,11 @@ function renderGlobalFSLevel() {
     });
     container.appendChild(fragment);
 }
-
 function globalFSUp() {
-    if (globalBrowsePath.length > 0) {
-        globalBrowsePath.pop();
+    const gbPath = [...(AppStore.getState().globalBrowsePath || [])];
+    if (gbPath.length > 0) {
+        gbPath.pop();
+        AppStore.setState({ globalBrowsePath: gbPath });
         renderGlobalFSLevel();
     }
 }
@@ -1033,7 +1038,8 @@ function filterGlobalFS(query) {
         // We intentionally keep the header visible so users know what directory they are searching within
         container.innerHTML = '';
         // Scope search to the current active directory level
-        const currentPrefix = globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '';
+        const gbPath = AppStore.getState().globalBrowsePath || [];
+        const currentPrefix = gbPath.length > 0 ? gbPath.join('/') + '/' : '';
 
         const terms = q.split(/\s+/).filter(t => t);
         const matches = globalManifest.filter(f => {
@@ -1041,25 +1047,27 @@ function filterGlobalFS(query) {
             const sub = f.substring(currentPrefix.length).toLowerCase();
             return terms.every(t => sub.includes(t));
         });
-
         if (matches.length === 0) {
             container.innerHTML = '<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>';
             return;
         }
+
+        const { browserConfig } = AppStore.getState();
+
         matches.forEach(filepath => {
             const filename = filepath.split('/').pop();
-            if (browserConfig.mode === 'file') {
+            if (browserConfig && browserConfig.mode === 'file') {
                 const card = document.createElement('div');
                 card.className = 'file-card';
                 card.style.cursor = 'pointer';
                 card.style.padding = '8px 15px';
                 card.innerHTML = `<span class="file-title" style="color: var(--intent-success);">📄 ${filename}</span><div class="file-desc">${filepath}</div>`;
                 card.onclick = () => {
-                    if (browserConfig.callback) browserConfig.callback(filepath);
+                    if (browserConfig && browserConfig.callback) browserConfig.callback(filepath);
                     closeBrowseModal();
                 };
                 container.appendChild(card);
-            } else if (browserConfig.mode !== 'folder') {
+            } else if (!browserConfig || browserConfig.mode !== 'folder') {
                 createFileCard({
                     filename: filepath,
                     displayName: filename,
@@ -1076,15 +1084,15 @@ function clearGlobalFSSearch() {
     document.getElementById('global-fs-search').value = '';
     filterGlobalFS('');
 }
-
 function checkFileExtension(filename) {
     const warningEl = document.getElementById('new-file-ext-warning');
     if (!warningEl) return;
     warningEl.style.display = 'none';
 
     if (!filename) return;
-    if (globalBrowsePath.length > 0) {
-        const repoDir = globalBrowsePath[0];
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    if (gbPath.length > 0) {
+        const repoDir = gbPath[0];
         const { targetConfigs } = AppStore.getState();
         const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
 
@@ -1109,7 +1117,9 @@ function checkFileExtension(filename) {
     }
 }
 function openNewFileModal(overridePath = null) {
-    const prefix = typeof overridePath === 'string' ? overridePath : (globalBrowsePath.length > 0 ? globalBrowsePath.join('/') + '/' : '');
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    const prefix = typeof overridePath === 'string' ?
+overridePath : (gbPath.length > 0 ? gbPath.join('/') + '/' : '');
 
     const bodyHtml = `
         <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: var(--intent-highlight);">${prefix}</span></label>
@@ -1186,8 +1196,9 @@ async function saveNewFile(modalId = 'new-file-modal') {
     });
 }
 function openNewFolderModal(overridePath = null) {
-    const isRoot = overridePath === null && globalBrowsePath.length === 0;
-    const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : globalBrowsePath.join('/') + '/');
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    const isRoot = overridePath === null && gbPath.length === 0;
+    const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : gbPath.join('/') + '/');
     const modalTitle = isRoot ? 'Create New Repository' : 'Create New Folder';
     const submitLabel = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
 
@@ -1396,19 +1407,15 @@ export async function viewSourceFile(filepath, isFS = false) {
         if (isMarkdown && isPreviewMode) preview.innerHTML = '<p style="color:red;">Error loading file.</p>';
     }
 }
-
 let currentFileTree = {};
-let currentBrowsePath = [];
 let currentBrowseManifest = [];
-let browserConfig = { mode: 'view', callback: null };
 
 function closeBrowseModal() {
     document.getElementById('browse-modal').style.display = 'none';
-    browserConfig = { mode: 'view', callback: null };
+    AppStore.setState({ browserConfig: { mode: 'view', callback: null } });
     document.getElementById('browse-select-folder-btn').style.display = 'none';
     document.getElementById('browse-search').style.display = 'block';
 }
-
 export function openWorkspaceBrowser(options = {}) {
     const {
         mode = 'view', // 'view', 'folder', 'file'
@@ -1417,8 +1424,7 @@ export function openWorkspaceBrowser(options = {}) {
         callback = null,
         autoDrilldown = false
     } = options;
-
-    browserConfig = { mode, callback };
+    AppStore.setState({ browserConfig: { mode, callback } });
 
     document.getElementById('browse-select-folder-btn').style.display = mode === 'folder' ? 'block' : 'none';
     document.getElementById('browse-search').style.display = mode === 'folder' ? 'none' : 'block';
@@ -1431,11 +1437,9 @@ export function openWorkspaceBrowser(options = {}) {
         Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
         currentBrowseManifest = Array.from(allFiles);
     }
-
     currentFileTree = buildFileTree(currentBrowseManifest);
-    currentBrowsePath = []; // reset to root
+    let cbPath = [];
     document.getElementById('browse-search').value = '';
-
     const clearBtn = document.getElementById('browse-clear-btn');
     if (clearBtn) clearBtn.style.display = 'none';
 
@@ -1446,7 +1450,7 @@ export function openWorkspaceBrowser(options = {}) {
             if (keys.length === 1) {
                 const onlyKey = keys[0];
                 if (!current[onlyKey]._isFile) {
-                    currentBrowsePath.push(onlyKey);
+                    cbPath.push(onlyKey);
                     current = current[onlyKey];
                     continue;
                 }
@@ -1454,6 +1458,8 @@ export function openWorkspaceBrowser(options = {}) {
             break;
         }
     }
+
+    AppStore.setState({ currentBrowsePath: cbPath });
 
     document.getElementById('browse-modal-title').innerText = title;
     renderBrowseLevel();
@@ -1463,10 +1469,10 @@ export function openWorkspaceBrowser(options = {}) {
 export function openFolderBrowser(callback = null) {
     openWorkspaceBrowser({ mode: 'folder', title: 'Select Destination Folder', callback: callback });
 }
-
 function confirmFolderSelection() {
-    const selectedPath = currentBrowsePath.join('/');
-    if (browserConfig.callback) {
+    const { currentBrowsePath, browserConfig } = AppStore.getState();
+    const selectedPath = (currentBrowsePath || []).join('/');
+    if (browserConfig && browserConfig.callback) {
         browserConfig.callback(selectedPath);
         closeBrowseModal();
         return;
@@ -1543,27 +1549,28 @@ export function buildFileTree(files) {
     });
     return tree;
 }
-
 function renderBrowseLevel() {
+    const { currentBrowsePath, browserConfig } = AppStore.getState();
+    const cbPath = currentBrowsePath || [];
     const container = document.getElementById('browse-list');
     container.innerHTML = '';
-
-    // Header & Breadcrumbs
+// Header & Breadcrumbs
     const headerDiv = document.createElement('div');
     headerDiv.style.display = 'flex';
     headerDiv.style.gap = '10px';
     headerDiv.style.marginBottom = '15px';
     headerDiv.style.alignItems = 'center';
     headerDiv.style.flexWrap = 'wrap';
-
     const upBtn = document.createElement('button');
     upBtn.className = 'btn-sm';
     upBtn.innerText = '⬆️ Up';
-    upBtn.disabled = currentBrowsePath.length === 0;
+    upBtn.disabled = cbPath.length === 0;
     if (!upBtn.disabled) {
         upBtn.style.background = 'var(--intent-neutral)';
         upBtn.onclick = () => {
-            currentBrowsePath.pop();
+            const p = [...(AppStore.getState().currentBrowsePath || [])];
+            p.pop();
+            AppStore.setState({ currentBrowsePath: p });
             renderBrowseLevel();
         };
     } else {
@@ -1571,20 +1578,18 @@ function renderBrowseLevel() {
         upBtn.style.color = 'var(--border)';
         upBtn.style.border = '1px solid var(--border)';
     }
-
     const pathText = document.createElement('span');
     pathText.style.fontFamily = 'monospace';
     pathText.style.color = 'var(--text)';
     pathText.style.opacity = '0.7';
-    pathText.innerText = '/' + currentBrowsePath.join('/');
+    pathText.innerText = '/' + cbPath.join('/');
 
     headerDiv.appendChild(upBtn);
     headerDiv.appendChild(pathText);
     container.appendChild(headerDiv);
-
     // Traverse to current level
     let current = currentFileTree;
-    for (const p of currentBrowsePath) {
+    for (const p of cbPath) {
         current = current[p];
     }
     // Sort folders first, then files
@@ -1601,16 +1606,16 @@ function renderBrowseLevel() {
     keys.forEach(key => {
         const item = current[key];
         if (item._isFile) {
-            if (browserConfig.mode === 'folder') return;
+            if (browserConfig && browserConfig.mode === 'folder') return;
 
-            if (browserConfig.mode === 'file') {
+            if (browserConfig && browserConfig.mode === 'file') {
                 const card = document.createElement('div');
                 card.className = 'file-card';
                 card.style.cursor = 'pointer';
                 card.style.padding = '8px 15px';
                 card.innerHTML = `<span class="file-title" style="color: var(--intent-success);">📄 ${key}</span>`;
                 card.onclick = () => {
-                    if (browserConfig.callback) browserConfig.callback(item.fullPath);
+                    if (browserConfig && browserConfig.callback) browserConfig.callback(item.fullPath);
                     closeBrowseModal();
                 };
                 fragment.appendChild(card);
@@ -1633,7 +1638,9 @@ function renderBrowseLevel() {
             card.style.alignItems = 'center';
             card.innerHTML = `<span class="folder-label">📁 ${key}</span>`;
             card.onclick = () => {
-                currentBrowsePath.push(key);
+                const p = [...(AppStore.getState().currentBrowsePath || [])];
+                p.push(key);
+                AppStore.setState({ currentBrowsePath: p });
                 renderBrowseLevel();
             };
             fragment.appendChild(card);
@@ -1744,7 +1751,8 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
 }
 export async function openQuickPackModal(targetDir) {
     let current = globalFileTree;
-    for (const p of globalBrowsePath) {
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    for (const p of gbPath) {
         if (current[p]) current = current[p];
         else break;
     }
@@ -1797,7 +1805,8 @@ export async function openQuickPackModal(targetDir) {
 export function openFsDropdown(anchorElement) {
     if (!window.inSetu.ui.Factory || !window.inSetu.ui.Factory.createDropdown) return;
 
-    const currentPath = globalBrowsePath.join('/');
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    const currentPath = gbPath.join('/');
 
     window.inSetu.ui.Factory.createDropdown({
         anchor: anchorElement,
