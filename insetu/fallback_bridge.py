@@ -121,20 +121,6 @@ HTML_TEMPLATE = """
                 if (!res.ok) throw new Error("Download failed");
                 const blob = await res.blob();
 
-                // Intercept mobile architectures to summon device Share Sheet natively
-                if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                    try {
-                        const nativeFile = new File([blob], filename, { type: blob.type || 'text/plain' });
-                        await navigator.share({
-                            files: [nativeFile],
-                            title: filename
-                        });
-                        return;
-                    } catch (shareError) {
-                        if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
-                    }
-                }
-
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.style.display = 'none';

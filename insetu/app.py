@@ -255,12 +255,18 @@ def submit():
                     map_repositories(wid)
                 except Exception as e:
                     print(f"Warning: Cartographer failed: {str(e)}")
-
                 q.put({"status": "progress", "message": "Compiling context payloads..."})
                 engine_gather.generate_context_file(wid)
+                manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
 
-                generated_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
-                q.put({"status": "success", "message": "Context successfully compiled!", "files": sorted(generated_files)})
+                from insetu.utils_core import load_json_file
+                manifest_data = load_json_file(manifest_path, {})
+                manifest_keys = list(manifest_data.keys())
+
+                if not manifest_keys and os.path.exists(paths["contexts_dir"]):
+                    manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
+
+                q.put({"status": "success", "message": "Context successfully compiled!", "files": sorted(manifest_keys)})
             except Exception as e:
                 import traceback
                 print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")

@@ -155,15 +155,18 @@ def load_json_file(filepath, default_fallback=None):
         _JSON_MTIME[filepath] = current_mtime
 
     return _JSON_CACHE[filepath]
-def save_json_file(filepath, data):
+def save_json_file(filepath, data, workspace_id=None):
     global _JSON_CACHE, _JSON_MTIME
 
     # Write through VFS pipeline if it's a configuration mutation to avoid blocking HTTP threads
     if filepath.endswith('config.json') or filepath.endswith('workflows.json'):
         from insetu.routes_fs import _VFS_WRITE_QUEUE
         try:
-            workspace_id = sniff_tenant_id()
-            _VFS_WRITE_QUEUE.put((workspace_id, filepath, json.dumps(data, indent=2), {}))
+            wid = workspace_id or sniff_tenant_id()
+            if not wid:
+                print(f"⚠️ [Security] Context Leak Prevented: save_json_file lacks workspace_id for {filepath}.")
+                wid = "default"
+            _VFS_WRITE_QUEUE.put((wid, filepath, json.dumps(data, indent=2), {}))
         except Exception:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
@@ -251,6 +254,60 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
         if os.path.exists(os.path.join(repo_path, forced_file)): valid_files.add(forced_file.replace("\\", "/"))
 
     return sorted(list(valid_files))
+def generate_text_chunks(blocks, chunk_limit=400000):
+    """Pure generator that yields concatenated text strings safely under a byte/char limit."""
+    current_chunk = []
+    current_length = 0
+    for block in blocks:
+        block_len = len(block)
+        if current_length + block_len > chunk_limit and current_length > 0:
+            yield "".join(current_chunk)
+            current_chunk = []
+            current_length = 0
+        current_chunk.append(block)
+        current_length += block_len
+    if current_chunk:
+        yield "".join(current_chunk)
+def get_available_contexts(workspace_id=None):
+    """
+    SSOT Helper: Computes all expected and active context artifacts across the workspace.
+    This provides a centralized directory map for any extension that needs to
+    know what context files the system is capable of producing.
+    """
+    cfg = load_config(workspace_id)
+    paths = get_gather_paths(workspace_id)
+
+    expected_contexts = set()
+
+    for c in cfg.get("target_repos", []):
+        r_dir = c.get("repo_dir", "")
+        safe_r_dir = get_safe_repo_id(r_dir)
+        subs = c.get("sub_buckets", [])
+
+        # Every repository inherently has an implicit catch-all bucket for unmapped files.
+        out = c.get("out_file", f"{safe_r_dir}_context.txt")
+        expected_contexts.add(f"contexts/{out}")
+
+        if subs:
+            for b in subs:
+                if not b.get("dynamic_split_prefix"):
+                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
+                    expected_contexts.add(f"contexts/{sub_out}")
+                else:
+                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
+                    if os.path.exists(dyn_dir):
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                                expected_contexts.add(f"contexts/{module}_context.txt")
+    # Read the active manifest for dynamic/ephemeral contexts
+    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_data = load_json_file(manifest_path, {})
+    for key in manifest_data.keys():
+        if key.endswith('_context.txt'):
+            expected_contexts.add(f"contexts/{key}")
+
+    return expected_contexts
+
 def get_safe_repo_id(repo_dir):
     """Sanitizes repo directories into safe file prefixes (e.g., '.insetu' -> 'dot_insetu')."""
     if not repo_dir: return ""

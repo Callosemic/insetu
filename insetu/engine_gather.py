@@ -138,7 +138,6 @@ def generate_context_file(workspace_id=None):
                     b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
                     b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
                     b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
-
                     out_path = os.path.join(paths["contexts_dir"], safe_out)
                     write_bucket(out_path, data["files"], b_title.upper(), b_domain, repo_path, config['repo_dir'], workspace_id)
                     manifest[safe_out] = {
@@ -154,7 +153,6 @@ def generate_context_file(workspace_id=None):
                 title = meta.get("title", module.replace('_', ' ').title())
                 domain = meta.get("domain", cfg.get("domain", "Dynamic Modules"))
                 desc = meta.get("description", cfg.get("description", f"Dynamically mapped logic and templates for {title}."))
-
                 out_path = os.path.join(paths["contexts_dir"], f"{module}_context.txt")
                 write_bucket(out_path, files, title.upper(), domain, repo_path, config['repo_dir'], workspace_id)
                 manifest[f"{module}_context.txt"] = {
@@ -167,7 +165,6 @@ def generate_context_file(workspace_id=None):
             r_title = config.get("title", config["repo_dir"].replace('-', ' ').title())
             r_domain = config.get("domain", "Workspaces")
             r_desc = config.get("description", f"Context payload for {r_title}.")
-
             write_bucket(out_path, final_list, r_title, r_domain, repo_path, config['repo_dir'], workspace_id)
             manifest[safe_out] = {
                 "files": [f"{config['repo_dir']}/{f}" for f in final_list],
@@ -175,7 +172,13 @@ def generate_context_file(workspace_id=None):
             }
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
+    from insetu.routes_fs import execute_vfs_save, _VFS_WRITE_QUEUE
+
+    # Block until the async VFS queue drains so downstream workflows can read the physical files
+    _VFS_WRITE_QUEUE.join()
+
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
+
     # Re-inject surviving Ephemeral Artifacts into the manifest so they persist through background compiles
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]):
@@ -187,8 +190,10 @@ def generate_context_file(workspace_id=None):
             }
 
     manifest_out_path = os.path.join(paths["contexts_dir"], "manifest.json")
-    from insetu.routes_fs import execute_vfs_save
     execute_vfs_save(workspace_id, manifest_out_path, json.dumps(manifest, indent=2), data={"is_absolute_artifact": True})
+
+    # Block until the manifest and workflows are flushed so the UI can fetch them instantly
+    _VFS_WRITE_QUEUE.join()
 
 @gather_bp.route('/api/<workspace_id>/gather/quick-pack', methods=['POST'])
 def api_gather_quick_pack(workspace_id):
@@ -269,7 +274,7 @@ def api_gather_quick_pack(workspace_id):
         "files": [f"data/contexts/{filename}"],
         "meta": {"title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)"}
     }
-    save_json_file(manifest_path, manifest)
+    save_json_file(manifest_path, manifest, workspace_id)
 
     return jsonify({"status": "success", "filename": filename})
 @gather_bp.route('/api/<workspace_id>/gather/quick-pack/clear', methods=['POST'])
@@ -299,11 +304,10 @@ def api_gather_quick_pack_clear(workspace_id):
     paths = get_gather_paths(workspace_id)
     manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
     manifest = load_json_file(manifest_path, {})
-
     keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
     if keys_to_remove:
         for k in keys_to_remove:
             del manifest[k]
-        save_json_file(manifest_path, manifest)
+        save_json_file(manifest_path, manifest, workspace_id)
 
     return jsonify({"status": "success", "cleared": count})

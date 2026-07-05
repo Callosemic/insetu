@@ -77,6 +77,26 @@ export let mdeInstance = null;
 window.inSetu.extensions.Registry = {
     uiHooks: {},
     shortcuts: {},
+    utils: {
+        _timers: {},
+        debounce: function(key, callback, delay = 300) {
+            clearTimeout(this._timers[key]);
+            this._timers[key] = setTimeout(callback, delay);
+        },
+        debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
+            this.debounce(`verify_${filepath}`, async () => {
+                try {
+                    const res = await fetch(`/api/${workspaceId}/fs/exists?file=` + encodeURIComponent(filepath));
+                    if (res.ok) {
+                        const data = await res.json();
+                        callback(data.exists, filepath);
+                    }
+                } catch(e) {
+                    console.warn("Silent verify failed", e);
+                }
+            }, delay);
+        }
+    },
     registerShortcut: function(context, keyCombo, callback) {
         if (!this.shortcuts[context]) this.shortcuts[context] = {};
         this.shortcuts[context][keyCombo.toLowerCase()] = callback;
@@ -726,7 +746,6 @@ export function renderContextFiles(files, msg) {
             let finalCat = meta.domain;
             let finalDesc = meta.desc;
             let finalTitle = meta.title;
-
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                 const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
                 if (extMeta) {
@@ -776,10 +795,8 @@ export function renderContextFiles(files, msg) {
 export function setContextManifest(m) {
     AppStore.setState({ manifest: m });
 }
-let contextSearchTimeout = null;
 export function filterContexts(query) {
-    clearTimeout(contextSearchTimeout);
-    contextSearchTimeout = setTimeout(() => {
+    window.inSetu.extensions.Registry.utils.debounce('contextSearch', () => {
         const q = query.toLowerCase().trim();
         const container = document.getElementById('context-download-links');
         const categories = container.querySelectorAll('.category-heading');

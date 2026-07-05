@@ -336,7 +336,6 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
             update_immediate_job_status(job_id, 'failed', err_out, workspace_id=workspace_id)
 
 register_callback("git", "push_task", _background_git_push)
-
 @git_bp.route('/api/git/push', methods=['POST'])
 def api_git_push():
     workspace_id = request.headers.get('X-Workspace-ID')
@@ -349,6 +348,44 @@ def api_git_push():
 
     job_id = f"psh_{uuid.uuid4().hex[:8]}"
     args_json = json.dumps({"repo": repo, "message": message, "diff_file": diff_file})
+
     submit_immediate_job(job_id, "git", "push_task", args_json, workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+@hooks.on('request_available_diffs')
+def provide_available_diffs(workspace_id=None, **kwargs):
+    """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
+    from insetu.utils_core import load_config, get_gather_paths, get_safe_repo_id
+    import os
+    cfg = load_config(workspace_id)
+    paths = get_gather_paths(workspace_id)
+    expected_diffs = set()
+
+    for c in cfg.get("target_repos", []):
+        if c.get("exclude_from_diffs"): continue
+        r_dir = c.get("repo_dir", "")
+        safe_r_dir = get_safe_repo_id(r_dir)
+        subs = c.get("sub_buckets", [])
+
+        out = c.get("out_file", f"{safe_r_dir}_context.txt")
+        expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
+
+        if subs:
+            for b in subs:
+                if not b.get("dynamic_split_prefix"):
+                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
+                    expected_diffs.add(f"diffs/{sub_out.replace('_context.txt', '_diffs.txt')}")
+                else:
+                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
+                    if os.path.exists(dyn_dir):
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                                expected_diffs.add(f"diffs/{module}_diffs.txt")
+
+    if os.path.exists(paths["diffs_dir"]):
+        for f in os.listdir(paths["diffs_dir"]):
+            if f.endswith('.txt'):
+                expected_diffs.add(f"diffs/{f}")
+
+    return list(expected_diffs)

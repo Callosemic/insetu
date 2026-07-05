@@ -29,7 +29,8 @@ if (researchTab) {
     researchTab.innerHTML = `
         <style>
             .rs-layout {
-                display: flex; flex-direction: column; height: calc(100vh - 180px); overflow: hidden;
+                display: flex;
+                flex-direction: column; height: calc(100dvh - 180px); overflow: hidden;
             }
             .rs-view {
                 display: none; flex-direction: column; height: 100%; overflow: hidden;
@@ -124,7 +125,7 @@ if (researchTab) {
                     </div>
                 </div>
                 <div id="rs-preview-modal" class="fullscreen-modal" style="z-index: 1090; display: none;">
-                    <div class="modal-content" style="max-height: 95vh; height: 95vh; width: 95vw; max-width: none; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--bg);">
+                    <div class="modal-content" style="max-height: 95dvh; height: 95dvh; width: 95vw; max-width: none; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--bg);">
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
 <div style="display: flex;
 justify-content: space-between; align-items: flex-start; gap: 15px;">

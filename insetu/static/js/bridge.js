@@ -127,32 +127,28 @@ function syncDOMToBridgeState(state) {
         div.appendChild(actionContainer);
         targetFilesDiv.appendChild(div);
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        fetch(`/api/${activeWs}/fs/exists?file=` + encodeURIComponent(file))
-            .then(res => res.json())
-            .then(data => {
-                if (data.exists) {
-                    const viewBtn = document.createElement('button');
-                    viewBtn.className = 'btn-sm';
-                    viewBtn.style.cssText = 'margin: 0; padding: 4px 8px; font-size: 0.8rem; background: var(--intent-primary);';
-                    viewBtn.innerText = '📋 View';
-                    viewBtn.onclick = (e) => {
-                        e.preventDefault();
-                        viewSourceFile(file, true);
-                    };
-                    actionContainer.appendChild(viewBtn);
-                } else {
-                    const badge = document.createElement('span');
-                    badge.style.cssText = 'font-size: 0.75rem; color: var(--intent-warning); font-weight: bold; padding: 4px 8px;';
-                    badge.innerText = '❓ Unknown';
-                    actionContainer.appendChild(badge);
-                }
-            }).catch(e => console.error(e));
+        window.ExtensionRegistry.utils.debounceVerifyFile(activeWs, file, (exists) => {
+            if (exists) {
+                const viewBtn = document.createElement('button');
+                viewBtn.className = 'btn-sm';
+                viewBtn.style.cssText = 'margin: 0; padding: 4px 8px; font-size: 0.8rem; background: var(--intent-primary);';
+                viewBtn.innerText = '📋 View';
+                viewBtn.onclick = (e) => {
+                    e.preventDefault();
+                    viewSourceFile(file, true);
+                };
+                actionContainer.appendChild(viewBtn);
+            } else {
+                const badge = document.createElement('span');
+                badge.style.cssText = 'font-size: 0.75rem; color: var(--intent-warning); font-weight: bold; padding: 4px 8px;';
+                badge.innerText = '❓ Unknown';
+                actionContainer.appendChild(badge);
+            }
+        }, 100);
     });
 }
-let bridgeSyncTimeout = null;
 BridgeStore.subscribe((state) => state.detectedFiles, () => {
-    clearTimeout(bridgeSyncTimeout);
-    bridgeSyncTimeout = setTimeout(() => {
+    window.ExtensionRegistry.utils.debounce('bridgeSync', () => {
         syncDOMToBridgeState(BridgeStore.getState());
     }, 300);
 });

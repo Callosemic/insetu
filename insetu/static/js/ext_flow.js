@@ -375,6 +375,7 @@ window.openBatchModal = function(batch) {
         body: bodyHtml
     });
     document.getElementById('batch-copy-context-btn').onclick = function() { window.fetchAndCopy(`${artifactsDir}/workflows/${contextFile}`, this); };
+
     const dlBtn = document.getElementById('batch-dl-context-btn');
     dlBtn.onclick = function() { window.fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, this); };
     dlBtn.classList.add('ui-draggable-export');

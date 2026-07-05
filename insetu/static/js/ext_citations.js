@@ -996,9 +996,7 @@ export async function addFileToLibrary(filename, content, filepath) {
 
     return newContent;
 }
-
 let citationLibraryCache = null;
-let citationSearchTimeout = null;
 export async function openCitationModal() {
     const bodyHtml = `
         <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
@@ -1022,10 +1020,8 @@ export async function openCitationModal() {
         document.getElementById('citation-results-list').innerHTML = '<span style="color:red;">Failed to load library.</span>';
     }
 }
-
 export function onCitationSearchInput(val) {
-    clearTimeout(citationSearchTimeout);
-    citationSearchTimeout = setTimeout(() => {
+    window.ExtensionRegistry.utils.debounce('citationSearch', () => {
         const container = document.getElementById('citation-results-list');
         const norm = window.normalizeAccentText || (str => str.toLowerCase());
         const q = norm(val.trim());

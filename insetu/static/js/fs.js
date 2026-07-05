@@ -84,22 +84,6 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     if (!res.ok) throw new Error('Download failed from server.');
     const blob = await res.blob();
 
-    // Standardized Mobile Integration Layer: Intercept mobile runtimes to summon the native device Share Sheet
-    if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-        try {
-            const nativeFile = new File([blob], fallbackFilename, { type: blob.type || 'text/plain' });
-            await navigator.share({
-                files: [nativeFile],
-                title: fallbackFilename,
-                text: `inSetu Developer OS Context Matrix: ${fallbackFilename}`
-            });
-            return;
-        } catch (shareError) {
-            // Absorb clean user cancellations; bypass to standard blob anchor click on real failure bounds
-            if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
-        }
-    }
-
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.style.display = 'none';
@@ -656,24 +640,7 @@ async function downloadFromModal() {
             if (isModalTruncated) {
                 text = currentModalFullText;
             }
-
             const blob = new Blob([text], { type: 'text/plain' });
-
-            // Mobile Device native Share Sheet handler
-            if (navigator.share && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-                try {
-                    const nativeFile = new File([blob], currentModalFile, { type: 'text/plain' });
-                    await navigator.share({
-                        files: [nativeFile],
-                        title: currentModalFile,
-                        text: `inSetu Developer OS Context Matrix: ${currentModalFile}`
-                    });
-                    btn.innerText = origText;
-                    return;
-                } catch (shareError) {
-                    if (shareError.name !== 'AbortError') console.warn('Native share framework bypassed:', shareError);
-                }
-            }
 
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -731,7 +698,6 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
         browseBtn.onclick = () => openBrowseModal(fileInfo.filename);
         actions.appendChild(browseBtn);
 }
-
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         window.inSetu.extensions.Registry.executeUIHook('zone:file-card-actions', {
             filepath: fileInfo.filename,
@@ -752,9 +718,11 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     dlBtn.classList.add('ui-draggable-export');
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     dlBtn.dataset.fetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-    dlBtn.dataset.filename = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
+    dlBtn.dataset.filename = fileInfo.isSource ?
+fileInfo.filename.split('/').pop() : fileInfo.filename;
 
-    dlBtn.onclick = async () => {
+    dlBtn.onclick = async (e) => {
+        e.stopPropagation();
         const origText = dlBtn.innerText;
         dlBtn.innerText = '⏳...';
         try {
@@ -766,55 +734,6 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
             if (!res.ok) throw new Error("Failed to fetch");
 
             const text = await res.text();
-            const CHUNK_LIMIT = 300000; // ~300kb limit
-
-            if (!fileInfo.isSource && text.length > CHUNK_LIMIT && fileInfo.filename.endsWith('.txt')) {
-                const chunks = [];
-                let currentChunk = "";
-                // Split cleanly at file boundaries so we don't chop code blocks in half
-                const sections = text.split(/(?=\n\n={60}\n>>>NEW FILE :: )/);
-
-                for (const sec of sections) {
-                    if (currentChunk.length + sec.length > CHUNK_LIMIT && currentChunk.length > 0) {
-                        chunks.push(currentChunk);
-                        currentChunk = sec;
-                    } else {
-                        currentChunk += sec;
-                    }
-                }
-                if (currentChunk) chunks.push(currentChunk);
-
-                if (chunks.length > 1) {
-                    const card = dlBtn.closest('.file-card');
-                    let partsContainer = card.querySelector('.chunk-container');
-                    if (!partsContainer) {
-                        partsContainer = document.createElement('div');
-                        partsContainer.className = 'chunk-container';
-                        partsContainer.style.cssText = 'display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; width: 100%; border-top: 1px dashed var(--border); padding-top: 12px;';
-                        card.appendChild(partsContainer);
-                    }
-                    partsContainer.innerHTML = ''; 
-
-                    const baseName = fileInfo.filename.split('/').pop().replace('.txt', '');
-                    chunks.forEach((c, idx) => {
-                        const blob = new Blob([c], { type: 'text/plain' });
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `${baseName}_pt${idx + 1}.txt`;
-                        a.className = 'btn-sm';
-                        a.style.cssText = 'background: var(--intent-primary); color: white; text-decoration: none; padding: 4px 8px; font-size: 0.75rem; border-radius: 4px;';
-                        a.innerText = `📄 Part ${idx + 1} (${(c.length/1024).toFixed(0)} kb)`;
-                        partsContainer.appendChild(a);
-                    });
-
-                    dlBtn.innerText = "✅ Chunked";
-                    setTimeout(() => dlBtn.innerText = origText, 2000);
-                    return;
-                }
-            }
-
-            // Fallback download if < 300kb or is a source file
             const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -827,13 +746,13 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
             a.remove();
 
             dlBtn.innerText = "✅ Done";
-            setTimeout(() => dlBtn.innerText = origText, 2000);
-        } catch (e) {
-            alert("Error downloading file: " + e.message);
+        } catch (err) {
+            alert("Error downloading file: " + err.message);
             dlBtn.innerText = origText;
+        } finally {
+            setTimeout(() => dlBtn.innerText = origText, 2000);
         }
     };
-
     actions.appendChild(dlBtn);
 
     header.appendChild(titleSpan);
@@ -982,10 +901,8 @@ function globalFSUp() {
         renderGlobalFSLevel();
     }
 }
-let globalFSSearchTimeout = null;
 function filterGlobalFS(query) {
-    clearTimeout(globalFSSearchTimeout);
-    globalFSSearchTimeout = setTimeout(() => {
+    window.ExtensionRegistry.utils.debounce('globalFSSearch', () => {
         const q = query.toLowerCase().trim();
         const container = document.getElementById('global-fs-list');
         const clearBtn = document.getElementById('global-fs-clear-btn');
@@ -1461,10 +1378,8 @@ function clearBrowseSearch() {
     document.getElementById('browse-clear-btn').style.display = 'none';
     filterBrowse('');
 }
-let browseSearchTimeout = null;
 function filterBrowse(query) {
-    clearTimeout(browseSearchTimeout);
-    browseSearchTimeout = setTimeout(() => {
+    window.ExtensionRegistry.utils.debounce('browseSearch', () => {
         const q = query.toLowerCase().trim();
         const container = document.getElementById('browse-list');
         const clearBtn = document.getElementById('browse-clear-btn');
@@ -1813,9 +1728,7 @@ export async function clearQuickPacks() {
 }
 
 window.clearQuickPacks = clearQuickPacks;
-
 let activeLinkTab = 'filename';
-let linkSearchTimeout = null;
 export function openLinkModal() {
     // Hydrate manifest explicitly if missing to ensure files are available
     if (!globalManifest || globalManifest.length === 0) {
@@ -1864,11 +1777,9 @@ export function switchLinkTab(tab) {
         document.getElementById('link-results-list').innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Hit search to rank by multi-word matching...</span>';
     }
 }
-
 export function onLinkSearchInput(val) {
     if (activeLinkTab !== 'filename') return;
-    clearTimeout(linkSearchTimeout);
-    linkSearchTimeout = setTimeout(() => {
+    window.ExtensionRegistry.utils.debounce('linkSearch', () => {
         executeLinkSearch(val);
     }, 300);
 }

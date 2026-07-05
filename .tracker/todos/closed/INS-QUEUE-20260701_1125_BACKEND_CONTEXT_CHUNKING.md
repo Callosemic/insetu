@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "active"
+status: "closed"
 id: INS-QUEUE-20260701_1125_BACKEND_CONTEXT_CHUNKING
 title: "Offload RAG Context File Chunking to Backend Compilation Pipeline"
 created_at: 2026-07-01T11:25:00
-closed_at: null
+closed_at: 2026-07-05T03:53:36
 sub_bucket: "None"
-tags: [backend, performance, gather, optimization, memory]
 ---
 
 ## Description

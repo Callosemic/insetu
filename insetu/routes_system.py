@@ -42,13 +42,11 @@ def get_system_config(workspace_id):
 
     data["_available_extensions"] = sorted(available)
     return data
-
-
 def save_system_config(workspace_id, payload):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     if "_available_extensions" in payload:
         del payload["_available_extensions"]
-    save_json_file(cfg_path, payload)
+    save_json_file(cfg_path, payload, workspace_id)
 
 
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])

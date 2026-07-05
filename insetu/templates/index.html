@@ -63,7 +63,7 @@
                 <div class="sub-tab active" id="st-bundles" onclick="switchSubTab('bundles')">Main</div>
             </div>
         </div>
-        <div class="screen active" style="min-height: 80vh;">
+        <div class="screen active" style="min-height: 80dvh;">
             <div id="sub-bundles" class="sub-tab-content active">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                     <h2 style="margin: 0;">System Context</h2>
@@ -92,11 +92,12 @@ flex-direction: column;"></div>
                     <button id="btn-new-folder" onclick="openNewFolderModal()" class="btn-sm" style="background: #3b82f6; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ Folder</button>
                     <button id="btn-new-file" onclick="openNewFileModal()" class="btn-sm" style="background: #10b981; margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">+ File</button>
                     <button id="btn-fs-more" onclick="if(window.openFsDropdown) window.openFsDropdown(this)" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;">▼</button>
-                    <button id="btn-paste" onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; resetStatus(); document.getElementById('payload').dispatchEvent(new Event('input')); }).catch(e => alert('Clipboard access denied.'));" class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
-                </div>
-            </div>
-            <div class="screen active" style="min-height: 80vh;">
-                <div id="sub-bridge" class="sub-tab-content active" style="height: 100%;">
+<button id="btn-paste" onclick="navigator.clipboard.readText().then(t => { document.getElementById('payload').value = t; resetStatus(); document.getElementById('payload').dispatchEvent(new Event('input')); }).catch(e => alert('Clipboard access denied.'));" class="btn-sm" style="background: var(--btn);
+margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
+</div>
+</div>
+<div class="screen active" style="min-height: 80dvh;">
+<div id="sub-bridge" class="sub-tab-content active" style="height: 100%;">
                     <div style="display:flex; flex-direction:column; height: 100%;">
                         <div id="bridge-input-area" style="display: flex; flex-direction: column; flex: 1;">
                             <textarea id="payload" placeholder="<<<<<<< FILE: sample.py&#10;<<<<<<< SEARCH&#10;start_anchor()&#10;{{until}}&#10;end_anchor()&#10;=======&#10;new_code()&#10;>>>>>>> REPLACE" style="min-height: 300px; margin-top: 0; flex: 1; margin-bottom: 15px;"></textarea>

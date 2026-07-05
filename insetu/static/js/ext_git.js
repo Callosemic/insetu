@@ -256,9 +256,10 @@ export function renderDiffFiles(files) {
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
             if (hiddenOutputs && hiddenOutputs.includes(file)) return;
 
-            const baseFile = file.replace('_diffs.txt', '_context.txt');
+            const safeFile = file.split('/').pop();
+            const baseFile = safeFile.replace('_diffs.txt', '_context.txt');
             const manifestObj = AppStore.getState().manifest[baseFile] || {};
-            const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Pending diff payload." };
+            const meta = manifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
 
             let finalCat = meta.domain;
             let finalDesc = meta.desc;
@@ -384,10 +385,13 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                     const btn = document.getElementById('execute-sweep-btn');
 
                     if (spinner) spinner.innerText = statusData.message || "Committing and pushing...";
-
                     if (statusData.status === 'completed') {
                         window._activeSweepJobId = null;
                         document.getElementById('sweep-message').value = '';
+
+                        if (!window._dirtyDiffRepos) window._dirtyDiffRepos = new Set();
+                        window._dirtyDiffRepos.add("ALL");
+
                         await loadSweepFiles(); 
                         compileContexts().then(() => generateDiffs());
                         alert(`✅ Sweep successful:\n\n${statusData.message}`);
@@ -421,13 +425,15 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                     const btn = document.getElementById('execute-push-btn');
 
                     if (spinner) spinner.innerText = statusData.message || "Pushing to remote... please wait.";
-
                     if (statusData.status === 'completed') {
                         window._activePushJobId = null;
                         const { currentPushRepo } = AppStore.getState();
                         alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                         window.inSetu.ui.Factory.closeModal('push-modal');
                         try {
+                            if (!window._dirtyDiffRepos) window._dirtyDiffRepos = new Set();
+                            window._dirtyDiffRepos.add(currentPushRepo);
+
                             await compileContexts();
                             const activeWs = AppStore.getState().activeWorkspace || 'default';
                             const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
@@ -435,7 +441,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                         } catch (refreshErr) {
                             console.warn("Background refresh failed:", refreshErr);
                         } finally {
-                            generateDiffs();
+                            generateDiffs(true);
                         }
                     } else if (statusData.status === 'failed') {
                         window._activePushJobId = null;

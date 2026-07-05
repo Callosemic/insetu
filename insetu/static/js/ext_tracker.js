@@ -66,12 +66,13 @@ if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('tracker')) {
                 <div class="sub-tab" id="st-queue" onclick="switchSubTab('queue')">Queue</div>
                 <div class="sub-tab" id="st-log" onclick="switchSubTab('log')">Log</div>
             </div>
-            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;" onclick="openNewTaskModal()">+ New</button>
-        `;
-        tasksScreen.parentElement.insertBefore(subTabBar, tasksScreen);
+<button class="btn-sm" style="background: var(--intent-highlight); margin: 0; white-space: nowrap; padding: 4px 12px; font-size: 0.9rem;"
+onclick="openNewTaskModal()">+ New</button>
+`;
+tasksScreen.parentElement.insertBefore(subTabBar, tasksScreen);
 
-        tasksScreen.style.minHeight = '80vh';
-        tasksScreen.innerHTML = `
+tasksScreen.style.minHeight = '80dvh';
+tasksScreen.innerHTML = `
             <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
                 <div id="task-repo-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px;"></div>
             </div>

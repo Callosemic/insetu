@@ -105,6 +105,7 @@ def check_javascript_files():
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
     hardcoded_modal_pattern = re.compile(r'class=["\'][^"\']*fullscreen-modal[^"\']*["\']|class=["\'][^"\']*modal-panel[^"\']*["\']')
     hex_color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}\b')
+    clear_timeout_pattern = re.compile(r'\bclearTimeout\s*\(')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -135,12 +136,17 @@ def check_javascript_files():
                     # 3. UIFactory Mandate
                     if hardcoded_modal_pattern.search(line):
                         report_violation("UI_FACTORY_MANDATE", filepath, line_num, "Hardcoded modal structural classes detected. Use UIFactory.createModal().")
-
                     # 4. Theme Variables
                     if is_extension and hex_color_pattern.search(line):
                         # Simple heuristic: warn if hex colors are used in UI injection strings
                         if "style=" in line or "cssText" in line:
                             report_violation("THEME_TOKENS", filepath, line_num, f"Hardcoded HEX color found: {line.strip()}. Use CSS intent variables (e.g., var(--btn)).")
+
+                    # 5. Debounce Mandate
+                    if clear_timeout_pattern.search(line):
+                        # Whitelist the core utility declaration itself and the legacy panic fallback
+                        if "utils.debounce" not in line and "panicTimeout" not in line:
+                            report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
 
 if __name__ == "__main__":
     print("============================================================")
