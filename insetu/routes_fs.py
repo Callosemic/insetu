@@ -49,13 +49,7 @@ def stop_vfs_pipeline():
     if _VFS_WORKER_THREAD:
         _VFS_WORKER_THREAD.join(timeout=5.0)
 def _trigger_post_mutation_hooks(workspace_id, old_filepath, new_filepath=None):
-    """DRY helper for triggering cartographer and event bus updates after a VFS mutation."""
-    try:
-        from insetu.cartographer import map_repositories
-        map_repositories(workspace_id)
-    except Exception as e:
-        print(f"Warning: Cartographer failed during VFS mutation: {str(e)}")
-
+    """DRY helper for triggering event bus updates after a VFS mutation."""
     hooks.emit_background('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
     if new_filepath:
         hooks.emit_background('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
@@ -166,7 +160,9 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
         return {"status": "accepted", "message": f"File {filepath} queued for atomic background commit."}
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
         """Handles the synchronous physical I/O execution loop off-thread."""
-        if data.get("is_new_repo"):
+        if data.get("is_absolute_artifact"):
+                resolved_path = filepath
+        elif data.get("is_new_repo"):
                 from insetu.utils_core import get_workspace_physics
                 _, ws_root, _ = get_workspace_physics(workspace_id)
                 resolved_path = os.path.join(ws_root, filepath)
@@ -233,13 +229,6 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         cfg["target_repos"] = targets
                         cfg_path, _, _ = get_workspace_physics(workspace_id)
                         utils_core.save_json_file(cfg_path, cfg)
-        if is_new:
-                try:
-                        from insetu.cartographer import map_repositories
-                        map_repositories(workspace_id)
-                except Exception as e:
-                        print(f"Warning: Cartographer failed during save: {str(e)}")
-
         hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
 
 @fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])

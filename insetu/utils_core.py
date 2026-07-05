@@ -155,11 +155,22 @@ def load_json_file(filepath, default_fallback=None):
         _JSON_MTIME[filepath] = current_mtime
 
     return _JSON_CACHE[filepath]
-
 def save_json_file(filepath, data):
     global _JSON_CACHE, _JSON_MTIME
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
+
+    # Write through VFS pipeline if it's a configuration mutation to avoid blocking HTTP threads
+    if filepath.endswith('config.json') or filepath.endswith('workflows.json'):
+        from insetu.routes_fs import _VFS_WRITE_QUEUE
+        try:
+            workspace_id = sniff_tenant_id()
+            _VFS_WRITE_QUEUE.put((workspace_id, filepath, json.dumps(data, indent=2), {}))
+        except Exception:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+    else:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
     _JSON_CACHE[filepath] = data
     _JSON_MTIME[filepath] = 0  # Explicitly force mtime invalidation to bypass cache collisions
 def load_config(workspace_id=None):
@@ -357,7 +368,8 @@ def search_workspace_files(workspace_id, query):
         with open(manifest_path, 'r', encoding='utf-8') as f:
             try:
                 manifest = json.load(f)
-                for file_list in manifest.values():
+                for data in manifest.values():
+                    file_list = data.get("files", []) if isinstance(data, dict) else data
                     for filepath in file_list:
                         if filepath.lower().endswith('.md'):
                             md_files.add(filepath)

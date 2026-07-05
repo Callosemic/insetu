@@ -1,7 +1,45 @@
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 // --- DYNAMIC UI FACTORY ---
+document.addEventListener('dragstart', (e) => {
+    const dragEl = e.target.closest('.ui-draggable-export');
+    if (dragEl) {
+        const filename = dragEl.dataset.filename;
+        const fetchUrl = dragEl.dataset.fetchUrl;
+        if (filename && fetchUrl && window.inSetu.ui.Factory.bindDownloadDrag) {
+            window.inSetu.ui.Factory.bindDownloadDrag(e, filename, fetchUrl);
+        }
+    }
+});
+
 export const UIFactory = {
+    bindDownloadDrag: function(e, filename, fetchUrl) {
+        const absoluteUrl = window.location.origin + fetchUrl;
+        const safeName = filename.split('/').pop();
+        const ext = safeName.split('.').pop().toLowerCase();
+
+        let mime = 'application/octet-stream';
+        if (ext === 'md') mime = 'text/markdown';
+        else if (ext === 'txt') mime = 'text/plain';
+        else if (ext === 'json') mime = 'application/json';
+        else if (ext === 'py') mime = 'text/x-python';
+        else if (ext === 'js') mime = 'text/javascript';
+
+        const ghost = document.createElement('div');
+        ghost.style.cssText = 'position: absolute; top: -1000px; left: -1000px; background: var(--pane-bg); color: var(--text); border: 1px solid var(--btn); padding: 8px 12px; border-radius: 4px; font-family: monospace; font-weight: bold; z-index: -1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
+        ghost.innerText = `📄 ${safeName}`;
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 15, 15);
+
+        setTimeout(() => ghost.remove(), 50);
+
+        e.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${absoluteUrl}`);
+        e.dataTransfer.setData('text/uri-list', absoluteUrl);
+        e.dataTransfer.setData('text/plain', absoluteUrl);
+
+        e.dataTransfer.effectAllowed = 'copy';
+    },
+
     createModal: function(config) {
         const backdrop = document.createElement('div');
         backdrop.className = 'fullscreen-modal dynamic-modal';

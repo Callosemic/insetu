@@ -269,6 +269,11 @@ function toggleModalMode() {
     const editDivider = document.getElementById('edit-zone-divider');
 
     const { ext, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(currentModalFile);
+    const dlBtn = document.getElementById('modal-dl-btn');
+    if (dlBtn && !currentModalIsMemoryOnly) {
+        dlBtn.dataset.filename = filename.split('/').pop();
+        dlBtn.dataset.fetchUrl = `/download/${filename}`;
+    }
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
     if (isPreviewMode) {
@@ -372,11 +377,13 @@ document.getElementById('modal-text').addEventListener('input', (e) => {
 });
 function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
-    Object.values(manifest).forEach(fileArray => {
-        const index = fileArray.indexOf(oldPath);
-        if (index > -1) {
-            fileArray.splice(index, 1);
-            if (newPath) fileArray.push(newPath);
+    Object.values(manifest).forEach(obj => {
+        if (obj.files) {
+            const index = obj.files.indexOf(oldPath);
+            if (index > -1) {
+                obj.files.splice(index, 1);
+                if (newPath) obj.files.push(newPath);
+            }
         }
     });
     if (document.getElementById('browse-modal').style.display === 'block') {
@@ -465,12 +472,13 @@ function openMoveModal() {
         });
     }, 50);
 }
-
 export function mountFolderBrowser(container, onSelect) {
     container.innerHTML = '';
     const allFiles = new Set();
     const { manifest } = AppStore.getState();
-    Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
+    Object.values(manifest).forEach(obj => {
+        if (obj.files) obj.files.forEach(f => allFiles.add(f));
+    });
     const fileTree = buildFileTree(Array.from(allFiles));
     let currentPath = [];
 
@@ -628,49 +636,6 @@ function cleanModalFile() {
         window.saveModalFile(true);
     }
 }
-window.bindDownloadDrag = function(e, filename, fetchUrl) {
-    const absoluteUrl = window.location.origin + fetchUrl;
-    const safeName = filename.split('/').pop();
-    const ext = safeName.split('.').pop().toLowerCase();
-
-    let mime = 'application/octet-stream';
-    if (ext === 'md') mime = 'text/markdown';
-    else if (ext === 'txt') mime = 'text/plain';
-    else if (ext === 'json') mime = 'application/json';
-    else if (ext === 'py') mime = 'text/x-python';
-    else if (ext === 'js') mime = 'text/javascript';
-
-    // 1. Generate a custom File Label ghost image
-    const ghost = document.createElement('div');
-    ghost.style.cssText = 'position: absolute; top: -1000px; left: -1000px; background: var(--pane-bg); color: var(--text); border: 1px solid var(--btn); padding: 8px 12px; border-radius: 4px; font-family: monospace; font-weight: bold; z-index: -1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
-    ghost.innerText = `📄 ${safeName}`;
-    document.body.appendChild(ghost);
-    e.dataTransfer.setDragImage(ghost, 15, 15);
-
-    // Clean up the DOM immediately after the browser snapshots it
-    setTimeout(() => ghost.remove(), 50);
-
-    // 2. Set OS-Level payload
-    e.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${absoluteUrl}`);
-
-    // 3. Set Browser-to-Browser fallbacks
-    e.dataTransfer.setData('text/uri-list', absoluteUrl);
-    e.dataTransfer.setData('text/plain', absoluteUrl);
-
-    e.dataTransfer.effectAllowed = 'copy';
-};
-
-window.modalDragStart = function(e) {
-    // Memory-only files (like immediate Quick-Packs) don't have a backend route to drag from.
-    if (typeof currentModalIsMemoryOnly !== 'undefined' && currentModalIsMemoryOnly) {
-        e.preventDefault();
-        return;
-    }
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
-    window.bindDownloadDrag(e, currentModalFile, fetchUrl);
-};
-
 async function downloadFromModal() {
     const btn = document.getElementById('modal-dl-btn');
     if (!btn) return;
@@ -784,14 +749,10 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     dlBtn.innerText = '⬇️ DL';
     // Native Desktop Drag-and-Drop (Out of Browser)
     dlBtn.draggable = true;
-    dlBtn.addEventListener('dragstart', (e) => {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const fetchUrl = fileInfo.isSource ?
-            `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-        const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
-
-        window.bindDownloadDrag(e, safeName, fetchUrl);
-    });
+    dlBtn.classList.add('ui-draggable-export');
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    dlBtn.dataset.fetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+    dlBtn.dataset.filename = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
 
     dlBtn.onclick = async () => {
         const origText = dlBtn.innerText;
@@ -905,7 +866,9 @@ export function loadGlobalFS() {
     const container = document.getElementById('global-fs-list');
     const allFiles = new Set();
     const { manifest, targetConfigs } = AppStore.getState();
-    Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
+    Object.values(manifest).forEach(obj => {
+        if (obj.files) obj.files.forEach(f => allFiles.add(f));
+    });
 
     globalManifest = Array.from(allFiles);
 
@@ -1356,6 +1319,12 @@ export async function viewSourceFile(filepath, isFS = false) {
     const tb = document.getElementById('modal-action-toolbar');
     const editZone = document.getElementById('edit-zone-buttons');
     const editDivider = document.getElementById('edit-zone-divider');
+    const dlBtn = document.getElementById('modal-dl-btn');
+    if (dlBtn && !currentModalIsMemoryOnly) {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        dlBtn.dataset.filename = filepath.split('/').pop();
+        dlBtn.dataset.fetchUrl = isFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(filepath)}` : `/download/${filepath}`;
+    }
 
     if (isFS) {
         tb.style.display = 'flex';
@@ -1428,13 +1397,14 @@ export function openWorkspaceBrowser(options = {}) {
 
     document.getElementById('browse-select-folder-btn').style.display = mode === 'folder' ? 'block' : 'none';
     document.getElementById('browse-search').style.display = mode === 'folder' ? 'none' : 'block';
-
     if (files) {
         currentBrowseManifest = files;
     } else {
         const allFiles = new Set();
         const { manifest } = AppStore.getState();
-        Object.values(manifest).forEach(fileArray => fileArray.forEach(f => allFiles.add(f)));
+        Object.values(manifest).forEach(obj => {
+            if (obj.files) obj.files.forEach(f => allFiles.add(f));
+        });
         currentBrowseManifest = Array.from(allFiles);
     }
     currentFileTree = buildFileTree(currentBrowseManifest);
@@ -1650,7 +1620,7 @@ function renderBrowseLevel() {
 }
 export function openBrowseModal(contextFilename) {
     const { manifest } = AppStore.getState();
-    const files = manifest[contextFilename] || [];
+    const files = (manifest[contextFilename] && manifest[contextFilename].files) ? manifest[contextFilename].files : [];
     openWorkspaceBrowser({
         mode: 'view',
         title: `Browsing: ${contextFilename}`,
@@ -1851,9 +1821,11 @@ export function openLinkModal() {
     if (!globalManifest || globalManifest.length === 0) {
         const allFiles = new Set();
         const { manifest } = AppStore.getState();
-        Object.values(manifest).forEach(fileArray => fileArray.forEach(f => {
-            if (f.toLowerCase().endsWith('.md')) allFiles.add(f);
-        }));
+        Object.values(manifest).forEach(obj => {
+            if (obj.files) obj.files.forEach(f => {
+                if (f.toLowerCase().endsWith('.md')) allFiles.add(f);
+            });
+        });
         globalManifest = Array.from(allFiles);
     }
     const bodyHtml = `

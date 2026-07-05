@@ -14,6 +14,7 @@ from insetu.utils_core import resolve_workspace_path, get_sister_repos
 from insetu.engine_bridge import parse_blocks, apply_block_in_memory
 import insetu.engine_gather as engine_gather
 import insetu.workers # Initializes the metronome listeners
+import insetu.cartographer # Registers Event Bus hooks
 app = Flask(__name__)
 from insetu.routes_fs import fs_bp
 from insetu.routes_bridge import bridge_bp

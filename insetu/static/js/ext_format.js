@@ -32,17 +32,22 @@ export async function executePublish() {
     try {
         const { activeWorkspace, currentFormatTarget } = AppStore.getState();
         const activeWs = activeWorkspace || 'default';
-        const dlName = currentFormatTarget.split('/').pop().split('.')[0] + '.' + format;
 
-        await downloadFile(`/api/${activeWs}/format/compile-document`, dlName, {
+        const res = await fetch(`/api/${activeWs}/format/compile-document`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filepath: currentFormatTarget, format: format })
         });
-        window.inSetu.ui.Factory.closeModal('publish-modal');
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Compilation request failed.");
+        }
+        const data = await res.json();
+        window._activeFormatJobId = data.job_id;
+
     } catch (e) {
         alert("Network error: " + e.message);
-    } finally {
         if (btn) btn.innerText = origText;
     }
 }
@@ -57,6 +62,61 @@ if (tb && !document.getElementById('btn-publish-doc')) {
     pubBtn.onclick = openPublishModal;
     tb.appendChild(pubBtn);
 }
+window._activeFormatJobId = null;
+
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
+    window.inSetu.extensions.Registry.registerTick('format', 1000, async () => {
+        if (!window._activeFormatJobId) return;
+        try {
+            const statusRes = await fetch(`/api/system/jobs/${window._activeFormatJobId}`);
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                const btn = document.getElementById('execute-publish-btn');
+                if (btn) btn.innerText = statusData.message || "⏳ Compiling...";
+
+                if (statusData.status === 'completed') {
+                    window._activeFormatJobId = null;
+                    await downloadFile(statusData.artifact.download_url, statusData.artifact.filename);
+                    window.inSetu.ui.Factory.closeModal('publish-modal');
+                } else if (statusData.status === 'failed') {
+                    window._activeFormatJobId = null;
+                    alert(`Compilation Failed:\n${statusData.message}`);
+                    if (btn) btn.innerText = "Compile & Download";
+                }
+            }
+        } catch (e) {
+            console.error("Format polling error:", e);
+        }
+    });
+}
+window._activeFormatJobId = null;
+
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
+    window.inSetu.extensions.Registry.registerTick('format', 1000, async () => {
+        if (!window._activeFormatJobId) return;
+        try {
+            const statusRes = await fetch(`/api/system/jobs/${window._activeFormatJobId}`);
+            if (statusRes.ok) {
+                const statusData = await statusRes.json();
+                const btn = document.getElementById('execute-publish-btn');
+                if (btn) btn.innerText = statusData.message || "⏳ Compiling...";
+
+                if (statusData.status === 'completed') {
+                    window._activeFormatJobId = null;
+                    await downloadFile(statusData.artifact.download_url, statusData.artifact.filename);
+                    window.inSetu.ui.Factory.closeModal('publish-modal');
+                } else if (statusData.status === 'failed') {
+                    window._activeFormatJobId = null;
+                    alert(`Compilation Failed:\n${statusData.message}`);
+                    if (btn) btn.innerText = "Compile & Download";
+                }
+            }
+        } catch (e) {
+            console.error("Format polling error:", e);
+        }
+    });
+}
+
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     window.inSetu.extensions.Registry.registerUIHook('zone:modal-file-toolbar', (data) => {
         if (data.filepath) AppStore.setState({ currentFormatTarget: data.filepath });

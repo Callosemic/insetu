@@ -716,93 +716,31 @@ export function renderContextFiles(files, msg) {
     if (files && files.length > 0) {
         const categories = {};
         const { categoryOrder, targetConfigs } = AppStore.getState();
-        const resolveMetadata = (fileName) => {
-            let cat = "Workspaces";
-            let desc = "Repository context payload.";
-            let displayName = fileName;
-
-            if (fileName.startsWith('quick_pack_')) {
-                const parts = fileName.split('_');
-                const dateStr = new Date(parseInt(parts[2]) * 1000).toLocaleString();
-                const target = parts.slice(3).join('_').replace('.txt', '');
-                return {
-                    cat: "Quick-Pack Clipboard",
-                    desc: `Ad-hoc context packed on ${dateStr} (24h TTL)`,
-                    displayName: `📦 ${target}`
-                };
-            }
-            // Let extensions claim the file metadata first
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', fileName);
-                if (extMeta) return extMeta;
-            }
-
-            const { virtualContexts } = AppStore.getState();
-            if (virtualContexts) {
-                const vMatch = virtualContexts.find(v => v.out_file === fileName);
-                if (vMatch) return {
-                    cat: vMatch.domain || "Extensions",
-                    desc: vMatch.description || `Virtual context payload.`,
-                    displayName: vMatch.title || fileName
-                };
-            }
-            for (const cfg of targetConfigs) {
-                const safeRepoDir = cfg.repo_dir.startsWith('.') ? 'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
-                const safeId = safeRepoDir.replace(/-/g, '_');
-                const expectedOut = cfg.out_file || `${safeId}_context.txt`;
-                if (fileName === expectedOut) return {
-                    cat: cfg.domain || "Workspaces",
-                    desc: cfg.description || `Context payload for ${cfg.title || cfg.repo_dir}.`,
-                    displayName: cfg.title || fileName
-                };
-                if (cfg.sub_buckets) {
-                    for (const b of cfg.sub_buckets) {
-                        if (fileName === b.out_file) return {
-                            cat: b.domain || cfg.domain || "Workspaces",
-                            desc: b.description || `Context payload for ${b.title || b.id}.`,
-                            displayName: b.title || b.out_file
-                        };
-                    }
-                }
-            }
-            const rawModule = fileName.replace('_context.txt', '');
-            let matchedMeta = null;
-            let parentBucket = null;
-
-            for (const cfg of targetConfigs) {
-                if (cfg.sub_buckets) {
-                    for (const b of cfg.sub_buckets) {
-                        if (b.dynamic_split_prefix) {
-                            if (b.meta_map && b.meta_map[rawModule]) {
-                                matchedMeta = b.meta_map[rawModule];
-                                parentBucket = b;
-                                break;
-                            }
-                            if (!parentBucket) parentBucket = b;
-                        }
-                    }
-                }
-                if (matchedMeta) break;
-            }
-
-            const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-            const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
-            desc = matchedMeta?.description || parentBucket?.description || `Dynamically mapped logic and templates for ${title}.`;
-
-            return {
-                cat: domain,
-                desc: desc,
-                displayName: title
-            };
-        };
         files.forEach(file => {
             if (typeof HIDDEN_OUTPUTS !== 'undefined' && HIDDEN_OUTPUTS.includes(file)) return;
-            const meta = resolveMetadata(file);
-            if (!categories[meta.cat]) categories[meta.cat] = [];
-            categories[meta.cat].push({
+
+            const manifestObj = AppStore.getState().manifest[file] || {};
+            const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
+
+            // Allow extensions to override/claim UI metadata dynamically (e.g., ext_prompts.js)
+            let finalCat = meta.domain;
+            let finalDesc = meta.desc;
+            let finalTitle = meta.title;
+
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
+                if (extMeta) {
+                    finalCat = extMeta.cat;
+                    finalDesc = extMeta.desc;
+                    finalTitle = extMeta.displayName;
+                }
+            }
+
+            if (!categories[finalCat]) categories[finalCat] = [];
+            categories[finalCat].push({
                 filename: file,
-                displayName: meta.displayName,
-                description: meta.desc,
+                displayName: finalTitle,
+                description: finalDesc,
                 isFS: false
             });
         });

@@ -377,11 +377,9 @@ window.openBatchModal = function(batch) {
     document.getElementById('batch-copy-context-btn').onclick = function() { window.fetchAndCopy(`${artifactsDir}/workflows/${contextFile}`, this); };
     const dlBtn = document.getElementById('batch-dl-context-btn');
     dlBtn.onclick = function() { window.fetchAndDownloadState(`${artifactsDir}/workflows/${contextFile}`, this); };
-
-    dlBtn.addEventListener('dragstart', (e) => {
-        const fetchUrl = `/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(artifactsDir + '/workflows/' + contextFile)}`;
-        if (window.bindDownloadDrag) window.bindDownloadDrag(e, contextFile, fetchUrl);
-    });
+    dlBtn.classList.add('ui-draggable-export');
+    dlBtn.dataset.filename = contextFile;
+    dlBtn.dataset.fetchUrl = `/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(artifactsDir + '/workflows/' + contextFile)}`;
 
     if (batch.include_prompt) {
         const promptTextArea = document.getElementById('batch-prompt-text');

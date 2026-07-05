@@ -1,8 +1,12 @@
 import os
 import subprocess
+import uuid
+import json
 from flask import Blueprint, request, jsonify
 from insetu.utils_core import load_config, get_workspace_physics
 from insetu.hooks import hooks
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
+
 git_bp = Blueprint('git', __name__)
 __depends__ = []
 
@@ -12,23 +16,30 @@ def on_pre_compile_generate_diffs(workspace_id=None):
         generate_diff_context(workspace_id)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
-
-def generate_diff_context(workspace_id=None):
+def generate_diff_context(workspace_id=None, target_repos=None):
     from insetu.utils_core import load_config, get_gather_paths, get_workspace_physics, get_safe_repo_id
     from insetu.engine_gather import resolve_file_bucket
     paths = get_gather_paths(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
-    for f in os.listdir(paths["diffs_dir"]):
-        f_path = os.path.join(paths["diffs_dir"], f)
-        if os.path.isfile(f_path):
-            try:
-                os.remove(f_path)
-            except Exception as e:
-                print(f"Warning: Failed to clear old diff file {f_path}: {e}")
 
     live_cfg = load_config(workspace_id)
+
+    safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
+
+    if os.path.exists(paths["diffs_dir"]):
+        for f in os.listdir(paths["diffs_dir"]):
+            f_path = os.path.join(paths["diffs_dir"], f)
+            if os.path.isfile(f_path):
+                # If target_repos is provided, only clear diff files belonging to those repos
+                if not target_repos or any(f.startswith(st) for st in safe_targets):
+                    try:
+                        os.remove(f_path)
+                    except Exception as e:
+                        print(f"Warning: Failed to clear old diff file {f_path}: {e}")
+
     diff_manifest = []
     for config in live_cfg.get("target_repos", []):
+        if target_repos and config.get("repo_dir") not in target_repos: continue
         if config.get("exclude_from_diffs"): continue
         if config.get("archive_type", "repo") == "media-vault": continue
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
@@ -124,20 +135,32 @@ def generate_diff_context(workspace_id=None):
                     out_lines.append("\n\n")
                 if out_lines:
                     out_path = os.path.join(paths["diffs_dir"], out_filename)
-                    with open(out_path, 'w', encoding='utf-8') as out_f:
-                        out_f.write("\n".join(out_lines))
+                    from insetu.routes_fs import execute_vfs_save
+                    execute_vfs_save(workspace_id, out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
                     diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
         except Exception as e:
             print(f"Skipping diff generation for {config['repo_dir']}: {e}")
     return diff_manifest
+def _background_generate_diffs(job_id, workspace_id, target_repos=None):
+    try:
+        msg = f"Analyzing Git trees for {', '.join(target_repos)}..." if target_repos else "Analyzing Git trees across sister repositories..."
+        update_immediate_job_status(job_id, 'processing', msg, workspace_id=workspace_id)
+        files = generate_diff_context(workspace_id, target_repos)
+        update_immediate_job_status(job_id, 'completed', "Diff generation complete.", artifact={"files": files, "target_repos": target_repos}, workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Diff generation failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("git", "diffs_task", _background_generate_diffs)
 
 @git_bp.route('/api/<workspace_id>/diffs/generate', methods=['POST'])
 def api_generate_diffs(workspace_id):
-    try:
-        files = generate_diff_context(workspace_id)
-        return jsonify({"status": "success", "files": files})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    data = request.json or {}
+    target_repos = data.get("target_repos", None)
+
+    job_id = f"dif_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({"target_repos": target_repos})
+    submit_immediate_job(job_id, "git", "diffs_task", args_json, workspace_id)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @git_bp.route('/api/git/sweep/status', methods=['GET'])
 def api_git_sweep_status():
@@ -167,28 +190,27 @@ def api_git_sweep_status():
         except Exception:
             pass
     return jsonify({"repos": results})
-@git_bp.route('/api/git/sweep/push', methods=['POST'])
-def api_git_sweep_push():
-    workspace_id = request.headers.get('X-Workspace-ID')
-    data = request.json
-    selections = data.get('selections', {})
-    message = data.get('message', 'chore: workspace sweep')
-
+def _background_sweep_push(job_id, workspace_id, selections, message):
+    import os
+    import subprocess
+    from insetu.utils_core import load_config, get_workspace_physics
     cfg = load_config(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
     output_log = ""
 
-    for repo, files in selections.items():
-        if not files: continue
+    try:
+        for repo, files in selections.items():
+            if not files: continue
+            update_immediate_job_status(job_id, 'processing', f"Pushing {repo}...", workspace_id=workspace_id)
 
-        repo_path = os.path.join(ws_root, repo)
-        for c in cfg.get("target_repos", []):
-            if c.get("repo_dir") == repo and c.get("physical_path"):
-                repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-                break
+            repo_path = os.path.join(ws_root, repo)
+            for c in cfg.get("target_repos", []):
+                if c.get("repo_dir") == repo and c.get("physical_path"):
+                    repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+                    break
 
-        if not os.path.exists(repo_path): continue
-        try:
+            if not os.path.exists(repo_path): continue
+
             # Guarantee topology is perfectly mapped before staging
             from insetu.cartographer import map_repositories
             map_repositories(workspace_id)
@@ -197,11 +219,28 @@ def api_git_sweep_push():
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
             subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
             output_log += f"✅ {repo}: Pushed {len(files)} files.\n"
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
-            return jsonify({"error": f"{repo} Error: {err}"}), 500
 
-    return jsonify({"status": "success", "output": output_log})
+        update_immediate_job_status(job_id, 'completed', output_log, workspace_id=workspace_id)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
+        update_immediate_job_status(job_id, 'failed', f"{repo} Error: {err}", workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', str(e), workspace_id=workspace_id)
+
+register_callback("git", "sweep_push_task", _background_sweep_push)
+
+@git_bp.route('/api/git/sweep/push', methods=['POST'])
+def api_git_sweep_push():
+    workspace_id = request.headers.get('X-Workspace-ID')
+    data = request.json
+    selections = data.get('selections', {})
+    message = data.get('message', 'chore: workspace sweep')
+
+    job_id = f"swp_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({"selections": selections, "message": message})
+    submit_immediate_job(job_id, "git", "sweep_push_task", args_json, workspace_id)
+
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.route('/api/git/changelogs', methods=['GET'])
 def api_git_changelogs():
     """Queries the rapid SQLite tracking index to populate recent commit suggestions."""
@@ -219,14 +258,12 @@ def api_git_changelogs():
         print(f"Warning: Failed to fetch release log suggestions via Event Bus: {e}")
 
     return jsonify({"repo": repo, "changelogs": changelogs})
-@git_bp.route('/api/git/push', methods=['POST'])
-def api_git_push():
-    workspace_id = request.headers.get('X-Workspace-ID')
-    data = request.json
-    repo = data.get('repo')
-    message = data.get('message')
-    diff_file = data.get('diff_file')
-    if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
+def _background_git_push(job_id, workspace_id, repo, message, diff_file):
+    import os
+    import subprocess
+    from insetu.utils_core import load_config, get_workspace_physics
+
+    update_immediate_job_status(job_id, 'processing', f"Preparing to push {repo}...", workspace_id=workspace_id)
 
     cfg = load_config(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
@@ -236,7 +273,9 @@ def api_git_push():
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
             break
 
-    if not os.path.exists(repo_path): return jsonify({"error": "Repo not found"}), 404
+    if not os.path.exists(repo_path): 
+        update_immediate_job_status(job_id, 'failed', "Repo not found", workspace_id=workspace_id)
+        return
 
     files_to_stage = set()
     if diff_file:
@@ -253,32 +292,30 @@ def api_git_push():
                     files_to_stage.add(filepath)
 
     if not files_to_stage:
-        # Fallback if diff_file wasn't specified or couldn't be parsed
         status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
         for line in status_res.stdout.splitlines():
             if len(line) >= 3:
                 filepath = line[3:]
-                # Safely handle git renames (e.g., R  old -> new)
                 if '->' in filepath: 
                     filepath = filepath.split('->')[-1]
                 files_to_stage.add(filepath.strip())
 
     if not files_to_stage:
-        return jsonify({"error": "No files found to commit. Working tree is clean."}), 400
+        update_immediate_job_status(job_id, 'failed', "No files found to commit. Working tree is clean.", workspace_id=workspace_id)
+        return
+
     try:
-        # Guarantee topology is perfectly mapped before staging
         from insetu.cartographer import map_repositories
         map_repositories(workspace_id)
-        # Auto-include the updated Code Index and managed extension states so metadata stays synced
+
         if os.path.exists(os.path.join(repo_path, "CODE_INDEX.md")): files_to_stage.add("CODE_INDEX.md")
         if os.path.exists(os.path.join(repo_path, "docs", "CODE_INDEX.md")): files_to_stage.add("docs/CODE_INDEX.md")
         for m_dir in cfg.get("managed_dirs", []):
             if os.path.exists(os.path.join(repo_path, m_dir)): files_to_stage.add(f"{m_dir}/")
 
-        # Surgically add only the parsed files + metadata
+        update_immediate_job_status(job_id, 'processing', f"Committing and pushing {repo}...", workspace_id=workspace_id)
         subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
-        
-        # Gracefully handle empty commits
+
         committed = False
         status_res = subprocess.run(['git', 'status', '--porcelain'], cwd=repo_path, capture_output=True, text=True)
         if status_res.stdout.strip():
@@ -286,24 +323,32 @@ def api_git_push():
             committed = True
 
         push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+        output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
 
-        output = push_res.stdout
-        if push_res.stderr:
-            output += "\n" + push_res.stderr
-
-        return jsonify({"status": "success", "output": output.strip()})
+        update_immediate_job_status(job_id, 'completed', output.strip(), workspace_id=workspace_id)
     except subprocess.CalledProcessError as e:
         err_out = e.stderr or e.stdout
-        if isinstance(err_out, bytes):
-            err_out = err_out.decode('utf-8', errors='replace')
-        if not err_out:
-            err_out = str(e)
+        err_out = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
 
         if 'committed' in locals() and committed and hasattr(e, 'cmd') and 'push' in e.cmd:
-            return jsonify({
-                "status": "partial", 
-                "error": err_out, 
-                "message": "Local commit succeeded, but pushing to the remote repository failed. The daemon likely lacks Git credentials."
-            }), 200
+            update_immediate_job_status(job_id, 'failed', f"Local commit succeeded, but pushing to remote failed. The daemon likely lacks Git credentials.\n\nError: {err_out}", workspace_id=workspace_id)
+        else:
+            update_immediate_job_status(job_id, 'failed', err_out, workspace_id=workspace_id)
 
-        return jsonify({"error": err_out}), 500
+register_callback("git", "push_task", _background_git_push)
+
+@git_bp.route('/api/git/push', methods=['POST'])
+def api_git_push():
+    workspace_id = request.headers.get('X-Workspace-ID')
+    data = request.json
+    repo = data.get('repo')
+    message = data.get('message')
+    diff_file = data.get('diff_file')
+
+    if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
+
+    job_id = f"psh_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({"repo": repo, "message": message, "diff_file": diff_file})
+    submit_immediate_job(job_id, "git", "push_task", args_json, workspace_id)
+
+    return jsonify({"status": "accepted", "job_id": job_id}), 202

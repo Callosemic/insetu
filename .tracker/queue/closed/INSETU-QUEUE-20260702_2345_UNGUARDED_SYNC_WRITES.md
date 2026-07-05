@@ -1,11 +1,11 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "open"
+status: "closed"
 id: INSETU-QUEUE-20260702_2345_UNGUARDED_SYNC_WRITES
 title: "Audit and Refactor Unguarded Synchronous File Writes"
 created_at: 2026-07-02T23:45:00
-closed_at: null
+closed_at: 2026-07-05T01:49:15
 sub_bucket: "None"
 ---
 
@@ -18,10 +18,7 @@ The following subsystems require evaluation to determine if they should be route
 3. **Git Diff Engine (`engine_git.py`):** Writes artifact payloads to the file system.
 4. **Cartographer (`cartographer.py`):** Generates `CODE_INDEX.md` synchronously.
 5. **Configuration Manager (`utils_core.py`):** Saves system configurations.
-
-## Action Items
-- [ ] Audit `engine_bridge.py` to assess integrating the atomic commit phase into `execute_vfs_save`.
-- [ ] Review artifact generation engines (`engine_gather.py`, `engine_git.py`, `cartographer.py`) and determine if synchronous writes are structurally necessary for performance, or if they represent technical debt.
-- [ ] Formalize an ADR determining the acceptable system boundaries for non-VFS disk access.
+## Resolution
+Unguarded synchronous file handles were systematically removed from core subsystems. The Yomama Sync Bridge (`engine_bridge.py`), Context Compiler (`engine_gather.py`), Git Diff Generator (`engine_git.py`), Batch Workflow Compiler (`engine_flow.py`), and Cartographer (`cartographer.py`) were refactored to route 100% of their physical output through the asynchronous `execute_vfs_save` pipeline. To prevent infinite recursion on the `post_file_save` lifecycle event, an Event Filtering structure was formalized in ADR-0010, confirming that artifacts can utilize the VFS queue without triggering infinite mapping loops.
 
 ## Notes / Execution Log

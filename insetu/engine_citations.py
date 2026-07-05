@@ -78,20 +78,26 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         if rows:
             def write_citation_bucket(filename, items, list_title):
                 out_path = os.path.join(paths["contexts_dir"], filename)
-                with open(out_path, 'w', encoding='utf-8') as outfile:
-                    outfile.write("============================================================\n")
-                    outfile.write(f"INSETU TOPOLOGY ({list_title})\n")
-                    outfile.write("============================================================\n\n")
-                    for item in items:
-                        csl_id = item.get("id", "unknown")
-                        title = item.get("title", "Untitled")
-                        authors = ", ".join([a.get('family', '') for a in item.get('author', [])])
-                        outfile.write(f"--- [@{csl_id}] ---\n")
-                        outfile.write(f"Title: {title}\n")
-                        outfile.write(f"Author(s): {authors}\n")
-                        outfile.write(f"Type: {item.get('type', 'unknown')}\n")
-                        outfile.write(f"Raw CSL-JSON: {json.dumps(item)}\n\n")
-                    manifest[filename] = ["data/citations.db"]
+                content_lines = []
+                content_lines.append("============================================================")
+                content_lines.append(f"INSETU TOPOLOGY ({list_title})")
+                content_lines.append("============================================================\n")
+
+                for item in items:
+                    csl_id = item.get("id", "unknown")
+                    title = item.get("title", "Untitled")
+                    authors = ", ".join([a.get('family', '') for a in item.get('author', [])])
+                    content_lines.append(f"--- [@{csl_id}] ---")
+                    content_lines.append(f"Title: {title}")
+                    content_lines.append(f"Author(s): {authors}")
+                    content_lines.append(f"Type: {item.get('type', 'unknown')}")
+                    content_lines.append(f"Raw CSL-JSON: {json.dumps(item)}\n")
+                from insetu.routes_fs import execute_vfs_save
+                execute_vfs_save(workspace_id, out_path, "\n".join(content_lines), data={"is_absolute_artifact": True})
+                manifest[filename] = {
+                    "files": ["data/citations.db"],
+                    "meta": {"title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
+                }
 
             global_items = []
             bucketed_items = {}

@@ -466,12 +466,9 @@ def execute_bridge_sync(workspace_id, data):
                         print(f"  [!] SYNTAX ERROR: Validation failed for {target_file}. Details: {str(e)}")
                         file_success = False
                 if file_success and working_content != original_content and not dry_run:
-                    if os.path.dirname(resolved_path):
-                        os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
-                    with open(resolved_path, 'w', encoding='utf-8') as f: f.write(working_content)
-                    print(f"  [✓] Transaction complete: In-memory composition committed cleanly for {target_file}.")
-                    from insetu.hooks import hooks
-                    hooks.emit_background('post_file_save', filepath=target_file, workspace_id=workspace_id)
+                    from insetu.routes_fs import execute_vfs_save
+                    execute_vfs_save(workspace_id, target_file, working_content)
+                    print(f"  [✓] Transaction complete: In-memory composition queued for atomic VFS commit for {target_file}.")
                 elif file_success and dry_run:
                     print(f"  [✓] [DRY RUN] Verified perfectly for {target_file}.")
                 print("." * 30)

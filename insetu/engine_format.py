@@ -1,11 +1,35 @@
 import os
 import sys
 import json
+import uuid
 from flask import Blueprint, request, jsonify, send_file
 from insetu.utils_core import extension_auth
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
 
 format_bp = Blueprint('format', __name__)
 __depends__ = []
+
+def _background_compile(job_id, workspace_id, filepath, target_format):
+    import os
+    from insetu.utils_core import get_gather_paths
+    try:
+        update_immediate_job_status(job_id, 'processing', f"Compiling document to {target_format.upper()}...", workspace_id=workspace_id)
+        mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
+
+        paths = get_gather_paths(workspace_id)
+        safe_name = f"{job_id}_{download_name}"
+        out_path = os.path.join(paths["artifacts_base"], safe_name)
+
+        with open(out_path, "wb") as f:
+            f.write(mem_file.read())
+
+        register_ephemeral_artifact(out_path, "format", 3600, workspace_id=workspace_id)
+
+        update_immediate_job_status(job_id, 'completed', "Compilation successful.", artifact={"download_url": f"/download/{safe_name}", "filename": download_name}, workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Compilation failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("format", "compile_task", _background_compile)
 
 @format_bp.route('/api/<workspace_id>/format/compile-document', methods=['POST'])
 @extension_auth('format')
@@ -16,13 +40,12 @@ def api_format_compile_document(workspace_id):
 
     if not filepath: return jsonify({"error": "Filepath required"}), 400
 
-    try:
-        mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
-        return send_file(mem_file, as_attachment=True, download_name=download_name)
-    except FileNotFoundError:
-        return jsonify({"error": "File not found"}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    import json
+    job_id = f"fmt_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({"filepath": filepath, "target_format": target_format})
+    submit_immediate_job(job_id, "format", "compile_task", args_json, workspace_id)
+
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, sqlite3, shutil, io
@@ -134,10 +157,10 @@ def run_formatter():
         sys.exit(1)
     # Target the directory where the user executed the command
     target_dir = os.getcwd()
-
     # Collect unique JS files from the manifest, restricted to the current directory
     js_files = set()
-    for context_name, file_list in manifest.items():
+    for context_name, data in manifest.items():
+        file_list = data.get("files", []) if isinstance(data, dict) else data
         for filepath in file_list:
             if filepath.endswith(".js") and not filepath.endswith(".min.js"):
                 abs_filepath = os.path.join(workspace_root, filepath)

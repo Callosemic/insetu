@@ -69,44 +69,23 @@ export async function executePush(modalId = 'push-modal') {
     try {
         const res = await fetch('/api/git/push', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 repo: currentPushRepo,
                 message: msg,
                 diff_file: currentPushDiffFile
             })
         });
-        const data = await res.json();
-        if (res.ok) {
-            if (data.status === 'partial') {
-                alert(`⚠️ ${data.message}\n\nDetails:\n${data.error}`);
-            } else {
-                alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${data.output}`);
-            }
-            if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
-            else {
-                const m = document.getElementById(modalId);
-                if (m) m.style.display = 'none';
-            }
-            // Silently re-hydrate the UI manifest and bundles
-            try {
-                await compileContexts();
-                const activeWs = AppStore.getState().activeWorkspace || 'default';
-                const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
-                if (mRes.ok) setContextManifest(await mRes.json());
-            } catch (refreshErr) {
-                console.warn("Background refresh failed (likely due to auto-reload):", refreshErr);
-            } finally {
-                generateDiffs();
-            }
-        } else {
-            alert(`❌ Push failed:\n\n${data.error}`);
+        
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Push request failed.");
         }
+        
+        const data = await res.json();
+        window._activePushJobId = data.job_id;
     } catch (e) {
-        alert("Network error executing push. (The server may be reloading)");
-    } finally {
+        alert("Network error executing push: " + e.message);
         if (btn) btn.style.display = 'block';
         if (spinner) spinner.style.display = 'none';
     }
@@ -234,7 +213,6 @@ export async function executeSweepPush() {
     const spinner = document.getElementById('sweep-push-spinner');
     btn.style.display = 'none';
     spinner.style.display = 'block';
-
     try {
         const res = await fetch('/api/git/sweep/push', {
             method: 'POST',
@@ -242,20 +220,14 @@ export async function executeSweepPush() {
             body: JSON.stringify({ selections, message: msg })
         });
 
-        const data = await res.json();
-        if (res.ok) {
-            // Clear message and re-hydrate the modal to show what's left
-            document.getElementById('sweep-message').value = '';
-            await loadSweepFiles(); 
-
-            // Silently sync the main UI behind the modal
-            compileContexts().then(() => generateDiffs());
-        } else {
-            alert(`❌ Sweep failed:\n\n${data.error || 'Unknown error'}`);
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Sweep request failed.");
         }
+        const data = await res.json();
+        window._activeSweepJobId = data.job_id;
     } catch (e) {
-        alert("Network error executing sweep.");
-    } finally {
+        alert("Network error executing sweep: " + e.message);
         btn.style.display = 'block';
         spinner.style.display = 'none';
     }
@@ -264,132 +236,118 @@ window.openPushModal = openPushModal;
 window.executePush = executePush;
 window.openSweepModal = openSweepModal;
 window.executeSweepPush = executeSweepPush;
+window._cachedDiffFiles = null;
+window._dirtyDiffRepos = new Set(["ALL"]);
 
-export async function generateDiffs() {
+export function renderDiffFiles(files) {
+    const loading = document.getElementById('diff-loading');
+    const results = document.getElementById('diff-results');
+    const sweepBtn = document.getElementById('btn-sweep-remaining');
+
+    if (loading) loading.style.display = 'none';
+    if (results) results.innerHTML = '';
+
+    if (files.length > 0) {
+        if (sweepBtn) sweepBtn.style.display = 'block';
+        const categories = {};
+        const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
+        files.forEach(fileObj => {
+            const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
+            const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
+            if (hiddenOutputs && hiddenOutputs.includes(file)) return;
+
+            const baseFile = file.replace('_diffs.txt', '_context.txt');
+            const manifestObj = AppStore.getState().manifest[baseFile] || {};
+            const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Pending diff payload." };
+
+            let finalCat = meta.domain;
+            let finalDesc = meta.desc;
+            let finalTitle = meta.title + " (Diffs)";
+
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile);
+                if (extMeta) {
+                    finalCat = extMeta.cat;
+                    finalDesc = extMeta.desc;
+                    finalTitle = extMeta.displayName.replace('.txt', '_diffs.txt');
+                }
+            }
+
+            if (!categories[finalCat]) categories[finalCat] = [];
+            categories[finalCat].push({
+                filename: file,
+                displayName: finalTitle,
+                description: finalDesc,
+                isFS: false,
+                repoDir: repoDir
+            });
+        });
+
+        const sortedCats = Object.keys(categories).sort((a, b) => {
+            if (a === "Quick-Pack Clipboard") return -1;
+            if (b === "Quick-Pack Clipboard") return 1;
+            let iA = categoryOrder.indexOf(a);
+            let iB = categoryOrder.indexOf(b);
+            if (iA === -1) iA = 999;
+            if (iB === -1) iB = 999;
+            if (iA !== iB) return iA - iB;
+            return a.localeCompare(b);
+        });
+
+        for (const catName of sortedCats) {
+            const catFiles = categories[catName];
+            if (catFiles.length > 0) {
+                const heading = document.createElement('div');
+                heading.className = 'category-heading';
+                heading.innerText = catName;
+                results.appendChild(heading);
+
+                import('./app.js').then(module => {
+                    catFiles.forEach(f => module.createFileCard(f, results));
+                });
+            }
+        }
+    } else {
+        if (sweepBtn) sweepBtn.style.display = 'none';
+        if (results) results.innerHTML = '<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>';
+    }
+}
+export async function generateDiffs(force = false) {
     const loading = document.getElementById('diff-loading');
     const results = document.getElementById('diff-results');
     if (!loading || !results) return;
 
+    let targetRepos = null;
+    if (force || !window._cachedDiffFiles || (window._dirtyDiffRepos && window._dirtyDiffRepos.has("ALL"))) {
+        targetRepos = null; 
+    } else if (window._dirtyDiffRepos && window._dirtyDiffRepos.size > 0) {
+        targetRepos = Array.from(window._dirtyDiffRepos);
+    } else {
+        renderDiffFiles(window._cachedDiffFiles);
+        return;
+    }
+
     loading.style.display = 'block';
     results.innerHTML = '';
+
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/diffs/generate`, { method: 'POST' });
-        const data = await res.json();
-        const sweepBtn = document.getElementById('btn-sweep-remaining');
+        const res = await fetch(`/api/${activeWs}/diffs/generate`, { 
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target_repos: targetRepos })
+        });
 
-        loading.style.display = 'none';
-        if (data.status === 'success' && data.files.length > 0) {
-            if (sweepBtn) sweepBtn.style.display = 'block';
-            const categories = {};
-            const { categoryOrder, targetConfigs, hiddenOutputs, virtualContexts } = AppStore.getState();
-
-            const resolveMetadata = (fileName) => {
-                let cat = "Workspaces";
-                let desc = "Pending diff payload.";
-                let displayName = fileName;
-                const baseFile = fileName.replace('_diffs.txt', '_context.txt');
-                if (baseFile === 'prompts_context.txt') return {
-                    cat: "Prompts & State",
-                    desc: "Uncommitted prompt or state changes.",
-                    displayName: 'prompts_diffs.txt'
-                };
-                if (virtualContexts) {
-                    const vMatch = virtualContexts.find(v => v.out_file === fileName);
-                    if (vMatch) return {
-                        cat: vMatch.domain || "Extensions",
-                        desc: vMatch.description || "Virtual context payload.",
-                        displayName: vMatch.title || fileName
-                    };
-                }
-
-                for (const cfg of targetConfigs) {
-                    const safeRepoDir = cfg.repo_dir.startsWith('.') ? 'dot_' + cfg.repo_dir.substring(1) : cfg.repo_dir;
-                    const safeId = safeRepoDir.replace(/-/g, '_');
-                    const expectedOut = cfg.out_file || `${safeId}_context.txt`;
-                    if (baseFile === expectedOut) return {
-                        cat: cfg.domain || "Workspaces",
-                        desc: `Uncommitted changes for ${cfg.title || cfg.repo_dir}.`,
-                        displayName: (cfg.title || baseFile) + " (Diffs)"
-                    };
-                    if (cfg.sub_buckets) {
-                        for (const b of cfg.sub_buckets) {
-                            if (baseFile === b.out_file) return {
-                                cat: b.domain || cfg.domain || "Workspaces",
-                                desc: `Uncommitted changes for ${b.title || b.id}.`,
-                                displayName: (b.title || baseFile) + " (Diffs)"
-                            };
-                        }
-                    }
-                }
-                const rawModule = baseFile.replace('_context.txt', '');
-                let matchedMeta = null;
-                let parentBucket = null;
-                for (const cfg of targetConfigs) {
-                    if (cfg.sub_buckets) {
-                        for (const b of cfg.sub_buckets) {
-                            if (b.dynamic_split_prefix) {
-                                if (b.meta_map && b.meta_map[rawModule]) {
-                                    matchedMeta = b.meta_map[rawModule];
-                                    parentBucket = b;
-                                    break;
-                                }
-                                if (!parentBucket) parentBucket = b;
-                            }
-                        }
-                    }
-                    if (matchedMeta) break;
-                }
-
-                const title = matchedMeta?.title || rawModule.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                const domain = matchedMeta?.domain || parentBucket?.domain || "Dynamic Modules";
-                desc = matchedMeta?.description ? `Uncommitted changes for ${title} (${matchedMeta.description})` : (parentBucket?.description ? `Uncommitted changes for ${title} (${parentBucket.description})` : `Uncommitted logic changes for ${title}.`);
-                return { cat: domain, desc: desc, displayName: title + " (Diffs)" };
-            };
-
-            data.files.forEach(fileObj => {
-                const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
-                const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
-                if (hiddenOutputs && hiddenOutputs.includes(file)) return;
-                const meta = resolveMetadata(file);
-                if (!categories[meta.cat]) categories[meta.cat] = [];
-                categories[meta.cat].push({
-                    filename: file,
-                    displayName: meta.displayName,
-                    description: meta.desc,
-                    isFS: false,
-                    repoDir: repoDir
-                });
-            });
-
-            const sortedCats = Object.keys(categories).sort((a, b) => {
-                if (a === "Quick-Pack Clipboard") return -1;
-                if (b === "Quick-Pack Clipboard") return 1;
-                let iA = categoryOrder.indexOf(a);
-                let iB = categoryOrder.indexOf(b);
-                if (iA === -1) iA = 999;
-                if (iB === -1) iB = 999;
-                if (iA !== iB) return iA - iB;
-                return a.localeCompare(b);
-            });
-
-            for (const catName of sortedCats) {
-                const catFiles = categories[catName];
-                if (catFiles.length > 0) {
-                    const heading = document.createElement('div');
-                    heading.className = 'category-heading';
-                    heading.innerText = catName;
-                    results.appendChild(heading);
-                    catFiles.forEach(f => createFileCard(f, results));
-                }
-            }
-        } else {
-            if (sweepBtn) sweepBtn.style.display = 'none';
-            results.innerHTML = '<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>';
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Diff generation request failed.");
         }
+
+        const data = await res.json();
+        window._activeDiffJobId = data.job_id;
     } catch (error) {
         loading.style.display = 'none';
-        results.innerHTML = `<p style="color: red;">Error analyzing diffs: ${error.message}</p>`;
+        results.innerHTML = `<p style="color: red;">Error requesting diff analysis: ${error.message}</p>`;
     }
 }
 window.generateDiffs = generateDiffs;
@@ -399,7 +357,10 @@ if (diffsScreen) {
     diffsScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
-            <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+            <div style="display: flex; gap: 10px;">
+                <button id="btn-refresh-diffs" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="generateDiffs(true)">🔄 Refresh</button>
+                <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+            </div>
         </div>
         <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
         <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
@@ -407,8 +368,143 @@ if (diffsScreen) {
         </div>
     `;
 }
+window._activeSweepJobId = null;
+window._activePushJobId = null;
+window._activeDiffJobId = null;
 
+if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
+    window.inSetu.extensions.Registry.registerTick('git', 1000, async () => {
+        // Sweep Job Polling
+        if (window._activeSweepJobId) {
+            try {
+                const statusRes = await fetch(`/api/system/jobs/${window._activeSweepJobId}`);
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    const spinner = document.getElementById('sweep-push-spinner');
+                    const btn = document.getElementById('execute-sweep-btn');
+
+                    if (spinner) spinner.innerText = statusData.message || "Committing and pushing...";
+
+                    if (statusData.status === 'completed') {
+                        window._activeSweepJobId = null;
+                        document.getElementById('sweep-message').value = '';
+                        await loadSweepFiles(); 
+                        compileContexts().then(() => generateDiffs());
+                        alert(`✅ Sweep successful:\n\n${statusData.message}`);
+                        if (btn) btn.style.display = 'block';
+                        if (spinner) {
+                            spinner.style.display = 'none';
+                            spinner.innerText = "Committing and pushing...";
+                        }
+                    } else if (statusData.status === 'failed') {
+                        window._activeSweepJobId = null;
+                        alert(`❌ Sweep failed:\n\n${statusData.message}`);
+                        if (btn) btn.style.display = 'block';
+                        if (spinner) {
+                            spinner.style.display = 'none';
+                            spinner.innerText = "Committing and pushing...";
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Sweep polling error:", e);
+            }
+        }
+
+        // Push Job Polling
+        if (window._activePushJobId) {
+            try {
+                const statusRes = await fetch(`/api/system/jobs/${window._activePushJobId}`);
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    const spinner = document.getElementById('push-spinner');
+                    const btn = document.getElementById('execute-push-btn');
+
+                    if (spinner) spinner.innerText = statusData.message || "Pushing to remote... please wait.";
+
+                    if (statusData.status === 'completed') {
+                        window._activePushJobId = null;
+                        const { currentPushRepo } = AppStore.getState();
+                        alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
+                        window.inSetu.ui.Factory.closeModal('push-modal');
+                        try {
+                            await compileContexts();
+                            const activeWs = AppStore.getState().activeWorkspace || 'default';
+                            const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+                            if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                        } catch (refreshErr) {
+                            console.warn("Background refresh failed:", refreshErr);
+                        } finally {
+                            generateDiffs();
+                        }
+                    } else if (statusData.status === 'failed') {
+                        window._activePushJobId = null;
+                        alert(`❌ Push failed:\n\n${statusData.message}`);
+                        if (btn) btn.style.display = 'block';
+                        if (spinner) spinner.style.display = 'none';
+                    }
+                }
+            } catch (e) {
+                console.error("Push polling error:", e);
+            }
+        }
+        // Diff Generation Polling
+        if (window._activeDiffJobId) {
+            try {
+                const statusRes = await fetch(`/api/system/jobs/${window._activeDiffJobId}`);
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    const loading = document.getElementById('diff-loading');
+                    const results = document.getElementById('diff-results');
+                    const sweepBtn = document.getElementById('btn-sweep-remaining');
+
+                    if (loading) loading.innerText = statusData.message || "Analyzing Git trees...";
+
+                    if (statusData.status === 'completed') {
+                        window._activeDiffJobId = null;
+                        const newFiles = statusData.artifact.files || [];
+                        const targetRepos = statusData.artifact.target_repos;
+
+                        if (!targetRepos) {
+                            window._cachedDiffFiles = newFiles;
+                            if (window._dirtyDiffRepos) window._dirtyDiffRepos.clear();
+                        } else {
+                            let mergedFiles = (window._cachedDiffFiles || []).filter(f => {
+                                const repo = typeof f === 'object' ? f.repo : null;
+                                return !repo || !targetRepos.includes(repo);
+                            });
+                            mergedFiles = mergedFiles.concat(newFiles);
+                            window._cachedDiffFiles = mergedFiles;
+                            if (window._dirtyDiffRepos) targetRepos.forEach(r => window._dirtyDiffRepos.delete(r));
+                        }
+
+                        renderDiffFiles(window._cachedDiffFiles);
+                    } else if (statusData.status === 'failed') {
+                        window._activeDiffJobId = null;
+                        if (loading) loading.style.display = 'none';
+                        if (results) results.innerHTML = `<p style="color: red;">Error analyzing diffs: ${statusData.message}</p>`;
+                    }
+                }
+            } catch (e) {
+                console.error("Diff polling error:", e);
+            }
+        }
+    });
+}
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+    const markRepoDirty = (filepath) => {
+        if (!filepath) return false;
+        const repo = filepath.split('/')[0];
+        if (repo) {
+            if (!window._dirtyDiffRepos) window._dirtyDiffRepos = new Set();
+            window._dirtyDiffRepos.add(repo);
+        }
+        return false;
+    };
+
+    window.inSetu.extensions.Registry.registerUIHook('zone:post-file-save', markRepoDirty);
+    window.inSetu.extensions.Registry.registerUIHook('zone:post-file-delete', markRepoDirty);
+
     window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
         if (data.parentId === 'context' && data.subId === 'diffs') {
             generateDiffs();

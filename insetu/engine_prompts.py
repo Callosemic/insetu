@@ -36,7 +36,14 @@ def compile_prompts_context(manifest, workspace_id=None, **kwargs):
             if os.path.exists(repo_path):
                 final_list = get_valid_workspace_files(repo_path, config)
                 if final_list:
-                    manifest["prompts_context.txt"] = [f"{config['repo_dir']}/{f}" for f in final_list]
+                    manifest["prompts_context.txt"] = {
+                        "files": [f"{config['repo_dir']}/{f}" for f in final_list],
+                        "meta": {
+                            "title": config.get("title", "Prompts"),
+                            "domain": config.get("domain", "Prompts & State"),
+                            "desc": config.get("description", "The Master Ingestion Prompt and CLI templates.")
+                        }
+                    }
 
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):

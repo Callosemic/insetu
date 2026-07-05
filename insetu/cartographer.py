@@ -4,7 +4,32 @@ import subprocess
 import json
 from pathlib import Path
 from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, load_config
+from insetu.hooks import hooks
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
+import uuid
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _background_map(job_id, workspace_id):
+    try:
+        update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
+        map_repositories(workspace_id)
+        update_immediate_job_status(job_id, 'completed', "Cartography complete.", workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Mapping failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("cartographer", "map_task", _background_map)
+
+@hooks.on('post_file_save')
+@hooks.on('post_file_delete')
+def auto_trigger_cartography(filepath, workspace_id=None, **kwargs):
+    """Event Bus listener: Triggers topology mapping on file changes, with recursion protection."""
+    # SHORT-CIRCUIT RECURSION: Ignore our own artifacts and other system text dumps
+    if filepath.endswith('CODE_INDEX.md') or filepath.endswith('_context.txt') or filepath.endswith('_diffs.txt'):
+        return
+
+    job_id = f"map_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "cartographer", "map_task", "{}", workspace_id=workspace_id)
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
     def parse_text_for_comments(text):
@@ -124,13 +149,13 @@ def map_repositories(workspace_id=None):
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
         # Extract declarative managed list from config
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
-
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
 
-        with open(index_path, "w", encoding="utf-8") as f:
-            f.write(header + "\n".join(tree_lines) + footer)
-            
+        rel_index_path = os.path.relpath(index_path, ws_root).replace('\\', '/')
+        from insetu.routes_fs import execute_vfs_save
+        execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer)
+
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if missing > 0:
             print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")

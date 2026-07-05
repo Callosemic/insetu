@@ -21,18 +21,21 @@ def compile_batch(batch, workspace_id=None):
     if not batch_id: return
     includes = batch.get("includes", [])
     out_path = os.path.join(paths["gather_dir"], f"{batch_id}_context.txt")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as out_f:
-        out_f.write(f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n")
-        for inc in includes:
-            inc_path = os.path.join(paths["artifacts_base"], inc)
-            if os.path.exists(inc_path):
-                with open(inc_path, "r", encoding="utf-8") as in_f:
-                    out_f.write(f"--- {inc} ---\n")
-                    out_f.write(in_f.read())
-                    out_f.write("\n\n")
-            else:
-                out_f.write(f"--- {inc} (NOT FOUND) ---\n\n")
+
+    content_lines = []
+    content_lines.append(f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n")
+    for inc in includes:
+        inc_path = os.path.join(paths["artifacts_base"], inc)
+        if os.path.exists(inc_path):
+            with open(inc_path, "r", encoding="utf-8") as in_f:
+                content_lines.append(f"--- {inc} ---\n")
+                content_lines.append(in_f.read())
+                content_lines.append("\n\n")
+        else:
+            content_lines.append(f"--- {inc} (NOT FOUND) ---\n\n")
+
+    from insetu.routes_fs import execute_vfs_save
+    execute_vfs_save(workspace_id, out_path, "".join(content_lines), data={"is_absolute_artifact": True})
 
 @flow_bp.route('/api/<workspace_id>/flow/batches', methods=['GET'])
 def api_flow_batches(workspace_id):
