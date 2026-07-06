@@ -1,7 +1,6 @@
 import { executeWorkspaceMutation, compileContexts, fetchAndCopy, fetchAndDownloadState } from '../app.js';
 import { AppStore } from '../store.js';
-
-const flowScreen = window.inSetu.extensions.Registry?.registerSubTab('context', 'flow', 'Flow');
+const flowScreen = window.inSetu.extensions.Registry?.registerSubTab('context', 'flow', 'Flow', 'flow');
 if (flowScreen) {
     flowScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">

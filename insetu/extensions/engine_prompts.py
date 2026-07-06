@@ -7,10 +7,10 @@ from insetu.utils_core import resolve_workspace_path, get_gather_paths
 
 prompts_bp = Blueprint('prompts', __name__)
 __depends__ = []
-
 @hooks.on('mutate_workspace_config')
 def inject_prompts_config(cfg, workspace_id=None, **kwargs):
     """Dynamically mounts the .insetu internal repository to the workspace matrix."""
+    if "prompts" not in cfg.get("extensions", []): return
     targets = cfg.get("target_repos", [])
     if not any(r.get("repo_dir") == ".insetu" for r in targets):
         targets.append({

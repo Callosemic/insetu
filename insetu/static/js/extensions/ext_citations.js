@@ -199,10 +199,11 @@ if (libraryScreen) {
     };
     const openCitationNotes = async (cslId) => {
         const btn = document.getElementById(`btn-notes-${cslId}`);
-        if (btn) btn.innerText = "⏳...";
+if (btn) btn.innerText = "⏳...";
         try {
-            const res = await fetch('/api/fs/search?q=' + encodeURIComponent(cslId));
-            if (res.ok) {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(cslId));
+if (res.ok) {
                 const data = await res.json();
                 if (data.results && data.results.length === 1) {
                     if (window.viewSourceFile) window.viewSourceFile(data.results[0].path, true);
@@ -231,15 +232,15 @@ const bodyHtml = `
             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                 <select id="attach-repo-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
                 <select id="attach-bucket-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
-                <button id="btn-add-attachment" class="btn-sm" style="background:var(--intent-success); margin: 0;">➕ Add</button>
+                <button id="btn-add-attachment" class="btn-sm" style="background:var(--intent-success); margin: 0;">📌 Pin</button>
+
             </div>
-            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Current Attachments:</label>
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Currently Pinned Repositories:</label>
             <div id="current-attachments-list" style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;"></div>
         `;
-
-        window.inSetu.ui.Factory.createModal({
+window.inSetu.ui.Factory.createModal({
             id: 'lib-attach-dynamic-modal',
-            title: `Attach: <span style="color: var(--intent-highlight); font-family: monospace;">[@${citation.id}]</span>`,
+            title: `Pin to Repo: <span style="color: var(--intent-highlight); font-family: monospace;">[@${citation.id}]</span>`,
             body: bodyHtml
         });
         const repoSelect = document.getElementById('attach-repo-select');
@@ -302,10 +303,9 @@ const renderAttachmentList = () => {
         const list = document.getElementById('current-attachments-list');
         list.replaceChildren();
 const atts = activeAttachCitation ? (activeAttachCitation._attachments || []) : [];
-
         if (atts.length === 0) {
-            list.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No attachments.</span>';
-            return;
+                    list.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">Not pinned to any repository.</span>';
+        return;
         }
 
         atts.forEach((a, idx) => {
@@ -353,9 +353,9 @@ renderAttachmentList();
         } catch(e) {
             alert('Error saving attachment.');
 } finally {
-            btn.innerText = '➕ Add';
+    btn.innerText = '📌 Pin';
 }
-    };
+};
     const renderAuthorPills = () => {
         const { currentEditAuthors } = CitationStore.getState();
         const container = document.getElementById('edit-cit-author-pills');
@@ -664,7 +664,7 @@ if (!confirm(`Are you sure you want to completely delete this citation ([@${acti
                     }
                     return `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: var(--intent-success); margin: 0; padding: 2px 8px;">📥 Import</button>`;
                 }
-                return `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;">📎 Attach</button>`;
+                return `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;">📌 Pin to Repo</button>`;
             })();
 
             const attTags = !isExplore && c._attachments && c._attachments.length > 0
@@ -1252,32 +1252,12 @@ window.addFileToLibrary = addFileToLibrary;
 window.syncDocumentCitations = syncDocumentCitations;
 window.openCitationModal = openCitationModal;
 window.onCitationSearchInput = onCitationSearchInput;
-// Inject Toolbar Buttons natively into Edit Zone
-const tb = document.getElementById('edit-zone-buttons');
-if (tb && !document.getElementById('btn-insert-citation')) {
-    const citeBtn = document.createElement('button');
-    citeBtn.id = 'btn-insert-citation';
-    citeBtn.className = 'btn-sm';
-    citeBtn.style.cssText = 'background: var(--intent-highlight); margin: 0; display: none;';
-    citeBtn.innerText = '📚 Cite';
-    citeBtn.onclick = window.openCitationModal;
-    tb.appendChild(citeBtn);
-
-    const syncBtn = document.createElement('button');
-    syncBtn.id = 'btn-sync-citations';
-    syncBtn.className = 'btn-sm';
-    syncBtn.style.cssText = 'background: var(--intent-warning); margin: 0; display: none;';
-    syncBtn.innerText = '🔄 Sync Refs';
-    syncBtn.onclick = window.syncDocumentCitations;
-    tb.appendChild(syncBtn);
-}
-
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    window.inSetu.extensions.Registry.registerUIHook('zone:modal-edit-toolbar', (data) => {
-        const citeBtn = document.getElementById('btn-insert-citation');
-        const syncBtn = document.getElementById('btn-sync-citations');
-        if (citeBtn) citeBtn.style.display = data.isMarkdown ? 'block' : 'none';
-        if (syncBtn) syncBtn.style.display = data.isMarkdown ? 'block' : 'none';
+    window.inSetu.extensions.Registry.registerUIHook('zone:modal-ext-menu', (data) => {
+        if (data.isMarkdown) {
+            data.menuItems.push({ label: 'Cite', icon: '📚', onClick: window.openCitationModal });
+            data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: window.syncDocumentCitations });
+        }
         return false;
     });
 }
@@ -1303,12 +1283,12 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         // Clean out raw text import console log traces
         const importLog = document.getElementById('lib-import-log');
         if (importLog) importLog.innerText = '';
-        
         // Dismiss standalone active citation modal frames if currently left open
-        const attachModal = document.getElementById('lib-attach-modal');
-        if (attachModal) attachModal.style.display = 'none';
-        
-        const editModal = document.getElementById('edit-citation-modal');
-        if (editModal) editModal.style.display = 'none';
+        if (document.getElementById('lib-attach-dynamic-modal')) {
+            window.inSetu.ui.Factory.closeModal('lib-attach-dynamic-modal');
+        }
+        if (document.getElementById('edit-citation-dynamic-modal')) {
+            window.inSetu.ui.Factory.closeModal('edit-citation-dynamic-modal');
+        }
     });
 }

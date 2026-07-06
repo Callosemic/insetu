@@ -247,18 +247,27 @@ if (!item) return;
 
             if (!success) return alert("Failed to write Markdown to disk.");
         }
-
         // Update DB status
         await fetch(`/api/research/inbox/${inboxId}/disposition`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status })
         });
+
         // Clear preview if resolving active item
         if (ResearchStore.getState().selectedItemId === inboxId) {
             ResearchStore.setState({ selectedItemId: null });
-}
-        await fetchState();
+        }
+
+        // Surgically update UDF State without N+1 backend fetches
+        const currentInbox = ResearchStore.getState().inbox;
+        if (status === 'force_scrape') {
+            const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
+            ResearchStore.setState({ inbox: updatedInbox });
+        } else {
+            const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
+            ResearchStore.setState({ inbox: updatedInbox });
+        }
     };
     // --- DOM BINDINGS ---
     document.getElementById('rs-btn-pause-job').onclick = () => { if (ResearchStore.getState().selectedJobId) handleJobAction(ResearchStore.getState().selectedJobId, 'pause'); };

@@ -1,8 +1,7 @@
 // ext_prompts.js - Prompt Library Extension
 import { createFileCard, buildFileTree, mdeInstance } from '../app.js';
 import { AppStore } from '../store.js';
-
-const promptsScreen = window.inSetu.extensions.Registry?.registerSubTab('context', 'prompts', 'Prompts');
+const promptsScreen = window.inSetu.extensions.Registry?.registerSubTab('context', 'prompts', 'Prompts', 'prompts');
 if (promptsScreen) {
     promptsScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
@@ -162,27 +161,12 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return false;
     });
     // 3. Native Toolbar Button for Prompt Embedding
-    const tb = document.getElementById('edit-zone-buttons');
-    if (tb && !document.getElementById('btn-embed-prompt')) {
-        const embedBtn = document.createElement('button');
-        embedBtn.id = 'btn-embed-prompt';
-        embedBtn.className = 'btn-sm';
-        embedBtn.style.cssText = 'background: var(--intent-primary); margin: 0; display: none;';
-        embedBtn.innerText = '🧩 Embed';
-        embedBtn.onclick = openPromptEmbedModal;
-        tb.appendChild(embedBtn);
-    }
-
-    window.inSetu.extensions.Registry.registerUIHook('zone:modal-edit-toolbar', (data) => {
-        const embedBtn = document.getElementById('btn-embed-prompt');
-        if (embedBtn) embedBtn.style.display = (data.isMarkdown && data.filepath && data.filepath.includes('/prompts/')) ? 'block' : 'none';
-        return false;
-    });
-
-    window.inSetu.extensions.Registry.registerUnloadHook('prompts', () => {
-        const embedBtn = document.getElementById('btn-embed-prompt');
-        if (embedBtn) embedBtn.remove();
-    });
+        window.inSetu.extensions.Registry.registerUIHook('zone:modal-ext-menu', (data) => {
+            if (data.isMarkdown && data.filepath && data.filepath.includes('/prompts/')) {
+                data.menuItems.push({ label: 'Embed Prompt', icon: '🧩', onClick: openPromptEmbedModal });
+            }
+            return false;
+        });
 
     // 4. Inject the copy button onto prompt file cards
     window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {

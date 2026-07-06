@@ -10,6 +10,9 @@ __depends__ = []
 @hooks.on('compile_contexts')
 def compile_flow_batches(manifest, workspace_id=None, **kwargs):
     """Event Bus Hook: Auto-generates workflow batch payloads whenever the OS compiles."""
+    from insetu.utils_core import load_config
+    cfg = load_config(workspace_id)
+    if "flow" not in cfg.get("extensions", []): return
     w_cfg = load_workflows(workspace_id)
     context_batches = w_cfg.get("context_batches", [])
     for batch in context_batches:

@@ -371,54 +371,68 @@ function createTaskCard(task, container) {
     const actions = document.createElement('div');
     actions.className = 'file-actions';
     actions.style.marginTop = '10px';
+    actions.style.display = 'grid';
+    actions.style.gridTemplateColumns = 'repeat(3, 1fr)';
+    actions.style.gap = '5px';
 
+    // 1. Start / Accept Button (Left)
+    const startBtn = document.createElement('button');
+    startBtn.className = 'btn-sm';
+    startBtn.style.gridColumn = '1';
+    startBtn.style.margin = '0';
+    startBtn.style.width = '100%';
     if (task.status === 'open' && !task.isQueue) {
-        const startBtn = document.createElement('button');
-        startBtn.className = 'btn-sm';
-        startBtn.style.background = 'var(--intent-warning)';
         startBtn.innerText = '▶️ Start';
+        startBtn.style.background = 'var(--intent-warning)';
         startBtn.onclick = () => transitionTask(task, 'active');
-        actions.appendChild(startBtn);
+    } else if (task.status === 'closed') {
+        startBtn.innerText = '🔄 Re-open';
+        startBtn.style.background = 'var(--intent-highlight)';
+        startBtn.onclick = () => transitionTask(task, 'open');
+    } else if (task.status !== 'closed' && task.isQueue) {
+        startBtn.innerText = '✅ Accept';
+        startBtn.style.background = 'var(--intent-success)';
+        startBtn.onclick = () => transitionTask(task, 'open', 'todo');
+    } else {
+        startBtn.style.visibility = 'hidden';
     }
+    actions.appendChild(startBtn);
 
-    if (task.status === 'active') {
-        const pauseBtn = document.createElement('button');
-        pauseBtn.className = 'btn-sm';
+    // 2. Pause Button (Middle)
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'btn-sm';
+    pauseBtn.innerText = '⏸️ Pause';
+    pauseBtn.style.gridColumn = '2';
+    pauseBtn.style.margin = '0';
+    pauseBtn.style.width = '100%';
+    if (task.status === 'active' && !task.isQueue) {
         pauseBtn.style.background = 'var(--intent-neutral)';
-        pauseBtn.innerText = '⏸️ Pause';
         pauseBtn.onclick = () => transitionTask(task, 'open');
-        actions.appendChild(pauseBtn);
+    } else {
+        pauseBtn.style.visibility = 'hidden';
     }
+    actions.appendChild(pauseBtn);
+
+    // 3. Close/Resolve Button (Right)
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn-sm';
+    closeBtn.style.gridColumn = '3';
+    closeBtn.style.margin = '0';
+    closeBtn.style.width = '100%';
     if (task.status !== 'closed' && task.status !== 'archived') {
         if (task.isQueue) {
-            const acceptBtn = document.createElement('button');
-            acceptBtn.className = 'btn-sm';
-            acceptBtn.style.background = 'var(--intent-success)';
-            acceptBtn.innerText = '✅ Accept';
-            acceptBtn.onclick = () => transitionTask(task, 'open', 'todo');
-            actions.appendChild(acceptBtn);
-            const archiveBtn = document.createElement('button');
-            archiveBtn.className = 'btn-sm';
-            archiveBtn.style.background = 'var(--intent-neutral)';
-            archiveBtn.innerText = '✅ Resolve';
-            archiveBtn.onclick = () => transitionTask(task, 'closed');
-            actions.appendChild(archiveBtn);
-        } else {
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'btn-sm';
-            closeBtn.style.background = 'var(--intent-success)';
-            closeBtn.innerText = '✅ Close';
+            closeBtn.innerText = '✅ Resolve';
+            closeBtn.style.background = 'var(--intent-neutral)';
             closeBtn.onclick = () => transitionTask(task, 'closed');
-            actions.appendChild(closeBtn);
+        } else {
+            closeBtn.innerText = '✅ Close';
+            closeBtn.style.background = 'var(--intent-success)';
+            closeBtn.onclick = () => transitionTask(task, 'closed');
         }
-    } else if (task.status === 'closed') {
-        const reopenBtn = document.createElement('button');
-        reopenBtn.className = 'btn-sm';
-        reopenBtn.style.background = 'var(--intent-highlight)';
-        reopenBtn.innerText = '🔄 Re-open';
-        reopenBtn.onclick = () => transitionTask(task, 'open');
-        actions.appendChild(reopenBtn);
+    } else {
+        closeBtn.style.visibility = 'hidden';
     }
+    actions.appendChild(closeBtn);
 
     card.appendChild(header);
     card.appendChild(desc);
@@ -427,27 +441,21 @@ function createTaskCard(task, container) {
 }
 async function transitionTask(task, newStatus, newType = null) {
     try {
-
-
         const res = await fetch('/api/tracker/transition', {
-
             method: 'POST',
-
-
             headers: {
                 'Content-Type': 'application/json'
             },
-
             body: JSON.stringify({
                 repo: task.repo,
                 filepath: task.filepath,
                 new_status: newStatus,
                 new_type: newType
             })
-
-
         });
+
         if (res.ok) {
+            const data = await res.json();
             // Surgical DOM Reconciliation
             const cardNode = document.querySelector(`[data-task-id="${task.id}"]`);
             if (cardNode) cardNode.remove();
@@ -456,6 +464,7 @@ async function transitionTask(task, newStatus, newType = null) {
             const stateTask = KanbanStore.getState().tasks.find(t => t.id === task.id);
             if (stateTask) {
                 stateTask.status = newStatus;
+                stateTask.filepath = data.new_filepath;
                 if (newType) {
                     stateTask.ticket_type = newType;
                     stateTask.isTodo = newType === 'todo';

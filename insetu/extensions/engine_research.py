@@ -13,14 +13,16 @@ from insetu.hooks import hooks
 
 research_bp = Blueprint('research', __name__)
 __depends__ = ['ingest']
-
 @hooks.on('system_boot')
 def init_research_db():
     """Executes SQLite schemas securely on boot per the V2 Contract."""
-    conn = get_connection("research")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS research_jobs (
-            id TEXT PRIMARY KEY,
+    from insetu.utils_core import get_all_workspace_ids
+
+    for ws_id in get_all_workspace_ids():
+        conn = get_connection("research", workspace_id=ws_id)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS research_jobs (
+                id TEXT PRIMARY KEY,
             query TEXT,
             provider TEXT,
             status TEXT,

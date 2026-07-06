@@ -52,18 +52,6 @@ export async function executePublish() {
         if (btn) btn.innerText = origText;
     }
 }
-
-// Inject Toolbar Button Natively into File Zone
-const tb = document.getElementById('file-zone-buttons');
-if (tb && !document.getElementById('btn-publish-doc')) {
-    const pubBtn = document.createElement('button');
-    pubBtn.id = 'btn-publish-doc';
-    pubBtn.className = 'btn-sm';
-    pubBtn.style.cssText = 'background: var(--intent-warning); margin: 0; display: none;';
-    pubBtn.innerText = '📄 Publish';
-    pubBtn.onclick = openPublishModal;
-    tb.appendChild(pubBtn);
-}
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
     window.inSetu.extensions.Registry.registerTick('format', 1000, async () => {
         const { activeFormatJobId } = AppStore.getState();
@@ -90,19 +78,12 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         }
     });
 }
-
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    window.inSetu.extensions.Registry.registerUIHook('zone:modal-file-toolbar', (data) => {
+    window.inSetu.extensions.Registry.registerUIHook('zone:modal-ext-menu', (data) => {
         if (data.filepath) AppStore.setState({ currentFormatTarget: data.filepath });
-        const pubBtn = document.getElementById('btn-publish-doc');
-        if (pubBtn) pubBtn.style.display = data.isMarkdown ? 'block' : 'none';
+        if (data.isMarkdown) {
+            data.menuItems.push({ label: 'Publish', icon: '📄', onClick: openPublishModal });
+        }
         return false;
-    });
-}
-
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
-    window.inSetu.extensions.Registry.registerUnloadHook('format', () => {
-        const pubBtn = document.getElementById('btn-publish-doc');
-        if (pubBtn) pubBtn.remove();
     });
 }
