@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import sqlite3
 import threading
@@ -25,7 +26,7 @@ def get_connection(db_name, workspace_id=None):
 
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     artifacts_base = os.path.join(os.path.dirname(cfg_path), "data")
-    db_path = os.path.join(artifacts_base, f"{db_name}.db")
+    db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
 
     # Key the connection by tenant
     cache_key = (workspace_id, db_name)

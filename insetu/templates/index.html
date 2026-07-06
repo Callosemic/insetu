@@ -198,7 +198,7 @@ title="File Content">File Content</h3>
                 const tb = document.getElementById('toolbar-buttons');
                 if (tb) {
                     new ResizeObserver(window.checkToolbarOverflow).observe(tb);
-                    new MutationObserver(window.checkToolbarOverflow).observe(tb, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+                    new MutationObserver(window.checkToolbarOverflow).observe(tb, { childList: true, subtree: true });
                 }
             });
         </script>

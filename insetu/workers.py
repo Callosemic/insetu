@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import time
 import json
@@ -199,7 +200,7 @@ def _metronome_loop():
     from insetu.utils_core import _cwd, load_json_file
     while not _shutdown_event.is_set():
         try:
-            index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+            index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
             workspace_ids = ["default"]
 
             if os.path.exists(index_path):
@@ -284,7 +285,7 @@ def start_workers():
 
         from insetu.utils_core import _cwd, load_json_file
         import os
-        index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+        index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
         workspace_ids = ["default"]
         if os.path.exists(index_path):
                 try:

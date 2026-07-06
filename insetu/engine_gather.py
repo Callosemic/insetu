@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import json
 import datetime
@@ -52,7 +53,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
     content_lines.append(generate_ascii_tree(filepaths) + "\n\n")
     for filepath in filepaths:
         try:
-            with open(os.path.join(repo_path, filepath), 'r', encoding='utf-8') as infile: content = infile.read()
+            with open(Path(repo_path).joinpath(filepath).as_posix(), 'r', encoding='utf-8') as infile: content = infile.read()
             display_domain = domain_str
             content_lines.append(f"\n\n{'='*60}\n>>>NEW FILE :: {repo_dir}/{filepath} | {display_domain}\n{'='*60}\n\n{content}")
         except Exception as e: print(f"Skipping {filepath}: {e}")
@@ -81,7 +82,7 @@ def generate_context_file(workspace_id=None):
 
     if os.path.exists(paths["contexts_dir"]):
         for f in os.listdir(paths["contexts_dir"]):
-            f_path = os.path.join(paths["contexts_dir"], f)
+            f_path = Path(paths["contexts_dir"]).joinpath(f).as_posix()
             if os.path.isfile(f_path):
                 if f_path not in active_ephemerals:
                     try:
@@ -100,7 +101,7 @@ def generate_context_file(workspace_id=None):
         if physical_path:
             repo_path = os.path.abspath(os.path.expanduser(physical_path))
         else:
-            repo_path = os.path.abspath(os.path.join(ws_root, config["repo_dir"]))
+            repo_path = os.path.abspath(Path(ws_root).joinpath(config["repo_dir"]).as_posix())
 
         if not os.path.exists(repo_path): continue
         final_list = get_valid_workspace_files(repo_path, config)
@@ -148,7 +149,7 @@ def generate_context_file(workspace_id=None):
                     b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
                     b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
                     b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
-                    out_path = os.path.join(paths["contexts_dir"], safe_out)
+                    out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
                     write_bucket(out_path, data["files"], b_title.upper(), b_domain, repo_path, config['repo_dir'], workspace_id)
                     manifest[safe_out] = {
                         "files": [f"{config['repo_dir']}/{f}" for f in data["files"]],
@@ -163,7 +164,7 @@ def generate_context_file(workspace_id=None):
                 title = meta.get("title", module.replace('_', ' ').title())
                 domain = meta.get("domain", cfg.get("domain", "Dynamic Modules"))
                 desc = meta.get("description", cfg.get("description", f"Dynamically mapped logic and templates for {title}."))
-                out_path = os.path.join(paths["contexts_dir"], f"{module}_context.txt")
+                out_path = Path(paths["contexts_dir"]).joinpath(f"{module}_context.txt").as_posix()
                 write_bucket(out_path, files, title.upper(), domain, repo_path, config['repo_dir'], workspace_id)
                 manifest[f"{module}_context.txt"] = {
                     "files": [f"{config['repo_dir']}/{f}" for f in files],
@@ -171,7 +172,7 @@ def generate_context_file(workspace_id=None):
                 }
         else:
             safe_out = config.get("out_file", f"{safe_r_dir}_context.txt")
-            out_path = os.path.join(paths["contexts_dir"], safe_out)
+            out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
             r_title = config.get("title", config["repo_dir"].replace('-', ' ').title())
             r_domain = config.get("domain", "Workspaces")
             r_desc = config.get("description", f"Context payload for {r_title}.")
@@ -187,7 +188,7 @@ def generate_context_file(workspace_id=None):
     _VFS_WRITE_QUEUE.join()
 
     for f_name, data in manifest.items():
-        f_path = os.path.join(paths["contexts_dir"], f_name)
+        f_path = Path(paths["contexts_dir"]).joinpath(f_name).as_posix()
         if os.path.exists(f_path):
             data["meta"]["size_bytes"] = os.path.getsize(f_path)
 
@@ -204,7 +205,7 @@ def generate_context_file(workspace_id=None):
                 "meta": {"title": f"📦 {f_name.replace('.txt','')}", "domain": "Quick-Pack Clipboard", "desc": "Ad-hoc context payload.", "size_bytes": size_bytes}
             }
 
-    manifest_out_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_out_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     execute_vfs_save(workspace_id, manifest_out_path, json.dumps(manifest, indent=2), data={"is_absolute_artifact": True})
 
     # Block until the manifest and workflows are flushed so the UI can fetch them instantly
@@ -261,7 +262,7 @@ def api_gather_quick_pack(workspace_id):
     out_lines.append(generate_ascii_tree(matched_files))
     out_lines.append("\n")
     for rel_path in sorted(matched_files):
-        abs_path = os.path.join(ws_root, rel_path)
+        abs_path = Path(ws_root).joinpath(rel_path).as_posix()
         try:
             with open(abs_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -274,7 +275,7 @@ def api_gather_quick_pack(workspace_id):
     safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
     filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
     paths = get_gather_paths(workspace_id)
-    out_path = os.path.join(paths["contexts_dir"], filename)
+    out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
 
     from insetu.routes_fs import execute_vfs_save
     execute_vfs_save(workspace_id, out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
@@ -283,7 +284,7 @@ def api_gather_quick_pack(workspace_id):
     from insetu.workers import register_ephemeral_artifact
     register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
     # Eagerly inject into the manifest using SSOT caching functions
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest = load_json_file(manifest_path, {})
     size_bytes = len("\n".join(out_lines).encode('utf-8'))
     manifest[filename] = {
@@ -318,7 +319,7 @@ def api_gather_quick_pack_clear(workspace_id):
     conn.commit()
 
     paths = get_gather_paths(workspace_id)
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest = load_json_file(manifest_path, {})
     keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
     if keys_to_remove:

@@ -48,8 +48,7 @@ window.inSetu.stores.Bridge = BridgeStore;
 export function renderRepoPins(state) {
     const container = document.getElementById('repo-pins');
     if (!container) return;
-    container.innerHTML = '';
-
+    container.replaceChildren();
     const lbl = document.createElement('span');
     lbl.innerText = "📌 Repos:";
     lbl.style.cssText = "font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap;";
@@ -97,12 +96,10 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
-
 function syncDOMToBridgeState(state) {
     const targetFilesDiv = document.getElementById('target-files');
     if (!targetFilesDiv) return;
-    targetFilesDiv.innerHTML = '';
-
+    targetFilesDiv.replaceChildren();
     state.detectedFiles.forEach((file, index) => {
         const div = document.createElement('div');
         div.className = 'checkbox-row';

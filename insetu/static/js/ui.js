@@ -148,8 +148,8 @@ export const UIFactory = {
             getBucketsFn
         } = config;
 
-        container.innerHTML = '';
-        const wrap = document.createElement('div');
+    container.replaceChildren();
+    const wrap = document.createElement('div');
         wrap.style.cssText = "display: flex; align-items: center; flex-wrap: wrap; gap: 6px;";
 
         const lbl = document.createElement('span');

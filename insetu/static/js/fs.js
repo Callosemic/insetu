@@ -112,13 +112,11 @@ function renderMarkdownPreview() {
         // Auto-link URLs inside the frontmatter
         const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: var(--intent-primary); text-decoration: underline;">$1</a>');
         return '<pre class="yaml-frontmatter">' + linkedP1 + '</pre>';
-});
-// Sanitize raw text vectors against script tag injection using DOMPurify
+    });
+    // Sanitize raw text vectors against script tag injection using DOMPurify
 let htmlContent = marked.parse(text);
 if (typeof DOMPurify !== 'undefined') {
     htmlContent = DOMPurify.sanitize(htmlContent, { ADD_ATTR: ['target'] });
-} else {
-    htmlContent = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '⚠️ [Script Blocked]');
 }
 preview.innerHTML = htmlContent;
 
@@ -492,7 +490,7 @@ function openMoveModal() {
     }, 50);
 }
 export function mountFolderBrowser(container, onSelect, initialPath = []) {
-    container.innerHTML = '';
+    container.replaceChildren();
     const allFiles = new Set();
     const { manifest } = AppStore.getState();
     Object.values(manifest).forEach(obj => {
@@ -500,10 +498,8 @@ export function mountFolderBrowser(container, onSelect, initialPath = []) {
     });
     const fileTree = buildFileTree(Array.from(allFiles));
     let currentPath = initialPath;
-
     const render = () => {
-        container.innerHTML = '';
-
+        container.replaceChildren();
         // Breadcrumbs & Up Navigation
         const headerDiv = document.createElement('div');
         headerDiv.style.cssText = 'display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 10px;';
@@ -859,7 +855,7 @@ export function loadGlobalFS() {
 function renderGlobalFSLevel() {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     const container = document.getElementById('global-fs-list');
-    container.innerHTML = '';
+    container.replaceChildren();
     const btnNewFolder = document.getElementById('btn-new-folder');
     if (btnNewFolder) {
         btnNewFolder.innerText = gbPath.length === 0 ? '+ Repo' : '+ Folder';
@@ -949,7 +945,7 @@ function filterGlobalFS(query) {
         }
         clearBtn.style.display = 'block';
         // We intentionally keep the header visible so users know what directory they are searching within
-        container.innerHTML = '';
+        container.replaceChildren();
         // Scope search to the current active directory level
         const gbPath = AppStore.getState().globalBrowsePath || [];
         const currentPrefix = gbPath.length > 0 ? gbPath.join('/') + '/' : '';
@@ -1446,8 +1442,9 @@ function filterBrowse(query) {
             renderBrowseLevel();
             return;
         }
+
         clearBtn.style.display = 'block';
-        container.innerHTML = '';
+        container.replaceChildren();
 
         const terms = q.split(/\s+/).filter(t => t);
         const matches = currentBrowseManifest.filter(f => {
@@ -1496,8 +1493,8 @@ function renderBrowseLevel() {
     const { currentBrowsePath, browserConfig } = AppStore.getState();
     const cbPath = currentBrowsePath || [];
     const container = document.getElementById('browse-list');
-    container.innerHTML = '';
-// Header & Breadcrumbs
+    container.replaceChildren();
+    // Header & Breadcrumbs
     const headerDiv = document.createElement('div');
     headerDiv.style.display = 'flex';
     headerDiv.style.gap = '10px';
@@ -1859,7 +1856,7 @@ export async function executeDeepLinkSearch() {
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
 
-        container.innerHTML = '';
+        container.replaceChildren();
         if (data.results.length === 0) {
             container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No files found matching contents.</span>';
             return;
@@ -1901,10 +1898,9 @@ function executeLinkSearch(query) {
         container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
         return;
     }
-
     const results = globalManifest.filter(path => path.toLowerCase().includes(q)).slice(0, 50);
 
-    container.innerHTML = '';
+    container.replaceChildren();
     if (results.length === 0) {
         container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No markdown files found.</span>';
         return;

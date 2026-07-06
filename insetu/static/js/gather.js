@@ -33,7 +33,6 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
-
 export async function loadGatherBatches() {
     const container = document.getElementById('gather-list');
     container.innerHTML = '<div class="spinner" style="display:block;">Loading batches...</div>';
@@ -50,7 +49,7 @@ export async function loadGatherBatches() {
                 profileDir: data.profile_dir || ".insetu/profiles/default"
             }
         });
-        container.innerHTML = '';
+        container.replaceChildren();
         if (!data.batches || data.batches.length === 0) {
             container.innerHTML = '<p style="color: var(--text-muted);">No context batches defined in workflows.json.</p>';
             return;

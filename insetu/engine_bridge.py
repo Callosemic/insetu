@@ -345,7 +345,7 @@ def execute_bridge_sync(workspace_id, data):
                     all_known = [r.get("repo_dir") for r in load_config(workspace_id).get("target_repos", []) if r.get("repo_dir")]
                     if explicit_repo in all_known:
                         pass
-                    elif explicit_repo and os.path.isdir(os.path.join(ws_root, explicit_repo)):
+                    elif explicit_repo and os.path.isdir(Path(ws_root).joinpath(explicit_repo).as_posix()):
                         print(f"  [⚡] Auto-Resolved: '{explicit_repo}' exists physically.\nAllowing genesis patch.")
                     elif len(allowed_repos) == 1:
                         target_file = f"{allowed_repos[0]}/{norm_target}"
@@ -377,7 +377,7 @@ def execute_bridge_sync(workspace_id, data):
                     failed_diff_cands = []
 
                     for cand in candidates:
-                        cand_abs = os.path.join(ws_root, cand)
+                        cand_abs = Path(ws_root).joinpath(cand).as_posix()
                         try:
                             with open(cand_abs, 'r', encoding='utf-8') as cf:
                                 temp_content = cf.read()

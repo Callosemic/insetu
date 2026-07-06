@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import sys
 import json
@@ -33,7 +34,7 @@ def get_system_config(workspace_id):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     core_engines = {"bridge", "gather"}
     available = []
-    extensions_dir = os.path.join(script_dir, "extensions")
+    extensions_dir = Path(script_dir).joinpath("extensions").as_posix()
     if os.path.exists(extensions_dir):
         for file in os.listdir(extensions_dir):
             if file.startswith("engine_") and file.endswith(".py"):
@@ -86,7 +87,7 @@ def api_job_status(job_id):
 
 @system_bp.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():
-    index_path = os.path.join(utils_core._cwd, ".insetu", "workspaces.json")
+    index_path = Path(utils_core._cwd).joinpath(".insetu", "workspaces.json").as_posix()
 
     if request.method == 'GET':
         return jsonify(utils_core.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))

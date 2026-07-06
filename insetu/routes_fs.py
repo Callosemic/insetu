@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import queue
 import threading
@@ -12,22 +13,38 @@ fs_bp = Blueprint('fs', __name__)
 _VFS_WRITE_QUEUE = queue.Queue()
 _VFS_WORKER_THREAD = None
 _VFS_SHUTDOWN_SIGNAL = threading.Event()
-
 def _vfs_commit_worker():
     """Consumes write payloads sequentially off-thread to guard the Flask event loop."""
     while not _VFS_SHUTDOWN_SIGNAL.is_set():
         try:
             # Short timeout allows the loop to periodically check for shutdown signals
             task = _VFS_WRITE_QUEUE.get(timeout=1.0)
+
             if task is None:
                 _VFS_WRITE_QUEUE.task_done()
                 break
 
             workspace_id, filepath, content, data = task
             try:
-                execute_vfs_save_physical(workspace_id, filepath, content, data)
+                action = data.get("action", "save")
+                if action == "delete":
+                    resolved_path = resolve_workspace_path(filepath, workspace_id)
+                    if os.path.exists(resolved_path):
+                        os.remove(resolved_path)
+                    _trigger_post_mutation_hooks(workspace_id, filepath)
+                elif action == "move":
+                    dest_path = data.get("dest_path")
+                    resolved_src = resolve_workspace_path(filepath, workspace_id)
+                    resolved_dest = resolve_workspace_path(dest_path, workspace_id)
+                    if os.path.exists(resolved_src):
+                        os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
+                        import shutil
+                        shutil.move(resolved_src, resolved_dest)
+                    _trigger_post_mutation_hooks(workspace_id, filepath, dest_path)
+                else:
+                    execute_vfs_save_physical(workspace_id, filepath, content, data)
             except Exception as e:
-                print(f"❌ [VFS Pipeline] Background commit failed for {filepath}: {e}")
+                print(f"❌ [VFS Pipeline] Background operation failed for {filepath}: {e}")
             finally:
                 _VFS_WRITE_QUEUE.task_done()
         except queue.Empty:
@@ -53,52 +70,29 @@ def _trigger_post_mutation_hooks(workspace_id, old_filepath, new_filepath=None):
     hooks.emit_background('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
     if new_filepath:
         hooks.emit_background('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
-
 def execute_vfs_move(workspace_id, filepath, dest_path):
-    resolved_src = resolve_workspace_path(filepath, workspace_id)
-    resolved_dest = resolve_workspace_path(dest_path, workspace_id)
-
-    if not os.path.exists(resolved_src):
-            return {"error": "Source file not found"}, 404
-
-    os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
-    import shutil
-    try:
-            shutil.move(resolved_src, resolved_dest)
-    except Exception as e:
-            return {"error": f"OS Move Failed: {str(e)}"}, 500
-
-    _trigger_post_mutation_hooks(workspace_id, filepath, dest_path)
-    return {"status": "success", "new_filepath": dest_path}, 200
-
+    _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": dest_path}))
+    return {"status": "accepted", "message": f"File move queued."}, 202
 def execute_vfs_archive(workspace_id, filepath):
+    from pathlib import Path
     resolved_path = resolve_workspace_path(filepath, workspace_id)
-    if not os.path.exists(resolved_path):
-            return {"error": "File not found"}, 404
+    archive_dir = Path(resolved_path).parent / "archived"
+    new_path = archive_dir / Path(resolved_path).name
 
-    archive_dir = os.path.join(os.path.dirname(resolved_path), "archived")
-    os.makedirs(archive_dir, exist_ok=True)
-    new_path = os.path.join(archive_dir, os.path.basename(resolved_path))
-    import shutil
+    # Determine relative path for the new destination
+    from insetu.utils_core import get_workspace_physics
+    _, ws_root, _ = get_workspace_physics(workspace_id)
     try:
-            shutil.move(resolved_path, new_path)
-    except Exception as e:
-            return {"error": f"OS Move Failed: {str(e)}"}, 500
+        rel_dest = os.path.relpath(new_path, ws_root)
+    except ValueError:
+        rel_dest = new_path
 
-    _trigger_post_mutation_hooks(workspace_id, filepath)
-    return {"status": "success"}, 200
+    _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": rel_dest}))
+    return {"status": "accepted", "message": f"File archive queued."}, 202
 
 def execute_vfs_delete(workspace_id, filepath):
-    resolved_path = resolve_workspace_path(filepath, workspace_id)
-    if not os.path.exists(resolved_path):
-            return {"error": "File not found"}, 404
-    try:
-            os.remove(resolved_path)
-    except Exception as e:
-            return {"error": f"OS Remove Failed: {str(e)}"}, 500
-
-    _trigger_post_mutation_hooks(workspace_id, filepath)
-    return {"status": "success"}, 200
+    _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "delete"}))
+    return {"status": "accepted", "message": f"File deletion queued."}, 202
 
 
 @fs_bp.route('/api/<workspace_id>/fs/move', methods=['POST'])
@@ -165,7 +159,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
         elif data.get("is_new_repo"):
                 from insetu.utils_core import get_workspace_physics
                 _, ws_root, _ = get_workspace_physics(workspace_id)
-                resolved_path = os.path.join(ws_root, filepath)
+                resolved_path = Path(ws_root).joinpath(filepath).as_posix()
         else:
                 resolved_path = resolve_workspace_path(filepath, workspace_id)
 
@@ -182,8 +176,8 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 if os.path.exists(resolved_target_dir):
                         import shutil
                         for f in os.listdir(resolved_target_dir):
-                                if f.startswith(prefix) and os.path.isfile(os.path.join(resolved_target_dir, f)):
-                                        shutil.move(os.path.join(resolved_target_dir, f), os.path.join(resolved_archive, f))
+                                if f.startswith(prefix) and os.path.isfile(Path(resolved_target_dir).joinpath(f).as_posix()):
+                                        shutil.move(Path(resolved_target_dir).joinpath(f).as_posix(), Path(resolved_archive).joinpath(f).as_posix())
 
         is_new = not os.path.exists(resolved_path)
 

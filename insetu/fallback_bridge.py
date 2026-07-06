@@ -1,3 +1,4 @@
+from pathlib import Path
 # insetu/fallback_bridge.py
 
 import os
@@ -290,7 +291,7 @@ def fs_list():
         if item.startswith('__') or item == '.git':
             continue
             
-        if os.path.isdir(os.path.join(abs_dir, item)):
+        if os.path.isdir(Path(abs_dir).joinpath(item).as_posix()):
             dirs.append(item)
         else:
             files.append(item)
@@ -333,7 +334,7 @@ def api_emergency_dump():
                     
                 for f in files:
                     if f.endswith(('.py', '.js', '.html', '.css')):
-                        filepath = os.path.join(root, f)
+                        filepath = Path(root).joinpath(f).as_posix()
                         rel_path = os.path.relpath(filepath, script_dir)
                         try:
                             with open(filepath, 'r', encoding='utf-8') as inf:

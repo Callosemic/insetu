@@ -33,9 +33,9 @@ def get_workspace_physics(workspace_id=None):
     if not workspace_id:
         workspace_id = sniff_tenant_id()
 
-    local_insetu_dir = os.path.join(_cwd, ".insetu")
-    default_config = os.path.join(local_insetu_dir, "config.json")
-    index_path = os.path.join(local_insetu_dir, "workspaces.json")
+    local_insetu_dir = Path(_cwd).joinpath(".insetu").as_posix()
+    default_config = Path(local_insetu_dir).joinpath("config.json").as_posix()
+    index_path = Path(local_insetu_dir).joinpath("workspaces.json").as_posix()
 
     # 1. Environment Variable Override (Overrides everything)
     env_config = os.environ.get("INSETU_CONFIG")
@@ -69,7 +69,7 @@ def get_workspace_physics(workspace_id=None):
 
     if cfg_path:
         if not os.path.isabs(os.path.expanduser(cfg_path)):
-            resolved_cfg = os.path.abspath(os.path.join(local_insetu_dir, cfg_path))
+            resolved_cfg = os.path.abspath(Path(local_insetu_dir).joinpath(cfg_path).as_posix())
         else:
             resolved_cfg = os.path.abspath(os.path.expanduser(cfg_path))
 
@@ -92,17 +92,17 @@ def get_gather_paths(workspace_id=None):
     """Dynamically calculates artifact physics for the requested tenant."""
     cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
     workspace_dir = os.path.dirname(cfg_path)
-    artifacts_base = os.path.join(workspace_dir, "data")
+    artifacts_base = Path(workspace_dir).joinpath("data").as_posix()
 
     paths = {
         "config_path": cfg_path,
         "workspace_root": ws_root,
         "workflows_path": wf_path,
         "artifacts_base": artifacts_base,
-        "contexts_dir": os.path.join(artifacts_base, "contexts"),
-        "prompts_dir": os.path.join(workspace_dir, "prompts"),
-        "diffs_dir": os.path.join(artifacts_base, "diffs"),
-        "gather_dir": os.path.join(artifacts_base, "workflows")
+        "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix(),
+        "prompts_dir": Path(workspace_dir).joinpath("prompts").as_posix(),
+        "diffs_dir": Path(artifacts_base).joinpath("diffs").as_posix(),
+        "gather_dir": Path(artifacts_base).joinpath("workflows").as_posix()
     }
 
     os.makedirs(paths["contexts_dir"], exist_ok=True)
@@ -212,7 +212,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
 
                     # Drop an empty anchor if the folder was completely barren
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
-                        with open(os.path.join(repo_path, '.gitkeep'), 'w') as f: pass
+                        with open(Path(repo_path).joinpath('.gitkeep').as_posix(), 'w') as f: pass
             except Exception:
                 pass
         try:
@@ -312,13 +312,13 @@ def get_available_contexts(workspace_id=None):
                     sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
                     expected_contexts.add(f"contexts/{sub_out}")
                 else:
-                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
+                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
                     if os.path.exists(dyn_dir):
                         for module in os.listdir(dyn_dir):
-                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_contexts.add(f"contexts/{module}_context.txt")
     # Read the active manifest for dynamic/ephemeral contexts
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest_data = load_json_file(manifest_path, {})
     for key in manifest_data.keys():
         if key.endswith('_context.txt'):
@@ -455,7 +455,7 @@ def search_workspace_files(workspace_id, query):
     import json
     paths = get_gather_paths(workspace_id)
 
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     md_files = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, 'r', encoding='utf-8') as f:

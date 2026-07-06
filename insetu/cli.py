@@ -65,37 +65,37 @@ WantedBy=default.target
     else:
         print(f"❌ Unknown service action: {action}. Use install|uninstall|start|stop|restart|status.")
 def scaffold_profiles(cwd):
-    base_dir = os.path.join(cwd, ".insetu")
+    base_dir = Path(cwd).joinpath(".insetu").as_posix()
     is_new_hub = not os.path.exists(base_dir)
     os.makedirs(base_dir, exist_ok=True)
   
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    defaults_dir = os.path.join(script_dir, "defaults")
+    defaults_dir = Path(script_dir).joinpath("defaults").as_posix()
     
     # Scaffold the default config
-    target_config = os.path.join(base_dir, "config.json")
+    target_config = Path(base_dir).joinpath("config.json").as_posix()
     if not os.path.exists(target_config):
-        src_config = os.path.join(defaults_dir, "config.json")
+        src_config = Path(defaults_dir).joinpath("config.json").as_posix()
         if os.path.exists(src_config):
             shutil.copy(src_config, target_config)
 
     # Scaffold workflows
-    target_workflows = os.path.join(base_dir, "workflows.json")
+    target_workflows = Path(base_dir).joinpath("workflows.json").as_posix()
     if not os.path.exists(target_workflows):
         with open(target_workflows, "w", encoding="utf-8") as f:
             json.dump({"context_batches": []}, f, indent=2)
 
     # Scaffold the switchboard locally
-    target_ws = os.path.join(base_dir, "workspaces.json")
+    target_ws = Path(base_dir).joinpath("workspaces.json").as_posix()
     if not os.path.exists(target_ws):
-        src_ws = os.path.join(defaults_dir, "workspaces.json")
+        src_ws = Path(defaults_dir).joinpath("workspaces.json").as_posix()
         if os.path.exists(src_ws):
             shutil.copy(src_ws, target_ws)
             
     # Scaffold the Git safeguard
-    target_gitignore = os.path.join(base_dir, ".gitignore")
+    target_gitignore = Path(base_dir).joinpath(".gitignore").as_posix()
     if not os.path.exists(target_gitignore):
-        src_gitignore = os.path.join(defaults_dir, "gitignore.txt")
+        src_gitignore = Path(defaults_dir).joinpath("gitignore.txt").as_posix()
         if os.path.exists(src_gitignore):
             shutil.copy(src_gitignore, target_gitignore)
 

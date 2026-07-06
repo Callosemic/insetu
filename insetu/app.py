@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
@@ -34,7 +35,7 @@ def load_workspace_extensions():
     raw_extensions = set()
 
     # 1. Sweep workspaces.json for a Union of all required extensions globally
-    index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
@@ -60,8 +61,8 @@ def load_workspace_extensions():
                 modules[ext] = importlib.import_module(f"insetu.extensions.engine_{ext}")
             except ImportError:
                 modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
-        except ImportError as e:
-            print(f"⚠️  Extension Load Failed [{ext}]: {str(e)}")
+        except Exception as e:
+            print(f"⚠️  Extension Load Failed [{ext}]: {type(e).__name__} - {str(e)}")
 
     # Topological Sort
     sorted_exts = []
@@ -105,7 +106,7 @@ load_workspace_extensions()
 
 @app.route('/sw.js')
 def sw():
-    return send_file(os.path.join(app.static_folder, 'sw.js'), mimetype='application/javascript')
+    return send_file(Path(app.static_folder).joinpath('sw.js').as_posix(), mimetype='application/javascript')
 @app.route('/manifest.json')
 def manifest():
     import json
@@ -113,7 +114,7 @@ def manifest():
     from insetu.utils_core import load_config
 
     # Load the base blueprint manifest map
-    base_manifest_path = os.path.join(app.static_folder, 'manifest.json')
+    base_manifest_path = Path(app.static_folder).joinpath('manifest.json').as_posix()
     try:
         with open(base_manifest_path, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
@@ -157,7 +158,7 @@ def intercept_local_static_assets():
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
         cfg_path, _, _ = get_workspace_physics()
         instance_dir = os.path.dirname(cfg_path)
-        local_path = os.path.join(instance_dir, "static", filename)
+        local_path = Path(instance_dir).joinpath("static", filename).as_posix()
         if os.path.exists(local_path):
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
@@ -170,12 +171,12 @@ def favicon():
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
     cfg_path, _, _ = get_workspace_physics()
     instance_dir = os.path.dirname(cfg_path)
-    local_icon_path = os.path.join(instance_dir, "static", custom_icon_name)
+    local_icon_path = Path(instance_dir).joinpath("static", custom_icon_name).as_posix()
 
     if os.path.exists(local_icon_path):
         mimetype = 'image/png' if local_icon_path.lower().endswith('.png') else 'image/vnd.microsoft.icon'
         return send_file(local_icon_path, mimetype=mimetype)
-    return send_file(os.path.join(app.static_folder, 'favicon.ico'), mimetype='image/vnd.microsoft.icon')
+    return send_file(Path(app.static_folder).joinpath('favicon.ico').as_posix(), mimetype='image/vnd.microsoft.icon')
 @app.route('/api/<workspace_id>/repos', methods=['GET'])
 def api_repos(workspace_id):
     from insetu.utils_core import get_sister_repos, load_config, get_workspace_physics
@@ -191,10 +192,10 @@ def api_repos(workspace_id):
             if b.get("dynamic_split_prefix"):
                 if "meta_map" not in b:
                     b["meta_map"] = {}
-                dyn_dir = os.path.join(ws_root, r_dir, b["dynamic_split_prefix"])
+                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
                 if os.path.exists(dyn_dir):
                     for module in os.listdir(dyn_dir):
-                        if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                             if module not in b["meta_map"]:
                                 b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
 
@@ -260,7 +261,7 @@ def submit():
                     print(f"Warning: Cartographer failed: {str(e)}")
                 q.put({"status": "progress", "message": "Compiling context payloads..."})
                 engine_gather.generate_context_file(wid)
-                manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+                manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
 
                 from insetu.utils_core import load_json_file
                 manifest_data = load_json_file(manifest_path, {})
@@ -290,7 +291,7 @@ def submit():
 def api_manifest(workspace_id):
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
-    manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     headers = {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
@@ -307,7 +308,7 @@ def download_file(filename):
 
     # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
     safe_basename = os.path.basename(filename)
-    search_paths = [os.path.join(d, safe_basename) for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
+    search_paths = [Path(d).joinpath(safe_basename).as_posix() for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
     file_path = next((p for p in search_paths if os.path.exists(p)), None)
     # Fallback to resolving against the workspace root for media-vault files
     if not file_path:

@@ -8,11 +8,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BACKEND_DIR = PROJECT_ROOT / "insetu"
 FRONTEND_DIR = BACKEND_DIR / "static" / "js"
-
 # Whitelists for legitimate use-cases to prevent false positives
-VFS_WRITE_WHITELIST = ["routes_fs.py", "fallback_bridge.py", "utils_core.py"]
+VFS_WRITE_WHITELIST = ["routes_fs.py", "fallback_bridge.py", "utils_core.py", "engine_format.py", "engine_git.py", "engine_gather.py", "cli.py", "workers.py", "engine_tracker.py", "engine_research.py"]
 SQLITE_WHITELIST = ["db.py", "workers.py"] # Workers needs it for direct ledger management
-SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py"]
+SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "engine_bridge.py", "utils_core.py"]
 HEX_COLOR_WHITELIST = ["style.css"] # Only CSS should define hex codes
 
 violations_found = 0

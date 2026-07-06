@@ -7,6 +7,7 @@ import {
     buildFileTree
 } from './fs.js';
 import { BridgeStore } from './bridge.js';
+import { AppStore } from './store.js';
 import './ui.js';
 
 function getFlattenedBuckets(repoDir, includeSystem = false) {
@@ -80,6 +81,7 @@ window.inSetu.extensions.Registry = {
     utils: {
         _timers: {},
         debounce: function(key, callback, delay = 300) {
+            // utils.debounce internal reset
             clearTimeout(this._timers[key]);
             this._timers[key] = setTimeout(callback, delay);
         },
@@ -478,8 +480,7 @@ async function loadWorkspaces() {
             document.getElementById('workspaces-header').style.display = 'block';
             const list = document.getElementById('workspaces-list');
             list.style.display = 'flex';
-            list.innerHTML = '';
-
+            list.replaceChildren();
             Object.entries(data.workspaces).forEach(([key, ws]) => {
                 const btn = document.createElement('button');
                 const isActive = activeWs === key; // Check against frontend local state
@@ -663,6 +664,10 @@ window.alert = function(msg) {
         document.body.appendChild(c);
         return c;
     })();
+    // Anti-spam constraint: Prevent stacking identical active toasts
+    if (Array.from(container.children).some(t => t.innerText === msg || t.textContent === msg)) {
+        return;
+    }
 
     const toast = document.createElement('div');
     toast.style.cssText = 'background: var(--input-bg); color: var(--text); border-left: 4px solid var(--intent-danger); padding: 12px 15px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); font-family: var(--font-mono); font-size: 0.85rem; max-width: 400px; white-space: pre-wrap; word-break: break-word; pointer-events: auto; transition: opacity 0.3s; cursor: pointer;';
@@ -728,11 +733,10 @@ export async function executeWorkspaceMutation(url, payload, options = {}) {
         }
     }
 }
-
 export function renderContextFiles(files, msg) {
     document.getElementById('result-message').style.display = 'none';
     const downloadContainer = document.getElementById('context-download-links');
-    downloadContainer.innerHTML = '';
+    downloadContainer.replaceChildren();
     if (files && files.length > 0) {
         const categories = {};
         const { categoryOrder, targetConfigs } = AppStore.getState();
@@ -1045,7 +1049,6 @@ async function fullRefresh() {
 /* ==========================================================================
    BRIDGE LOGIC (Extracted to bridge.js)
    ========================================================================== */
-import { AppStore } from './store.js';
 let HIDDEN_OUTPUTS = [];
 
 const initialWs = AppStore.getState().activeWorkspace || 'default';
