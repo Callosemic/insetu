@@ -9,11 +9,10 @@ from insetu.workers import submit_immediate_job, update_immediate_job_status, re
 import uuid
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-def _background_map(job_id, workspace_id):
+def _background_map(job_id, workspace_id, target_repos=None):
     try:
         update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
-        map_repositories(workspace_id)
+        map_repositories(workspace_id, target_repos=target_repos)
         update_immediate_job_status(job_id, 'completed', "Cartography complete.", workspace_id=workspace_id)
     except Exception as e:
         update_immediate_job_status(job_id, 'failed', f"Mapping failed: {str(e)}", workspace_id=workspace_id)
@@ -28,8 +27,12 @@ def auto_trigger_cartography(filepath, workspace_id=None, **kwargs):
     if filepath.endswith('CODE_INDEX.md') or filepath.endswith('_context.txt') or filepath.endswith('_diffs.txt'):
         return
 
+    import json
+    repo = filepath.split('/')[0] if '/' in filepath else filepath
+    args_json = json.dumps({"target_repos": [repo]})
+
     job_id = f"map_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "cartographer", "map_task", "{}", workspace_id=workspace_id)
+    submit_immediate_job(job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id)
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
     def parse_text_for_comments(text):
@@ -52,7 +55,7 @@ def extract_existing_comments(index_path, repo_path=None):
     git_comments = {}
     if repo_path:
         try:
-            rel_index = os.path.relpath(index_path, repo_path).replace('\\', '/')
+            rel_index = os.path.relpath(index_path, repo_path)
             res = subprocess.run(['git', 'show', f'HEAD:{rel_index}'], capture_output=True, text=True, cwd=repo_path)
             if res.returncode == 0:
                 git_comments = parse_text_for_comments(res.stdout)
@@ -114,24 +117,29 @@ def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path="
         lines.extend(render_ascii_tree(node[key], comment_map, managed_dirs, prefix + extension, next_path))
 
     return lines
-def map_repositories(workspace_id=None):
-    print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
+def map_repositories(workspace_id=None, silent=True, target_repos=None):
+    if not silent: print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
     cfg = load_config(workspace_id)
     cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
-    target_repos = cfg.get("target_repos", [])
-    for config in target_repos:
+    all_configs = cfg.get("target_repos", [])
+    for config in all_configs:
         repo_dir = config["repo_dir"]
+        if target_repos and repo_dir not in target_repos:
+            continue
+        from pathlib import Path
+        ws_root_path = Path(ws_root).resolve()
+
         physical_path = config.get("physical_path")
         if physical_path:
-            repo_path = os.path.abspath(os.path.expanduser(physical_path))
+            repo_path = Path(physical_path).expanduser().resolve()
         else:
-            repo_path = os.path.join(ws_root, repo_dir)
+            repo_path = (ws_root_path / repo_dir).resolve()
 
-        index_path = os.path.join(repo_path, "docs", "CODE_INDEX.md") if config.get("is_core_chassis") else os.path.join(repo_path, "CODE_INDEX.md")
-        if not os.path.exists(repo_path):
-            print(f"⚠️  Skipping {repo_dir}: Directory not found.")
+        index_path = (repo_path / "docs" / "CODE_INDEX.md") if config.get("is_core_chassis") else (repo_path / "CODE_INDEX.md")
+        if not repo_path.exists():
+            if not silent: print(f"⚠️  Skipping {repo_dir}: Directory not found.")
             continue
-        print(f"🗺️  Cartographing {repo_dir}...")
+        if not silent: print(f"🗺️  Cartographing {repo_dir}...")
 
         # Pass 1: Preserve (checking disk and Git history)
         comments = extract_existing_comments(index_path, repo_path)
@@ -151,18 +159,22 @@ def map_repositories(workspace_id=None):
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
+        try:
+            rel_index_path = index_path.relative_to(ws_root_path).as_posix()
+        except ValueError:
+            rel_index_path = index_path.as_posix()
 
-        rel_index_path = os.path.relpath(index_path, ws_root).replace('\\', '/')
         from insetu.routes_fs import execute_vfs_save
+
         execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer)
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if missing > 0:
-            print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
+            if not silent: print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
         else:
-            print(f"  └─ ✅ Index updated. Perfect documentation parity.")
+            if not silent: print(f"  └─ ✅ Index updated. Perfect documentation parity.")
 
-    print("\n🎉 Cartography complete!\n")
+    if not silent: print("\n🎉 Cartography complete!\n")
 
 if __name__ == "__main__":
     map_repositories()

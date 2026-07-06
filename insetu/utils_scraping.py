@@ -1,8 +1,7 @@
 # This file is deprecated. Logic has moved to engine_ingest.py
 # per Step 1 of the V2 Architecture Migration.
-
 def extract_markdown_from_url(*args, **kwargs):
-    from insetu.engine_ingest import extract_markdown_from_url as extract
+    from insetu.extensions.engine_ingest import extract_markdown_from_url as extract
     return extract(*args, **kwargs)
 
 def _deprecated_stub():

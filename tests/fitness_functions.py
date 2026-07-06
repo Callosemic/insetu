@@ -40,7 +40,6 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 for kw in node.keywords:
                     if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and 'w' in kw.value.value:
                         report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save instead.")
-
         # 2. I/O Block Ban: Prevent subprocess.run inside routes
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             if node.func.value.id == 'subprocess' and node.func.attr in ('run', 'Popen', 'call'):
@@ -48,6 +47,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
                 elif self.filename not in SUBPROCESS_WHITELIST:
                     report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, f"Subprocess call outside of designated engines.")
+
+            # VFS Async Deletion/Move Guardrail
+            if node.func.value.id == 'os' and node.func.attr in ('remove', 'rmdir'):
+                if self.filename not in VFS_WRITE_WHITELIST:
+                    report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous os.remove/rmdir detected. Route through the async VFS queue.")
+            if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
+                if self.filename not in VFS_WRITE_WHITELIST:
+                    report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
+
+        # Pathlib Migration Mandate (os.path.join)
+        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
+            if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr == 'join':
+                report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, "os.path.join detected. Migrate to pathlib.Path.")
 
         self.generic_visit(node)
 
@@ -107,6 +119,11 @@ def check_javascript_files():
     hex_color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}\b')
     clear_timeout_pattern = re.compile(r'\bclearTimeout\s*\(')
 
+    # New Rules
+    dom_annihilation_pattern = re.compile(r'\.innerHTML\s*=\s*[\'"][\'"]')
+    floating_global_pattern = re.compile(r'^let\s+[a-zA-Z0-9_]+\s*=')
+    naive_xss_pattern = re.compile(r'\.replace\(/<script')
+
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
             if file.endswith(".js"):
@@ -141,12 +158,23 @@ def check_javascript_files():
                         # Simple heuristic: warn if hex colors are used in UI injection strings
                         if "style=" in line or "cssText" in line:
                             report_violation("THEME_TOKENS", filepath, line_num, f"Hardcoded HEX color found: {line.strip()}. Use CSS intent variables (e.g., var(--btn)).")
-
                     # 5. Debounce Mandate
                     if clear_timeout_pattern.search(line):
                         # Whitelist the core utility declaration itself and the legacy panic fallback
                         if "utils.debounce" not in line and "panicTimeout" not in line:
                             report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
+
+                    # 6. Surgical DOM Annihilation Ban
+                    if dom_annihilation_pattern.search(line):
+                        report_violation("SURGICAL_DOM_MANDATE", filepath, line_num, "DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.")
+
+                    # 7. Floating Globals / UDF Bleed
+                    if is_extension and floating_global_pattern.match(line.strip()):
+                        report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
+
+                    # 8. Naive XSS Regex Ban
+                    if naive_xss_pattern.search(line):
+                        report_violation("XSS_VULNERABILITY", filepath, line_num, "Naive regex script stripping detected. Use DOMPurify.sanitize().")
 
 if __name__ == "__main__":
     print("============================================================")

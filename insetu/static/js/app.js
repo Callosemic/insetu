@@ -281,7 +281,7 @@ async function bootExtensions() {
         for (const ext of window.ACTIVE_EXTENSIONS) {
             try {
                 // Dynamically load the module native to the browser
-                await import(`/static/js/ext_${ext}.js`);
+                await import(`/static/js/extensions/ext_${ext}.js`);
                 console.log(`🔌 Loaded UI Extension: ${ext}`);
             } catch (e) {
                 console.error(`⚠️ Failed to load UI extension: ${ext}`, e);
@@ -746,6 +746,12 @@ export function renderContextFiles(files, msg) {
             let finalCat = meta.domain;
             let finalDesc = meta.desc;
             let finalTitle = meta.title;
+            let sizeStr = "";
+            if (meta.size_bytes !== undefined) {
+                const kb = Math.round(meta.size_bytes / 1024);
+                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+            }
+
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                 const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
                 if (extMeta) {
@@ -760,6 +766,7 @@ export function renderContextFiles(files, msg) {
                 filename: file,
                 displayName: finalTitle,
                 description: finalDesc,
+                sizeStr: sizeStr,
                 isFS: false
             });
         });

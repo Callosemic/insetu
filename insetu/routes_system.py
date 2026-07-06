@@ -32,13 +32,14 @@ def get_system_config(workspace_id):
         data = load_config(workspace_id)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     core_engines = {"bridge", "gather"}
-
     available = []
-    for file in os.listdir(script_dir):
-        if file.startswith("engine_") and file.endswith(".py"):
-            ext_name = file.replace("engine_", "").replace(".py", "")
-            if ext_name not in core_engines:
-                available.append(ext_name)
+    extensions_dir = os.path.join(script_dir, "extensions")
+    if os.path.exists(extensions_dir):
+        for file in os.listdir(extensions_dir):
+            if file.startswith("engine_") and file.endswith(".py"):
+                ext_name = file.replace("engine_", "").replace(".py", "")
+                if ext_name not in core_engines:
+                    available.append(ext_name)
 
     data["_available_extensions"] = sorted(available)
     return data

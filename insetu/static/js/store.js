@@ -26,6 +26,12 @@ export const AppStore = createStore(
             currentPushDiffFile: '',
             currentFormatTarget: '',
             currentPromptsPath: [],
+            activeFormatJobId: null,
+            activeSweepJobId: null,
+            activePushJobId: null,
+            activeDiffJobId: null,
+            dirtyDiffRepos: new Set(["ALL"]),
+            cachedDiffFiles: null,
 
             resetState: () => set({
                 globalBrowsePath: [],
@@ -34,7 +40,13 @@ export const AppStore = createStore(
                 currentPushRepo: '',
                 currentPushDiffFile: '',
                 currentFormatTarget: '',
-                currentPromptsPath: []
+                currentPromptsPath: [],
+                activeFormatJobId: null,
+                activeSweepJobId: null,
+                activePushJobId: null,
+                activeDiffJobId: null,
+                dirtyDiffRepos: new Set(["ALL"]),
+                cachedDiffFiles: null
             })
         })),
         { name: 'AppStore' }

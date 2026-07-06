@@ -15,6 +15,7 @@ def register_callback(ext_name, callback_name, func):
     """Extensions register their background functions here to be triggered by the Metronome."""
     _callbacks[f"{ext_name}:{callback_name}"] = func
 def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", 
+
     jitter_ms=0, workspace_id=None):
     """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
     if not workspace_id:
@@ -23,9 +24,10 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}",
             if request:
                 workspace_id = request.headers.get('X-Workspace-ID')
         except RuntimeError:
+
             pass
     workspace_id = workspace_id or "default"
-
+    _init_worker_schema(workspace_id)
     conn = get_connection("workers", workspace_id=workspace_id)
     now = time.time()
     try:
@@ -41,18 +43,18 @@ INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, sta
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, interval_ms, jitter_ms, now, args_json))
     conn.commit()
-
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
     if not workspace_id:
         try:
             from flask import request
+
             if request:
                 workspace_id = request.headers.get('X-Workspace-ID')
         except RuntimeError:
             pass
     workspace_id = workspace_id or "default"
-
+    _init_worker_schema(workspace_id)
     conn = get_connection("workers", workspace_id=workspace_id)
     now = time.time()
     try:
@@ -194,18 +196,19 @@ def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_j
             pass
 def _metronome_loop():
     """The unified Event Loop dispatcher supporting dynamic multi-tenancy."""
-    from insetu.utils_core import _cwd
+    from insetu.utils_core import _cwd, load_json_file
     while not _shutdown_event.is_set():
         try:
             index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
             workspace_ids = ["default"]
+
             if os.path.exists(index_path):
                 try:
-                    with open(index_path, 'r', encoding='utf-8') as f:
-                        w_data = json.load(f)
-                        workspace_ids = list(w_data.get("workspaces", {}).keys())
-                        if "default" not in workspace_ids:
-                            workspace_ids.append("default")
+                    w_data = load_json_file(index_path, {})
+
+                    workspace_ids = list(w_data.get("workspaces", {}).keys())
+                    if "default" not in workspace_ids:
+                        workspace_ids.append("default")
                 except Exception:
                     pass
 
@@ -227,67 +230,79 @@ def _metronome_loop():
             pass
 
         time.sleep(1.0) # Tick pace
+def _init_worker_schema(workspace_id="default"):
+        conn = get_connection("workers", workspace_id=workspace_id)
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                        id TEXT PRIMARY KEY,
+                        ext_name TEXT,
+                        callback_name TEXT,
+                        interval_ms INTEGER,
+                        jitter_ms INTEGER DEFAULT 0,
+                        next_run_at REAL,
+                        status TEXT,
+                        args_json TEXT
+                )
+        """)
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS ephemeral_artifacts (
+                        id TEXT PRIMARY KEY,
+                        filepath TEXT,
+                        module_owner TEXT,
+                        created_at REAL,
+                        expires_at REAL
+                )
+        """)
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS immediate_jobs (
+                        id TEXT PRIMARY KEY,
+                        ext_name TEXT,
+                        callback_name TEXT,
+                        status TEXT,
+                        status_message TEXT,
+                        artifact_json TEXT,
+                        created_at REAL,
+                        updated_at REAL,
+                        args_json TEXT
+                )
+        """)
+        try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN jitter_ms INTEGER DEFAULT 0")
+                conn.commit()
+        except Exception:
+                pass
+        conn.execute("UPDATE jobs SET status='pending' WHERE status='running'")
+        conn.execute("""
+                INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+                VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
+        """)
+        conn.commit()
+
 @hooks.on('system_boot')
 def start_workers():
-    global _executor, _metronome_thread
+        global _executor, _metronome_thread
 
-    conn = get_connection("workers")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            ext_name TEXT,
-            callback_name TEXT,
-            interval_ms INTEGER,
-            jitter_ms INTEGER DEFAULT 0,
-            next_run_at REAL,
-            status TEXT,
-            args_json TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS ephemeral_artifacts (
-            id TEXT PRIMARY KEY,
-            filepath TEXT,
-            module_owner TEXT,
-            created_at REAL,
-            expires_at REAL
-        )
-    """)
+        from insetu.utils_core import _cwd, load_json_file
+        import os
+        index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+        workspace_ids = ["default"]
+        if os.path.exists(index_path):
+                try:
+                        w_data = load_json_file(index_path, {})
+                        workspace_ids = list(w_data.get("workspaces", {}).keys())
+                        if "default" not in workspace_ids:
+                                workspace_ids.append("default")
+                except Exception:
+                        pass
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS immediate_jobs (
-            id TEXT PRIMARY KEY,
-            ext_name TEXT,
-            callback_name TEXT,
-            status TEXT,
-            status_message TEXT,
-            artifact_json TEXT,
-            created_at REAL,
-            updated_at REAL,
-            args_json TEXT
-        )
-    """)
+        for ws_id in workspace_ids:
+                _init_worker_schema(ws_id)
 
-    try:
-        conn.execute("ALTER TABLE jobs ADD COLUMN jitter_ms INTEGER DEFAULT 0")
-        conn.commit()
-    except Exception:
-        pass
-    # Heal the ledger: Demote any jobs left 'running' from a prior kernel panic back to 'pending'
-    conn.execute("UPDATE jobs SET status='pending' WHERE status='running'")
-
-    # Register the universal garbage collector (ticks every 5 minutes)
-    conn.execute("""
-        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-        VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
-    """)
-    conn.commit()
-
-    _executor = ThreadPoolExecutor(max_workers=3)
-    _shutdown_event.clear()
-    _metronome_thread = threading.Thread(target=_metronome_loop, daemon=True)
-    _metronome_thread.start()
-    print("⚙️  Stateless Worker Metronome Online.")
+        _executor = ThreadPoolExecutor(max_workers=3)
+        _shutdown_event.clear()
+        _metronome_thread = threading.Thread(target=_metronome_loop, daemon=True)
+        _metronome_thread.start()
+        print("⚙️  Stateless Worker Metronome Online.")
 
 @hooks.on('system_shutdown')
 def stop_workers():

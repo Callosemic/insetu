@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import re
 import io
@@ -226,6 +227,38 @@ def apply_block_in_memory(content, block, silent=False):
             print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
 
         return False, content
+
+    # --- ATOMIC S/R HEALER (Duplication Prevention) ---
+    # Look ahead in the file to see if the REPLACE block contains trailing context
+    # that already exists in the file. If so, absorb it into the SEARCH block 
+    # to make the transaction deterministic and atomic.
+    tail_f_idx = match_idx + actual_span
+    r_non_empty = [l.strip() for l in replace_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
+    f_tail_non_empty = [l.strip() for l in file_lines[tail_f_idx:] if l.strip()]
+
+    best_overlap = 0
+    max_check = min(15, len(r_non_empty), len(f_tail_non_empty))
+
+    for i in range(1, max_check + 1):
+        if r_non_empty[-i:] == f_tail_non_empty[:i]:
+            s_non_empty = [l.strip() for l in search_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
+            if r_non_empty[-i:] != s_non_empty[-i:]:
+                best_overlap = i
+
+    if best_overlap > 0:
+        matched_f = 0
+        f_absorb_idx = tail_f_idx
+        while matched_f < best_overlap and f_absorb_idx < len(file_lines):
+            if file_lines[f_absorb_idx].strip():
+                matched_f += 1
+            f_absorb_idx += 1
+
+        search_lines.extend(file_lines[tail_f_idx:f_absorb_idx])
+        actual_span += (f_absorb_idx - tail_f_idx)
+        block["search"] = "\n".join(search_lines)
+        if not silent: 
+            print(f"  └─ 🛡️  Atomic Heal: Expanded SEARCH block to absorb {best_overlap} hallucinated trailing lines.")
+
     llm_base_indent = len(search_lines[baseline_s_idx]) - len(search_lines[baseline_s_idx].lstrip()) if baseline_s_idx != -1 else 0
     actual_base_indent = len(file_lines[matched_baseline_f_idx]) - len(file_lines[matched_baseline_f_idx].lstrip()) if matched_baseline_f_idx != -1 else 0
     # 1. Calculate File Step (Source of Truth)
@@ -293,7 +326,7 @@ def execute_bridge_sync(workspace_id, data):
                 if target_file not in active_files or not blocks: continue
 
                 # Hardware Lock: Protect Bootloader and Lifeboat
-                norm_target = target_file.replace('\\', '/')
+                norm_target = target_file
                 if norm_target.endswith('cli.py') or norm_target.endswith('fallback_bridge.py'):
                     print(f"  [!] TRANSACTION ABORTED: '{target_file}' is hardware-locked.\nThe bootloader and lifeboat must be edited manually.")
                     print("." * 30)
@@ -316,7 +349,7 @@ def execute_bridge_sync(workspace_id, data):
                         print(f"  [⚡] Auto-Resolved: '{explicit_repo}' exists physically.\nAllowing genesis patch.")
                     elif len(allowed_repos) == 1:
                         target_file = f"{allowed_repos[0]}/{norm_target}"
-                        norm_target = target_file.replace('\\', '/')
+                        norm_target = target_file
                         explicit_repo = allowed_repos[0]
                         resolved_path = resolve_workspace_path(target_file, workspace_id)
                         print(f"  [⚡] Auto-Resolved: Genesis patch missing repo anchor. Defaulting to '{explicit_repo}'.")
@@ -332,7 +365,7 @@ def execute_bridge_sync(workspace_id, data):
                     basename = os.path.basename(target_file)
                     all_files = get_omniscient_workspace_files(workspace_id, allowed_repos)
                     candidates = [cand_rel for f, cand_rel in all_files if f == basename]
-                    target_norm = target_file.replace('\\', '/')
+                    target_norm = target_file
 
                     def grade_candidate(c):
                         if c == target_norm or c.endswith("/" + target_norm):
@@ -394,7 +427,7 @@ def execute_bridge_sync(workspace_id, data):
                                 continue
 
                 abs_target = os.path.abspath(resolved_path)
-                display_path = os.path.relpath(abs_target, ws_root).replace('\\', '/')
+                display_path = os.path.relpath(abs_target, ws_root)
                 print(f"Targeting: {display_path} ({len(blocks)} chunks mapped)")
 
                 if os.path.exists(resolved_path):

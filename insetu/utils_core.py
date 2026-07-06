@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import json
 import subprocess
@@ -214,44 +215,61 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                         with open(os.path.join(repo_path, '.gitkeep'), 'w') as f: pass
             except Exception:
                 pass
-
         try:
             result = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], 
-                                    capture_output=True, text=True, check=True, cwd=repo_path)
+                                            capture_output=True, text=True, check=True, cwd=repo_path)
             git_files = set(result.stdout.splitlines())
         except Exception:
-            git_files = set(os.path.relpath(os.path.join(r, f), repo_path).replace("\\", "/") 
-                            for r, _, fs in os.walk(repo_path) for f in fs)
+            git_files = set()
+            for p in Path(repo_path).rglob('*'):
+                    if p.is_file():
+                        try:
+                            git_files.add(p.relative_to(repo_path).as_posix())
+                        except ValueError:
+                            pass
     else:
         # "media-vault" or future custom archive types bypass Git entirely
-        git_files = set(os.path.relpath(os.path.join(r, f), repo_path).replace("\\", "/") 
-                        for r, _, fs in os.walk(repo_path) for f in fs)
+        git_files = set()
+        for p in Path(repo_path).rglob('*'):
+            if p.is_file():
+                    try:
+                        git_files.add(p.relative_to(repo_path).as_posix())
+                    except ValueError:
+                        pass
 
     valid_files = set()
+    repo_p = Path(repo_path)
+
     for file in git_files:
-        norm_path = file.replace("\\", "/")
+        norm_path = file
         if norm_path.startswith("./"): norm_path = norm_path[2:]
         if config.get("prefix") and not norm_path.startswith(config.get("prefix")): continue
-        if not os.path.isfile(os.path.join(repo_path, norm_path)): continue
-        if os.path.basename(norm_path).lower() in ignore_files: continue
+
+        target_f = repo_p / norm_path
+        if not target_f.is_file(): continue
+        if target_f.name.lower() in ignore_files: continue
+
         if config.get("apply_ignore"):
             if any(norm_path.startswith(exc) for exc in config.get("ignore_exceptions", [])):
-                pass
+                    pass
             else:
-                if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
-                if any(pattern in norm_path for pattern in ignore_patterns): continue
+                    if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
+                    if any(pattern in norm_path for pattern in ignore_patterns): continue
+
         # Always allow standard empty-directory anchors
-        if os.path.basename(norm_path).lower() in (".gitkeep", ".keep"):
+        if target_f.name.lower() in (".gitkeep", ".keep"):
             valid_files.add(norm_path)
             continue
-        ext = os.path.splitext(norm_path)[1].lower()
+
+        ext = target_f.suffix.lower()
 
         # Merge global extensions with repo-specific extensions
         allowed_exts = set(live_cfg.get("include_extensions", []) + config.get("exts", []))
         if ext in allowed_exts: valid_files.add(norm_path)
 
     for forced_file in config.get("force_include", []):
-        if os.path.exists(os.path.join(repo_path, forced_file)): valid_files.add(forced_file.replace("\\", "/"))
+        if (repo_p / forced_file).exists(): 
+            valid_files.add(forced_file)
 
     return sorted(list(valid_files))
 def generate_text_chunks(blocks, chunk_limit=400000):
@@ -318,97 +336,115 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     SSOT OMNISCIENT SWEEP
     Centralizes all filesystem scanning loops to safely protect critical system 
     nodes (like .git) without duplicating walk arrays across controllers.
-    """
+"""
+    from pathlib import Path
+
     cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    ws_root_path = Path(ws_root).resolve()
     live_cfg = load_config(workspace_id)
     ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
     managed_dirs = set(live_cfg.get("managed_dirs", []))
 
-    search_roots = [os.path.dirname(cfg_path)]
+    search_roots = [Path(cfg_path).parent.resolve()]
     for repo in allowed_repos:
-        repo_path = os.path.join(ws_root, repo)
-        if os.path.exists(repo_path):
+        repo_path = ws_root_path / repo
+        if repo_path.exists():
             search_roots.append(repo_path)
-    search_roots = list(set(os.path.abspath(r) for r in search_roots))
+    search_roots = list(set(search_roots))
 
     candidates = []
     for s_root in search_roots:
-        for root, dirs, files in os.walk(s_root):
+        for root, dirs, files in os.walk(str(s_root)):
             dirs[:] = [d for d in dirs if (not d.startswith('.') or d in managed_dirs) and d not in ignore_dirs]
             for f in files:
-                cand_abs = os.path.abspath(os.path.join(root, f)).replace('\\', '/')
-                cand_rel = os.path.relpath(cand_abs, ws_root).replace('\\', '/')
+                cand_abs = Path(root) / f
+                try:
+                    cand_rel = cand_abs.relative_to(ws_root_path).as_posix()
+                except ValueError:
+                    cand_rel = cand_abs.as_posix()
                 candidates.append((f, cand_rel))
     return candidates
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
 def resolve_workspace_path(path, workspace_id=None):
-    _, workspace_root, _ = get_workspace_physics(workspace_id)
+    from pathlib import Path
+    import re
 
-    norm_path = path.replace('\\', '/')
+    _, workspace_root, _ = get_workspace_physics(workspace_id)
+    ws_root_path = Path(workspace_root).resolve()
+
+    norm_path = path
     # Prevent absolute path traversal containment breaches
-    if os.path.isabs(norm_path):
-        resolved_abs = os.path.abspath(norm_path)
-        # Check if the target is explicitly wrapped inside an authorized physical target repository
+    if Path(norm_path).is_absolute():
+        resolved_abs = Path(norm_path).resolve()
+        # Check if the target is explicitly wrapped inside an 
+        # authorized physical target repository
         cfg = load_config(workspace_id)
         for repo in cfg.get("target_repos", []):
             p_path = repo.get("physical_path")
             if p_path:
-                allowed_base = os.path.abspath(os.path.expanduser(p_path))
-                if resolved_abs.startswith(allowed_base):
-                    return resolved_abs
-        # Fall back to locking down to the general workspace sandbox framework
-        if resolved_abs.startswith(os.path.abspath(workspace_root)):
-            return resolved_abs
-        # Disallow arbitrary system breakout traversals; anchor back inside the root container
-        norm_path = os.path.relpath(resolved_abs, workspace_root).replace('\\', '/')
+                allowed_base = Path(p_path).expanduser().resolve()
+                if str(resolved_abs).startswith(str(allowed_base)):
+                    return resolved_abs.as_posix()
 
-    import re
+        # Fall back to locking down to the general workspace sandbox framework
+        if str(resolved_abs).startswith(str(ws_root_path)):
+            return resolved_abs.as_posix()
+
+        # Disallow arbitrary system breakout traversals; anchor back inside the root container
+        try:
+            norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
+        except ValueError:
+            norm_path = resolved_abs.name
+
     # Strip out malicious directory traversal operators safely
-    norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
+    norm_path = re.sub(r'\.\.(?=/|$)', '', str(norm_path))
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
     parts = [p for p in norm_path.split('/') if p]
     if not parts:
-        return path
+        return Path(path).as_posix()
 
     # Mount Point Protocol: Check for physical_path overrides
     cfg = load_config(workspace_id)
     for repo in cfg.get("target_repos", []):
         if parts[0] == repo.get("repo_dir"):
             physical_path = repo.get("physical_path")
-            expanded_base = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else os.path.abspath(os.path.join(workspace_root, repo.get("repo_dir")))
-            
-            # EDGE CASE FIX: "Repo Name == Top Level Folder Name" (e.g. insetu/insetu/app.py)
-            path_stripped = os.path.abspath(os.path.join(expanded_base, *parts[1:])) if len(parts) > 1 else expanded_base
-            path_kept = os.path.abspath(os.path.join(expanded_base, *parts))
-            if os.path.exists(path_kept) and not os.path.exists(path_stripped):
-                return path_kept
+            if physical_path:
+                expanded_base = Path(physical_path).expanduser().resolve()
+            else:
+                expanded_base = (ws_root_path / repo.get("repo_dir")).resolve()
 
-            # GENESIS PATCH AMBIGUITY HEALER:
-            # If neither exists (new file), evaluate which path fragment requires creating the fewest new
-            # subdirectories by tracing backwards to the deepest existing directory.
-            if not os.path.exists(path_kept) and not os.path.exists(path_stripped):
+            # EDGE CASE FIX: "Repo Name == Top Level Folder Name" (e.g. insetu/insetu/app.py)
+            path_stripped = expanded_base.joinpath(*parts[1:]).resolve() if len(parts) > 1 else expanded_base
+            path_kept = expanded_base.joinpath(*parts).resolve()
+
+            if path_kept.exists() and not path_stripped.exists():
+                return path_kept.as_posix()
+
+            # GENESIS PATCH AMBIGUITY HEALER
+            if not path_kept.exists() and not path_stripped.exists():
                 def get_unmatched_distance(target_path):
-                    d_path = os.path.dirname(target_path)
+                    d_path = target_path.parent
                     distance = 0
-                    while d_path and d_path.startswith(expanded_base) and len(d_path) >= len(expanded_base):
-                        if os.path.isdir(d_path):
+                    while d_path and str(d_path).startswith(str(expanded_base)) and len(str(d_path)) >= len(str(expanded_base)):
+                        if d_path.is_dir():
                             return distance
                         distance += 1
-                        d_path = os.path.dirname(d_path)
+                        d_path = d_path.parent
                     return distance
+
                 dist_kept = get_unmatched_distance(path_kept)
                 dist_stripped = get_unmatched_distance(path_stripped)
-                # Only use path_kept if it explicitly maps closer to an existing physical tree
 
                 if dist_kept < dist_stripped:
-                    return path_kept
-                return path_stripped
+                    return path_kept.as_posix()
+                return path_stripped.as_posix()
 
-            return path_stripped
+            return path_stripped.as_posix()
+
     # Mathematically resolve against dynamic root
-    return os.path.abspath(os.path.join(workspace_root, norm_path))
+    return ws_root_path.joinpath(norm_path).resolve().as_posix()
 
 
 def search_workspace_files(workspace_id, query):

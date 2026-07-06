@@ -51,12 +51,15 @@ def load_workspace_extensions():
         cfg = load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
-
     # DAG Node Resolution
     modules = {}
     for ext in list(raw_extensions):
         try:
-            modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
+            # Try the extensions folder first, fallback to core chassis
+            try:
+                modules[ext] = importlib.import_module(f"insetu.extensions.engine_{ext}")
+            except ImportError:
+                modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
         except ImportError as e:
             print(f"⚠️  Extension Load Failed [{ext}]: {str(e)}")
 

@@ -251,12 +251,11 @@ function toggleModalMode() {
     const preview = document.getElementById('modal-preview');
     const editZone = document.getElementById('edit-zone-buttons');
     const editDivider = document.getElementById('edit-zone-divider');
-
     const { ext, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(currentModalFile);
     const dlBtn = document.getElementById('modal-dl-btn');
     if (dlBtn && !currentModalIsMemoryOnly) {
-        dlBtn.dataset.filename = filename.split('/').pop();
-        dlBtn.dataset.fetchUrl = `/download/${filename}`;
+        dlBtn.dataset.filename = currentModalFile.split('/').pop();
+        dlBtn.dataset.fetchUrl = `/download/${currentModalFile}`;
     }
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
@@ -359,6 +358,26 @@ document.getElementById('modal-text').addEventListener('input', (e) => {
         }
     }
 });
+function refreshActiveFileViews(oldPath, newPath = null) {
+    updateManifestState(oldPath, newPath);
+
+    if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
+        loadGlobalFS();
+    }
+    if (document.getElementById('st-prompts') && document.getElementById('st-prompts').classList.contains('active')) {
+        if (window.renderPromptsTab) window.renderPromptsTab();
+    }
+
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        window.inSetu.extensions.Registry.executeUIHook('zone:post-file-delete', oldPath);
+        if (newPath) {
+            window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', newPath);
+        } else {
+            window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
+        }
+    }
+}
+
 function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
     Object.values(manifest).forEach(obj => {
@@ -417,8 +436,17 @@ async function saveModalFile(autoSave = false) {
         }
     });
 }
-function copyFromModal() {
-    const text = document.getElementById('modal-text').value;
+async function copyFromModal() {
+    let text = document.getElementById('modal-text').value;
+    if (currentModalFile && currentModalFile.includes('/prompts/')) {
+        try {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            const res = await fetch(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(currentModalFile));
+            if (res.ok) text = await res.text();
+        } catch (e) {
+            console.warn("Failed to resolve prompt for copy", e);
+        }
+    }
     navigator.clipboard.writeText(text).then(() => {
         const btn = document.querySelector('#file-modal button[style*="10b981"]');
         const origText = btn.innerText;
@@ -430,16 +458,16 @@ function copyFromModal() {
 }
 function openMoveModal() {
     const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Destination Path (including filename):</label>
-        <input type="text" id="move-dest-path" value="${currentModalFile}" placeholder="e.g. repo/new_folder/my_file.py" style="width: 100%; padding: 8px; margin-bottom: 15px; font-family: monospace; box-sizing: border-box;">
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Select Target Directory:</label>
-        <div id="move-browser-container" style="border: 1px solid var(--border); border-radius: 4px; height: 250px; overflow-y: auto; background: var(--pane-bg); padding: 10px;">
+        <div style="flex-shrink: 0; padding-bottom: 15px; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
+            <input type="text" id="move-dest-path" value="${currentModalFile}" placeholder="e.g. repo/new_folder/my_file.py" style="width: 100%; padding: 8px; font-family: monospace; box-sizing: border-box; margin: 0;">
+        </div>
+        <div id="move-browser-container" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 10px;">
             <div class="spinner" style="display:block;">Loading folders...</div>
         </div>
     `;
     window.inSetu.ui.Factory.createModal({
         id: 'move-modal',
-        title: 'Move File',
+        title: 'Move File to...',
         body: bodyHtml,
         actions: [
             { label: '🚚 Move File', style: 'primary', id: 'execute-move-btn', onClick: async (e, modal) => {
@@ -448,15 +476,22 @@ function openMoveModal() {
             }}
         ]
     });
+    let initialPathParts = [];
+    if (currentModalFile) {
+        const parts = currentModalFile.split('/').filter(p => p);
+        parts.pop();
+// remove filename
+        initialPathParts = parts;
+    }
 
     setTimeout(() => {
         mountFolderBrowser(document.getElementById('move-browser-container'), (selectedPath) => {
             const filename = currentModalFile ? currentModalFile.split('/').pop() : '';
             document.getElementById('move-dest-path').value = selectedPath ? (filename ? `${selectedPath}/${filename}` : selectedPath) : filename;
-        });
+        }, initialPathParts);
     }, 50);
 }
-export function mountFolderBrowser(container, onSelect) {
+export function mountFolderBrowser(container, onSelect, initialPath = []) {
     container.innerHTML = '';
     const allFiles = new Set();
     const { manifest } = AppStore.getState();
@@ -464,7 +499,7 @@ export function mountFolderBrowser(container, onSelect) {
         if (obj.files) obj.files.forEach(f => allFiles.add(f));
     });
     const fileTree = buildFileTree(Array.from(allFiles));
-    let currentPath = [];
+    let currentPath = initialPath;
 
     const render = () => {
         container.innerHTML = '';
@@ -534,11 +569,7 @@ async function executeMove(modalId = 'move-modal') {
 
             document.getElementById('file-modal').style.display = 'none';
 
-            updateManifestState(currentModalFile, destPath);
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', currentModalFile);
-            }
+            refreshActiveFileViews(currentModalFile, destPath);
         }
     });
 }
@@ -552,11 +583,7 @@ async function archiveModalFile() {
         onSuccess: () => {
             const oldPath = currentModalFile;
             document.getElementById('file-modal').style.display = 'none';
-            updateManifestState(oldPath);
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
-            }
+            refreshActiveFileViews(oldPath);
         }
     });
 }
@@ -570,11 +597,7 @@ async function deleteModalFile() {
         onSuccess: () => {
             const oldPath = currentModalFile;
             document.getElementById('file-modal').style.display = 'none';
-            updateManifestState(oldPath);
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
-            }
+            refreshActiveFileViews(oldPath);
         }
     });
 }
@@ -653,7 +676,10 @@ async function downloadFromModal() {
             a.remove();
         } else {
             const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+            let fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+            if (currentModalFile && currentModalFile.includes('/prompts/')) {
+                fetchUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(currentModalFile)}`;
+            }
             await downloadFile(fetchUrl, currentModalFile.split('/').pop());
         }
     } catch (e) {
@@ -717,9 +743,12 @@ if (!fileInfo.isSource && manifest[fileInfo.filename]) {
     dlBtn.draggable = true;
     dlBtn.classList.add('ui-draggable-export');
     const activeWs = AppStore.getState().activeWorkspace || 'default';
-    dlBtn.dataset.fetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-    dlBtn.dataset.filename = fileInfo.isSource ?
-fileInfo.filename.split('/').pop() : fileInfo.filename;
+    let dlFetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+    if (fileInfo.filename && fileInfo.filename.includes('/prompts/')) {
+        dlFetchUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fileInfo.filename)}`;
+    }
+    dlBtn.dataset.fetchUrl = dlFetchUrl;
+    dlBtn.dataset.filename = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
 
     dlBtn.onclick = async (e) => {
         e.stopPropagation();
@@ -758,10 +787,14 @@ fileInfo.filename.split('/').pop() : fileInfo.filename;
     header.appendChild(titleSpan);
     header.appendChild(actions);
     card.appendChild(header);
-    if (fileInfo.description) {
+    if (fileInfo.description || fileInfo.sizeStr) {
         const desc = document.createElement('div');
         desc.className = 'file-desc';
-        desc.innerText = fileInfo.description;
+        if (fileInfo.sizeStr) {
+            desc.innerHTML = `<div style="display: flex; justify-content: space-between;"><span>${fileInfo.description || ''}</span><span style="font-family: monospace; opacity: 0.7;">${fileInfo.sizeStr}</span></div>`;
+        } else {
+            desc.innerText = fileInfo.description;
+        }
         card.appendChild(desc);
     }
 
@@ -1057,20 +1090,32 @@ async function saveNewFile(modalId = 'new-file-modal') {
         btnId: btn ? btn.id : null,
         loadingText: 'Saving...',
         onSuccess: async () => {
-            if (btn) btn.innerText = "Syncing Tree...";
-            await compileContexts();
-
-            const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-            if (mRes.ok) setContextManifest(await mRes.json());
-
             if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else document.getElementById(modalId).style.display = 'none';
+
+            // Surgically inject into the local manifest state to avoid full re-compilation
+            const { manifest } = AppStore.getState();
+            const repoDir = filepath.split('/')[0];
+            const defaultBucket = `${repoDir}_context.txt`;
+
+            if (manifest[defaultBucket]) {
+                if (!manifest[defaultBucket].files.includes(filepath)) {
+                    manifest[defaultBucket].files.push(filepath);
+                }
+            } else {
+                // Create the bucket if it's a completely new repo
+                manifest[defaultBucket] = {
+                    files: [filepath],
+                    meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
+                };
+            }
+            AppStore.setState({ manifest: manifest });
 
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
                 loadGlobalFS();
             }
             if (document.getElementById('st-prompts') && document.getElementById('st-prompts').classList.contains('active')) {
-                if (window.switchSubTab) window.switchSubTab('prompts');
+                if (window.renderPromptsTab) window.renderPromptsTab();
             }
         }
     });
@@ -1171,10 +1216,6 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
             })
         });
         if (res.ok) {
-            btn.innerText = "Syncing Tree...";
-            await compileContexts();
-            const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-            if (mRes.ok) setContextManifest(await mRes.json());
             if (isNewRepo) {
                 const rRes = await fetch(`/api/${activeWs}/repos?t=` + Date.now());
                 if (rRes.ok) {
@@ -1182,6 +1223,23 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
                 }
             }
+
+            // Surgically inject into the local manifest state
+            const { manifest } = AppStore.getState();
+            const repoDir = filepath.split('/')[0];
+            const defaultBucket = `${repoDir}_context.txt`;
+
+            if (manifest[defaultBucket]) {
+                if (!manifest[defaultBucket].files.includes(filepath)) {
+                    manifest[defaultBucket].files.push(filepath);
+                }
+            } else {
+                manifest[defaultBucket] = {
+                    files: [filepath],
+                    meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
+                };
+            }
+            AppStore.setState({ manifest: manifest });
 
             if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
             else {

@@ -67,6 +67,16 @@ def generate_context_file(workspace_id=None):
     import time
     from insetu.db import get_connection
     w_conn = get_connection("workers", workspace_id=workspace_id)
+    w_conn.execute("""
+        CREATE TABLE IF NOT EXISTS ephemeral_artifacts (
+            id TEXT PRIMARY KEY,
+            filepath TEXT,
+            module_owner TEXT,
+            created_at REAL,
+            expires_at REAL
+        )
+    """)
+    w_conn.commit()
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
 
     if os.path.exists(paths["contexts_dir"]):
@@ -134,7 +144,7 @@ def generate_context_file(workspace_id=None):
                     buckets["default_catch_all"]["files"].append(filepath)
             for b_id, data in buckets.items():
                 if data["files"]:
-                    safe_out = data["cfg"].get("out_file", f"{config['repo_dir']}_{b_id}_context.txt")
+                    safe_out = data["cfg"].get("out_file", f"{safe_r_dir}_{b_id}_context.txt")
                     b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
                     b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
                     b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
@@ -173,9 +183,13 @@ def generate_context_file(workspace_id=None):
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
     from insetu.routes_fs import execute_vfs_save, _VFS_WRITE_QUEUE
-
     # Block until the async VFS queue drains so downstream workflows can read the physical files
     _VFS_WRITE_QUEUE.join()
+
+    for f_name, data in manifest.items():
+        f_path = os.path.join(paths["contexts_dir"], f_name)
+        if os.path.exists(f_path):
+            data["meta"]["size_bytes"] = os.path.getsize(f_path)
 
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
 
@@ -183,10 +197,11 @@ def generate_context_file(workspace_id=None):
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]):
             f_name = os.path.basename(f_path)
+            size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
             # Ensure it aligns with the new schema
             manifest[f_name] = {
                 "files": [f"data/contexts/{f_name}"],
-                "meta": {"title": f"📦 {f_name.replace('.txt','')}", "domain": "Quick-Pack Clipboard", "desc": "Ad-hoc context payload."}
+                "meta": {"title": f"📦 {f_name.replace('.txt','')}", "domain": "Quick-Pack Clipboard", "desc": "Ad-hoc context payload.", "size_bytes": size_bytes}
             }
 
     manifest_out_path = os.path.join(paths["contexts_dir"], "manifest.json")
@@ -270,9 +285,10 @@ def api_gather_quick_pack(workspace_id):
     # Eagerly inject into the manifest using SSOT caching functions
     manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
     manifest = load_json_file(manifest_path, {})
+    size_bytes = len("\n".join(out_lines).encode('utf-8'))
     manifest[filename] = {
         "files": [f"data/contexts/{filename}"],
-        "meta": {"title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)"}
+        "meta": {"title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)", "size_bytes": size_bytes}
     }
     save_json_file(manifest_path, manifest, workspace_id)
 

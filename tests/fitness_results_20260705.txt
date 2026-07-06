@@ -1,0 +1,995 @@
+============================================================
+      inSetu Architectural Fitness Functions Validator      
+============================================================
+
+🔍 Sweeping Python Backend (AST Analysis)...
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_bridge.py:348
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_bridge.py:380
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_bridge.py:466
+   ↳ Subprocess call outside of designated engines.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:79
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:81
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:168
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:185
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:186
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_fs.py:186
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/db.py:27
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/db.py:28
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/fallback_bridge.py:293
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/fallback_bridge.py:336
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:37
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:108
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:116
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:160
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:173
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:178
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:194
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:197
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:263
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:293
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/app.py:310
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/workers.py:151
+   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/workers.py:202
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/workers.py:287
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:68
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:73
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:76
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:78
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:83
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:85
+   ↳ Native file write detected. Route through execute_vfs_save instead.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:89
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:91
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:96
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/cli.py:98
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:36
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:37
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:38
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:44
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:72
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:80
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:95
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:102
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:103
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:104
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:105
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:207
+   ↳ Subprocess call outside of designated engines.
+
+❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:211
+   ↳ Subprocess call outside of designated engines.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:215
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:219
+   ↳ Subprocess call outside of designated engines.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:315
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:318
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:321
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/utils_core.py:458
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:55
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:84
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:88
+   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:103
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:151
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:166
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:174
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:190
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:207
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:264
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:277
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:286
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:311
+   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/engine_gather.py:321
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_system.py:36
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/routes_system.py:89
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_prompts.py:36
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_prompts.py:58
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_prompts.py:70
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_prompts.py:77
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: DB_CONNECTION_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_citations.py:3
+   ↳ Direct sqlite3 import detected. Use 'from insetu.db import get_connection'.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_citations.py:80
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_flow.py:23
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_flow.py:27
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_flow.py:34
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_flow.py:36
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_flow.py:124
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:19
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:54
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:159
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:164
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:209
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:211
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:213
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:216
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:232
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:280
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:353
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:359
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:509
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:562
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:565
+   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:581
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:587
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:601
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_tracker.py:606
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:37
+   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:68
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:179
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:212
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:276
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:290
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:317
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:318
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:320
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:385
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_git.py:388
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:21
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:23
+   ↳ Native file write detected. Route through execute_vfs_save instead.
+
+❌ [VIOLATION: DB_CONNECTION_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:51
+   ↳ Direct sqlite3 import detected. Use 'from insetu.db import get_connection'.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:89
+   ↳ Native file write detected. Route through execute_vfs_save instead.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:89
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:93
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:119
+   ↳ Synchronous shutil.move/rmtree detected. Route through the async VFS queue.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:140
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:166
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_format.py:180
+   ↳ Native file write detected. Route through execute_vfs_save instead.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_research.py:195
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: PATHLIB_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_research.py:197
+   ↳ os.path.join detected. Migrate to pathlib.Path.
+
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/engine_research.py:198
+   ↳ Native file write detected. Route through execute_vfs_save instead.
+
+🔍 Sweeping JavaScript Frontend (Regex Analysis)...
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/bridge.js:51
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/bridge.js:104
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/gather.js:53
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: XSS_VULNERABILITY] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:121
+   ↳ Naive regex script stripping detected. Use DOMPurify.sanitize().
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:495
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:505
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:862
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:952
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1450
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1499
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1862
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1907
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/app.js:83
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/app.js:481
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/app.js:735
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/ui.js:151
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/ui.js:360
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UI_FACTORY_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:127
+   ↳ Hardcoded modal structural classes detected. Use UIFactory.createModal().
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:190
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:191
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:192
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:193
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:194
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:194
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:196
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:197
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:201
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:202
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:213
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:214
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:216
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:226
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:249
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:250
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:255
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:322
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:355
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:358
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:361
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:393
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:426
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:519
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:534
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:535
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:539
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:540
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:551
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:555
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:567
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:698
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:705
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:708
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:715
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:729
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: THEME_TOKENS] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:731
+   ↳ Hardcoded HEX color found: errorHtml = `<div style="font-size: 0.8rem; color: var(--intent-danger); background: #fef2f2; padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid #f87171;">⚠️ <b>Error:</b> ${meta.error}</div>`;. Use CSS intent variables (e.g., var(--btn)).
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:734
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:772
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:787
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: THEME_TOKENS] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_research.js:806
+   ↳ Hardcoded HEX color found: <div style="color: #555; font-family: monospace; font-size: 0.7rem; margin-top: 4px; user-select: all;">ID: ${item.id}</div>. Use CSS intent variables (e.g., var(--btn)).
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:13
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:46
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:55
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:126
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:196
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:248
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:264
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:265
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:266
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:290
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:291
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:318
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:329
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:383
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_git.js:469
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:3
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:7
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:48
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:178
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:193
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:223
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_config.js:296
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_ingest.js:36
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_ingest.js:82
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UI_FACTORY_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:153
+   ↳ Hardcoded modal structural classes detected. Use UIFactory.createModal().
+
+❌ [VIOLATION: UI_FACTORY_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:171
+   ↳ Hardcoded modal structural classes detected. Use UIFactory.createModal().
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:281
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:297
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:305
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:332
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:386
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:389
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:413
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:417
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:418
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:419
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:423
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:425
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:429
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:439
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:445
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:451
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:477
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:487
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:488
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:489
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:502
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:590
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:602
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:690
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:691
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:729
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:730
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:763
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:768
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:771
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:776
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:777
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:785
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:896
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:897
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:898
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:899
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:919
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:926
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:937
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:944
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:956
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:999
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1041
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1072
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1078
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1082
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1094
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1103
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1141
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1158
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1167
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1168
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1169
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1185
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1188
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1206
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1214
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_citations.js:1283
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:198
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:206
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:273
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:293
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:347
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:462
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:486
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:488
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:489
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:491
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:496
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:549
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:560
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:561
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:562
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:563
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:564
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:565
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:566
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:604
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:605
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:606
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:625
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:664
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:681
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:682
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:683
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:684
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:685
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:686
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:696
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:697
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:698
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:699
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:763
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:770
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:877
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_tracker.js:878
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_prompts.js:41
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_prompts.js:52
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_prompts.js:53
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_prompts.js:54
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: SURGICAL_DOM_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:49
+   ↳ DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:64
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:65
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:109
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:130
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: UDF_STATE_BLEED] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:136
+   ↳ Floating global state detected. Migrate variable into the centralized Zustand AppStore.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:200
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:284
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:285
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:286
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:295
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:296
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:300
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:301
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:303
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:362
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+❌ [VIOLATION: DOM_READ_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/extensions/ext_flow.js:400
+   ↳ Direct DOM reading detected. Read from the Zustand Store instead.
+
+============================================================
+❌ FAILED: Found 329 architectural violations.
