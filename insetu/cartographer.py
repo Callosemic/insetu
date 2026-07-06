@@ -18,13 +18,12 @@ def _background_map(job_id, workspace_id, target_repos=None):
         update_immediate_job_status(job_id, 'failed', f"Mapping failed: {str(e)}", workspace_id=workspace_id)
 
 register_callback("cartographer", "map_task", _background_map)
-
 @hooks.on('post_file_save')
 @hooks.on('post_file_delete')
 def auto_trigger_cartography(filepath, workspace_id=None, **kwargs):
     """Event Bus listener: Triggers topology mapping on file changes, with recursion protection."""
-    # SHORT-CIRCUIT RECURSION: Ignore our own artifacts and other system text dumps
-    if filepath.endswith('CODE_INDEX.md') or filepath.endswith('_context.txt') or filepath.endswith('_diffs.txt'):
+    # SHORT-CIRCUIT RECURSION: Ignore our own artifacts, system text dumps, and volatile ticket states
+    if filepath.endswith('CODE_INDEX.md') or filepath.endswith('_context.txt') or filepath.endswith('_diffs.txt') or '.tracker/' in filepath:
         return
 
     import json
@@ -140,7 +139,6 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             if not silent: print(f"⚠️  Skipping {repo_dir}: Directory not found.")
             continue
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
-
         # Pass 1: Preserve (checking disk and Git history)
         comments = extract_existing_comments(index_path, repo_path)
         # Pass 2: Discover & Filter (SSOT)
@@ -149,8 +147,14 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         if not valid_files:
             continue
 
-        tree_dict = build_tree_dict(valid_files)
-        
+        # Exclude highly volatile state folders like .tracker from the architectural code index
+        filtered_files = [f for f in valid_files if not f.startswith('.tracker/') and '/.tracker/' not in f]
+
+        if not filtered_files:
+            continue
+
+        tree_dict = build_tree_dict(filtered_files)
+
         # Ensure the docs directory exists if writing to the core chassis
         if config.get("is_core_chassis"):
             os.makedirs(os.path.dirname(index_path), exist_ok=True)
