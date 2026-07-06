@@ -41,7 +41,7 @@ def get_workspace_physics(workspace_id=None):
     env_config = os.environ.get("INSETU_CONFIG")
     if env_config:
         resolved_cfg = os.path.abspath(os.path.expanduser(env_config))
-        return resolved_cfg, _cwd, os.path.join(os.path.dirname(resolved_cfg), "workflows.json")
+        return resolved_cfg, _cwd, Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
 
     target_ws = workspace_id
     if not target_ws:
@@ -75,17 +75,17 @@ def get_workspace_physics(workspace_id=None):
 
     if not os.path.exists(resolved_cfg):
         resolved_cfg = default_config
-
     # 3. Resolve Workspace Root
-    workflows_path = os.path.join(os.path.dirname(resolved_cfg), "workflows.json")
+    workflows_path = Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
     if os.path.exists(resolved_cfg):
         try:
             with open(resolved_cfg, 'r', encoding='utf-8') as f: c_data = json.load(f)
             if "workspace_root" in c_data:
-                return resolved_cfg, os.path.abspath(os.path.expanduser(c_data["workspace_root"])), workflows_path
+                return resolved_cfg, Path(c_data["workspace_root"]).expanduser().resolve().as_posix(), workflows_path
         except Exception:
             pass
-        return resolved_cfg, os.path.dirname(os.path.dirname(resolved_cfg)), workflows_path
+
+        return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
 
     return resolved_cfg, _cwd, workflows_path
 def get_gather_paths(workspace_id=None):

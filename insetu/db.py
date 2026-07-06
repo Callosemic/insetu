@@ -23,9 +23,8 @@ def get_connection(db_name, workspace_id=None):
         except RuntimeError:
             pass
     workspace_id = workspace_id or "default"
-
     cfg_path, _, _ = get_workspace_physics(workspace_id)
-    artifacts_base = os.path.join(os.path.dirname(cfg_path), "data")
+    artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
     db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
 
     # Key the connection by tenant

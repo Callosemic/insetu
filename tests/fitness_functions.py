@@ -27,11 +27,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename):
         self.filepath = filepath
         self.filename = filename
-
     def visit_Call(self, node):
         # 1. VFS Write-Path Ban: Prevent native open(..., 'w') outside of the VFS pipeline
-        if isinstance(node.func, ast.Name) and node.func.id == 'open':
-            if self.filename not in VFS_WRITE_WHITELIST:
+        if isinstance(node.func, ast.Name):
+            if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
                 # Check positional args for write modes
                 if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and 'w' in node.args[1].value:
                     report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save instead.")
@@ -39,21 +38,45 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 for kw in node.keywords:
                     if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and 'w' in kw.value.value:
                         report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save instead.")
-        # 2. I/O Block Ban: Prevent subprocess.run inside routes
-        if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-            if node.func.value.id == 'subprocess' and node.func.attr in ('run', 'Popen', 'call'):
-                if self.filename.startswith("routes_"):
-                    report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
-                elif self.filename not in SUBPROCESS_WHITELIST:
-                    report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, f"Subprocess call outside of designated engines.")
 
-            # VFS Async Deletion/Move Guardrail
-            if node.func.value.id == 'os' and node.func.attr in ('remove', 'rmdir'):
+            # Catch __import__('sqlite3') bypass
+            if node.func.id == '__import__' and self.filename not in SQLITE_WHITELIST:
+                if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'sqlite3':
+                    report_violation("DB_CONNECTION_BAN_BYPASS", self.filepath, node.lineno, "__import__('sqlite3') bypass detected.")
+
+        # 2. I/O Block Ban & Attribute-based Bypasses
+        if isinstance(node.func, ast.Attribute):
+            # Catch pathlib write/delete bypasses
+            if node.func.attr in ('write_text', 'write_bytes', 'unlink', 'rmdir'):
                 if self.filename not in VFS_WRITE_WHITELIST:
-                    report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous os.remove/rmdir detected. Route through the async VFS queue.")
-            if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
-                if self.filename not in VFS_WRITE_WHITELIST:
-                    report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
+                    report_violation("VFS_CONSTRAINT_BYPASS", self.filepath, node.lineno, f"pathlib.{node.func.attr}() bypass detected. Route through the async VFS queue.")
+
+            # Catch importlib.import_module('sqlite3') bypass
+            if node.func.attr == 'import_module' and self.filename not in SQLITE_WHITELIST:
+                if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'sqlite3':
+                    report_violation("DB_CONNECTION_BAN_BYPASS", self.filepath, node.lineno, "importlib.import_module('sqlite3') bypass detected.")
+
+            if isinstance(node.func.value, ast.Name):
+                if node.func.value.id == 'subprocess' and node.func.attr in ('run', 'Popen', 'call', 'check_output', 'check_call'):
+                    if self.filename.startswith("routes_"):
+                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
+                    elif self.filename not in SUBPROCESS_WHITELIST:
+                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, f"Subprocess call outside of designated engines.")
+
+                # Catch os.system / os.popen bypasses
+                if node.func.value.id == 'os' and node.func.attr in ('system', 'popen'):
+                    if self.filename.startswith("routes_"):
+                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous OS execution in a REST route.")
+                    elif self.filename not in SUBPROCESS_WHITELIST:
+                        report_violation("IO_BLOCK_BAN_BYPASS", self.filepath, node.lineno, "os.system/popen bypass detected.")
+
+                # VFS Async Deletion/Move Guardrail
+                if node.func.value.id == 'os' and node.func.attr in ('remove', 'rmdir'):
+                    if self.filename not in VFS_WRITE_WHITELIST:
+                        report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous os.remove/rmdir detected. Route through the async VFS queue.")
+                if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
+                    if self.filename not in VFS_WRITE_WHITELIST:
+                        report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
 
         # Pathlib Migration Mandate (os.path.join)
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
@@ -68,6 +91,11 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+
+        # Catch from os.path import join bypass
+        if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
+            report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
+
         self.generic_visit(node)
 
     def _check_sqlite_import(self, node):
@@ -110,17 +138,17 @@ def check_python_files():
 # --- JAVASCRIPT REGEX LINTER ---
 def check_javascript_files():
     print("🔍 Sweeping JavaScript Frontend (Regex Analysis)...")
-    
     # Pre-compile Regex Patterns
-    dom_read_pattern = re.compile(r'document\.getElementById\([^\)]+\)\.(value|checked|classList)')
+    dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
     hardcoded_modal_pattern = re.compile(r'class=["\'][^"\']*fullscreen-modal[^"\']*["\']|class=["\'][^"\']*modal-panel[^"\']*["\']')
     hex_color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}\b')
     clear_timeout_pattern = re.compile(r'\bclearTimeout\s*\(')
 
     # New Rules
-    dom_annihilation_pattern = re.compile(r'\.innerHTML\s*=\s*[\'"][\'"]')
-    floating_global_pattern = re.compile(r'^let\s+[a-zA-Z0-9_]+\s*=')
+    dom_annihilation_pattern = re.compile(r'(?:\.innerHTML|\[[\'"]innerHTML[\'"]\])\s*=\s*([\'"`][\'"`])')
+    bracket_bypass_pattern = re.compile(r'\[[\'"](value|checked|classList)[\'"]\]')
+    floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
     naive_xss_pattern = re.compile(r'\.replace\(/<script')
 
     for root, _, files in os.walk(FRONTEND_DIR):
@@ -138,11 +166,12 @@ def check_javascript_files():
                     # Ignore comments
                     if line.strip().startswith("//"):
                         continue
-
                     # 1. DOM Read Ban (UDF Enforcement)
                     if is_extension or file in ["kanban.js", "bridge.js"]:
                         if dom_read_pattern.search(line):
                             report_violation("DOM_READ_BAN", filepath, line_num, "Direct DOM reading detected. Read from the Zustand Store instead.")
+                        if bracket_bypass_pattern.search(line):
+                            report_violation("DOM_READ_BAN_BYPASS", filepath, line_num, "Bracket notation bypass detected. Use pure UDF instead.")
 
                     # 2. Metronome Mandate
                     if is_extension:

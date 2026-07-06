@@ -352,12 +352,10 @@ export function openSelectorModal(title, items, onSelect) {
             bodyEl.style.paddingBottom = '0';
         }
     }
-
     const listEl = document.getElementById('selector-list');
     const searchEl = document.getElementById('selector-search');
-
     const renderList = (filter = '') => {
-        listEl.innerHTML = '';
+        if (listEl) listEl.replaceChildren();
         const lowerFilter = filter.toLowerCase();
 
         // Filter and limit to 50 items to prevent DOM lag on massive author/pub lists

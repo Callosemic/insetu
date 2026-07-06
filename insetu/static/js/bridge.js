@@ -149,20 +149,17 @@ BridgeStore.subscribe((state) => state.detectedFiles, () => {
         syncDOMToBridgeState(BridgeStore.getState());
     }, 300);
 });
-
-function isPatchSandwich(text) {
+function isIdempotencyRisk(text) {
     const blocks = text.split('>>>>>>> REPLACE');
-    for (let b of blocks) {
+    for (const b of blocks) {
         if (!b.includes('<<<<<<< SEARCH') || !b.includes('=======')) continue;
-        const searchPart = b.split('<<<<<<< SEARCH')[1].split('=======')[0];
-        const replacePart = b.split('=======')[1];
-        const sLines = searchPart.split('\n').map(l => l.trim()).filter(l => l && l !== '{{UNTIL}}');
-        const rLines = replacePart.split('\n').map(l => l.trim()).filter(l => l && l !== '{{UNTIL}}');
-        if (sLines.length === 0) continue;
-        if (rLines.length === 0) return false;
-        if (sLines[0] !== rLines[0] || sLines[sLines.length - 1] !== rLines[rLines.length - 1]) return false;
+        const searchPart = b.split('<<<<<<< SEARCH')[1].split('=======')[0].trim();
+        const replacePart = b.split('=======')[1].trim();
+        if (!searchPart) continue;
+        // If the exact search block is fully contained within the replace block, it's an idempotency risk
+        if (replacePart.includes(searchPart)) return true;
     }
-    return true;
+    return false;
 }
 let globalBypassSandwich = false;
 
@@ -184,10 +181,9 @@ export function sync(dryRunActive, bypassSandwich = false) {
     const bridgeState = BridgeStore.getState();
     const textVal = bridgeState.payloadText;
     const statusBox = document.getElementById('status-box');
-
     showConsole();
-    if (!globalBypassSandwich && !isPatchSandwich(textVal)) {
-        statusBox.innerHTML = `<span style="color: var(--intent-warning); font-weight: bold;">[!] WARNING: Patch lacks leading/trailing context (Not a "Patch Sandwich").</span><br><br>Your SEARCH and REPLACE blocks do not share the exact same top and bottom context lines.<br><br><button type="button" onclick="sync(${dryRunActive}, true)" style="background: var(--intent-danger); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">⚠️ Do it anyway</button>`;
+    if (!globalBypassSandwich && isIdempotencyRisk(textVal)) {
+        statusBox.innerHTML = `<span style="color: var(--intent-warning); font-weight: bold;">[!] WARNING: Idempotency Risk Detected.</span><br><br>Your REPLACE block contains an exact copy of your SEARCH block. This can lead to endless duplication if applied multiple times.<br><br><button type="button" onclick="sync(${dryRunActive}, true)" style="background: var(--intent-danger); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">⚠️ Do it anyway</button>`;
         return;
     }
 

@@ -81,8 +81,7 @@ window.inSetu.extensions.Registry = {
     utils: {
         _timers: {},
         debounce: function(key, callback, delay = 300) {
-            // utils.debounce internal reset
-            clearTimeout(this._timers[key]);
+            window.clearTimeout(this._timers[key]); // utils.debounce internal reset
             this._timers[key] = setTimeout(callback, delay);
         },
         debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
@@ -632,10 +631,14 @@ export function resolveEditorMode(filename) {
     };
     return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
 }
-
 export function normalizeAccentText(str) {
     if (!str) return '';
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+export function generateSafeSlug(str) {
+    if (!str) return '';
+    return normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
@@ -1143,6 +1146,7 @@ export async function fetchAndDownloadState(filePath, btnElement) {
             survive the transition to <script type="module">
             ========================================================================== */
 window.normalizeAccentText = normalizeAccentText;
+window.generateSafeSlug = generateSafeSlug;
 window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
