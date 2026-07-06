@@ -125,7 +125,7 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | Zone ID | Context / Trigger | Primary Use Case |
 | :--- | :--- | :--- |
 | `zone:tab-changed` | Emitted when the user navigates primary UI tabs. | Allows background extensions (like Tracker or Citations) to execute silent data-fetches only when their UI is actually visible. |
-| `zone:modal-edit-toolbar` | Emitted when the VFS modal opens a Markdown file. | Allows extensions to dynamically inject buttons (e.g., "📚 Cite", "🔄 Sync Refs") into the editor toolbar. |
+| `zone:modal-ext-menu` | Emitted when the VFS modal opens a file. | Allows extensions to declaratively push action objects (`{label, icon, onClick}`) into the global extension dropdown menu, eliminating horizontal toolbar clutter. |
 | `zone:file-edit-override` | Emitted right before a file is loaded into the VFS modal. | Allows extensions to hijack the rendering flow (e.g., Tracker redirecting `.tracker/` markdown files into its custom Kanban UI modal instead). |
 | `zone:post-file-save` | Emitted after the VFS successfully flushes to disk. | Triggers reactive background refreshes for dependent extensions (e.g., reloading the Kanban board if a ticket is saved). |
 | `zone:file-card-actions` | Emitted when a file card is rendered in the UI. | Allows extensions to inject contextual action buttons next to the default "View" and "DL" buttons. |

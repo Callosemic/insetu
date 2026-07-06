@@ -44,6 +44,12 @@ To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must n
 * **`AppStore` (store.js):** Coordinates system-wide topologies, configuration schemas, manifest states, active repositories, and extension arrays.
 * **`KanbanStore` (ext_tracker.js):** Isolates the task tracking arrays, active ticket filters, tag matrices, and column expansion flags for the project management canvas.
 
+### 3.2 The Frontend Metronome & Lifecycle Teardown
+In a stateless Single Page Application (SPA), navigating between workspaces does not trigger a hard browser refresh. Extensions must manually clean up their memory footprints to prevent cross-tenant data contamination and zombie polling loops.
+* **The `setInterval` Ban:** Extensions are strictly forbidden from utilizing native `setInterval`.
+* **`ExtensionRegistry.registerTick(extName, intervalMs, callback)`:** Extensions requiring background polling or UI updates must subscribe to the centralized Frontend Metronome. The metronome guarantees execution pacing and automatically garbage-collects the polling loop when the extension unmounts.
+* **`ExtensionRegistry.registerUnloadHook(extName, callback)`:** Extensions must register a teardown hook to sever dynamic DOM listeners, clear transient caches, and reset their Zustand stores when the user navigates away from their workspace.
+
 ## 4. The Background Worker Matrix (The Metronome & Ledger)
 Extensions must respect the ASGI event loop and the Cloud Run Serverless Lock constraint. Spinning up unmanaged `threading.Thread` loops is a vector for catastrophic failure. Furthermore, background tasks must survive workspace profile swaps (`os.execv` process replacements) without heavy multi-daemon architecture.
 * **The Ledger:** Extensions requiring background sweeping must submit their callback and interval to the centralized `insetu.workers` ledger. State remains strictly vaulted in the originating workspace's localized database.

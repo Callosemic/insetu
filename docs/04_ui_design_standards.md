@@ -16,11 +16,10 @@ Avoid the "box within a box" feeling.
 * **Modals are for Transience**: Traditional constrained pop-ups (modals with backdrops) should only be used for quick, transient interactions (e.g., confirming a deletion, naming a new folder, or picking an option).
 * **Parallel Views for Work**: When a user opens a file or engages in a long-form workflow, it must act as a parallel fullscreen view.
 Use `ui-fixed-to-top` equivalent headers/toolbars, a `flex-1` wrapper for the main content (which manages its own overflow), and `ui-fixed-to-bottom` equivalent containers for primary actions.
-
 ## 3. Toolbars & Responsive Action Arrays
 Horizontal space is premium, especially on split-screen setups or tablets.
-* **Fluid Wrapping**: Action buttons must use `flex-wrap: wrap`.
-* **Smart Overflow**: If a toolbar wraps to a second line and consumes vertical space, implement a `ResizeObserver` to truncate the height and reveal a "..." (More) toggle. Never let a wrapping toolbar permanently push main content off-screen.
+* **The Menu Bar Paradigm**: Avoid injecting multiple top-level buttons that rely on `flex-wrap: wrap` and `ResizeObserver` overflow hacks. Instead, group extension actions into centralized dropdown menus (e.g., `zone:modal-ext-menu`). This scales infinitely without consuming vertical real estate.
+* **Grid Arrays for Cards**: For item-level actions (e.g., Task Cards), use a stable CSS Grid layout (`grid-template-columns: repeat(X, 1fr)`) to ensure uniform button widths and consistent vertical alignment.
 * **Text Truncation**: Deep file paths or long titles must truncate intelligently. Use `direction: rtl; text-align: left;` alongside `text-overflow: ellipsis;` to ensure the actual filename remains visible while hiding the deep ancestor directories.
 
 ## 4. Theme Variables & Contrast
