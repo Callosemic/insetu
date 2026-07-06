@@ -4,17 +4,17 @@ import {
     createFileCard
 } from '../app.js';
 import { AppStore } from '../store.js';
-
 export async function openPushModal(diffFilename, repoDir) {
-    AppStore.setState({ currentPushDiffFile: diffFilename, currentPushRepo: repoDir });
-
-    const bodyHtml = `
+    AppStore.setState({ currentPushDiffFile: diffFilename, currentPushRepo: repoDir, gitPushMessage: '' });
+const bodyHtml = `
         <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
-        <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" onchange="document.getElementById('push-message').value = this.value;">
+        <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;"
+onchange="window.inSetu.stores.App.setState({ gitPushMessage: this.value }); const pm = document.getElementById('push-message'); if(pm) pm.value = this.value;">
             <option value="">-- Type a custom message below --</option>
         </select>
         <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-        <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0; width: 100%; box-sizing: border-box;"></textarea>
+        <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0; width: 100%; box-sizing: border-box;"
+oninput="window.inSetu.stores.App.setState({ gitPushMessage: event.target.value })"></textarea>
         <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
     `;
 
@@ -42,18 +42,19 @@ export async function openPushModal(diffFilename, repoDir) {
                     opt.innerText = cl.title;
                     select.appendChild(opt);
                 });
-                select.selectedIndex = 1;
-                document.getElementById('push-message').value = data.changelogs[0].title;
-            }
+                                    select.selectedIndex = 1;
+                                    const pm = document.getElementById('push-message');
+                                    if (pm) pm.value = data.changelogs[0].title;
+                                    AppStore.setState({ gitPushMessage: data.changelogs[0].title });
+}
         }
     } catch (e) {
         console.error("Failed to load changelogs.");
     }
 }
-
 export async function executePush(modalId = 'push-modal') {
-    const msg = document.getElementById('push-message').value.trim();
-    const { currentPushRepo, currentPushDiffFile } = AppStore.getState();
+    const { currentPushRepo, currentPushDiffFile, gitPushMessage } = AppStore.getState();
+    const msg = (gitPushMessage || '').trim();
 
     if (!msg) {
         alert("Please enter a commit message.");
@@ -91,14 +92,14 @@ export async function executePush(modalId = 'push-modal') {
         if (spinner) spinner.style.display = 'none';
     }
 }
-
 export async function openSweepModal() {
+    AppStore.setState({ gitSweepMessage: '' });
     const bodyHtml = `
         <div id="sweep-loading" class="spinner" style="display:block; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>
         <div id="sweep-files-container" style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; min-height: 200px;">
         </div>
         <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-        <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none; width: 100%; box-sizing: border-box;"></textarea>
+        <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none; width: 100%; box-sizing: border-box;" oninput="window.inSetu.stores.App.setState({ gitSweepMessage: event.target.value })"></textarea>
         <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
     `;
 
@@ -117,13 +118,12 @@ export async function openSweepModal() {
 
     await loadSweepFiles();
 }
-
 async function loadSweepFiles() {
     const container = document.getElementById('sweep-files-container');
     const loading = document.getElementById('sweep-loading');
     const btn = document.getElementById('execute-sweep-btn');
 
-    container.innerHTML = '';
+    container.replaceChildren();
     loading.style.display = 'block';
     btn.disabled = true;
 
@@ -191,9 +191,8 @@ async function loadSweepFiles() {
         container.innerHTML = `<p style="color: red;">Error scanning workspaces: ${e.message}</p>`;
     }
 }
-
 export async function executeSweepPush() {
-    const msg = document.getElementById('sweep-message').value.trim();
+    const msg = (AppStore.getState().gitSweepMessage || '').trim();
     if (!msg) {
         alert("Please enter a commit message for this sweep.");
         return;
@@ -243,9 +242,8 @@ export function renderDiffFiles(files) {
     const loading = document.getElementById('diff-loading');
     const results = document.getElementById('diff-results');
     const sweepBtn = document.getElementById('btn-sweep-remaining');
-
     if (loading) loading.style.display = 'none';
-    if (results) results.innerHTML = '';
+    if (results) results.replaceChildren();
 
     if (files.length > 0) {
         if (sweepBtn) sweepBtn.style.display = 'block';
@@ -261,18 +259,13 @@ export function renderDiffFiles(files) {
             const manifestObj = AppStore.getState().manifest[baseFile] || {};
             const meta = manifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
 
-            let finalCat = meta.domain;
-            let finalDesc = meta.desc;
-            let finalTitle = meta.title + " (Diffs)";
+            const extMeta = (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) 
+                ? window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile) 
+                : null;
 
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile);
-                if (extMeta) {
-                    finalCat = extMeta.cat;
-                    finalDesc = extMeta.desc;
-                    finalTitle = extMeta.displayName.replace('.txt', '_diffs.txt');
-                }
-            }
+            const finalCat = extMeta ? extMeta.cat : meta.domain;
+            const finalDesc = extMeta ? extMeta.desc : meta.desc;
+            const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : meta.title + " (Diffs)";
 
             if (!categories[finalCat]) categories[finalCat] = [];
             categories[finalCat].push({
@@ -283,14 +276,11 @@ export function renderDiffFiles(files) {
                 repoDir: repoDir
             });
         });
-
         const sortedCats = Object.keys(categories).sort((a, b) => {
             if (a === "Quick-Pack Clipboard") return -1;
             if (b === "Quick-Pack Clipboard") return 1;
-            let iA = categoryOrder.indexOf(a);
-            let iB = categoryOrder.indexOf(b);
-            if (iA === -1) iA = 999;
-            if (iB === -1) iB = 999;
+            const iA = categoryOrder.indexOf(a) === -1 ? 999 : categoryOrder.indexOf(a);
+            const iB = categoryOrder.indexOf(b) === -1 ? 999 : categoryOrder.indexOf(b);
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
@@ -313,20 +303,19 @@ export async function generateDiffs(force = false) {
     const loading = document.getElementById('diff-loading');
     const results = document.getElementById('diff-results');
     if (!loading || !results) return;
-
     const { cachedDiffFiles, dirtyDiffRepos } = AppStore.getState();
-    let targetRepos = null;
-    if (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
-        targetRepos = null;
-    } else if (dirtyDiffRepos && dirtyDiffRepos.size > 0) {
-        targetRepos = Array.from(dirtyDiffRepos);
-    } else {
+
+    const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
+        ? null 
+        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
+
+    if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
         renderDiffFiles(cachedDiffFiles);
         return;
     }
 
     loading.style.display = 'block';
-    results.innerHTML = '';
+    results.replaceChildren();
 
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
@@ -380,7 +369,9 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
 
                     if (spinner) spinner.innerText = statusData.message || "Committing and pushing...";
                     if (statusData.status === 'completed') {
-                        document.getElementById('sweep-message').value = '';
+                        const sweepMsgEl = document.getElementById('sweep-message');
+                        if (sweepMsgEl) sweepMsgEl.value = '';
+                        AppStore.setState({ gitSweepMessage: '' });
 
                         const { dirtyDiffRepos } = AppStore.getState();
                         const newDirty = new Set(dirtyDiffRepos);
@@ -461,27 +452,28 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                     const sweepBtn = document.getElementById('btn-sweep-remaining');
 
                     if (loading) loading.innerText = statusData.message || "Analyzing Git trees...";
-
                     if (statusData.status === 'completed') {
                         const newFiles = statusData.artifact.files || [];
                         const targetRepos = statusData.artifact.target_repos;
 
-                        let updatedCachedFiles = AppStore.getState().cachedDiffFiles || [];
+                        const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
                         const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
 
-                        if (!targetRepos) {
-                            updatedCachedFiles = newFiles;
-                            updatedDirtyRepos.clear();
-                        } else {
-                            updatedCachedFiles = updatedCachedFiles.filter(f => {
-                                const repo = typeof f === 'object' ? f.repo : null;
-                                return !repo || !targetRepos.includes(repo);
-                            });
-                            updatedCachedFiles = updatedCachedFiles.concat(newFiles);
-                            targetRepos.forEach(r => updatedDirtyRepos.delete(r));
-                        }
+                        const updatedCachedFiles = (() => {
+                            if (!targetRepos) {
+                                updatedDirtyRepos.clear();
+                                return newFiles;
+                            } else {
+                                targetRepos.forEach(r => updatedDirtyRepos.delete(r));
+                                const filtered = prevCachedFiles.filter(f => {
+                                    const repo = typeof f === 'object' ? f.repo : null;
+                                    return !repo || !targetRepos.includes(repo);
+                                });
+                                return filtered.concat(newFiles);
+                            }
+                        })();
 
-                        AppStore.setState({ 
+                        AppStore.setState({  
                             activeDiffJobId: null, 
                             cachedDiffFiles: updatedCachedFiles,
                             dirtyDiffRepos: updatedDirtyRepos

@@ -1,12 +1,14 @@
 export function importFromUrl() {
     const bodyHtml = `
         <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
-        <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+        <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="window.inSetu.stores.App.setState({ ingestUrl: this.value })">
 
         <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
-        <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;">
+<div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;"
+onchange="window.inSetu.stores.App.setState({ ingestMethod: event.target.value })">
+
             <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                <input type="radio" name="import-method" value="jina" checked> 
+                    <input type="radio" name="import-method" value="jina" checked>  
                 <b>Jina Reader API</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
             </label>
             <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
@@ -31,11 +33,11 @@ export function importFromUrl() {
         if (input) input.focus();
     }, 100);
 }
-
 export async function executeImportUrl(modalId = 'import-url-modal') {
-    const url = document.getElementById('import-url-input').value.trim();
+    const state = window.inSetu.stores.App.getState();
+    const url = (state.ingestUrl || '').trim();
     if (!url) return alert("Please enter a valid URL.");
-    const method = document.querySelector('input[name="import-method"]:checked').value;
+    const method = state.ingestMethod || 'jina';
 
     if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
     else {
@@ -75,23 +77,20 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
             if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
                 window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', data);
             }
-
             // Try to auto-guess a clean filename if the user hasn't typed one
             const nameEl = document.getElementById('new-file-name');
             if (nameEl.value.trim() === '') {
-                let slug = '';
-                if (data.title && data.title !== 'Imported Content') {
-                    slug = data.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-');
-                }
-                if (!slug) {
-                    try {
-                        const urlObj = new URL(data.resolved_url || url);
-                        slug = urlObj.pathname.split('/').pop() || urlObj.hostname;
-                        slug = slug.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-                    } catch(e) {}
-                }
-                if (!slug) slug = 'imported-article';
-                slug = slug.replace(/^-+|-+$/g, '').substring(0, 60);
+                const slug = (() => {
+                    const titleBase = (data.title && data.title !== 'Imported Content') ? data.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
+                    const urlBase = (() => {
+                        if (titleBase) return titleBase;
+                        try {
+                            const urlObj = new URL(data.resolved_url || url);
+                            return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+                        } catch(e) { return ''; }
+                    })();
+                    return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
+                })();
                 nameEl.value = slug + '.md';
                 if(typeof checkFileExtension === 'function') checkFileExtension(nameEl.value);
             }

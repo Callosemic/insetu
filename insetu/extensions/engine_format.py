@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import sys
 import json
@@ -18,7 +19,7 @@ def _background_compile(job_id, workspace_id, filepath, target_format):
 
         paths = get_gather_paths(workspace_id)
         safe_name = f"{job_id}_{download_name}"
-        out_path = os.path.join(paths["artifacts_base"], safe_name)
+        out_path = Path(paths["artifacts_base"]).joinpath(safe_name).as_posix()
 
         with open(out_path, "wb") as f:
             f.write(mem_file.read())
@@ -46,9 +47,8 @@ def api_format_compile_document(workspace_id):
     submit_immediate_job(job_id, "format", "compile_task", args_json, workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 def compile_document_payload(workspace_id, filepath, target_format):
-    import re, os, tempfile, subprocess, json, sqlite3, shutil, io
+    import re, os, tempfile, subprocess, json, shutil, io
     from insetu.utils_core import get_gather_paths, resolve_workspace_path
 
     resolved_path = resolve_workspace_path(filepath, workspace_id)
@@ -86,11 +86,11 @@ def compile_document_payload(workspace_id, filepath, target_format):
     try:
         # Write injected middleware temp files to disk
         for filename, file_content in temp_files.items():
-            with open(os.path.join(temp_dir, filename), 'w', encoding='utf-8') as f:
+            with open(Path(temp_dir).joinpath(filename).as_posix(), 'w', encoding='utf-8') as f:
                 f.write(file_content)
 
         out_filename = f"compiled_output.{target_format}"
-        out_path = os.path.join(temp_dir, out_filename)
+        out_path = Path(temp_dir).joinpath(out_filename).as_posix()
 
         cmd = ['pandoc', resolved_path, '-o', out_path]
         cmd.extend(compiler_flags)
@@ -137,7 +137,7 @@ def run_formatter():
         import insetu.utils_core as utils_core
         paths = utils_core.get_gather_paths()
         workspace_root = paths["workspace_root"]
-        manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     except Exception:
         print("❌ Error: Could not load core tooling modules.")
         sys.exit(1)
@@ -163,7 +163,7 @@ def run_formatter():
         file_list = data.get("files", []) if isinstance(data, dict) else data
         for filepath in file_list:
             if filepath.endswith(".js") and not filepath.endswith(".min.js"):
-                abs_filepath = os.path.join(workspace_root, filepath)
+                abs_filepath = Path(workspace_root).joinpath(filepath).as_posix()
                 # Guardrail: Only format files that are inside the current working directory
                 if abs_filepath.startswith(target_dir):
                     js_files.add(abs_filepath)

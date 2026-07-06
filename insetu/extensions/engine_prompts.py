@@ -33,7 +33,7 @@ def compile_prompts_context(manifest, workspace_id=None, **kwargs):
     _, ws_root, _ = get_workspace_physics(workspace_id)
     for config in cfg.get("target_repos", []):
         if config.get("archive_type") == "prompt-library":
-            repo_path = os.path.abspath(os.path.join(ws_root, config["repo_dir"]))
+            repo_path = os.path.abspath(Path(ws_root).joinpath(config["repo_dir"]).as_posix())
             if os.path.exists(repo_path):
                 final_list = get_valid_workspace_files(repo_path, config)
                 if final_list:
@@ -55,7 +55,7 @@ def provide_available_prompts(workspace_id=None, **kwargs):
         for root, _, files in os.walk(paths["prompts_dir"]):
             for f in files:
                 if f.lower().endswith(('.md', '.txt')) or f.lower() in ('.gitkeep', '.keep'):
-                    rel_path = os.path.relpath(os.path.join(root, f), paths["prompts_dir"])
+                    rel_path = os.path.relpath(Path(root).joinpath(f).as_posix(), paths["prompts_dir"])
                     prompts.append(f"prompts/{rel_path}")
     return prompts
 
@@ -67,14 +67,14 @@ def resolve_prompt_includes(text, current_filepath, workspace_id, depth=0):
         # By default, treat paths as workspace-relative unless they explicitly use dot-notation for relative traversal
         if include_path.startswith('./') or include_path.startswith('../'):
             base_dir = os.path.dirname(current_filepath)
-            target_path = os.path.normpath(os.path.join(base_dir, include_path))
+            target_path = os.path.normpath(Path(base_dir).joinpath(include_path).as_posix())
         else:
             # Absolute to workspace root
             target_path = include_path.lstrip('/')
 
         if target_path.startswith('prompts/'):
             paths = get_gather_paths(workspace_id)
-            resolved_abs = os.path.normpath(os.path.join(paths["prompts_dir"], target_path[8:]))
+            resolved_abs = os.path.normpath(Path(paths["prompts_dir"]).joinpath(target_path[8:]).as_posix())
         else:
             resolved_abs = resolve_workspace_path(target_path, workspace_id)
 

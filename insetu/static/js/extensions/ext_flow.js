@@ -42,11 +42,12 @@ export async function loadFlowBatches() {
                 contexts: data.available_contexts || [],
                 diffs: data.available_diffs || [],
                 prompts: data.available_prompts || [],
+
                 artifactsDir: data.artifacts_dir || ".insetu/profiles/default/data",
                 profileDir: data.profile_dir || ".insetu/profiles/default"
             }
         });
-        container.innerHTML = '';
+        container.replaceChildren();
         if (!data.batches || data.batches.length === 0) {
             container.innerHTML = '<p style="color: var(--text-muted);">No workflow batches defined.</p>';
             return;
@@ -58,13 +59,10 @@ export async function loadFlowBatches() {
             if (!categories[domain]) categories[domain] = [];
             categories[domain].push(b);
         });
-        
         const { categoryOrder } = AppStore.getState();
         const sortedCats = Object.keys(categories).sort((a, b) => {
-            let iA = categoryOrder.indexOf(a);
-            let iB = categoryOrder.indexOf(b);
-            if (iA === -1) iA = 999;
-            if (iB === -1) iB = 999;
+            const iA = categoryOrder.indexOf(a) === -1 ? 999 : categoryOrder.indexOf(a);
+            const iB = categoryOrder.indexOf(b) === -1 ? 999 : categoryOrder.indexOf(b);
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
@@ -102,47 +100,62 @@ export async function loadFlowBatches() {
         container.innerHTML = `<p style="color:red;">Error loading batches: ${e.message}</p>`;
     }
 }
-
 window.openEditBatchModal = function(batch = null) {
+    AppStore.setState({ 
+        flowFormIncludes: batch && batch.includes ? [...batch.includes] : [],
+        flowFormPrompt: batch && batch.include_prompt ? batch.include_prompt : '',
+        flowFormId: batch ? batch.id : '',
+        flowFormTitle: batch ? batch.title : '',
+        flowFormDomain: batch && batch.domain ? batch.domain : 'Workflows',
+        flowFormHasPrompt: batch ? !!batch.include_prompt : false,
+        flowFormHasResponse: batch ? !!batch.response_path : false,
+        flowFormResponsePath: batch && batch.response_path ? batch.response_path : '',
+        flowFormArchivePath: batch && batch.archive_path ? batch.archive_path : ''
+    });
     const { gatherOptions } = AppStore.getState();
     const allFiles = [...gatherOptions.diffs, ...gatherOptions.contexts];
-    let currentIncludes = batch && batch.includes ? [...batch.includes] : [];
 
     const renderSelectedIncludes = () => {
         const listContainer = document.getElementById('eb-selected-includes-list');
         if (!listContainer) return;
+
+        const currentIncludes = AppStore.getState().flowFormIncludes;
         if (currentIncludes.length === 0) {
-            listContainer.innerHTML = '<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem; padding: 4px 0;">No contexts selected.</div>';
+            listContainer.replaceChildren();
+            const emptyState = document.createElement('div');
+            emptyState.style.cssText = 'color: var(--text-muted); font-style: italic; font-size: 0.85rem; padding: 4px 0;';
+            emptyState.innerText = 'No contexts selected.';
+            listContainer.appendChild(emptyState);
             return;
         }
         listContainer.innerHTML = currentIncludes.map(inc => `
             <div style="font-family: monospace; font-size: 0.85rem; padding: 6px 0; border-bottom: 1px solid var(--border); color: var(--text);">
                 ${inc}
-                <input type="hidden" class="eb-hidden-include" value="${inc}">
             </div>
         `).join('');
     };
-
     window._tempOpenSelectPrompt = () => {
         const { gatherOptions } = AppStore.getState();
         import('../ui.js').then(module => {
             module.openSelectorModal('Select a Prompt', gatherOptions.prompts, (val) => {
-                document.getElementById('eb-prompt-select').value = val;
+                AppStore.setState({ flowFormPrompt: val });
+                const el = document.getElementById('eb-prompt-select');
+                if (el) el.value = val;
             });
         });
     };
-
     window._tempOpenSelectContexts = () => {
-        let checkboxesHtml = '';
-        allFiles.forEach((file, index) => {
-            const isChecked = currentIncludes.includes(file) ? 'checked' : '';
-            checkboxesHtml += `
+        AppStore.setState({ tempSelectContexts: [...(AppStore.getState().flowFormIncludes || [])] });
+        const checkboxesHtml = allFiles.reduce((acc, file, index) => {
+            const isChecked = (AppStore.getState().tempSelectContexts || []).includes(file) ? 'checked' : '';
+            return acc + `
                 <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
-                    <input type="checkbox" id="sc-cb-${index}" value="${file}" class="sc-file-checkbox" style="cursor: pointer; transform: scale(1.2);" ${isChecked}>
+                    <input type="checkbox" id="sc-cb-${index}" class="sc-file-checkbox" style="cursor: pointer; transform: scale(1.2);" ${isChecked}
+                    onchange="window.inSetu.stores.App.setState(s => { const set = new Set(s.tempSelectContexts || []); set.has('${file}') ? set.delete('${file}') : set.add('${file}'); return { tempSelectContexts: Array.from(set) }; })">
                     <label for="sc-cb-${index}" style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);">${file}</label>
                 </div>
             `;
-        });
+        }, '');
         window.inSetu.ui.Factory.createModal({
             id: 'select-contexts-modal-' + Date.now(),
             title: 'Select Contexts',
@@ -152,8 +165,8 @@ window.openEditBatchModal = function(batch = null) {
                     label: '✅ Confirm Selection',
                     style: 'primary',
                     onClick: (e, modal) => {
-                        currentIncludes = [];
-                        document.querySelectorAll('.sc-file-checkbox:checked').forEach(cb => currentIncludes.push(cb.value));
+                        const newIncludes = AppStore.getState().tempSelectContexts || [];
+                        AppStore.setState({ flowFormIncludes: newIncludes });
                         renderSelectedIncludes();
                         return false; 
                     }
@@ -161,20 +174,21 @@ window.openEditBatchModal = function(batch = null) {
             ]
         });
     };
-
     const bodyHtml = `
         <div style="display: flex; flex-direction: column; gap: 20px; flex: 1; overflow-y: auto; padding-right: 5px;">
             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <div style="flex: 1; min-width: 150px;">
                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Batch Title</label>
-                    <input type="text" id="eb-title" value="${batch ? batch.title : ''}" placeholder="e.g. API Wrap-Up" style="padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+                    <input type="text" id="eb-title" value="${batch ? batch.title : ''}" placeholder="e.g. API Wrap-Up" style="padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;"
+                    oninput="window.inSetu.stores.App.setState({ flowFormTitle: event.target.value }); if(!${!!batch}) { const newId = event.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); window.inSetu.stores.App.setState({ flowFormId: newId }); const idEl = document.getElementById('eb-id'); if(idEl) idEl.value = newId; }">
                 </div>
                 <div style="flex: 1; min-width: 150px; display: none;">
-                    <input type="text" id="eb-id" value="${batch ? batch.id : ''}" style="display: none;" ${batch ? 'readonly' : ''}>
+                    <input type="text" id="eb-id" value="${batch ? batch.id : ''}" style="display: none;" ${batch ? 'readonly' : ''} oninput="window.inSetu.stores.App.setState({ flowFormId: event.target.value })">
                 </div>
                 <div style="flex: 1; min-width: 150px;">
                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Domain</label>
-                    <input type="text" id="eb-domain" value="${batch ? (batch.domain || 'Workflows') : 'Workflows'}" placeholder="e.g. Workflows" style="padding: 10px; width: 100%; box-sizing: border-box;">
+                    <input type="text" id="eb-domain" value="${batch ? (batch.domain || 'Workflows') : 'Workflows'}" placeholder="e.g. Workflows" style="padding: 10px; width: 100%; box-sizing: border-box;"
+                    oninput="window.inSetu.stores.App.setState({ flowFormDomain: event.target.value })">
                 </div>
             </div>
 
@@ -189,30 +203,37 @@ window.openEditBatchModal = function(batch = null) {
             <div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
                     <input type="checkbox" id="eb-has-prompt" style="transform: scale(1.3); cursor: pointer;"
-${batch && batch.include_prompt ? 'checked' : ''} onchange="document.getElementById('eb-prompt-wrapper').style.display = this.checked ? 'block' : 'none';">
+${batch && batch.include_prompt ? 'checked' : ''} onchange="window.inSetu.stores.App.setState(s => ({ flowFormHasPrompt: !s.flowFormHasPrompt })); document.getElementById('eb-prompt-wrapper').style.display = window.inSetu.stores.App.getState().flowFormHasPrompt ? 'block' : 'none';">
                     <h4 style="margin: 0; color: var(--text); cursor: pointer; font-size: 1.05rem;"
 onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt</h4>
                 </div>
                 <div id="eb-prompt-wrapper" style="display: ${batch && batch.include_prompt ? 'block' : 'none'}; width: 100%;">
                     <div style="display: flex; gap: 8px;">
                         <input type="text" id="eb-prompt-select" value="${batch && batch.include_prompt ? batch.include_prompt : ''}" readonly placeholder="No prompt selected..." style="flex: 1; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); font-family: monospace; box-sizing: border-box; cursor: not-allowed; margin: 0;">
-                        <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px 14px;" type="button" onclick="window._tempOpenSelectPrompt()">📁 Select Prompt</button>
-                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 0; padding: 10px 14px;" type="button" title="Clear Prompt" onclick="document.getElementById('eb-prompt-select').value = ''">❌</button>
-                    </div>
+<button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px 14px;"
+type="button" onclick="window._tempOpenSelectPrompt()">📁 Select Prompt</button>
+<button class="btn-sm" style="background: var(--intent-neutral); margin: 0; padding: 10px 14px;"
+type="button" title="Clear Prompt" onclick="window.inSetu.stores.App.setState({ flowFormPrompt: '' }); const pel = document.getElementById('eb-prompt-select'); if(pel) pel.value = '';">❌</button>
+</div>
                 </div>
             </div>
-
             <div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                    <input type="checkbox" id="eb-has-response" style="transform: scale(1.3); cursor: pointer;" ${batch && batch.response_path ? 'checked' : ''} onchange="document.getElementById('eb-response-wrapper').style.display = this.checked ? 'block' : 'none';">
-                    <h4 style="margin: 0; color: var(--text); cursor: pointer; font-size: 1.05rem;" onclick="document.getElementById('eb-has-response').click()">3. Response Text Box</h4>
+
+        <input type="checkbox" id="eb-has-response" style="transform: scale(1.3); cursor: pointer;"
+${batch && batch.response_path ?
+'checked' : ''} onchange="window.inSetu.stores.App.setState(s => ({ flowFormHasResponse: !s.flowFormHasResponse })); document.getElementById('eb-response-wrapper').style.display = window.inSetu.stores.App.getState().flowFormHasResponse ? 'block' : 'none';">
+                    <h4 style="margin: 0; color: var(--text); cursor: pointer; font-size: 1.05rem;"
+onclick="document.getElementById('eb-has-response').click()">3. Response Text Box</h4>
                 </div>
                 <div id="eb-response-wrapper" style="display: ${batch && batch.response_path ? 'block' : 'none'}; width: 100%;">
                     <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Response Path</label>
-                    <input type="text" id="eb-response-path" value="${batch && batch.response_path ? batch.response_path : ''}" placeholder="e.g. sotu/sotu_{date}.current.md" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; margin-bottom: 15px; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);">
+                    <input type="text" id="eb-response-path" value="${batch && batch.response_path ? batch.response_path : ''}" placeholder="e.g. sotu/sotu_{date}.current.md" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; margin-bottom: 15px; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);"
+                    oninput="window.inSetu.stores.App.setState({ flowFormResponsePath: event.target.value })">
 
                     <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Archive Path (Optional)</label>
-                    <input type="text" id="eb-archive-path" value="${batch && batch.archive_path ? batch.archive_path : ''}" placeholder="e.g. sotu/archive/" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);">
+                    <input type="text" id="eb-archive-path" value="${batch && batch.archive_path ? batch.archive_path : ''}" placeholder="e.g. sotu/archive/" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);"
+                    oninput="window.inSetu.stores.App.setState({ flowFormArchivePath: event.target.value })">
                 </div>
             </div>
         </div>
@@ -249,14 +270,6 @@ onclick="document.getElementById('eb-has-prompt').click()">2. Instruction Prompt
     });
 
     renderSelectedIncludes();
-
-    const titleInput = document.getElementById('eb-title');
-    const idInput = document.getElementById('eb-id');
-    titleInput.addEventListener('keyup', (e) => {
-        if (!batch) {
-            idInput.value = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        }
-    });
 };
 
 window.deleteEditBatch = async function(batchId, modalId) {
@@ -279,28 +292,26 @@ window.deleteEditBatch = async function(batchId, modalId) {
         alert("Network error: " + e.message);
     }
 };
-
 window.saveEditBatch = async function(modalId, isEditing) {
-    const id = document.getElementById('eb-id').value.trim();
-    const title = document.getElementById('eb-title').value.trim();
-    const domain = document.getElementById('eb-domain').value.trim() || "Workflows";
+    const state = AppStore.getState();
+    const id = (state.flowFormId || '').trim();
+    const title = (state.flowFormTitle || '').trim();
+    const domain = (state.flowFormDomain || '').trim() || "Workflows";
 
     if (!id || !title) return alert("Batch ID and Title are required.");
 
-    const includes = [];
-    document.querySelectorAll('.eb-hidden-include').forEach(el => includes.push(el.value));
-
+    const includes = state.flowFormIncludes || [];
     const payload = { id, title, domain, includes };
 
-    if (document.getElementById('eb-has-prompt').checked) {
-        const promptVal = document.getElementById('eb-prompt-select').value;
+    if (state.flowFormHasPrompt) {
+        const promptVal = state.flowFormPrompt || '';
         if (promptVal) payload.include_prompt = promptVal;
     }
 
-    if (document.getElementById('eb-has-response').checked) {
-        const resVal = document.getElementById('eb-response-path').value.trim();
+    if (state.flowFormHasResponse) {
+        const resVal = (state.flowFormResponsePath || '').trim();
         if (resVal) payload.response_path = resVal;
-        const archVal = document.getElementById('eb-archive-path').value.trim();
+        const archVal = (state.flowFormArchivePath || '').trim();
         if (archVal) payload.archive_path = archVal;
     }
     const btn = document.getElementById('eb-save-btn');
@@ -357,9 +368,12 @@ window.openBatchModal = function(batch) {
 
             ${batch.include_prompt ? `
             <div id="batch-prompt-section">
-                <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                <textarea id="batch-prompt-text" style="height: 150px; margin-bottom: 10px; width: 100%; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 4px;" readonly>Loading prompt...</textarea>
-                <button id="batch-copy-prompt-btn" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" onclick="navigator.clipboard.writeText(document.getElementById('batch-prompt-text').value); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Prompt', 2000);">📋 Copy Prompt</button>
+                <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2.
+Instruction Prompt</h4>
+                <textarea id="batch-prompt-text" style="height: 150px; margin-bottom: 10px; width: 100%; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 4px;"
+readonly>Loading prompt...</textarea>
+                <button id="batch-copy-prompt-btn" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;"
+onclick="navigator.clipboard.writeText(window.inSetu.stores.App.getState().batchPromptText || ''); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Prompt', 2000);">📋 Copy Prompt</button>
             </div>` : ''}
 
             ${batch.response_path ? `
@@ -385,19 +399,25 @@ window.openBatchModal = function(batch) {
     dlBtn.classList.add('ui-draggable-export');
     dlBtn.dataset.filename = contextFile;
     dlBtn.dataset.fetchUrl = `/api/${activeWorkspace}/bridge/fetch?file=${encodeURIComponent(artifactsDir + '/workflows/' + contextFile)}`;
-
     if (batch.include_prompt) {
         const promptTextArea = document.getElementById('batch-prompt-text');
         const promptPath = profileDir + '/' + batch.include_prompt;
         fetch(`/api/${activeWorkspace}/prompts/resolve?file=${encodeURIComponent(promptPath)}`)
             .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed or Prompts extension is inactive")))
-            .then(text => promptTextArea.value = text)
-            .catch(err => promptTextArea.value = `[Error: ${err.message}]`);
+            .then(text => {
+                AppStore.setState({ batchPromptText: text });
+                promptTextArea.value = text;
+            })
+            .catch(err => {
+                const errorMsg = `[Error: ${err.message}]`;
+                AppStore.setState({ batchPromptText: errorMsg });
+                promptTextArea.value = errorMsg;
+            });
     }
-
     if (batch.response_path) {
         document.getElementById('batch-save-response-btn').onclick = () => {
-            const content = document.getElementById('batch-response-text').value;
+            const contentEl = document.getElementById('batch-response-text');
+            const content = contentEl ? contentEl.value : '';
             if (!content.trim()) return alert('Please paste a response.');
             const payload = {
                 filepath: `${artifactsDir}/${finalPath}`,

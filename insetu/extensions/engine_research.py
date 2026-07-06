@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import uuid
 from datetime import datetime
@@ -192,10 +193,10 @@ class GooglePlaywrightProvider(SearchProvider):
                     from insetu.utils_core import get_workspace_physics
                     import time, os
                     cfg_path, _, _ = get_workspace_physics()
-                    log_dir = os.path.join(os.path.dirname(cfg_path), "data", "logs", "research_dumps")
-                    os.makedirs(log_dir, exist_ok=True)
-                    dump_path = os.path.join(log_dir, f"google_serp_fail_{int(time.time())}.html")
-                    with open(dump_path, "w", encoding="utf-8") as f:
+                    log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
+                    os.makedirs(log_dir.as_posix(), exist_ok=True)
+                    dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
+                    with open(dump_path.as_posix(), "w", encoding="utf-8") as f:
                         f.write(page.content())
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:

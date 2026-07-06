@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import subprocess
 import uuid
@@ -23,7 +24,6 @@ def generate_diff_context(workspace_id=None, target_repos=None):
     _, ws_root, _ = get_workspace_physics(workspace_id)
 
     live_cfg = load_config(workspace_id)
-    from pathlib import Path
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
 
@@ -65,7 +65,7 @@ def generate_diff_context(workspace_id=None, target_repos=None):
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
                 if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
 
-                if os.path.isfile(os.path.join(repo_path, filepath)) or 'D' in status:
+                if os.path.isfile(Path(repo_path).joinpath(filepath).as_posix()) or 'D' in status:
                     changed_files.append((filepath, status))
             if not changed_files: continue
             sub_buckets = config.get("sub_buckets", [])
@@ -176,7 +176,7 @@ def api_git_sweep_status():
     results = {}
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
-        repo_path = os.path.join(ws_root, repo)
+        repo_path = Path(ws_root).joinpath(repo).as_posix()
         if c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
         if not os.path.exists(repo_path): continue
@@ -209,7 +209,7 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
             if not files: continue
             update_immediate_job_status(job_id, 'processing', f"Pushing {repo}...", workspace_id=workspace_id)
 
-            repo_path = os.path.join(ws_root, repo)
+            repo_path = Path(ws_root).joinpath(repo).as_posix()
             for c in cfg.get("target_repos", []):
                 if c.get("repo_dir") == repo and c.get("physical_path"):
                     repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
@@ -273,7 +273,7 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
 
     cfg = load_config(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
-    repo_path = os.path.join(ws_root, repo)
+    repo_path = Path(ws_root).joinpath(repo).as_posix()
     for c in cfg.get("target_repos", []):
         if c.get("repo_dir") == repo and c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
@@ -287,7 +287,7 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
     if diff_file:
         from insetu.utils_core import get_gather_paths
         paths = get_gather_paths(workspace_id)
-        diff_path = os.path.join(paths["diffs_dir"], diff_file)
+        diff_path = Path(paths["diffs_dir"]).joinpath(diff_file).as_posix()
         if os.path.exists(diff_path):
             with open(diff_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -314,10 +314,10 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
         from insetu.cartographer import map_repositories
         map_repositories(workspace_id)
 
-        if os.path.exists(os.path.join(repo_path, "CODE_INDEX.md")): files_to_stage.add("CODE_INDEX.md")
-        if os.path.exists(os.path.join(repo_path, "docs", "CODE_INDEX.md")): files_to_stage.add("docs/CODE_INDEX.md")
+        if os.path.exists(Path(repo_path).joinpath("CODE_INDEX.md").as_posix()): files_to_stage.add("CODE_INDEX.md")
+        if os.path.exists(Path(repo_path).joinpath("docs", "CODE_INDEX.md").as_posix()): files_to_stage.add("docs/CODE_INDEX.md")
         for m_dir in cfg.get("managed_dirs", []):
-            if os.path.exists(os.path.join(repo_path, m_dir)): files_to_stage.add(f"{m_dir}/")
+            if os.path.exists(Path(repo_path).joinpath(m_dir).as_posix()): files_to_stage.add(f"{m_dir}/")
 
         update_immediate_job_status(job_id, 'processing', f"Committing and pushing {repo}...", workspace_id=workspace_id)
         subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
@@ -382,10 +382,10 @@ def provide_available_diffs(workspace_id=None, **kwargs):
                     sub_out = b.get("out_file", f"{safe_r_dir}_{b.get('id')}_context.txt")
                     expected_diffs.add(f"diffs/{sub_out.replace('_context.txt', '_diffs.txt')}")
                 else:
-                    dyn_dir = os.path.join(paths["workspace_root"], r_dir, b["dynamic_split_prefix"])
+                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
                     if os.path.exists(dyn_dir):
                         for module in os.listdir(dyn_dir):
-                            if os.path.isdir(os.path.join(dyn_dir, module)) and not module.startswith('.'):
+                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_diffs.add(f"diffs/{module}_diffs.txt")
 
     if os.path.exists(paths["diffs_dir"]):

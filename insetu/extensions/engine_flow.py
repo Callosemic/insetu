@@ -20,20 +20,20 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
     batch_id = batch.get("id")
     if not batch_id: return
     includes = batch.get("includes", [])
-    out_path = os.path.join(paths["gather_dir"], f"{batch_id}_context.txt")
+    out_path = Path(paths["gather_dir"]).joinpath(f"{batch_id}_context.txt").as_posix()
     from insetu.routes_fs import execute_vfs_save
     from insetu.utils_core import generate_text_chunks
     if manifest_data is None:
-        manifest_path = os.path.join(paths["contexts_dir"], "manifest.json")
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         from insetu.utils_core import load_json_file
         manifest_data = load_json_file(manifest_path, {})
     content_lines = []
     content_lines.append(f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n")
     for inc in includes:
         if inc.startswith("prompts/"):
-            inc_path = os.path.join(paths["prompts_dir"], inc[8:])
+            inc_path = Path(paths["prompts_dir"]).joinpath(inc[8:]).as_posix()
         else:
-            inc_path = os.path.join(paths["artifacts_base"], inc)
+            inc_path = Path(paths["artifacts_base"]).joinpath(inc).as_posix()
 
         if os.path.exists(inc_path):
             with open(inc_path, "r", encoding="utf-8") as in_f:
@@ -121,7 +121,7 @@ def api_flow_batches_delete(workspace_id):
     w_cfg["context_batches"] = [b for b in batches if b.get("id") != batch_id]
     save_json_file(paths["workflows_path"], w_cfg, workspace_id)
     try:
-        out_path = os.path.join(paths["gather_dir"], f"{batch_id}_context.txt")
+        out_path = Path(paths["gather_dir"]).joinpath(f"{batch_id}_context.txt").as_posix()
         from insetu.routes_fs import execute_vfs_delete
         execute_vfs_delete(workspace_id, out_path)
     except Exception:

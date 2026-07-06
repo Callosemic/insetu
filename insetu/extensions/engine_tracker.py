@@ -16,7 +16,7 @@ __depends__ = []
 def init_tracker_db():
     import json
     from insetu.utils_core import _cwd
-    index_path = os.path.join(_cwd, ".insetu", "workspaces.json")
+    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
     workspace_ids = ["default"]
     if os.path.exists(index_path):
         try:
@@ -51,7 +51,7 @@ def init_tracker_db():
 def handle_tracker_file_save(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
         _, ws_root, _ = get_workspace_physics(workspace_id)
-        abs_path = os.path.join(ws_root, filepath)
+        abs_path = Path(ws_root).joinpath(filepath).as_posix()
         if os.path.exists(abs_path):
             _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
 
@@ -156,12 +156,12 @@ def _sync_disk_to_db(workspace_id=None):
 
     conn.execute("DELETE FROM tracker_tickets")
     for repo in get_sister_repos(workspace_id):
-        base = os.path.join(ws_root, repo, ".tracker")
+        base = Path(ws_root).joinpath(repo, ".tracker").as_posix()
         if not os.path.exists(base): continue
         for root, _, filenames in os.walk(base):
             for f in filenames:
                 if f.endswith('.md'):
-                    abs_path = os.path.join(root, f)
+                    abs_path = Path(root).joinpath(f).as_posix()
                     rel_path = os.path.relpath(abs_path, ws_root)
                     _parse_and_upsert_ticket(abs_path, rel_path, workspace_id)
     conn.commit()
@@ -206,14 +206,14 @@ def inject_tracker_config(cfg, **kwargs):
 def get_tracker_path(repo, ticket_type, status, workspace_id=None):
     """Resolves the physical directory for a ticket based on your taxonomy."""
     _, ws_root, _ = get_workspace_physics(workspace_id)
-    base = os.path.join(ws_root, repo, ".tracker")
+    base = Path(ws_root).joinpath(repo, ".tracker").as_posix()
     if status == "archived":
-        return os.path.join(base, "log", "archived")
+        return Path(base).joinpath("log", "archived").as_posix()
     elif status == "logged":
-        return os.path.join(base, "log")
+        return Path(base).joinpath("log").as_posix()
 
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
-    return os.path.join(base, folder_type, status)
+    return Path(base).joinpath(folder_type, status).as_posix()
 def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bucket="None", workspace_id=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     # Create a short prefix dynamically from the repo name
@@ -229,7 +229,7 @@ def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bu
 
     target_dir = get_tracker_path(repo, ticket_type, status, workspace_id=workspace_id)
     os.makedirs(target_dir, exist_ok=True)
-    filepath = os.path.join(target_dir, filename)
+    filepath = Path(target_dir).joinpath(filename).as_posix()
     tags_yaml = f"\ntags: [{', '.join(f'{t.strip()}' for t in tags.split(',') if t.strip())}]" if tags else ""
     content = f"""---
 repo: "{repo}"
@@ -277,7 +277,7 @@ def _extract_closed_date(content):
 def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspace_id=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
     _, ws_root, _ = get_workspace_physics(workspace_id)
-    abs_current = os.path.join(ws_root, current_rel_path)
+    abs_current = Path(ws_root).joinpath(current_rel_path).as_posix()
     if not os.path.exists(abs_current):
         raise FileNotFoundError(f"Ticket not found: {abs_current}")
 
@@ -350,13 +350,13 @@ def enforce_declarative_tickets(workspace_id=None):
         valid_buckets_by_repo[r] = buckets
 
     for current_repo in repos:
-        base_dir = os.path.join(ws_root, current_repo, ".tracker")
+        base_dir = Path(ws_root).joinpath(current_repo, ".tracker").as_posix()
         if not os.path.exists(base_dir): continue
 
         for root, _, files in os.walk(base_dir):
             for filename in files:
                 if not filename.endswith('.md'): continue
-                filepath = os.path.join(root, filename)
+                filepath = Path(root).joinpath(filename).as_posix()
                 rel_dir = os.path.relpath(root, base_dir)
                 rel_dir_lower = rel_dir.lower()
                 # Infer current state from path as fallback, defaulting to todo
@@ -506,7 +506,7 @@ def enforce_declarative_tickets(workspace_id=None):
                     # Determine intended physical destination based on declarative state
                     intended_dir = get_tracker_path(decl_repo, decl_type, decl_status, workspace_id=workspace_id)
                     intended_filename = f"{decl_id}.md"
-                    intended_path = os.path.join(intended_dir, intended_filename)
+                    intended_path = Path(intended_dir).joinpath(intended_filename).as_posix()
                     current_rel_path = os.path.relpath(filepath, ws_root)
                     intended_rel_path = os.path.relpath(intended_path, ws_root)
                     # Self-Healing: Duplicate / Ghost File Detection
@@ -559,7 +559,7 @@ def enforce_declarative_tickets(workspace_id=None):
         # Post-sweep cleanup: remove empty ghost directories left behind
         for root, dirs, files in os.walk(base_dir, topdown=False):
             for d in dirs:
-                dir_path = os.path.join(root, d)
+                dir_path = Path(root).joinpath(d).as_posix()
                 try:
                     if not os.listdir(dir_path):
                         os.rmdir(dir_path)
@@ -578,13 +578,13 @@ def archive_stale_tickets(workspace_id=None):
     for repo in repos:
         # Sweep 1: Move >7 day closed tickets to log
         for folder_type in ["todos", "bugs", "queue"]:
-            closed_dir = os.path.join(ws_root, repo, ".tracker", folder_type, "closed")
+            closed_dir = Path(ws_root).joinpath(repo, ".tracker", folder_type, "closed").as_posix()
             if not os.path.exists(closed_dir): continue
 
             for filename in os.listdir(closed_dir):
                 if not filename.endswith(".md"): continue
 
-                filepath = os.path.join(closed_dir, filename)
+                filepath = Path(closed_dir).joinpath(filename).as_posix()
                 if os.path.isfile(filepath):
                     with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()
@@ -598,12 +598,12 @@ def archive_stale_tickets(workspace_id=None):
                         archived_count += 1
 
         # Sweep 2: Move >30 day logged tickets to archive
-        log_dir = os.path.join(ws_root, repo, ".tracker", "log")
+        log_dir = Path(ws_root).joinpath(repo, ".tracker", "log").as_posix()
         if os.path.exists(log_dir):
             for filename in os.listdir(log_dir):
                 if not filename.endswith(".md"): continue
 
-                filepath = os.path.join(log_dir, filename)
+                filepath = Path(log_dir).joinpath(filename).as_posix()
                 if os.path.isfile(filepath):
                     with open(filepath, "r", encoding="utf-8") as f:
                         content = f.read()

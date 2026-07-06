@@ -21,9 +21,15 @@ if (promptsScreen) {
 export async function renderPromptsTab() {
     const container = document.getElementById('prompts-list');
     if (!container) return;
-    container.innerHTML = '<div class="spinner" style="display:block;">Loading prompts...</div>';
+    container.replaceChildren();
+    const loadEl = document.createElement('div');
+    loadEl.className = 'spinner';
+    loadEl.style.display = 'block';
+    loadEl.innerText = 'Loading prompts...';
+    container.appendChild(loadEl);
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const activeWs = AppStore.getState().activeWorkspace ||
+'default';
         const res = await fetch(`/api/${activeWs}/prompts/list`);
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         const data = await res.json();
@@ -34,11 +40,11 @@ export async function renderPromptsTab() {
                 profileDir: data.profile_dir || ".insetu/profiles/default"
             }
         });
-    } catch (e) {
+} catch (e) {
         console.error("Failed to fetch prompts:", e);
-    }
+}
 
-    container.innerHTML = '';
+    container.replaceChildren();
     const { gatherOptions } = AppStore.getState();
     const rawPrompts = gatherOptions.prompts || [];
     
@@ -48,25 +54,18 @@ export async function renderPromptsTab() {
     }
     const treePaths = rawPrompts.map(p => p.replace(/^prompts\//, ''));
     const tree = buildFileTree(treePaths);
+    const initialCpPath = AppStore.getState().currentPromptsPath || [];
 
-    let cpPath = AppStore.getState().currentPromptsPath || [];
-    let current = tree;
-    let resetPath = false;
-
-    for (const p of cpPath) {
-        if (current[p] && !current[p]._isFile) {
-            current = current[p];
-        } else {
-            resetPath = true;
-            current = tree;
-            break;
+    const { current, resetPath } = initialCpPath.reduce((acc, p) => {
+        if (acc.resetPath) return acc;
+        if (acc.current[p] && !acc.current[p]._isFile) {
+            return { current: acc.current[p], resetPath: false };
         }
-    }
+        return { current: tree, resetPath: true };
+    }, { current: tree, resetPath: false });
 
-    if (resetPath) {
-        cpPath = [];
-        AppStore.setState({ currentPromptsPath: cpPath });
-    }
+    const cpPath = resetPath ? [] : initialCpPath;
+    if (resetPath) AppStore.setState({ currentPromptsPath: cpPath });
 
     if (cpPath.length > 0) {
         const headerDiv = document.createElement('div');

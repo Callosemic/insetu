@@ -1,10 +1,10 @@
 // ext_config.js - Workspace Configuration Editor Extension
-
-let currentConfig = {};
+import { AppStore } from '../store.js';
 
 function renderExtensions() {
     const container = document.getElementById('config-editor-extensions');
-    container.innerHTML = '';
+    container.replaceChildren();
+    const currentConfig = AppStore.getState().workspaceConfigForm || {};
     if (!currentConfig.extensions) currentConfig.extensions = ['config'];
     // Dynamically load available extensions from the backend payload
     const knownExtensions = currentConfig._available_extensions || [];
@@ -42,11 +42,11 @@ function renderExtensions() {
         container.appendChild(wrap);
     });
 }
-
 function renderRepos() {
     const container = document.getElementById('config-editor-repos');
-    container.innerHTML = '';
-    
+    container.replaceChildren();
+
+    const currentConfig = AppStore.getState().workspaceConfigForm || {};
     const repos = currentConfig.target_repos || [];
     repos.forEach((repo, idx) => {
         const card = document.createElement('div');
@@ -171,11 +171,11 @@ function renderRepos() {
 
     repos.forEach((r, idx) => renderSubBuckets(idx));
 }
-
 function renderSubBuckets(repoIdx) {
     const container = document.getElementById(`sub-buckets-container-${repoIdx}`);
     if (!container) return;
-    container.innerHTML = '';
+    container.replaceChildren();
+    const currentConfig = AppStore.getState().workspaceConfigForm || {};
     const repo = currentConfig.target_repos[repoIdx];
     const buckets = repo.sub_buckets || [];
 
@@ -190,71 +190,73 @@ function renderSubBuckets(repoIdx) {
         const card = document.createElement('div');
         card.style.cssText = "background: var(--bg); border: 1px solid var(--border); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 8px;";
 
-        let html = `
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <select class="bucket-type-select" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding: 4px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); width: 200px;">
-                    <option value="explicit" ${!isImplicit ? 'selected' : ''}>Explicit (Match Prefixes)</option>
-                    <option value="implicit" ${isImplicit ? 'selected' : ''}>Implicit (Dynamic Folders)</option>
-                </select>
-                <button class="btn-sm btn-del-bucket" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;">🗑️</button>
-            </div>
-        `;
-
-        if (!isImplicit) {
-            html += `
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" value="${b.id || ''}" placeholder="my_bucket" class="b-id" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" value="${b.title || ''}" placeholder="Display Name" class="b-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" value="${b.domain || ''}" placeholder="Category" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                </div>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" value="${b.description || ''}" placeholder="What goes here?" class="b-desc" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                    <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" value="${b.out_file || ''}" placeholder="out_context.txt" class="b-outfile" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
-                </div>
-                <div>
-                    <label style="font-size: 0.75rem; color:var(--text-muted);">Match Prefixes (comma separated)</label>
-                    <input type="text" value="${(b.match_prefixes || []).join(', ')}" placeholder="path/to/folder, other/path" class="b-prefixes" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
-                </div>
-                <div style="margin-top: 5px;">
-                    <label style="font-size: 0.8rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="b-catchall" data-ridx="${repoIdx}" data-bidx="${bIdx}" ${b.is_catch_all ? 'checked' : ''}> Designate as Catch-All Bucket</label>
+        const html = (() => {
+            const baseHtml = `
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <select class="bucket-type-select" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding: 4px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); width: 200px;">
+                        <option value="explicit" ${!isImplicit ? 'selected' : ''}>Explicit (Match Prefixes)</option>
+                        <option value="implicit" ${isImplicit ? 'selected' : ''}>Implicit (Dynamic Folders)</option>
+                    </select>
+                    <button class="btn-sm btn-del-bucket" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;">🗑️</button>
                 </div>
             `;
-        } else {
-            let metaHtml = '';
-            const mmap = b.meta_map || {};
-            Object.keys(mmap).forEach((dirKey) => {
-                const meta = mmap[dirKey];
-                metaHtml += `
-                    <div style="display: flex; gap: 5px; align-items: center; background: var(--input-bg); padding: 5px; border-radius: 4px; flex-wrap: wrap;">
-                        <input type="text" value="${dirKey}" placeholder="Folder Name" class="m-dir" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
-                        <input type="text" value="${meta.title || ''}" placeholder="Title" class="m-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
-                        <input type="text" value="${meta.domain || ''}" placeholder="Domain" class="m-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
-                        <button class="btn-sm btn-del-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-key="${dirKey}" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1rem; padding: 0 5px; cursor: pointer;">×</button>
+            if (!isImplicit) {
+                const joinedPrefixes = (b.match_prefixes || []).join(', ');
+                return baseHtml + `
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" value="${b.id || ''}" placeholder="my_bucket" class="b-id" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                        <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" value="${b.title || ''}" placeholder="Display Name" class="b-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                        <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" value="${b.domain || ''}" placeholder="Category" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    </div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" value="${b.description || ''}" placeholder="What goes here?" class="b-desc" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                        <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" value="${b.out_file || ''}" placeholder="out_context.txt" class="b-outfile" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;"></div>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.75rem; color:var(--text-muted);">Match Prefixes (comma separated)</label>
+                        <input type="text" value="${joinedPrefixes}" placeholder="path/to/folder, other/path" class="b-prefixes" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                    </div>
+                    <div style="margin-top: 5px;">
+                        <label style="font-size: 0.8rem; color: var(--text); cursor: pointer;"><input type="checkbox" class="b-catchall" data-ridx="${repoIdx}" data-bidx="${bIdx}" ${b.is_catch_all ? 'checked' : ''}> Designate as Catch-All Bucket</label>
                     </div>
                 `;
-            });
-            html += `
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <div style="flex: 1;">
-                        <label style="font-size: 0.75rem; color:var(--text-muted);">Dynamic Split Prefix</label>
-                        <input type="text" value="${b.dynamic_split_prefix || ''}" placeholder="e.g. . or docs/" class="b-dyn" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+            } else {
+                const mmap = b.meta_map || {};
+                const metaHtml = Object.keys(mmap).map((dirKey) => {
+                    const meta = mmap[dirKey];
+                    return `
+                        <div style="display: flex; gap: 5px; align-items: center; background: var(--input-bg); padding: 5px; border-radius: 4px; flex-wrap: wrap;">
+                            <input type="text" value="${dirKey}" placeholder="Folder Name" class="m-dir" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
+                            <input type="text" value="${meta.title || ''}" placeholder="Title" class="m-title" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
+                            <input type="text" value="${meta.domain || ''}" placeholder="Domain" class="m-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-oldkey="${dirKey}" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;">
+                            <button class="btn-sm btn-del-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" data-key="${dirKey}" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1rem; padding: 0 5px; cursor: pointer;">×</button>
+                        </div>
+                    `;
+                }).join('');
+
+                return baseHtml + `
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <div style="flex: 1;">
+                            <label style="font-size: 0.75rem; color:var(--text-muted);">Dynamic Split Prefix</label>
+                            <input type="text" value="${b.dynamic_split_prefix || ''}" placeholder="e.g. . or docs/" class="b-dyn" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="font-size: 0.75rem; color:var(--text-muted);">Shared Base Domain</label>
+                            <input type="text" value="${b.domain || ''}" placeholder="e.g. Dynamic Modules" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                        </div>
                     </div>
-                    <div style="flex: 1;">
-                        <label style="font-size: 0.75rem; color:var(--text-muted);">Shared Base Domain</label>
-                        <input type="text" value="${b.domain || ''}" placeholder="e.g. Dynamic Modules" class="b-domain" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;">
+                    <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <label style="font-size: 0.75rem; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
+                            <button class="btn-sm btn-add-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: var(--intent-primary); margin: 0; padding: 2px 6px; font-size: 0.7rem;">+ Folder Meta</button>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                            ${metaHtml}
+                        </div>
                     </div>
-                </div>
-                <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                        <label style="font-size: 0.75rem; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
-                        <button class="btn-sm btn-add-meta" data-ridx="${repoIdx}" data-bidx="${bIdx}" style="background: var(--intent-primary); margin: 0; padding: 2px 6px; font-size: 0.7rem;">+ Folder Meta</button>
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 5px;">
-                        ${metaHtml}
-                    </div>
-                </div>
-            `;
-        }
+                `;
+            }
+        })();
 
         card.innerHTML = html;
         container.appendChild(card);
@@ -287,15 +289,17 @@ function renderSubBuckets(repoIdx) {
     container.querySelectorAll('.b-desc').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].description = e.target.value);
     container.querySelectorAll('.b-outfile').forEach(el => el.oninput = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].out_file = e.target.value);
     container.querySelectorAll('.b-catchall').forEach(el => el.onchange = (e) => currentConfig.target_repos[e.target.dataset.ridx].sub_buckets[e.target.dataset.bidx].is_catch_all = e.target.checked);
-
     container.querySelectorAll('.btn-add-meta').forEach(btn => btn.onclick = (e) => {
         const r = e.target.dataset.ridx;
         const b = e.target.dataset.bidx;
         const mmap = currentConfig.target_repos[r].sub_buckets[b].meta_map || {};
         currentConfig.target_repos[r].sub_buckets[b].meta_map = mmap;
-        let n = 1;
-        while (mmap[`new_folder_${n}`]) n++;
-        mmap[`new_folder_${n}`] = { title: '', domain: '' };
+        const getNextFolderName = () => {
+            const nextIdx = Object.keys(mmap).filter(k => k.startsWith('new_folder_')).length + 1;
+            return `new_folder_${nextIdx}`;
+        };
+        mmap[getNextFolderName()] = { title: '', domain: '' };
+
         renderSubBuckets(r);
     });
 
@@ -335,7 +339,7 @@ export async function openConfigEditor() {
     try {
         const res = await fetch('/api/system/config');
         if (res.ok) {
-            currentConfig = await res.json();
+            AppStore.setState({ workspaceConfigForm: await res.json() });
 
             const bodyHtml = `
                 <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
@@ -364,13 +368,12 @@ export async function openConfigEditor() {
                     }}
                 ]
             });
-
             renderExtensions();
             renderRepos();
-
             document.getElementById('config-editor-add-repo').onclick = () => {
+                const currentConfig = AppStore.getState().workspaceConfigForm;
                 if (!currentConfig.target_repos) currentConfig.target_repos = [];
-                currentConfig.target_repos.push({ 
+                currentConfig.target_repos.push({  
                     repo_dir: '', 
                     title: '', 
                     domain: 'Workspaces', 
@@ -382,17 +385,17 @@ export async function openConfigEditor() {
                 const container = document.getElementById('config-editor-repos');
                 if (container) container.parentElement.scrollTo(0, container.parentElement.scrollHeight);
             };
-
-            document.getElementById('config-editor-save').onclick = async () => {
-                const btn = document.getElementById('config-editor-save');
-                const origText = btn.innerText;
-                btn.innerText = "⏳ Saving...";
-                try {
-                    const res = await fetch('/api/system/config', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(currentConfig)
-                    });
+                        document.getElementById('config-editor-save').onclick = async () => {
+                            const btn = document.getElementById('config-editor-save');
+                            const origText = btn.innerText;
+                            btn.innerText = "⏳ Saving...";
+                            const currentConfig = AppStore.getState().workspaceConfigForm;
+                            try {
+                                const res = await fetch('/api/system/config', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(currentConfig)
+                                });
                     if (res.ok) {
                         window.location.reload();
                     } else {

@@ -18,7 +18,6 @@ const _safeParseSet = (key) => {
     }
 };
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-
 export const CitationStore = createStore(
     devtools(
         subscribeWithSelector((set) => ({
@@ -32,7 +31,11 @@ export const CitationStore = createStore(
             activeAttachCitation: null,
             activeEditCitation: null,
             currentEditAuthors: [],
-            resetState: () => set({ localLibrary: [], cachedPublications: [], cachedAuthors: [], activeAttachCitation: null, activeEditCitation: null, currentEditAuthors: [] })
+            currentExplorePage: 1,
+            citationLibraryCache: null,
+            attachForm: { repo: '', bucket: 'None' },
+            editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
+            resetState: () => set({ localLibrary: [], cachedPublications: [], cachedAuthors: [], activeAttachCitation: null, activeEditCitation: null, currentEditAuthors: [], currentExplorePage: 1, citationLibraryCache: null, attachForm: { repo: '', bucket: 'None' }, editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' } })
         })),
         { name: 'CitationStore' }
     )
@@ -151,80 +154,6 @@ if (libraryScreen) {
                 <div id="lib-import-log" style="font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; color: var(--text);"></div>
             </div>
         </div>
-
-        <div id="lib-attach-modal" class="fullscreen-modal" style="z-index: 1090;">
-            <div class="modal-content" style="max-height: 500px; height: auto;">
-<div style="display: flex;
-justify-content: space-between; align-items: center; margin-bottom: 15px;">
-    <h3 style="margin:0;
-font-size: 1.1rem;">Attach: <span id="attach-ref-id" style="color: var(--intent-highlight); font-family: monospace;"></span></h3>
-    <button onclick="document.getElementById('lib-attach-modal').style.display='none'" class="btn-sm" style="background: var(--intent-neutral);
-margin: 0;">Back</button>
-</div>
-                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                    <select id="attach-repo-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
-                    <select id="attach-bucket-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
-                    <button id="btn-add-attachment" class="btn-sm" style="background:var(--intent-success); margin: 0;">➕ Add</button>
-                </div>
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Current Attachments:</label>
-                <div id="current-attachments-list" style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;"></div>
-            </div>
-        </div>
-        <div id="edit-citation-modal" class="fullscreen-modal" style="z-index: 1090;">
-            <div class="modal-content" style="max-height: 85vh; height: auto; display: flex; flex-direction: column; overflow-y: auto;">
-<div style="display: flex;
-justify-content: space-between; align-items: center; margin-bottom: 15px;">
-    <h3 style="margin:0;
-font-size: 1.1rem;">Edit: <span id="edit-ref-id" style="color: var(--intent-warning); font-family: monospace;"></span></h3>
-    <button onclick="document.getElementById('edit-citation-modal').style.display='none'" class="btn-sm" style="background: var(--intent-neutral);
-margin: 0;">Back</button>
-</div>
-                <div style="display: flex; gap: 10px; margin-bottom: 12px;">
-                    <div style="flex: 1;">
-                        <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Type:</label>
-                        <select id="edit-cit-type" style="width: 100%; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-                            <option value="article-journal">Journal Article</option>
-                            <option value="book">Book</option>
-                            <option value="chapter">Book Chapter</option>
-                            <option value="paper-conference">Conference Paper</option>
-                            <option value="article-magazine">Magazine Article</option>
-                            <option value="article-newspaper">Newspaper Article</option>
-                            <option value="webpage">Webpage</option>
-                            <option value="thesis">Thesis</option>
-                            <option value="report">Report</option>
-                            <option value="document">Document (Generic)</option>
-                        </select>
-                    </div>
-                </div>
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Item Title:</label>
-                <input type="text" id="edit-cit-title" style="width: 100%; padding: 8px; margin-bottom: 12px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Publication Title <span style="font-weight:normal;">(e.g., Journal Name)</span>:</label>
-                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="text" id="edit-cit-pub-title" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-                    <button id="btn-pick-pub" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
-                </div>
-
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Authors:</label>
-                <div id="edit-cit-author-pills" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
-                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-                    <input type="text" id="edit-cit-author-input" placeholder="Last, First" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-                    <button id="btn-pick-author" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
-                    <button id="btn-add-cit-author" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 12px;" type="button">➕ Add</button>
-                </div>
-
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Date <span style="font-weight:normal;">(YYYY or YYYY-MM-DD)</span>:</label>
-                <input type="text" id="edit-cit-date" style="width: 100%; padding: 8px; margin-bottom: 15px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;">
-
-                <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
-                <textarea id="edit-citation-json" style="flex: 1; min-height: 200px; margin-bottom: 15px; font-family: monospace; font-size: 13px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical;"></textarea>
-
-                <div style="display: flex; gap: 10px; margin-top: auto;">
-                    <button id="btn-delete-citation" class="btn-sm" style="background:var(--intent-danger); margin: 0; padding: 10px; font-size: 1rem; font-weight: bold;">🗑️ Delete</button>
-                    <button id="btn-save-citation" class="btn-sm" style="background:var(--intent-success); margin: 0; padding: 10px; font-size: 1rem; font-weight: bold; flex: 1;">💾 Save Changes</button>
-                </div>
-            </div>
-        </div>
     `;
     // --- LOGIC & BINDINGS ---
     const renderLibPins = (state) => {
@@ -280,7 +209,8 @@ margin: 0;">Back</button>
                 } else if (data.results && data.results.length > 1) {
                     if (window.openLinkModal) {
                         window.openLinkModal();
-                        document.getElementById('link-search-input').value = cslId;
+                        const linkSearchInput = document.getElementById('link-search-input');
+                        if (linkSearchInput) linkSearchInput.value = cslId;
                         window.switchLinkTab('deep');
                         window.executeDeepLinkSearch();
                     }
@@ -293,46 +223,85 @@ margin: 0;">Back</button>
             alert("Error searching for notes.");
         } finally {
             if (btn) btn.innerText = "📝 Notes";
-        }
+}
     };
-
-    let activeAttachCitation = null;
     const openAttachModal = (citation) => {
-        activeAttachCitation = citation;
-        document.getElementById('attach-ref-id').innerText = `[@${citation.id}]`;
+        CitationStore.setState({ activeAttachCitation: citation });
+const bodyHtml = `
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <select id="attach-repo-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
+                <select id="attach-bucket-select" style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"></select>
+                <button id="btn-add-attachment" class="btn-sm" style="background:var(--intent-success); margin: 0;">➕ Add</button>
+            </div>
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Current Attachments:</label>
+            <div id="current-attachments-list" style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;"></div>
+        `;
 
+        window.inSetu.ui.Factory.createModal({
+            id: 'lib-attach-dynamic-modal',
+            title: `Attach: <span style="color: var(--intent-highlight); font-family: monospace;">[@${citation.id}]</span>`,
+            body: bodyHtml
+        });
         const repoSelect = document.getElementById('attach-repo-select');
         const bucketSelect = document.getElementById('attach-bucket-select');
 
-        repoSelect.innerHTML = '';
-        libRepos.forEach(r => {
+        repoSelect.replaceChildren();
+        const { allRepos } = AppStore.getState();
+        allRepos.forEach(r => {
             const opt = document.createElement('option');
             opt.value = r;
             opt.innerText = r;
             repoSelect.appendChild(opt);
         });
-        const updateBuckets = () => {
-            bucketSelect.innerHTML = '<option value="None">No Bucket</option>';
-            const buckets = getFlattenedBuckets(repoSelect.value);
+
+        CitationStore.setState(state => ({ attachForm: { ...state.attachForm, repo: allRepos[0] || '', bucket: 'None' } }));
+
+        const updateBuckets = (selectedRepo) => {
+            bucketSelect.replaceChildren();
+            const defOpt = document.createElement('option');
+            defOpt.value = "None";
+            defOpt.innerText = "No Bucket";
+            bucketSelect.appendChild(defOpt);
+
+            const buckets = getFlattenedBuckets(selectedRepo);
             buckets.forEach(b => {
                 const opt = document.createElement('option');
                 opt.value = b.id;
                 opt.innerText = b.title;
                 bucketSelect.appendChild(opt);
             });
+            CitationStore.setState(state => ({ attachForm: { ...state.attachForm, bucket: 'None' } }));
         };
 
-        repoSelect.onchange = updateBuckets;
-        updateBuckets(); // init
+        repoSelect.onchange = (e) => {
+            CitationStore.setState(state => ({ attachForm: { ...state.attachForm, repo: e.target.value } }));
+            updateBuckets(e.target.value);
+        };
+        bucketSelect.onchange = (e) => {
+            CitationStore.setState(state => ({ attachForm: { ...state.attachForm, bucket: e.target.value } }));
+        };
+        updateBuckets(allRepos[0] || '');
+
+        // Bind the Add button since we recreate it dynamically
+        document.getElementById('btn-add-attachment').onclick = async () => {
+            const { activeAttachCitation, attachForm } = CitationStore.getState();
+            if (!activeAttachCitation) return;
+            const repo = attachForm.repo;
+            const bucket = attachForm.bucket;
+            const atts = activeAttachCitation._attachments || [];
+if (!atts.find(a => a.repo === repo && a.bucket === bucket)) {
+                atts.push({ repo, bucket });
+await saveAttachments(atts);
+            }
+        };
 
         renderAttachmentList();
-        document.getElementById('lib-attach-modal').style.display = 'block';
     };
-
-    const renderAttachmentList = () => {
+const renderAttachmentList = () => {
+        const { activeAttachCitation } = CitationStore.getState();
         const list = document.getElementById('current-attachments-list');
-        list.innerHTML = '';
-        const atts = activeAttachCitation._attachments || [];
+        list.replaceChildren();
+const atts = activeAttachCitation ? (activeAttachCitation._attachments || []) : [];
 
         if (atts.length === 0) {
             list.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No attachments.</span>';
@@ -355,22 +324,24 @@ margin: 0;">Back</button>
             list.appendChild(row);
         });
     };
-
     const saveAttachments = async (newAtts) => {
+        const { activeAttachCitation } = CitationStore.getState();
+        if (!activeAttachCitation) return;
         const btn = document.getElementById('btn-add-attachment');
-        btn.innerText = '⏳';
+btn.innerText = '⏳';
         try {
             const res = await fetch(`/api/citations/${encodeURIComponent(activeAttachCitation.id)}/attach`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ attachments: newAtts })
             });
-            if (res.ok) {
-                activeAttachCitation._attachments = newAtts;
-                renderAttachmentList();
+if (res.ok) {
+                const updatedCitation = { ...activeAttachCitation, _attachments: newAtts };
+                CitationStore.setState({ activeAttachCitation: updatedCitation });
+renderAttachmentList();
 
                 // Surgical DOM Reconciliation
-                const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${activeAttachCitation.id}"]`);
+                const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${updatedCitation.id}"]`);
                 if (card) {
                     const tempFragment = document.createElement('div');
                     renderCards([activeAttachCitation], tempFragment, false, true);
@@ -381,14 +352,14 @@ margin: 0;">Back</button>
             }
         } catch(e) {
             alert('Error saving attachment.');
-        } finally {
+} finally {
             btn.innerText = '➕ Add';
-        }
+}
     };
-    let currentEditAuthors = [];
     const renderAuthorPills = () => {
+        const { currentEditAuthors } = CitationStore.getState();
         const container = document.getElementById('edit-cit-author-pills');
-        container.innerHTML = '';
+container.replaceChildren();
         currentEditAuthors.forEach((a, idx) => {
             const pill = document.createElement('span');
             pill.className = 'task-tag';
@@ -397,12 +368,13 @@ margin: 0;">Back</button>
             const name = a.given ? `${a.family}, ${a.given}` : a.family;
             const txt = document.createElement('span');
             txt.innerText = name || a.literal || 'Unknown';
-
             const closeBtn = document.createElement('span');
             closeBtn.innerText = '×';
             closeBtn.style.cssText = 'cursor: pointer; font-weight: bold; font-size: 1rem; line-height: 1; margin-left: 2px;';
             closeBtn.onclick = () => {
-                currentEditAuthors.splice(idx, 1);
+                const updatedAuthors = [...CitationStore.getState().currentEditAuthors];
+                updatedAuthors.splice(idx, 1);
+                CitationStore.setState({ currentEditAuthors: updatedAuthors });
                 renderAuthorPills();
             };
 
@@ -411,25 +383,67 @@ margin: 0;">Back</button>
             container.appendChild(pill);
         });
     };
+const openEditModal = (citation) => {
+        CitationStore.setState({ activeEditCitation: citation });
+const bodyHtml = `
+            <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                <div style="flex: 1;">
+                    <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Type:</label>
+                            <select id="edit-cit-type" style="width: 100%; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" onchange="CitationStore.setState(s => ({ editForm: { ...s.editForm, type: event.target.value } }))">
+                        <option value="article-journal">Journal Article</option>
+                        <option value="book">Book</option>
+                        <option value="chapter">Book Chapter</option>
+                        <option value="paper-conference">Conference Paper</option>
+                        <option value="article-magazine">Magazine Article</option>
+                        <option value="article-newspaper">Newspaper Article</option>
+                        <option value="webpage">Webpage</option>
+                        <option value="thesis">Thesis</option>
+                        <option value="report">Report</option>
+                        <option value="document">Document (Generic)</option>
+                    </select>
+                </div>
+            </div>
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Item Title:</label>
+            <input type="text" id="edit-cit-title" style="width: 100%; padding: 8px; margin-bottom: 12px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" oninput="CitationStore.setState(s => ({ editForm: { ...s.editForm, title: event.target.value } }))">
 
-    let activeEditCitation = null;
-    const openEditModal = (citation) => {
-        activeEditCitation = citation;
-        document.getElementById('edit-ref-id').innerText = `[@${citation.id}]`;
-        document.getElementById('edit-cit-type').value = citation.type || 'document';
-        document.getElementById('edit-cit-title').value = citation.title || '';
-        document.getElementById('edit-cit-pub-title').value = citation['container-title'] || '';
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Publication Title <span style="font-weight:normal;">(e.g., Journal Name)</span>:</label>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <input type="text" id="edit-cit-pub-title" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" oninput="CitationStore.setState(s => ({ editForm: { ...s.editForm, pubTitle: event.target.value } }))">
+                <button id="btn-pick-pub" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
+            </div>
 
-        currentEditAuthors = citation.author ? JSON.parse(JSON.stringify(citation.author)) : [];
-        renderAuthorPills();
-        document.getElementById('edit-cit-author-input').value = '';
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Authors:</label>
+            <div id="edit-cit-author-pills" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;"></div>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <input type="text" id="edit-cit-author-input" placeholder="Last, First" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" oninput="CitationStore.setState(s => ({ editForm: { ...s.editForm, authorInput: event.target.value } }))">
+                <button id="btn-pick-author" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" type="button">...</button>
+                <button id="btn-add-cit-author" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 12px;" type="button">➕ Add</button>
+            </div>
 
-        let dateStr = '';
-        if (citation.issued && citation.issued['date-parts'] && citation.issued['date-parts'][0]) {
-            dateStr = citation.issued['date-parts'][0].join('-');
-        }
-        document.getElementById('edit-cit-date').value = dateStr;
-        // Clone and remove local attachments and explicit fields to keep the text box clean
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Date <span style="font-weight:normal;">(YYYY or YYYY-MM-DD)</span>:</label>
+            <input type="text" id="edit-cit-date" style="width: 100%; padding: 8px; margin-bottom: 15px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" oninput="CitationStore.setState(s => ({ editForm: { ...s.editForm, dateStr: event.target.value } }))">
+
+            <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
+            <textarea id="edit-citation-json" style="flex: 1; min-height: 200px; margin-bottom: 15px; font-family: monospace; font-size: 13px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical;" oninput="CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: event.target.value } }))"></textarea>
+        `;
+
+        window.inSetu.ui.Factory.createModal({
+            id: 'edit-citation-dynamic-modal',
+            title: `Edit: <span style="color: var(--intent-warning); font-family: monospace;">[@${citation.id}]</span>`,
+            body: bodyHtml,
+            actions: [
+                { label: '🗑️ Delete', style: 'danger', id: 'btn-delete-citation', onClick: async (e, modal) => {
+                    await window._deleteDynamicCitation();
+                    return true;
+                }},
+                { label: '💾 Save Changes', style: 'primary', id: 'btn-save-citation', onClick: async (e, modal) => {
+                    await window._saveDynamicCitation();
+                    return true;
+                }}
+            ]
+        });
+        const initialDateStr = (citation.issued && citation.issued['date-parts'] && citation.issued['date-parts'][0]) ? citation.issued['date-parts'][0].join('-') : '';
+
         const cslData = { ...citation };
         delete cslData._attachments;
         delete cslData.type;
@@ -438,57 +452,95 @@ margin: 0;">Back</button>
         delete cslData.author;
         delete cslData.issued;
 
-        document.getElementById('edit-citation-json').value = JSON.stringify(cslData, null, 4);
-        document.getElementById('edit-citation-modal').style.display = 'block';
-    };
-    // Bind UI Generic Selectors
-    document.getElementById('btn-pick-pub').onclick = () => {
-        openSelectorModal('Select Publication', cachedPublications, (val) => {
-            document.getElementById('edit-cit-pub-title').value = val;
-        });
-    };
+        CitationStore.setState(s => ({
+            currentEditAuthors: citation.author ? JSON.parse(JSON.stringify(citation.author)) : [],
+            editForm: {
+                ...s.editForm,
+                type: citation.type || 'document',
+                title: citation.title || '',
+                pubTitle: citation['container-title'] || '',
+                dateStr: initialDateStr,
+                jsonStr: JSON.stringify(cslData, null, 4),
+                authorInput: ''
+            }
+        }));
 
-    document.getElementById('btn-pick-author').onclick = () => {
-        openSelectorModal('Select Author', cachedAuthors, (val) => {
-            document.getElementById('edit-cit-author-input').value = val;
-        });
-    };
+        setTimeout(() => {
+            const state = CitationStore.getState().editForm;
+            const ecType = document.getElementById('edit-cit-type');
+            if (ecType) ecType.value = state.type;
+            const ecTitle = document.getElementById('edit-cit-title');
+            if (ecTitle) ecTitle.value = state.title;
+            const ecPubTitle = document.getElementById('edit-cit-pub-title');
+            if (ecPubTitle) ecPubTitle.value = state.pubTitle;
+            const ecDate = document.getElementById('edit-cit-date');
+            if (ecDate) ecDate.value = state.dateStr;
+            const ecJson = document.getElementById('edit-citation-json');
+            if (ecJson) ecJson.value = state.jsonStr;
+        }, 50);
 
-    document.getElementById('btn-add-cit-author').onclick = () => {
-        const input = document.getElementById('edit-cit-author-input');
-        const val = input.value.trim();
-        if (!val) return;
-
-        const parts = val.split(',').map(s => s.trim());
-        if (parts.length > 1) {
-            currentEditAuthors.push({ family: parts[0], given: parts.slice(1).join(', ') });
-        } else {
-            currentEditAuthors.push({ family: parts[0] });
-        }
-
-        input.value = '';
         renderAuthorPills();
-        input.focus();
+
+        // Bind pickers dynamically since HTML was generated here
+        document.getElementById('btn-pick-pub').onclick = () => {
+            const { cachedPublications } = CitationStore.getState();
+            openSelectorModal('Select Publication', cachedPublications, (val) => {
+                CitationStore.setState(s => ({ editForm: { ...s.editForm, pubTitle: val } }));
+                const el = document.getElementById('edit-cit-pub-title');
+                if (el) el.value = val;
+            });
+        };
+
+        document.getElementById('btn-pick-author').onclick = () => {
+            const { cachedAuthors } = CitationStore.getState();
+            openSelectorModal('Select Author', cachedAuthors, (val) => {
+                CitationStore.setState(s => ({ editForm: { ...s.editForm, authorInput: val } }));
+                const el = document.getElementById('edit-cit-author-input');
+                if (el) el.value = val;
+            });
+        };
+        document.getElementById('btn-add-cit-author').onclick = () => {
+            const { editForm } = CitationStore.getState();
+            const val = (editForm.authorInput || '').trim();
+            if (!val) return;
+            const parts = val.split(',').map(s => s.trim());
+            const newAuthor = parts.length > 1 ? { family: parts[0], given: parts.slice(1).join(', ') } : { family: parts[0] };
+
+            CitationStore.setState(s => ({ 
+                currentEditAuthors: [...s.currentEditAuthors, newAuthor],
+                editForm: { ...s.editForm, authorInput: '' }
+            }));
+
+            const input = document.getElementById('edit-cit-author-input');
+            if (input) input.value = '';
+            renderAuthorPills();
+            if (input) input.focus();
+        };
     };
-
-    document.getElementById('btn-save-citation').onclick = async () => {
+window._saveDynamicCitation = async () => {
+        const { activeEditCitation, currentEditAuthors, editForm } = CitationStore.getState();
         if (!activeEditCitation) return;
-
         const btn = document.getElementById('btn-save-citation');
         const origText = btn.innerText;
-        const jsonStr = document.getElementById('edit-citation-json').value;
-        let payload;
 
-        try {
-            payload = JSON.parse(jsonStr);
-        } catch (e) {
+        const payload = (() => {
+            try {
+                return JSON.parse(editForm.jsonStr || '{}');
+            } catch (e) {
+                return null;
+            }
+        })();
+
+        if (!payload) {
             alert("Invalid JSON format in the 'Other Metadata' box. Please check for syntax errors.");
             return;
         }
+
         // Re-inject explicitly edited fields
-        payload.type = document.getElementById('edit-cit-type').value || 'document';
-        payload.title = document.getElementById('edit-cit-title').value.trim();
-        const pubTitle = document.getElementById('edit-cit-pub-title').value.trim();
+        payload.type = editForm.type || 'document';
+        payload.title = (editForm.title || '').trim();
+        const pubTitle = (editForm.pubTitle || '').trim();
+
         if (pubTitle) {
             payload['container-title'] = pubTitle;
         } else {
@@ -501,8 +553,8 @@ margin: 0;">Back</button>
             delete payload.author;
         }
 
-        const dateStr = document.getElementById('edit-cit-date').value.trim();
-        if (dateStr) {
+        const dateStr = (editForm.dateStr || '').trim();
+if (dateStr) {
             const parts = dateStr.split('-').map(n => parseInt(n, 10)).filter(n => !isNaN(n));
             if (parts.length > 0) {
                 payload.issued = { 'date-parts': [parts] };
@@ -511,7 +563,7 @@ margin: 0;">Back</button>
             delete payload.issued;
         }
 
-        // Ensure ID hasn't been maliciously or accidentally changed (which breaks file links)
+        // Ensure ID hasn't been maliciously or accidentally changed
         if (payload.id !== activeEditCitation.id) {
             alert("Warning: Changing the citation ID directly is not supported as it breaks existing links. Reverting ID.");
             payload.id = activeEditCitation.id;
@@ -525,15 +577,13 @@ margin: 0;">Back</button>
                 body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
             });
             if (res.ok) {
-                document.getElementById('edit-citation-modal').style.display = 'none';
-
+                window.inSetu.ui.Factory.closeModal('edit-citation-dynamic-modal');
                 // Surgical DOM Reconciliation
                 const stateLib = CitationStore.getState().localLibrary;
                 const idx = stateLib.findIndex(c => c.id === payload.id);
                 if (idx !== -1) {
-                    payload._attachments = stateLib[idx]._attachments; // Preserve local attachments
+                    payload._attachments = stateLib[idx]._attachments;
                     stateLib[idx] = payload;
-
                     const card = document.querySelector(`.cit-card-wrapper[data-cit-id="${payload.id}"]`);
                     if (card) {
                         const tempFragment = document.createElement('div');
@@ -543,7 +593,7 @@ margin: 0;">Back</button>
                         }
                     }
                 } else {
-                    loadMainLibrary(); // Fallback if it wasn't in state
+                    loadMainLibrary();
                 }
             } else {
                 const err = await res.json();
@@ -552,13 +602,13 @@ margin: 0;">Back</button>
         } catch(e) {
             alert('Network error saving citation.');
         } finally {
-            btn.innerText = origText;
+            if (btn) btn.innerText = origText;
         }
     };
-
-    document.getElementById('btn-delete-citation').onclick = async () => {
+    window._deleteDynamicCitation = async () => {
+        const { activeEditCitation } = CitationStore.getState();
         if (!activeEditCitation) return;
-        if (!confirm(`Are you sure you want to completely delete this citation ([@${activeEditCitation.id}]) from your library?`)) return;
+if (!confirm(`Are you sure you want to completely delete this citation ([@${activeEditCitation.id}]) from your library?`)) return;
 
         const btn = document.getElementById('btn-delete-citation');
         const origText = btn.innerText;
@@ -569,8 +619,7 @@ margin: 0;">Back</button>
                 method: 'DELETE'
             });
             if (res.ok) {
-                document.getElementById('edit-citation-modal').style.display = 'none';
-
+                window.inSetu.ui.Factory.closeModal('edit-citation-dynamic-modal');
                 // Surgical DOM Reconciliation
                 const stateLib = CitationStore.getState().localLibrary;
                 const idx = stateLib.findIndex(c => c.id === activeEditCitation.id);
@@ -584,12 +633,11 @@ margin: 0;">Back</button>
         } catch (e) {
             alert('Network error deleting citation.');
         } finally {
-            btn.innerText = origText;
+            if (btn) btn.innerText = origText;
         }
     };
-
     const renderCards = (items, container, isExplore = false, append = false) => {
-        if (!append) container.innerHTML = '';
+        if (!append) container.replaceChildren();
         if (items.length === 0 && !append) {
             container.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">No results.</p>';
             return;
@@ -598,30 +646,26 @@ margin: 0;">Back</button>
             const card = document.createElement('div');
             card.className = 'file-card cit-card-wrapper';
             card.dataset.citId = c.id;
-
             const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
             const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
-            let actionHtml = '';
-            if (isExplore) {
-              // Check if the citation ID or URL already exists in the local library
-              const libState = CitationStore.getState().localLibrary;
-              const alreadyExists = libState.some(libItem => 
-                libItem.id === c.id || 
-                (libItem.URL && c.URL 
-&& libItem.URL.toLowerCase() === c.URL.toLowerCase())
-              );
 
-              if (alreadyExists) {
-                actionHtml = `<div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
-                        <button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;">Force Import</button>
+            const actionHtml = (() => {
+                if (isExplore) {
+                    const libState = CitationStore.getState().localLibrary;
+                    const alreadyExists = libState.some(libItem => 
+                        libItem.id === c.id || 
+                        (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase())
+                    );
+                    if (alreadyExists) {
+                        return `<div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
+                            <button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;">Force Import</button>
                         </div>`;
-              } else {
-                actionHtml = `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: var(--intent-success); margin: 0; padding: 2px 8px;">📥 Import</button>`;
-              }
-            } else {
-              actionHtml = `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;">📎 Attach</button>`;
-            }
+                    }
+                    return `<button class="btn-sm btn-import-single" data-json='${JSON.stringify(c).replace(/'/g, "&#39;")}' style="background: var(--intent-success); margin: 0; padding: 2px 8px;">📥 Import</button>`;
+                }
+                return `<button id="btn-notes-${c.id}" class="btn-sm btn-notes-single" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;">📝 Notes</button><button class="btn-sm btn-edit-single" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;">✏️ Edit</button><button class="btn-sm btn-attach-single" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;">📎 Attach</button>`;
+            })();
 
             const attTags = !isExplore && c._attachments && c._attachments.length > 0
                 ? c._attachments.map(a => `<span class="task-tag" style="background: var(--border);">${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}</span>`).join(' ')
@@ -686,18 +730,6 @@ margin: 0;">Back</button>
         }
     };
 
-    // Attach listener for the Add button once
-    document.getElementById('btn-add-attachment').onclick = async () => {
-        if (!activeAttachCitation) return;
-        const repo = document.getElementById('attach-repo-select').value;
-        const bucket = document.getElementById('attach-bucket-select').value;
-        const atts = activeAttachCitation._attachments || [];
-
-        if (!atts.find(a => a.repo === repo && a.bucket === bucket)) {
-            atts.push({ repo, bucket });
-            await saveAttachments(atts);
-        }
-    };
     const loadMainLibrary = async () => {
         document.getElementById('lib-main-loading').style.display = 'block';
 // Fetch metadata index for the generic UI selector
@@ -725,22 +757,21 @@ if (res.ok) {
         const q = norm(e.target.value);
         const filtered = state.localLibrary.filter(c => {
             const matchesSearch = norm(c.title || "").includes(q) ||  
-                                  norm(c.id || "").includes(q) || 
-                                  norm(c.author ? c.author.map(a => a.family).join(" ") : "").includes(q);
+                                      norm(c.id || "").includes(q) || 
+                                      norm(c.author ? c.author.map(a => a.family).join(" ") : "").includes(q);
 
-            let matchesRepo = libPinnedRepos.has('ALL');
-            let matchesBucket = libPinnedBuckets.has('ALL');
             const atts = c._attachments || [];
 
-            if (!matchesRepo) {
-                matchesRepo = (libPinnedRepos.has('ORPHANS') && atts.length === 0) || atts.some(a => libPinnedRepos.has(a.repo));
-            }
+            const matchesRepo = (() => {
+                if (libPinnedRepos.has('ALL')) return true;
+                return (libPinnedRepos.has('ORPHANS') && atts.length === 0) || atts.some(a => libPinnedRepos.has(a.repo));
+            })();
 
-            if (atts.length === 0 && libPinnedRepos.has('ORPHANS')) {
-                matchesBucket = true; // Orphans inherently have no buckets to filter
-            } else if (!matchesBucket && matchesRepo) {
-                matchesBucket = atts.some(a => libPinnedBuckets.has(a.bucket) && (libPinnedRepos.has('ALL') || libPinnedRepos.has(a.repo)));
-            }
+            const matchesBucket = (() => {
+                if (atts.length === 0 && libPinnedRepos.has('ORPHANS')) return true;
+                if (libPinnedBuckets.has('ALL')) return true;
+                return matchesRepo && atts.some(a => libPinnedBuckets.has(a.bucket) && (libPinnedRepos.has('ALL') || libPinnedRepos.has(a.repo)));
+            })();
 
             return matchesSearch && matchesRepo && matchesBucket;
         });
@@ -749,69 +780,79 @@ if (res.ok) {
     // Dynamic Form Toggles
     const exploreSource = document.getElementById('lib-explore-source');
     const wrapField = document.getElementById('wrap-explore-field');
-    const wrapCat = document.getElementById('wrap-explore-category');
+const wrapCat = document.getElementById('wrap-explore-category');
     const exploreSearch = document.getElementById('lib-explore-search');
+    CitationStore.setState({ exploreSearchQuery: '', exploreSource: 'openalex', exploreField: 'all', exploreCategory: '' });
+    exploreSearch.oninput = (e) => CitationStore.setState({ exploreSearchQuery: e.target.value });
+    document.getElementById('lib-explore-field').onchange = (e) => CitationStore.setState({ exploreField: e.target.value });
+    document.getElementById('lib-explore-category').oninput = (e) => CitationStore.setState({ exploreCategory: e.target.value });
 
     exploreSource.addEventListener('change', (e) => {
-        const val = e.target.value;
-        if (val === 'openalex') {
-            wrapField.style.display = 'block';
-            wrapCat.style.display = 'block';
-            exploreSearch.placeholder = "Keywords, titles, or authors...";
-        } else if (val === 'crossref') {
-            wrapField.style.display = 'block';
-            wrapCat.style.display = 'none';
-            exploreSearch.placeholder = "DOIs, precise titles, or authors...";
-            document.getElementById('lib-explore-category').value = ''; // clear on hide
-        } else {
-            wrapField.style.display = 'none';
-            wrapCat.style.display = 'none';
-            exploreSearch.placeholder = "Keywords or Paper IDs...";
-            document.getElementById('lib-explore-category').value = '';
-        }
+      const val = e.target.value;
+      CitationStore.setState({ exploreSource: val });
+      if (val === 'openalex') {
+        wrapField.style.display = 'block';
+        wrapCat.style.display = 'block';
+        exploreSearch.placeholder = "Keywords, titles, or authors...";
+      } else if (val === 'crossref') {
+
+        wrapField.style.display = 'block';
+        wrapCat.style.display = 'none';
+        exploreSearch.placeholder = "DOIs, precise titles, or authors...";
+        CitationStore.setState({ exploreCategory: '' });
+        const crCatInput = document.getElementById('lib-explore-category');
+        if (crCatInput) crCatInput.value = ''; // clear on hide
+      } else {
+        wrapField.style.display = 'none';
+        wrapCat.style.display = 'none';
+
+        exploreSearch.placeholder = "Keywords or Paper IDs...";
+        CitationStore.setState({ exploreCategory: '' });
+
+        const otherCatInput = document.getElementById('lib-explore-category');
+        if (otherCatInput) otherCatInput.value = '';
+      }
     });
-    let currentExplorePage = 1;
 
     const performExploreSearch = async (loadMore = false) => {
-        const query = exploreSearch.value.trim();
-        const source = exploreSource.value;
-        const field = document.getElementById('lib-explore-field').value;
-        const category = document.getElementById('lib-explore-category').value.trim();
+      const state = CitationStore.getState();
+      const query = state.exploreSearchQuery ? state.exploreSearchQuery.trim() : '';
+      const source = state.exploreSource || 'openalex';
+      const field = state.exploreField || 'all';
+      const category = state.exploreCategory ? state.exploreCategory.trim() : '';
 
-        if (!query && !category) return;
+      if (!query && !category) return;
 
         const list = document.getElementById('lib-explore-list');
         const spinner = document.getElementById('lib-explore-loading');
-
         if (!loadMore) {
-            list.innerHTML = '';
-            currentExplorePage = 1;
+            list.replaceChildren();
+            CitationStore.setState({ currentExplorePage: 1 });
         } else {
             const btn = document.getElementById('btn-explore-load-more');
             if (btn) btn.remove();
         }
 
         spinner.style.display = 'block';
-
         try {
-            const res = await fetch(`/api/citations/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(source)}&field=${encodeURIComponent(field)}&category=${encodeURIComponent(category)}&page=${currentExplorePage}`);
-            if (res.ok) {
+            const pageToFetch = loadMore ? CitationStore.getState().currentExplorePage : 1;
+            const res = await fetch(`/api/citations/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(source)}&field=${encodeURIComponent(field)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
+if (res.ok) {
                 const data = await res.json();
-                const citations = data.citations || [];
+const citations = data.citations || [];
                 renderCards(citations, list, true, loadMore);
-
-                // If we got exactly 20 results, assume there's another page
+// If we got exactly 20 results, assume there's another page
                 if (citations.length === 20) {
                     const loadMoreBtn = document.createElement('button');
-                    loadMoreBtn.id = 'btn-explore-load-more';
+loadMoreBtn.id = 'btn-explore-load-more';
                     loadMoreBtn.className = 'btn-sm';
                     loadMoreBtn.style.background = 'var(--intent-neutral)';
                     loadMoreBtn.style.margin = '10px auto';
                     loadMoreBtn.style.display = 'block';
-                    loadMoreBtn.innerText = '⬇️ Load More';
+loadMoreBtn.innerText = '⬇️ Load More';
                     loadMoreBtn.onclick = () => {
-                        currentExplorePage++;
-                        performExploreSearch(true);
+                        CitationStore.setState({ currentExplorePage: pageToFetch + 1 });
+performExploreSearch(true);
                     };
                     list.appendChild(loadMoreBtn);
                 }
@@ -825,16 +866,15 @@ if (res.ok) {
 
     // Explore Tab Search
     document.getElementById('btn-explore-search').addEventListener('click', () => performExploreSearch(false));
-
     // Import Tab Logic
     const filePicker = document.getElementById('lib-file-picker');
     document.getElementById('btn-trigger-file').addEventListener('click', () => filePicker.click());
-    
-    filePicker.addEventListener('change', (e) => {
+filePicker.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
-        const strat = document.querySelector('input[name="lib-merge-strat"]:checked').value;
+        const stratNode = document.querySelector('input[name="lib-merge-strat"]:checked');
+        const strat = stratNode ? stratNode.getAttribute('value') : 'overwrite';
         const log = document.getElementById('lib-import-log');
         log.innerText = "Parsing JSON...\n";
 
@@ -895,82 +935,71 @@ if (res.ok) {
     setTimeout(updatePins, 100);
 }
 export async function addFileToLibrary(filename, content, filepath) {
-    let title = filename.replace('.md', '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    let url = '';
-    let dateStr = '';
-    let cslId = 'ref-' + Date.now();
+  const defaultTitle = filename.replace('.md', '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
 
-    const yamlMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (yamlMatch) {
-        const lines = yamlMatch[1].split('\n');
-        lines.forEach(l => {
-            if (l.startsWith('title:')) title = l.replace('title:', '').replace(/['"]/g, '').trim();
-            if (l.startsWith('source_url:')) url = l.replace('source_url:', '').replace(/['"]/g, '').trim();
-            if (l.startsWith('published_at:')) dateStr = l.replace('published_at:', '').replace(/['"]/g, '').trim();
-        });
+  const metadata = yamlMatch ? yamlMatch[1].split('\n').reduce((acc, l) => {
+    if (l.startsWith('title:')) acc.title = l.replace('title:', '').replace(/['"]/g, '').trim();
+    if (l.startsWith('source_url:')) acc.url = l.replace('source_url:', '').replace(/['"]/g, '').trim();
+    if (l.startsWith('published_at:')) acc.dateStr = l.replace('published_at:', '').replace(/['"]/g, '').trim();
+    return acc;
+  }, { title: defaultTitle, url: '', dateStr: '' }) : { title: defaultTitle, url: '', dateStr: '' };
+
+  const { title, url, dateStr } = metadata;
+  const cslId = 'ref-' + Date.now();
+
+  // DO NO HARM BYPASS: Check if this URL already exists in the local library
+  const { citationLibraryCache } = CitationStore.getState();
+  if (url && citationLibraryCache) {
+    const existingRef = citationLibraryCache.find(c => c.URL && c.URL.toLowerCase() === url.toLowerCase());
+    if (existingRef) {
+      console.log("URL already exists in library. Bypassing metadata overwrite and tagging with existing ID:", existingRef.id);
+      const eCslId = existingRef.id;
+
+      // Extract existing year for the pretty tag
+      const existingYear = (existingRef.issued && existingRef.issued['date-parts'] && existingRef.issued['date-parts'][0]) 
+        ? existingRef.issued['date-parts'][0][0].toString() 
+        : new Date().getFullYear().toString();
+
+      const existingAuthor = existingRef.author && existingRef.author[0] ?
+        existingRef.author[0].family.toLowerCase().replace(/[^a-z0-9]/g, '') : 'insetu';
+      const prettyId = `${existingAuthor}${existingYear}`;
+
+      const baseContent = yamlMatch 
+        ? content.trim().replace(yamlMatch[0], yamlMatch[0] + `\n\n**Source Reference:** [@${prettyId}]`) 
+        : `---\ntitle: "${title}"\n---\n\n**Source Reference:** [@${prettyId}]\n\n` + content.trim();
+
+      return baseContent + `\n\n---\ncitations:\n  ${prettyId}: "${eCslId}"\n---`;
     }
+  }
 
-    // DO NO HARM BYPASS: Check if this URL already exists in the local library
-    if (url && typeof citationLibraryCache !== 'undefined' && citationLibraryCache) {
-        const existingRef = citationLibraryCache.find(c => c.URL && c.URL.toLowerCase() === url.toLowerCase());
-        if (existingRef) {
-            console.log("URL already exists in library. Bypassing metadata overwrite and tagging with existing ID:", existingRef.id);
-            cslId = existingRef.id;
+  const year = (dateStr && dateStr !== 'Unknown' && dateStr.match(/^(\d{4})/)) ? dateStr.match(/^(\d{4})/)[1] : new Date().getFullYear().toString();
+  const prettyId = `insetu${year}`;
 
-            // Extract existing year for the pretty tag
-            let existingYear = new Date().getFullYear().toString();
-            if (existingRef.issued && existingRef.issued['date-parts'] && existingRef.issued['date-parts'][0]) {
-                existingYear = existingRef.issued['date-parts'][0][0].toString();
-            }
-            const existingAuthor = existingRef.author && existingRef.author[0] ? existingRef.author[0].family.toLowerCase().replace(/[^a-z0-9]/g, '') : 'insetu';
-            const prettyId = `${existingAuthor}${existingYear}`;
+  const baseContent = yamlMatch 
+    ? content.trim().replace(yamlMatch[0], yamlMatch[0] + `\n\n**Source Reference:** [@${prettyId}]`) 
+    : `---\ntitle: "${title}"\n---\n\n**Source Reference:** [@${prettyId}]\n\n` + content.trim();
 
-            let newContent = content.trim();
-            if (yamlMatch) {
-                newContent = newContent.replace(yamlMatch[0], yamlMatch[0] + `\n\n**Source Reference:** [@${prettyId}]`);
-            } else {
-                newContent = `---\ntitle: "${title}"\n---\n\n**Source Reference:** [@${prettyId}]\n\n` + newContent;
-            }
-            newContent += `\n\n---\ncitations:\n  ${prettyId}: "${cslId}"\n---`;
-            return newContent;
-        }
-    }
+  const newContent = baseContent + `\n\n---\ncitations:\n  ${prettyId}: "${cslId}"\n---`;
 
-    let year = new Date().getFullYear().toString();
-    if (dateStr && dateStr !== 'Unknown') {
-        const match = dateStr.match(/^(\d{4})/);
-        if (match) year = match[1];
-    }
-    const prettyId = `insetu${year}`;
+  const parts = filepath.split('/');
+  const repo = parts.length > 0 && parts[0] ? parts[0] : 'Workspace';
+  const inferredBucket = parts.length > 1 && parts[1] ? parts[1] : 'None';
+  const { targetConfigs } = AppStore.getState();
 
-    let newContent = content.trim();
-    if (yamlMatch) {
-        newContent = newContent.replace(yamlMatch[0], yamlMatch[0] + `\n\n**Source Reference:** [@${prettyId}]`);
-    } else {
-        newContent = `---\ntitle: "${title}"\n---\n\n**Source Reference:** [@${prettyId}]\n\n` + newContent;
-    }
-
-    newContent += `\n\n---\ncitations:\n  ${prettyId}: "${cslId}"\n---`;
-
-    const parts = filepath.split('/');
-    const repo = parts.length > 0 && parts[0] ? parts[0] : 'Workspace';
-    const inferredBucket = parts.length > 1 && parts[1] ? parts[1] : 'None';
-    let bucket = 'None';
-    const { targetConfigs } = AppStore.getState();
+  const bucket = (() => {
     if (targetConfigs) {
-        const repoCfg = targetConfigs.find(c => c.repo_dir === repo);
-        if (repoCfg && repoCfg.sub_buckets) {
-            for (const b of repoCfg.sub_buckets) {
-                if (b.dynamic_split_prefix && b.meta_map && b.meta_map[inferredBucket]) {
-                    bucket = inferredBucket;
-                    break;
-                } else if (!b.dynamic_split_prefix && b.id === inferredBucket) {
-                    bucket = inferredBucket;
-                    break;
-                }
-            }
-        }
+      const repoCfg = targetConfigs.find(c => c.repo_dir === repo);
+      if (repoCfg && repoCfg.sub_buckets) {
+        const found = repoCfg.sub_buckets.find(b => 
+          (b.dynamic_split_prefix && b.meta_map && b.meta_map[inferredBucket]) || 
+          (!b.dynamic_split_prefix && b.id === inferredBucket)
+        );
+        if (found) return inferredBucket;
+      }
     }
+    return 'None';
+  })();
 
     const cslItem = {
         id: cslId,
@@ -998,10 +1027,10 @@ export async function addFileToLibrary(filename, content, filepath) {
 
     return newContent;
 }
-let citationLibraryCache = null;
 export async function openCitationModal() {
     const bodyHtml = `
-        <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
+        <input type="text" id="citation-search-input" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;"
+oninput="if(typeof onCitationSearchInput === 'function') onCitationSearchInput(this.value)">
         <div id="citation-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
             <span style="color:var(--text-muted); font-style:italic;">Loading library...</span>
         </div>
@@ -1015,7 +1044,7 @@ export async function openCitationModal() {
         const res = await fetch('/api/citations');
         if (res.ok) {
             const data = await res.json();
-            citationLibraryCache = data.citations || [];
+            CitationStore.setState({ citationLibraryCache: data.citations || [] });
             document.getElementById('citation-results-list').innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Library loaded. Type to search...</span>';
         }
     } catch(e) {
@@ -1023,25 +1052,26 @@ export async function openCitationModal() {
     }
 }
 export function onCitationSearchInput(val) {
-    window.ExtensionRegistry.utils.debounce('citationSearch', () => {
-        const container = document.getElementById('citation-results-list');
-        const norm = window.normalizeAccentText || (str => str.toLowerCase());
-        const q = norm(val.trim());
+  window.ExtensionRegistry.utils.debounce('citationSearch', () => {
+    const container = document.getElementById('citation-results-list');
+    const norm = window.normalizeAccentText || (str => str.toLowerCase());
+    const q = norm(val.trim());
+    const { citationLibraryCache } = CitationStore.getState();
 
-        if (!q || !citationLibraryCache) {
-            container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
-            return;
-        }
+    if (!q || !citationLibraryCache) {
+      container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
+      return;
+    }
 
-        const results = citationLibraryCache.filter(c => {
-            const title = norm(c.title || "");
-            const authors = norm(c.author ? c.author.map(a => a.family).join(" ") : "");
-            const id = norm(c.id || "");
-            return title.includes(q) || authors.includes(q) || id.includes(q);
-        }).slice(0, 30);
+    const results = citationLibraryCache.filter(c => {
+      const title = norm(c.title || "");
+      const authors = norm(c.author ? c.author.map(a => a.family).join(" ") : "");
+      const id = norm(c.id || "");
+      return title.includes(q) || authors.includes(q) || id.includes(q);
+    }).slice(0, 30);
 
-        container.innerHTML = '';
-        if (results.length === 0) {
+    container.replaceChildren();
+    if (results.length === 0) {
             container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No citations found.</span>';
             return;
         }
@@ -1071,18 +1101,15 @@ function insertCitationToEditor(citation) {
     const norm = window.normalizeAccentText || (str => str.toLowerCase());
     const normalizedAuthor = norm(author).replace(/[^a-z0-9]/g, '');
     const baseId = `${normalizedAuthor}${year}`;
-    let prettyId = baseId;
-
     const mdeWrap = document.querySelector('.EasyMDEContainer');
     const isMDE = (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined');
     const textArea = document.getElementById('modal-text');
-
-    let text = isMDE ? mdeInstance.codemirror.getValue() : textArea.value;
+    const text = isMDE ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
     const backmatterRegex = /\n+---\n+citations:\n([\s\S]*?)\n---$/;
     const match = text.match(backmatterRegex);
 
-    let citationsMap = {};
-    if (match) {
+    const citationsMap = {};
+if (match) {
         const lines = match[1].split('\n');
         lines.forEach(l => {
             const parts = l.split(':');
@@ -1091,56 +1118,44 @@ function insertCitationToEditor(citation) {
             }
         });
     }
+    const finalPrettyId = (() => {
+        if (!citationsMap[baseId] || citationsMap[baseId] === citation.id) return baseId;
+        const findAvailable = (code) => {
+            if (!citationsMap[baseId + String.fromCharCode(code)] || citationsMap[baseId + String.fromCharCode(code)] === citation.id) return code;
+            return findAvailable(code + 1);
+        };
+        return baseId + String.fromCharCode(findAvailable(97));
+    })();
 
-    if (citationsMap[prettyId] && citationsMap[prettyId] !== citation.id) {
-        let suffixCharCode = 97;
-        while (citationsMap[baseId + String.fromCharCode(suffixCharCode)] && citationsMap[baseId + String.fromCharCode(suffixCharCode)] !== citation.id) {
-            suffixCharCode++;
-        }
-        prettyId = baseId + String.fromCharCode(suffixCharCode);
-    }
+    citationsMap[finalPrettyId] = citation.id;
 
-    citationsMap[prettyId] = citation.id;
-
-    let newBackmatter = "\n\n---\ncitations:\n";
-    Object.keys(citationsMap).forEach(k => {
-        newBackmatter += `  ${k}: "${citationsMap[k]}"\n`;
-    });
-    newBackmatter += "---";
-
-    if (match) {
-        text = text.replace(match[0], newBackmatter);
-    } else {
-        text += newBackmatter;
-    }
-
-    const linkText = `[@${prettyId}]`;
-
+    const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(citationsMap).map(k => `  ${k}: "${citationsMap[k]}"\n`).join('') + "---";
+    const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
+    const linkText = `[@${finalPrettyId}]`;
     if (isMDE) {
         const cm = mdeInstance.codemirror;
         const cursor = cm.getCursor();
-        cm.setValue(text);
+        cm.setValue(updatedText);
         cm.setCursor(cursor);
         cm.replaceSelection(linkText);
         cm.focus();
-    } else {
+    } else if (textArea) {
         const start = textArea.selectionStart;
         const end = textArea.selectionEnd;
-        textArea.value = text.substring(0, start) + linkText + text.substring(end);
+        textArea.value = updatedText.substring(0, start) + linkText + updatedText.substring(end);
         textArea.selectionStart = textArea.selectionEnd = start + linkText.length;
         textArea.focus();
         textArea.dispatchEvent(new Event('input'));
-        }
+    }
 
         window.inSetu.ui.Factory.closeModal('citation-insert-modal');
         if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
 }
-
 export async function syncDocumentCitations() {
     const mdeWrap = document.querySelector('.EasyMDEContainer');
     const isMDE = (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined');
     const textArea = document.getElementById('modal-text');
-    let text = isMDE ? mdeInstance.codemirror.getValue() : textArea.value;
+    const text = isMDE ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
 
     const backmatterRegex = /\n+---\n+citations:\n([\s\S]*?)\n---$/;
     const match = text.match(backmatterRegex);
@@ -1157,76 +1172,68 @@ export async function syncDocumentCitations() {
         if (!res.ok) throw new Error("Failed to fetch library.");
         const data = await res.json();
         const library = data.citations || [];
-        let oldMap = {};
         const lines = match[1].split('\n');
-        lines.forEach(l => {
+
+        const oldMap = lines.reduce((acc, l) => {
             const parts = l.split(':');
             if (parts.length >= 2) {
-                oldMap[parts[0].trim()] = parts.slice(1).join(':').replace(/['"]/g, '').trim();
+                acc[parts[0].trim()] = parts.slice(1).join(':').replace(/['"]/g, '').trim();
             }
-        });
-
-        let newMap = {};
-        let oldToNew = {};
-        let changesMade = false;
+            return acc;
+        }, {});
 
         const norm = window.normalizeAccentText || (str => str.toLowerCase());
 
-        for (const [oldPretty, trueId] of Object.entries(oldMap)) {
+        const syncResult = Object.entries(oldMap).reduce((acc, [oldPretty, trueId]) => {
             const citation = library.find(c => c.id === trueId);
             if (!citation) {
-                newMap[oldPretty] = trueId;
-                oldToNew[oldPretty] = oldPretty;
-                continue;
+                acc.newMap[oldPretty] = trueId;
+                acc.oldToNew[oldPretty] = oldPretty;
+                return acc;
             }
 
             const author = citation.author && citation.author[0] ? citation.author[0].family : 'unknown';
             const year = citation.issued && citation.issued['date-parts'] ? citation.issued['date-parts'][0][0] : 'nd';
             const normalizedAuthor = norm(author).replace(/[^a-z0-9]/g, '');
             const baseId = `${normalizedAuthor}${year}`;
-            let newPretty = baseId;
+            const newPretty = (() => {
+                if (!acc.newMap[baseId] || acc.newMap[baseId] === trueId) return baseId;
+                const findAvailable = (code) => {
+                    const candidate = baseId + String.fromCharCode(code);
+                    if (!acc.newMap[candidate] || acc.newMap[candidate] === trueId) return candidate;
+                    return findAvailable(code + 1);
+                };
+                return baseId + String.fromCharCode(findAvailable(97));
+            })();
 
-            if (newMap[newPretty] && newMap[newPretty] !== trueId) {
-                let suffixCharCode = 97;
-                while (newMap[baseId + String.fromCharCode(suffixCharCode)] && newMap[baseId + String.fromCharCode(suffixCharCode)] !== trueId) {
-                    suffixCharCode++;
-                }
-                newPretty = baseId + String.fromCharCode(suffixCharCode);
-            }
+            acc.newMap[newPretty] = trueId;
+            acc.oldToNew[oldPretty] = newPretty;
+            if (oldPretty !== newPretty) acc.changesMade = true;
+            return acc;
+        }, { newMap: {}, oldToNew: {}, changesMade: false });
 
-            newMap[newPretty] = trueId;
-            oldToNew[oldPretty] = newPretty;
-            if (oldPretty !== newPretty) changesMade = true;
-        }
-
-        if (!changesMade) {
+        if (!syncResult.changesMade) {
             alert("All citations are already up to date!");
             btn.innerText = origText;
             return;
         }
 
-        let bodyText = text.substring(0, match.index);
-        for (const [oldPretty, newPretty] of Object.entries(oldToNew)) {
+        const bodyText = Object.entries(syncResult.oldToNew).reduce((textAcc, [oldPretty, newPretty]) => {
             if (oldPretty !== newPretty) {
                 const regex = new RegExp('(@)' + oldPretty + '\\b', 'g');
-                bodyText = bodyText.replace(regex, '$1' + newPretty);
+                return textAcc.replace(regex, '$1' + newPretty);
             }
-        }
+            return textAcc;
+        }, text.substring(0, match.index));
 
-        let newBackmatter = "\n\n---\ncitations:\n";
-        Object.keys(newMap).forEach(k => {
-            newBackmatter += `  ${k}: "${newMap[k]}"\n`;
-        });
-        newBackmatter += "---";
-
+        const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(syncResult.newMap).map(k => `  ${k}: "${syncResult.newMap[k]}"\n`).join('') + "---";
         const finalText = bodyText + newBackmatter;
-
         if (isMDE) {
             const cm = mdeInstance.codemirror;
             const cursor = cm.getCursor();
             cm.setValue(finalText);
             cm.setCursor(cursor);
-        } else {
+        } else if (textArea) {
             const start = textArea.selectionStart;
             textArea.value = finalText;
             textArea.selectionStart = textArea.selectionEnd = start;
@@ -1279,15 +1286,18 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
     window.inSetu.extensions.Registry.registerUnloadHook('citations', () => {
         console.log("🧹 Evicting Citations Extension UI Canvas...");
-        
         // Clear out personal library listings to prevent cross-tenant view bleeding
         const mainList = document.getElementById('lib-main-list');
-        if (mainList) mainList.innerHTML = '';
-        
+        if (mainList) mainList.replaceChildren();
+
         // Reset explore panel back to its default pristine state
         const exploreList = document.getElementById('lib-explore-list');
         if (exploreList) {
-            exploreList.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>';
+            exploreList.replaceChildren();
+            const placeholder = document.createElement('p');
+            placeholder.style.cssText = 'color: var(--text-muted); font-style: italic;';
+            placeholder.innerText = 'Search the open science index to discover and import citations.';
+            exploreList.appendChild(placeholder);
         }
         
         // Clean out raw text import console log traces

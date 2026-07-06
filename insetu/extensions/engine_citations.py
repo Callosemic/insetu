@@ -1,6 +1,6 @@
+from pathlib import Path
 import os
 import json
-import sqlite3
 import urllib.request
 import urllib.parse
 from flask import Blueprint, request, jsonify
@@ -77,7 +77,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         rows = cursor.fetchall()
         if rows:
             def write_citation_bucket(filename, items, list_title):
-                out_path = os.path.join(paths["contexts_dir"], filename)
+                out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
                 content_lines = []
                 content_lines.append("============================================================")
                 content_lines.append(f"INSETU TOPOLOGY ({list_title})")
@@ -166,7 +166,7 @@ def get_db():
     """)
     try:
         conn.execute("ALTER TABLE citations ADD COLUMN attachments TEXT DEFAULT '[]'")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
     conn.commit()
     return conn

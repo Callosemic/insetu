@@ -15,6 +15,9 @@ export const ResearchStore = createStore(
             selectedItemId: null,
             targetDir: 'research/',
             aiTriageMode: false,
+            isTabActive: false,
+            searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
+            setSearchForm: (field, val) => set(state => ({ searchForm: { ...state.searchForm, [field]: val } })),
             resetState: () => set({ jobs: [], inbox: [], selectedJobId: null, selectedItemId: null, aiTriageMode: false })
         })),
         { name: 'ResearchStore' }
@@ -40,19 +43,21 @@ if (researchTab) {
             }
         </style>
         <div class="rs-layout">
-
             <div id="rs-view-jobs" class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
                 <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
                     <h3 style="margin-top: 0; color: var(--intent-primary);">New Research Job</h3>
-                    <input type="text" id="rs-query" placeholder="Search Query..." style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;">
+                    <input type="text" id="rs-query" placeholder="Search Query..." style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;"
+oninput="window.inSetu.stores.Research.getState().setSearchForm('query', event.target.value)">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                        <select id="rs-provider" style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
+                        <select id="rs-provider" style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+onchange="window.inSetu.stores.Research.getState().setSearchForm('provider', event.target.value)">
                             <option value="serper">Google (Serper.dev API)</option>
                             <option value="google">Google (Playwright)</option>
                             <option value="duckduckgo">DuckDuckGo</option>
                         </select>
-                        <select id="rs-date-range" style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
-                            <option value="">Any Time</option>
+<select id="rs-date-range" style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+onchange="window.inSetu.stores.Research.getState().setSearchForm('dateRange', event.target.value)">
+    <option value="">Any Time</option>
                             <option value="d">Past Day</option>
                             <option value="w">Past Week</option>
                             <option value="m">Past Month</option>
@@ -62,17 +67,22 @@ if (researchTab) {
                         </select>
                     </div>
                     <div id="rs-custom-dates" style="display: none; gap: 10px; margin-bottom: 10px;">
-                        <input type="date" id="rs-date-start" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
-                        <input type="date" id="rs-date-end" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
+                        <input type="date" id="rs-date-start" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+oninput="window.inSetu.stores.Research.getState().setSearchForm('dateStart', event.target.value)">
+                        <input type="date" id="rs-date-end" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+oninput="window.inSetu.stores.Research.getState().setSearchForm('dateEnd', event.target.value)">
                     </div>
                     <div id="rs-custom-years" style="display: none; gap: 10px; margin-bottom: 10px;">
-                        <input type="number" id="rs-year-start" placeholder="YYYY (e.g. 1999)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="1990" max="2100">
-                        <input type="number" id="rs-year-end" placeholder="YYYY (e.g. 2005)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="1990" max="2100">
+                        <input type="number" id="rs-year-start" placeholder="YYYY (e.g. 1999)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+min="1990" max="2100" oninput="window.inSetu.stores.Research.getState().setSearchForm('yearStart', event.target.value)">
+                        <input type="number" id="rs-year-end" placeholder="YYYY (e.g. 2005)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+min="1990" max="2100" oninput="window.inSetu.stores.Research.getState().setSearchForm('yearEnd', event.target.value)">
                     </div>
                     <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: flex-end;">
                         <div style="flex: 1;">
                             <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Extraction Parser</label>
-                            <select id="rs-parser" style="width: 100%; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
+                            <select id="rs-parser" style="width: 100%; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+onchange="window.inSetu.stores.Research.getState().setSearchForm('parser', event.target.value)">
                                 <option value="jina">Jina AI (Rich Markdown)</option>
                                 <option value="bs4">Local (BeautifulSoup)</option>
                             </select>
@@ -124,29 +134,6 @@ if (researchTab) {
                         <div id="rs-inbox-list" style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 10px; flex: 1;"></div>
                     </div>
                 </div>
-                <div id="rs-preview-modal" class="fullscreen-modal" style="z-index: 1090; display: none;">
-                    <div class="modal-content" style="max-height: 95dvh; height: 95dvh; width: 95vw; max-width: none; display: flex; flex-direction: column; padding: 0; overflow: hidden; background: var(--bg);">
-                        <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
-<div style="display: flex;
-justify-content: space-between; align-items: flex-start; gap: 15px;">
-    <span id="rs-preview-title" style="font-weight: bold;
-color: var(--intent-highlight); font-size: 1.15rem; word-break: break-word;">No item selected</span>
-    <button id="rs-close-preview-btn" class="btn-sm" style="background: var(--intent-neutral);
-margin: 0; flex-shrink: 0; padding: 4px 12px;">Back</button>
-</div>
-                            <div id="rs-disposition-controls" style="display: none; align-items: center; gap: 10px; flex-wrap: wrap;">
-                                <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
-                                    <input type="text" id="rs-target-dir" value="research/" placeholder="Target path (e.g. research/)" style="flex: 1; padding: 6px; font-family: monospace;">
-                                    <button id="btn-pick-rs-target-dir" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;" type="button">...</button>
-                                </div>
-                                <button id="rs-accept-btn" class="btn-sm" style="background: var(--intent-success); margin: 0;">✅ Accept to Workspace</button>
-                                <button id="rs-reject-btn" class="btn-sm" style="background: var(--intent-danger); margin: 0;">🗑️ Reject</button>
-                                <button id="rs-rescrape-btn" class="btn-sm" style="background: var(--intent-warning); margin: 0;">🔄 Re-Scrape</button>
-                            </div>
-                        </div>
-                        <div id="rs-markdown-preview" tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;"></div>
-                    </div>
-                </div>
 
                 <div id="rs-ai-triage" style="display: none; flex-direction: column; flex: 1; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 20px; overflow-y: auto;">
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
@@ -187,43 +174,36 @@ Output your response as a raw JSON object containing three arrays of \`id\` stri
         }
     };
     const startJob = async () => {
-        const query = document.getElementById('rs-query').value.trim();
-        const provider = document.getElementById('rs-provider').value;
-        const parser = document.getElementById('rs-parser').value;
-        const targetDir = document.getElementById('rs-default-dir').value;
-        let dateRange = document.getElementById('rs-date-range').value;
-        if (dateRange === 'custom') {
-            const start = document.getElementById('rs-date-start').value;
-            const end = document.getElementById('rs-date-end').value;
-            if (!start || !end) return alert("Both start and end dates are required for a custom range.");
-            dateRange = `${start}..${end}`;
-        } else if (dateRange === 'custom_year') {
-            const startYr = document.getElementById('rs-year-start').value.trim();
-            const endYr = document.getElementById('rs-year-end').value.trim();
-            if (!startYr || !endYr || startYr.length !== 4 || endYr.length !== 4) {
-                return alert("Both start and end years (YYYY) are required.");
+        const { query, provider, parser, dateStart, dateEnd, yearStart, yearEnd, maxResults: formMax, maxCustom, dateRange: rawDateRange } = ResearchStore.getState().searchForm;
+
+      const targetDir = ResearchStore.getState().targetDir || 'research/';
+        const dateRange = (() => {
+            if (rawDateRange === 'custom') {
+                if (!dateStart || !dateEnd) return null;
+                return `${dateStart}..${dateEnd}`;
+            } else if (rawDateRange === 'custom_year') {
+                if (!yearStart || !yearEnd || yearStart.length !== 4 || yearEnd.length !== 4) return null;
+                return `${yearStart}-01-01..${yearEnd}-12-31`;
             }
-            // Expand into full ISO dates for the backend parser
-            dateRange = `${startYr}-01-01..${endYr}-12-31`;
-        }
+            return rawDateRange;
+        })();
+
+        if (dateRange === null) return alert("Valid date configuration required for custom ranges.");
         if (!query) return alert("Query required.");
+
         const btn = document.getElementById('rs-start-btn');
-        btn.innerText = "⏳ Starting...";
+        if (btn) btn.innerText = "⏳ Starting...";
         try {
-            let maxResults = 50;
-            const maxSelect = document.getElementById('rs-max-results-select').value;
-            if (maxSelect === 'custom') {
-                maxResults = parseInt(document.getElementById('rs-max-results-custom').value, 10) || 50;
-            } else {
-                maxResults = parseInt(maxSelect, 10);
-            }
+            const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
             const res = await fetch('/api/research/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange })
             });
             if (res.ok) {
-                document.getElementById('rs-query').value = '';
+                const qEl = document.getElementById('rs-query');
+                if (qEl) qEl.value = '';
+                ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' } }));
                 await fetchState();
             } else {
                 const data = await res.json();
@@ -246,18 +226,18 @@ Output your response as a raw JSON object containing three arrays of \`id\` stri
         const item = ResearchStore.getState().inbox.find(i => i.id === inboxId);
 if (!item) return;
         if (status === 'accepted') {
-            const targetDir = document.getElementById('rs-target-dir').value.replace(/\/+$/, '') + '/';
-            let slug = item.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-');
-            if (!slug) slug = 'research-note';
-            slug = slug.replace(/^-+|-+$/g, '').substring(0, 60);
-
+            const targetDir = (ResearchStore.getState().targetDir || 'research/').replace(/\/+$/, '') + '/';
+            const slug = (() => {
+                const generated = item.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
+            })();
             const filepath = targetDir + slug + '.md';
-            let contentToSave = item.raw_markdown;
-
-            // Automatically bridge to the Citations Extension if active
-            if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
-                contentToSave = await window.addFileToLibrary(slug + '.md', contentToSave, filepath);
-            }
+            const contentToSave = await (async () => {
+                if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
+                    return await window.addFileToLibrary(slug + '.md', item.raw_markdown, filepath);
+                }
+                return item.raw_markdown;
+            })();
 
             // Physically save to workspace first
             const success = await executeWorkspaceMutation('/api/fs/save', {
@@ -311,15 +291,14 @@ document.getElementById('rs-btn-delete-job').onclick = async () => {
             ResearchStore.setState({ aiTriageMode: !ResearchStore.getState().aiTriageMode });
         };
     document.getElementById('rs-btn-gen-context').onclick = async () => {
-            const jobId = ResearchStore.getState().selectedJobId;
-            if (!jobId) return;
+        const jobId = ResearchStore.getState().selectedJobId;
+        if (!jobId) return;
 
         const btn = document.getElementById('rs-btn-gen-context');
         btn.innerText = "⏳ Packing...";
-
         try {
             const container = document.getElementById('rs-context-links');
-            container.innerHTML = '';
+            container.replaceChildren();
             const res = await fetch(`/api/research/${jobId}/export_context`);
             if (!res.ok) throw new Error("Failed to export context");
             const data = await res.json();
@@ -352,19 +331,27 @@ document.getElementById('rs-btn-delete-job').onclick = async () => {
         }
     };
     document.getElementById('rs-btn-exec-ai').onclick = async () => {
-        const input = document.getElementById('rs-ai-json-input').value.trim();
-        if (!input) return;
+        const input = (ResearchStore.getState().aiJsonInput || '').trim();
+if (!input) return;
 
-        let payload = {};
+        const payload = (() => {
+            try {
+                // Strip out markdown code blocks in case the LLM wrapped its response
+                const cleanInput = input
+                    .replace(/^```json/, '')
+                    .replace(/^```/, '')
+                    .replace(/```$/, '')
+                    .trim();
+                return JSON.parse(cleanInput);
+            } catch (e) {
+                return null;
+            }
+        })();
+
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            return alert("Invalid JSON object. Ensure it looks like: {\"accept\": [], \"reject\": [], \"rescan\": []}");
+        }
         try {
-            // Strip out markdown code blocks in case the LLM wrapped its response
-            let cleanInput = input;
-            if (cleanInput.startsWith('```json')) cleanInput = cleanInput.substring(7);
-            else if (cleanInput.startsWith('```')) cleanInput = cleanInput.substring(3);
-            if (cleanInput.endsWith('```')) cleanInput = cleanInput.substring(0, cleanInput.length - 3);
-            cleanInput = cleanInput.trim();
-
-            payload = JSON.parse(cleanInput);
             if (typeof payload !== 'object' || Array.isArray(payload)) throw new Error("Not an object");
         } catch(e) {
             return alert("Invalid JSON object. Ensure it looks like: {\"accept\": [], \"reject\": [], \"rescan\": []}");
@@ -388,9 +375,9 @@ document.getElementById('rs-btn-delete-job').onclick = async () => {
             }
             for (const id of rescanIds) {
                 if (id) await handleDisposition(id, 'force_scrape');
-            }
-
-            document.getElementById('rs-ai-json-input').value = '';
+}
+            const aiInp = document.getElementById('rs-ai-json-input');
+            if (aiInp) aiInp.value = '';
             await fetchState(); // Final sync with the backend
             alert(`✅ Triage complete:\n- ${acceptIds.length} Accepted to Workspace\n- ${rejectIds.length} Rejected\n- ${rescanIds.length} Queued for Rescan`);
             ResearchStore.setState({ aiTriageMode: false, selectedItemId: null });
@@ -419,32 +406,35 @@ document.getElementById('rs-btn-delete-job').onclick = async () => {
         if (headerInput) headerInput.value = e.target.value;
     });
     document.getElementById('rs-target-dir').addEventListener('input', (e) => {
-        const activeJobId = ResearchStore.getState().selectedJobId;
-        if (activeJobId) {
-            const activeJob = ResearchStore.getState().jobs.find(j => j.id === activeJobId);
-            if (activeJob) {
-                let m = {};
-                try { m = JSON.parse(activeJob.meta_json || '{}'); } catch(err){}
-                m.target_dir = e.target.value;
-                activeJob.meta_json = JSON.stringify(m);
+            const activeJobId = ResearchStore.getState().selectedJobId;
+            if (activeJobId) {
+                const activeJob = ResearchStore.getState().jobs.find(j => j.id === activeJobId);
+                if (activeJob) {
+                    const m = (() => {
+                        try { 
+                            return JSON.parse(activeJob.meta_json || '{}'); } 
+                        catch(err) { return {}; }
+                    })();
+                    m.target_dir = e.target.value;
+                    activeJob.meta_json = JSON.stringify(m);
+                }
             }
-        }
-        ResearchStore.setState({ targetDir: e.target.value });
-        const defaultInput = document.getElementById('rs-default-dir');
-        if (defaultInput) defaultInput.value = e.target.value;
-        const headerInput = document.getElementById('rs-header-target-dir');
-        if (headerInput) headerInput.value = e.target.value;
-    });
+            ResearchStore.setState({ targetDir: e.target.value });
+            const defaultInput = document.getElementById('rs-default-dir');
+            if (defaultInput) defaultInput.value = e.target.value;
+            const headerInput = document.getElementById('rs-header-target-dir');
+            if (headerInput) headerInput.value = e.target.value;
+        });
     document.getElementById('rs-target-dir').addEventListener('change', async (e) => {
-        const activeJobId = ResearchStore.getState().selectedJobId;
-        if (activeJobId) {
-            await fetch(`/api/research/${activeJobId}/action`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'update_meta', meta: { target_dir: e.target.value } })
-            });
-        }
-    });
+            const activeJobId = ResearchStore.getState().selectedJobId;
+            if (activeJobId) {
+                await fetch(`/api/research/${activeJobId}/action`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'update_meta', meta: { target_dir: e.target.value } })
+                });
+            }
+        });
 
     // Inject Global Back Button into the right-aligned sub-tabs-bar
     const actionContainer = document.querySelector('#tab-edit .sub-tabs-bar > div:last-child');
@@ -457,18 +447,7 @@ document.getElementById('rs-btn-delete-job').onclick = async () => {
         backBtn.onclick = () => ResearchStore.setState({ selectedJobId: null, selectedItemId: null });
         actionContainer.prepend(backBtn);
     }
-    // Observer to toggle Back button visibility if the user switches tabs while in detail view
-    const subResearchNode = document.getElementById('sub-research');
-if (subResearchNode) {
-        new MutationObserver(() => {
-            const isActive = subResearchNode.classList.contains('active');
-            const globalBackBtn = document.getElementById('rs-global-back-btn');
-            if (globalBackBtn) {
-                globalBackBtn.style.display = (isActive && ResearchStore.getState().selectedJobId) ? 'block' : 'none';
-            }
-
-        }).observe(subResearchNode, { attributes: true, attributeFilter: ['class'] });
-    }
+    // Observer replaced by pure UDF zone:subtab-changed UI Hook
 
     document.getElementById('rs-start-btn').onclick = startJob;
     document.getElementById('rs-refresh-btn').onclick = fetchState;
@@ -491,19 +470,6 @@ if (subResearchNode) {
             });
         }
     };
-    document.getElementById('rs-close-preview-btn').onclick = () => {
-        ResearchStore.setState({ selectedItemId: null });
-    };
-    document.getElementById('rs-accept-btn').onclick = () => {
-        if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'accepted');
-    };
-document.getElementById('rs-reject-btn').onclick = () => {
-        if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'rejected');
-    };
-document.getElementById('rs-rescrape-btn').onclick = () => {
-        if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'force_scrape');
-    };
-
     window.forceScrapeLink = async (inboxId) => {
         await fetch(`/api/research/inbox/${inboxId}/disposition`, {
             method: 'POST',
@@ -516,7 +482,7 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
     const updateLayout = () => {
         const state = ResearchStore.getState();
         const globalBackBtn = document.getElementById('rs-global-back-btn');
-        const subResearchActive = document.getElementById('sub-research') && document.getElementById('sub-research').classList.contains('active');
+        const subResearchActive = state.isTabActive;
 
         if (state.selectedJobId) {
             if (state.aiTriageMode) {
@@ -530,14 +496,21 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
                 document.getElementById('rs-toggle-ai-triage').innerText = '🤖 AI-Assisted Batch Triage';
                 document.getElementById('rs-toggle-ai-triage').style.background = 'var(--intent-highlight)';
             }
+            const jobsView = document.getElementById('rs-view-jobs');
+            const detailView = document.getElementById('rs-view-detail');
+            if (jobsView) jobsView.className = 'rs-view';
+            if (detailView) detailView.className = 'rs-view active';
 
-            document.getElementById('rs-view-jobs').classList.remove('active');
-            document.getElementById('rs-view-detail').classList.add('active');
             if (globalBackBtn && subResearchActive) globalBackBtn.style.display = 'block';
         } else {
-            document.getElementById('rs-detail-header').dataset.jobId = '';
-            document.getElementById('rs-view-jobs').classList.add('active');
-            document.getElementById('rs-view-detail').classList.remove('active');
+            const headerEl = document.getElementById('rs-detail-header');
+            if (headerEl) headerEl.dataset.jobId = '';
+
+            const jobsView = document.getElementById('rs-view-jobs');
+            const detailView = document.getElementById('rs-view-detail');
+            if (jobsView) jobsView.className = 'rs-view active';
+            if (detailView) detailView.className = 'rs-view';
+
             if (globalBackBtn) globalBackBtn.style.display = 'none';
         }
     };
@@ -548,27 +521,32 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
         const activeJob = state.jobs.find(j => j.id === state.selectedJobId);
         if (!activeJob) return;
 
-        let meta = {};
-        try { meta = JSON.parse(activeJob.meta_json || '{}'); } catch(e) {}
-
-        const safeDate = activeJob.created_at ? new Date(activeJob.created_at).toLocaleString() : 'Unknown Date';
-        let statusColor = 'var(--text-muted)';
-        if (activeJob.status === 'running') statusColor = 'var(--intent-primary)';
-        if (activeJob.status === 'gathering') statusColor = 'var(--intent-highlight)';
-        if (activeJob.status === 'completed') statusColor = 'var(--intent-primary)';
-        if (activeJob.status === 'reviewed') statusColor = 'var(--intent-success)';
-        if (activeJob.status === 'failed') statusColor = 'var(--intent-danger)';
-
-        const safeQueryForClick = activeJob.query.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+        const meta = (() => {
+            try { return JSON.parse(activeJob.meta_json || '{}'); } 
+            catch(e) { return {}; }
+        })();
+const safeDate = activeJob.created_at ?
+new Date(activeJob.created_at).toLocaleString() : 'Unknown Date';
+const statusColor = (() => {
+    if (activeJob.status === 'running') return 'var(--intent-primary)';
+    if (activeJob.status === 'gathering') return 'var(--intent-highlight)';
+    if (activeJob.status === 'completed') return 'var(--intent-primary)';
+    if (activeJob.status === 'reviewed') return 'var(--intent-success)';
+    if (activeJob.status === 'failed') return 'var(--intent-danger)';
+    return 'var(--text-muted)';
+})();
+const safeQueryForClick = activeJob.query.replace(/'/g, "\\'").replace(/"/g, "&quot;");
         const dr = meta.date_range ? meta.date_range : 'Any Time';
         const parserUsed = meta.parser || 'jina';
         const targetDirUsed = meta.target_dir || state.targetDir || 'research/';
 
-        let statusExtraDetail = `(${activeJob.processed_links}/${activeJob.total_links} scraped)`;
-        if (activeJob.status === 'gathering') {
+        const statusExtraDetail = (() => {
+          if (activeJob.status === 'gathering') {
             const pageNum = Math.floor((meta.start_index || 0) / 10) + 1;
-            statusExtraDetail = `(Page ${pageNum} - ${activeJob.total_links} found)`;
-        }
+            return `(Page ${pageNum} - ${activeJob.total_links} found)`;
+          }
+          return `(${activeJob.processed_links}/${activeJob.total_links} scraped)`;
+        })();
 
         const headerEl = document.getElementById('rs-detail-header');
 
@@ -691,51 +669,57 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
         if (btnRetry) btnRetry.style.display = (activeJob.status === 'failed') ? 'block' : 'none';
         if (btnCancel) btnCancel.style.display = (['running', 'paused', 'gathering', 'failed'].includes(activeJob.status)) ? 'block' : 'none';
     };
-
     const updateJobsList = () => {
         const state = ResearchStore.getState();
         const jobsList = document.getElementById('rs-jobs-list');
-        jobsList.innerHTML = '';
+        jobsList.replaceChildren();
         state.jobs.forEach(job => {
             const card = document.createElement('div');
             card.className = 'file-card';
             card.style.padding = '10px';
             card.style.cursor = 'pointer';
 
-            let meta = {};
-            try { meta = JSON.parse(job.meta_json || '{}'); } catch(e) {}
+            const meta = (() => {
+                try { return JSON.parse(job.meta_json || '{}'); } catch(e) { return {}; }
+            })();
 
-            let statusColor = 'var(--text-muted)';
-            if (job.status === 'running') statusColor = 'var(--intent-primary)';
-            if (job.status === 'gathering') statusColor = 'var(--intent-highlight)';
-            if (job.status === 'completed') statusColor = 'var(--intent-primary)';
-            if (job.status === 'reviewed') statusColor = 'var(--intent-success)';
-            if (job.status === 'failed') statusColor = 'var(--intent-danger)';
+            const statusColor = (() => {
+                if (job.status === 'running') return 'var(--intent-primary)';
+                if (job.status === 'gathering') return 'var(--intent-highlight)';
+                if (job.status === 'completed') return 'var(--intent-primary)';
+                if (job.status === 'reviewed') return 'var(--intent-success)';
+                if (job.status === 'failed') return 'var(--intent-danger)';
+                return 'var(--text-muted)';
+            })();
 
-            let actionHtml = '';
-            if (job.status === 'gathering') {
-                actionHtml = `<button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
-            } else if (job.status === 'running') {
-                actionHtml = `<button class="btn-sm job-pause" data-id="${job.id}" style="background: var(--intent-warning); margin:0; padding: 2px 8px;">⏸️ Pause</button>
-                              <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
-            } else if (job.status === 'paused') {
-                actionHtml = `<button class="btn-sm job-resume" data-id="${job.id}" style="background: var(--intent-success); margin:0; padding: 2px 8px;">▶️ Resume</button>
-                              <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
-            } else if (job.status === 'failed') {
-                actionHtml = `<button class="btn-sm job-retry" data-id="${job.id}" style="background: var(--intent-highlight); margin:0; padding: 2px 8px;">🔄 Retry</button>
-                              <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
-            }
+            const actionHtml = (() => {
+                if (job.status === 'gathering') {
+                    return `<button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
+                } else if (job.status === 'running') {
+                    return `<button class="btn-sm job-pause" data-id="${job.id}" style="background: var(--intent-warning); margin:0; padding: 2px 8px;">⏸️ Pause</button>
+                                  <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
+                } else if (job.status === 'paused') {
+                    return `<button class="btn-sm job-resume" data-id="${job.id}" style="background: var(--intent-success); margin:0; padding: 2px 8px;">▶️ Resume</button>
+                                  <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
+                } else if (job.status === 'failed') {
+                    return `<button class="btn-sm job-retry" data-id="${job.id}" style="background: var(--intent-highlight); margin:0; padding: 2px 8px;">🔄 Retry</button>
+                                  <button class="btn-sm job-cancel" data-id="${job.id}" style="background: var(--intent-danger); margin:0; padding: 2px 8px;">🗑️ Cancel</button>`;
+                }
+                return '';
+            })();
 
-            let errorHtml = '';
-            if (job.status === 'failed' && meta.error) {
-                errorHtml = `<div style="font-size: 0.8rem; color: var(--intent-danger); background: #fef2f2; padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid #f87171;">⚠️ <b>Error:</b> ${meta.error}</div>`;
-            }
-            const safeDate = job.created_at ? new Date(job.created_at).toLocaleString() : 'Unknown Date';
-            let cardStatusExtra = `(${job.processed_links}/${job.total_links} scraped)`;
-            if (job.status === 'gathering') {
-                const pageNum = Math.floor((meta.start_index || 0) / 10) + 1;
-                cardStatusExtra = `(Page ${pageNum} - ${job.total_links} found)`;
-            }
+            const errorHtml = (job.status === 'failed' && meta.error) 
+                ? `<div style="font-size: 0.8rem; color: var(--intent-danger); background: var(--input-bg); padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid var(--intent-danger);">⚠️ <b>Error:</b> ${meta.error}</div>`
+                : '';
+            const safeDate = job.created_at ?
+new Date(job.created_at).toLocaleString() : 'Unknown Date';
+            const cardStatusExtra = (() => {
+                if (job.status === 'gathering') {
+                    const pageNum = Math.floor((meta.start_index || 0) / 10) + 1;
+                    return `(Page ${pageNum} - ${job.total_links} found)`;
+                }
+                return `(${job.processed_links}/${job.total_links} scraped)`;
+            })();
 
             const dr = meta.date_range ? meta.date_range : 'Any Time';
 
@@ -765,11 +749,10 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
         document.querySelectorAll('.job-retry').forEach(btn => btn.onclick = (e) => handleJobAction(e.target.dataset.id, 'retry'));
         document.querySelectorAll('.job-cancel').forEach(btn => btn.onclick = (e) => handleJobAction(e.target.dataset.id, 'cancel'));
     };
-
     const updateInboxList = () => {
         const state = ResearchStore.getState();
         const inboxList = document.getElementById('rs-inbox-list');
-        inboxList.innerHTML = '';
+        inboxList.replaceChildren();
         // Filter inbox by active job
         const activeInbox = state.selectedJobId ? state.inbox.filter(i => i.job_id === state.selectedJobId) : [];
 
@@ -782,20 +765,25 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
                 card.style.cursor = 'pointer';
                 card.style.padding = '10px';
                 if (state.selectedItemId === item.id) {
-                    card.style.border = '2px solid var(--intent-highlight)';
+                  card.style.border = '2px solid var(--intent-highlight)';
                 }
-                let dupHtml = '';
-                if (item.status === 'duplicate') {
-                    dupHtml = `<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-                                <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span>
-                                <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.7rem;" onclick="event.stopPropagation(); window.forceScrapeLink('${item.id}')">Force Scrape Anyway</button>
-                                </div>`;
-                } else if (item.status === 'in_library') {
-                    dupHtml = `<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-                                <span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span>
-                                <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;" onclick="event.stopPropagation(); window.forceScrapeLink('${item.id}')">Force Scrape Anyway</button>
-                                </div>`;
-                }
+                const dupHtml = (() => {
+                  if (item.status === 'duplicate') {
+                    return `<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                          <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span>
+                          <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); 
+          padding: 2px 8px; margin: 0; font-size: 0.7rem;" onclick="event.stopPropagation(); window.forceScrapeLink('${item.id}')">Force Scrape Anyway</button>
+                          </div>`;
+                  } else if (item.status === 'in_library') {
+                    return `<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                          <span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span>
+
+              <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;"
+          onclick="event.stopPropagation(); window.forceScrapeLink('${item.id}')">Force Scrape Anyway</button>
+                          </div>`;
+                  }
+                  return '';
+                })();
                 const scrapedBadge = item.scraped_at ? '<span title="Extraction Complete" style="font-size: 0.8rem;">✅</span>' : '<span title="Waiting for extraction..." style="font-size: 0.8rem; opacity: 0.5;">⏳</span>';
                 card.innerHTML = `
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 5px;">
@@ -803,7 +791,7 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
                         <div style="flex-shrink: 0;">${scrapedBadge}</div>
                     </div>
                     <div style="font-size: 0.75rem; color: var(--intent-primary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.url}</div>
-                    <div style="color: #555; font-family: monospace; font-size: 0.7rem; margin-top: 4px; user-select: all;">ID: ${item.id}</div>
+                    <div style="color: var(--text-muted); font-family: monospace; font-size: 0.7rem; margin-top: 4px; user-select: all;">ID: ${item.id}</div>
                     ${dupHtml}
                 `;
                 card.onclick = () => ResearchStore.setState({ selectedItemId: item.id });
@@ -811,31 +799,81 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
             });
         }
     };
-
     const updatePreviewModal = () => {
         const state = ResearchStore.getState();
-        const titleEl = document.getElementById('rs-preview-title');
-        const previewEl = document.getElementById('rs-markdown-preview');
-        const controls = document.getElementById('rs-disposition-controls');
-        const modalEl = document.getElementById('rs-preview-modal');
-
         const activeItem = state.inbox.find(i => i.id === state.selectedItemId);
-        if (activeItem) {
+
+        // If there's an existing dynamic modal but no active item, close it
+        if (!activeItem) {
+            if (document.getElementById('rs-preview-dynamic-modal')) {
+                window.inSetu.ui.Factory.closeModal('rs-preview-dynamic-modal');
+            }
+            return;
+        }
+
+        // Create the modal dynamically if it doesn't exist
+        if (!document.getElementById('rs-preview-dynamic-modal')) {
+            const bodyHtml = `
+                <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
+                    <div id="rs-preview-title-container"></div>
+                    <div id="rs-disposition-controls" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
+<input type="text" id="rs-target-dir-modal" value="${state.targetDir || 'research/'}" placeholder="Target path (e.g. research/)" style="flex: 1; padding: 6px; font-family: monospace;"
+oninput="ResearchStore.setState({ targetDir: event.target.value })">
+<button id="btn-pick-rs-target-dir-modal" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;"
+type="button" onclick="if(window.openFolderBrowser) window.openFolderBrowser((p) => { const tmEl = document.getElementById('rs-target-dir-modal'); if(tmEl) tmEl.value = p ? p + '/' : ''; ResearchStore.setState({ targetDir: p ? p + '/' : '' }); })">...</button>
+</div>
+                        <button id="rs-accept-btn" class="btn-sm" style="background: var(--intent-success); margin: 0;">✅ Accept to Workspace</button>
+                        <button id="rs-reject-btn" class="btn-sm" style="background: var(--intent-danger); margin: 0;">🗑️ Reject</button>
+                        <button id="rs-rescrape-btn" class="btn-sm" style="background: var(--intent-warning); margin: 0;">🔄 Re-Scrape</button>
+                    </div>
+                </div>
+                <div id="rs-markdown-preview" tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;"></div>
+            `;
+            window.inSetu.ui.Factory.createModal({
+                id: 'rs-preview-dynamic-modal',
+                title: 'Research Item Preview',
+                body: bodyHtml,
+                maxWidth: '95vw',
+                actions: [] // Actions are handled inline for specific research layout mapping
+            });
+
+            // Re-bind actions for newly created dynamic modal
+            document.getElementById('rs-accept-btn').onclick = () => {
+                if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'accepted');
+            };
+            document.getElementById('rs-reject-btn').onclick = () => {
+                if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'rejected');
+            };
+            document.getElementById('rs-rescrape-btn').onclick = () => {
+                if (ResearchStore.getState().selectedItemId) handleDisposition(ResearchStore.getState().selectedItemId, 'force_scrape');
+            };
+
+            // Hook the generic modal 'Back' button to reset active state
+            const modalPanel = document.getElementById('rs-preview-dynamic-modal');
+            const backBtn = modalPanel.querySelector('.modal-header button');
+            if (backBtn) backBtn.addEventListener('click', () => ResearchStore.setState({ selectedItemId: null }));
+        }
+
+        // Update content of active dynamic modal safely
+        const titleEl = document.getElementById('rs-preview-title-container');
+        const previewEl = document.getElementById('rs-markdown-preview');
+
+        if (titleEl) {
             titleEl.innerHTML = `
-                <div style="margin-bottom: 4px;">${activeItem.title || 'Untitled'}</div>
+                <div style="margin-bottom: 4px; font-weight: bold; color: var(--intent-highlight); font-size: 1.15rem;">${activeItem.title || 'Untitled'}</div>
                 <div style="margin-bottom: 4px;"><a href="${activeItem.url}" target="_blank" style="color: var(--intent-primary); font-size: 0.85rem; word-break: break-all; font-weight: normal; text-decoration: none;">🔗 ${activeItem.url}</a></div>
                 <div style="color: var(--text-muted); font-family: monospace; font-size: 0.75rem; font-weight: normal; user-select: all;">Item ID: ${activeItem.id}</div>
             `;
-            controls.style.display = 'flex';
-            modalEl.style.display = 'block';
+        }
+
+        if (previewEl) {
             if (activeItem.raw_markdown) {
                 previewEl.innerHTML = marked.parse(activeItem.raw_markdown);
             } else {
                 previewEl.innerHTML = '<span style="color: var(--intent-warning); font-style: italic;">Awaiting extraction...</span>';
             }
             setTimeout(() => previewEl.focus(), 50);
-        } else {
-            if (modalEl) modalEl.style.display = 'none';
         }
     };
 
@@ -869,10 +907,14 @@ document.getElementById('rs-rescrape-btn').onclick = () => {
             }
         });
     }
-
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
         window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
             if (tabId === 'research') fetchState();
+        });
+        window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
+            if (data.parentId === 'edit') {
+                ResearchStore.setState({ isTabActive: data.subId === 'research' });
+            }
         });
     }
 
