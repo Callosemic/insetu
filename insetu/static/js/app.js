@@ -166,7 +166,7 @@ window.inSetu.extensions.Registry = {
         document.body.insertBefore(content, document.getElementById('file-modal'));
         return content.querySelector('.screen');
     },
-    registerSubTab: (parentId, id, label) => {
+    registerSubTab: (parentId, id, label, extName = null) => {
         const parentTab = document.getElementById('tab-' + parentId);
         if (!parentTab) return null;
 
@@ -175,6 +175,7 @@ window.inSetu.extensions.Registry = {
             const st = document.createElement('div');
             st.className = 'sub-tab';
             st.id = 'st-' + id;
+            if (extName) st.dataset.ext = extName;
             st.onclick = () => switchSubTab(id);
             st.innerText = label;
             subTabContainer.appendChild(st);
@@ -245,10 +246,14 @@ window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
         window.inSetu.ui.Factory.closeModal(topModal.id);
         return;
     }
-
     // 2. Fallback for legacy hardcoded modals
     const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
+
     if (activeModal) {
+        if (activeModal.id === 'file-modal' && window.closeFileModal) {
+            window.closeFileModal();
+            return;
+        }
         // Trigger specific close/cancel buttons to ensure teardown logic fires natively
         const closeBtn = activeModal.querySelector(`button[style*="dc2626"], button[onclick*="display='none'"]`);
         if (closeBtn) closeBtn.click();
@@ -323,6 +328,7 @@ window.ExtensionRegistry.executeUnload = function(extName) {
 // --- THE CENTRALIZED FRONTEND METRONOME ---
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
 
+// Evaluate ticks every 100ms to allow sub-second, high-resolution polling for critical extensions
 setInterval(() => {
     const now = Date.now();
     window.ExtensionRegistry._ticks.forEach((tasks, extName) => {
@@ -337,7 +343,7 @@ setInterval(() => {
             }
         });
     });
-}, 1000);
+}, 100);
 
 // --- STATELESS TENANT ROUTING (Fetch Interceptor) ---
 const originalFetch = window.fetch;
@@ -421,13 +427,32 @@ window.addEventListener('DOMContentLoaded', async () => {
             Object.assign(mdeInstance.codemirror.constructor.modes, window.CodeMirror.modes);
             Object.assign(mdeInstance.codemirror.constructor.mimeModes, window.CodeMirror.mimeModes);
         }
-
         // Proxy changes back to the native textarea so legacy logic survives
         mdeInstance.codemirror.on("change", () => {
             textArea.value = mdeInstance.value();
             textArea.dispatchEvent(new Event('input'));
         });
-    }
+
+        // Native Checkbox Toggling
+        mdeInstance.codemirror.on("mousedown", (cm, e) => {
+            if (cm.getOption("readOnly") && cm.getOption("readOnly") !== false) return;
+            const pos = cm.coordsChar({left: e.clientX, top: e.clientY});
+            const lineText = cm.getLine(pos.line);
+            const match = lineText.match(/^(\s*[-*+]\s+\[)( |x|X)(\])/);
+
+            if (match) {
+                const startCh = match[1].length - 1; // Index of '['
+                const endCh = match[1].length + 1;   // Index of ']'
+                // If user clicks anywhere near the brackets
+                if (pos.ch >= startCh && pos.ch <= endCh + 1) {
+                    e.preventDefault();
+                    const isChecked = match[2] !== ' ';
+                    const newLine = match[1] + (isChecked ? ' ' : 'x') + match[3] + lineText.substring(match[0].length);
+                    cm.replaceRange(newLine, {line: pos.line, ch: 0}, {line: pos.line, ch: lineText.length});
+                }
+            }
+        });
+}
     const savedTab = localStorage.getItem('insetu_tab');
     if (savedTab) {
         switchTab(null, savedTab);
@@ -988,9 +1013,9 @@ async function performSoftRefresh() {
                 statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
             }
             // Hide extension tabs that are disabled in the new workspace & execute unloads
-            document.querySelectorAll('.tab[data-ext]').forEach(tabEl => {
+            document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext]').forEach(tabEl => {
                 const extName = tabEl.dataset.ext;
-                const tabId = tabEl.dataset.id;
+                const tabId = tabEl.dataset.id || tabEl.id.replace('st-', '');
                 const isActive = window.ACTIVE_EXTENSIONS.includes(extName);
 
                 tabEl.style.display = isActive ? '' : 'none';

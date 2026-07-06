@@ -6,8 +6,7 @@ import subprocess
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Shift spatial physics to the terminal's Current Working Directory,
 # but enforce the universal sibling-repo architecture (repos are one level up).
-import os
-import json
+
 _cwd = os.getcwd()
 def sniff_tenant_id():
     """Universal helper to extract the active workspace tenant from Flask headers."""
@@ -397,16 +396,32 @@ def resolve_workspace_path(path, workspace_id=None):
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
-
     # Strip out malicious directory traversal operators safely
     norm_path = re.sub(r'\.\.(?=/|$)', '', str(norm_path))
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
+
+    cfg = load_config(workspace_id)
+
+    # Cross-Repo Boundary Protocol (Explicit :: syntax)
+    if '::' in norm_path:
+        boundary_parts = norm_path.split('::', 1)
+        target_repo = boundary_parts[0]
+        downstream = boundary_parts[1].lstrip('/')
+
+        for repo in cfg.get("target_repos", []):
+            if target_repo == repo.get("repo_dir"):
+                physical_path = repo.get("physical_path")
+                expanded_base = Path(physical_path).expanduser().resolve() if physical_path else (ws_root_path / target_repo).resolve()
+                return expanded_base.joinpath(downstream).resolve().as_posix()
+
+        # Fallback if repo not found: sanitize and let standard logic attempt resolution
+        norm_path = norm_path.replace('::', '/')
+
     parts = [p for p in norm_path.split('/') if p]
     if not parts:
         return Path(path).as_posix()
 
     # Mount Point Protocol: Check for physical_path overrides
-    cfg = load_config(workspace_id)
     for repo in cfg.get("target_repos", []):
         if parts[0] == repo.get("repo_dir"):
             physical_path = repo.get("physical_path")
@@ -506,3 +521,31 @@ def search_workspace_files(workspace_id, query):
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:50]
+
+def get_all_workspace_ids():
+    """Returns a list of all active workspace IDs from the central switchboard."""
+    import json
+    import os
+    from pathlib import Path
+    
+    # Assumes _cwd is available in module scope
+    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    workspace_ids = ["default"]
+    if os.path.exists(index_path):
+        try:
+            with open(index_path, 'r', encoding='utf-8') as f:
+                w_data = json.load(f)
+            workspace_ids = list(w_data.get("workspaces", {}).keys())
+            if "default" not in workspace_ids:
+                workspace_ids.append("default")
+        except Exception:
+            pass
+    return workspace_ids
+
+def generate_idempotency_hash(payload: dict) -> str:
+    """
+    Generates a deterministic JSON string representation of a payload 
+    for immediate job request-deduplication and idempotency checks.
+    """
+    import json
+    return json.dumps(payload, sort_keys=True)

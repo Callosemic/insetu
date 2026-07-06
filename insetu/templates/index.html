@@ -9,13 +9,11 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/searchcursor.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/search.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.min.js"></script>
@@ -157,59 +155,25 @@ margin: 0; padding: 4px 12px; font-size: 0.9rem;">Paste</button>
 <div id="file-modal" class="fullscreen-modal" style="display: none; z-index: 1050;">
 <div style="display: flex; flex-direction: column; height: 100dvh; width: 100vw;">
     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
-        <h3 id="modal-title" style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);"
-title="File Content">File Content</h3>
-        <div style="display: flex; gap: 10px;">
-            <button id="modal-toggle-btn" onclick="toggleModalMode()" class="btn-sm" style="background: #64748b; margin: 0; display: none;">👁️ Preview</button>
-            <button id="modal-save-btn" onclick="saveModalFile()" class="btn-sm" style="background: #f59e0b; display: none; margin: 0;">💾 Save</button>
-            <button onclick="document.getElementById('file-modal').style.display='none'" class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
+            <h3 id="modal-title" style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);"
+    title="File Content">File Content</h3>
+            <div style="display: flex; gap: 10px;">
+                <button id="modal-save-btn" onclick="saveModalFile()" class="btn-sm" style="background: #f59e0b; display: none; margin: 0;">💾 Save</button>
+                <button onclick="closeFileModal()" class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
 
-        </div>
-        </div>
-        <div id="modal-action-toolbar" style="display: none; gap: 10px; margin: 0 !important; padding: 10px 20px 12px 20px; background: var(--input-bg); border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0; align-items: flex-start; position: relative; flex-shrink: 0;">
-            <div id="toolbar-buttons" style="display: flex; gap: 15px; flex-wrap: wrap; overflow: hidden; max-height: 32px; flex: 1; transition: max-height 0.2s;">
-                <div id="file-zone-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                    <button onclick="openMoveModal()" class="btn-sm" style="background: #3b82f6; margin: 0;">🚚 Move</button>
-                    <button onclick="archiveModalFile()" class="btn-sm" style="background: #f59e0b; margin: 0;">📦 Archive</button>
-                    <button onclick="deleteModalFile()" class="btn-sm" style="background: #dc2626; margin: 0;">🗑️ Delete</button>
-                </div>
-                <div id="edit-zone-divider" style="width: 2px; background: var(--border); border-radius: 2px; margin: 2px 0;"></div>
-                <div id="edit-zone-buttons" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                    <button onclick="openLinkModal()" class="btn-sm" style="background: #10b981; margin: 0;">🔗 Insert Link</button>
-                    <button id="modal-clean-btn" onclick="cleanModalFile()" class="btn-sm" style="background: #8b5cf6; margin: 0; display: none;">🧹 Clean AI Tags</button>
-                </div>
             </div>
-            <button id="toolbar-more-btn" onclick="const tb = document.getElementById('toolbar-buttons'); tb.style.maxHeight = tb.style.maxHeight === '32px' ? '500px' : '32px';" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0;">...</button>
+            </div>
+        <div id="modal-action-toolbar" style="display: none; gap: 10px; margin: 0 !important; padding: 10px 20px 12px 20px; background: var(--input-bg); border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0; align-items: center; position: relative; flex-shrink: 0;">
+            <button id="btn-menu-file" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📁 File ▾</button>
+            <button id="btn-menu-edit" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
+            <button id="btn-menu-ext" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold; display: none;">🧩 Extensions ▾</button>
         </div>
-        <script>
-            window.checkToolbarOverflow = () => {
-                const tb = document.getElementById('toolbar-buttons');
-                const moreBtn = document.getElementById('toolbar-more-btn');
-                if (!tb || !moreBtn) return;
-                if (tb.scrollHeight > 40) {
-                    moreBtn.style.display = 'block';
-                } else {
-                    moreBtn.style.display = 'none';
-                    tb.style.maxHeight = '32px'; // Reset state if it drops back to 1 row
-                }
-            };
-
-            window.addEventListener('DOMContentLoaded', () => {
-                const tb = document.getElementById('toolbar-buttons');
-                if (tb) {
-                    new ResizeObserver(window.checkToolbarOverflow).observe(tb);
-                    new MutationObserver(window.checkToolbarOverflow).observe(tb, { childList: true, subtree: true });
-                }
-            });
-        </script>
 
         <div id="modal-truncation-banner" style="display: none; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
             <span id="modal-truncation-msg">⚠️ Truncated</span>
             <button onclick="loadFullModalText()" class="btn-sm" style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000;">Show All</button>
         </div>
-
         <textarea id="modal-text" style="flex: 1; margin: 0; padding: 20px; font-size: 14px; font-family: var(--font-mono); line-height: 1.6; resize: none; border: none; outline: none; background: var(--bg); color: var(--text); box-sizing: border-box;"></textarea>
-        <div id="modal-preview" tabindex="0" style="flex: 1; margin: 0; padding: 20px; font-size: 14px; line-height: 1.6; overflow-y: auto; background: var(--bg); color: var(--text); outline: none; display: none;"></div>
         <div class="modal-footer">
             <button id="modal-dl-btn" draggable="true" class="ui-draggable-export" onclick="downloadFromModal()" style="background: #0284c7; color: white;">⬇️ Download</button>
             <button onclick="copyFromModal()" style="background: #10b981; color: white;">📋 Copy</button>

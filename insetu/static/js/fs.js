@@ -12,7 +12,6 @@ import { AppStore } from './store.js';
 let currentModalFile = '';
 export let currentModalOriginalText = '';
 export let currentModalIsFS = false;
-let isPreviewMode = false;
 let currentModalFullText = '';
 let isModalTruncated = false;
 let currentModalForceEdit = false;
@@ -36,9 +35,7 @@ window.loadFullModalText = function() {
         textArea.value = currentModalFullText;
         textArea.readOnly = shouldBeReadOnly;
     }
-
     currentModalOriginalText = currentModalFullText;
-    if (isMarkdown && isPreviewMode) renderMarkdownPreview();
 };
 
 function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
@@ -72,11 +69,9 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
         } else {
             textArea.value = text;
             textArea.readOnly = shouldBeReadOnly;
-        }
-        currentModalOriginalText = text;
-    }
-
-    if (isMarkdown && isPreviewMode) renderMarkdownPreview();
+            }
+            currentModalOriginalText = text;
+}
 }
 
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
@@ -102,199 +97,16 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     window.URL.revokeObjectURL(url);
     a.remove();
 }
-
-function renderMarkdownPreview() {
-    const preview = document.getElementById('modal-preview');
-    let text = document.getElementById('modal-text').value;
-    // Intercept YAML frontmatter and wrap it in a custom styled block
-    const yamlRegex = /^---\n([\s\S]*?)\n---/;
-    text = text.replace(yamlRegex, (match, p1) => {
-        // Auto-link URLs inside the frontmatter
-        const linkedP1 = p1.replace(/(https?:\/\/[^\s"']+)/g, '<a href="$1" target="_blank" style="color: var(--intent-primary); text-decoration: underline;">$1</a>');
-        return '<pre class="yaml-frontmatter">' + linkedP1 + '</pre>';
-    });
-    // Sanitize raw text vectors against script tag injection using DOMPurify
-let htmlContent = marked.parse(text);
-if (typeof DOMPurify !== 'undefined') {
-    htmlContent = DOMPurify.sanitize(htmlContent, { ADD_ATTR: ['target'] });
-}
-preview.innerHTML = htmlContent;
-
-const checkboxes = preview.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach((cb, index) => {
-        cb.disabled = false;
-        cb.addEventListener('change', (e) => {
-            const isChecked = e.target.checked;
-            let rawText = document.getElementById('modal-text').value;
-            const checkboxRegex = /^(\s*[-*+]\s+\[)[ xX](\])/gm;
-            let matchCount = 0;
-
-            rawText = rawText.replace(checkboxRegex, (match, p1, p2) => {
-                if (matchCount === index) {
-                    matchCount++;
-                    return p1 + (isChecked ? 'x' : ' ') + p2;
-                }
-                matchCount++;
-                return match;
-            });
-            document.getElementById('modal-text').value = rawText;
-            if (currentModalIsFS) saveModalFile(true);
-        });
-    });
-    // Wiki-link interception
-    const links = preview.querySelectorAll('a');
-    links.forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-            showWikiPopup(e, link.getAttribute('href'), link.getAttribute('title'));
-        });
-    });
-}
-
-let activeWikiPopup = null;
-function showWikiPopup(e, href, title) {
-    if (activeWikiPopup) activeWikiPopup.remove();
-
-    const popup = document.createElement('div');
-    popup.className = 'wiki-link-popup';
-    popup.style.position = 'fixed';
-
-    // Offset slightly so it doesn't immediately intercept subsequent clicks
-    popup.style.left = (e.clientX + 10) + 'px';
-    popup.style.top = (e.clientY + 15) + 'px';
-
-    const displayHref = href.length > 40 ? href.substring(0, 40) + '...' : href;
-    const titleHtml = title ? `<div style="font-size: 0.85rem; font-weight: bold; color: var(--btn); margin-bottom: 4px;">${title}</div>` : '';
-
-    popup.innerHTML = `
-        <div style="display: flex; flex-direction: column;">
-            ${titleHtml}
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text); opacity: 0.8;">${displayHref}</span>
-                <button class="btn-sm" style="background: var(--btn); margin: 0; padding: 4px 8px; font-weight: bold;">Go</button>
-            </div>
-        </div>
-    `;
-
-    const goBtn = popup.querySelector('button');
-    goBtn.onclick = () => {
-        popup.remove();
-        activeWikiPopup = null;
-
-        let targetPath = href;
-
-        // Handle local relative paths
-        if (!href.startsWith('http') && !href.startsWith('/')) {
-            const parts = currentModalFile.split('/');
-            parts.pop(); // Remove current filename to anchor at its directory
-
-            if (href.startsWith('./')) {
-                targetPath = parts.join('/') + '/' + href.substring(2);
-            } else if (href.startsWith('../')) {
-                let hrefParts = href.split('/');
-                while(hrefParts[0] === '..') {
-                    hrefParts.shift();
-                    parts.pop();
-                }
-                targetPath = parts.join('/') + '/' + hrefParts.join('/');
-            } else {
-                targetPath = parts.length > 0 ? parts.join('/') + '/' + href : href;
-            }
-            // Sanitize redundant slashes
-            targetPath = targetPath.replace(/\/+/g, '/').replace(/^\/+/, '');
-        }
-        if (targetPath.startsWith('http')) {
-            window.open(targetPath, '_blank');
-        } else {
-            const ext = targetPath.split('.').pop().toLowerCase();
-            const mediaExts = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mp3', 'wav', 'webm'];
-
-            if (mediaExts.includes(ext)) {
-                // Open PDFs and images in a new browser tab using the inline viewer
-                window.open('/download/' + encodeURIComponent(targetPath) + '?inline=1', '_blank');
-            } else if (['zip', 'docx', 'xlsx', 'pptx', 'tar', 'gz'].includes(ext)) {
-                // Force a direct download for heavy binaries
-                window.open('/download/' + encodeURIComponent(targetPath), '_blank');
-            } else {
-                // Assume workspace text/code and open it in the modal
-                viewSourceFile(targetPath, true);
-            }
-        }
-    };
-
-    document.body.appendChild(popup);
-    activeWikiPopup = popup;
-
-    // Listen for outside clicks to close the pop-up gracefully
-    setTimeout(() => {
-        const closer = (ev) => {
-            if (!popup.contains(ev.target)) {
-                popup.remove();
-                activeWikiPopup = null;
-                document.removeEventListener('click', closer);
-            }
-        };
-        document.addEventListener('click', closer);
-    }, 10);
-}
-function toggleModalMode() {
-    if (isPreviewMode && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', currentModalFile);
-        if (override) return;
-    }
-
-    isPreviewMode = !isPreviewMode;
-    const toggleBtn = document.getElementById('modal-toggle-btn');
-    const textArea = document.getElementById('modal-text');
-    const preview = document.getElementById('modal-preview');
-    const editZone = document.getElementById('edit-zone-buttons');
-    const editDivider = document.getElementById('edit-zone-divider');
-    const { ext, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(currentModalFile);
-    const dlBtn = document.getElementById('modal-dl-btn');
-    if (dlBtn && !currentModalIsMemoryOnly) {
-        dlBtn.dataset.filename = currentModalFile.split('/').pop();
-        dlBtn.dataset.fetchUrl = `/download/${currentModalFile}`;
-    }
-
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
-    if (isPreviewMode) {
-        renderMarkdownPreview();
-        textArea.style.display = 'none';
-        if (mdeWrap) mdeWrap.style.display = 'none';
-        preview.style.display = 'block';
-        toggleBtn.innerText = '📝 Edit';
-        if (editZone) editZone.style.display = 'none';
-        if (editDivider) editDivider.style.display = 'none';
-        setTimeout(() => preview.focus(), 50);
-    } else {
-        if (isSupportedEditor && mdeWrap) {
-            mdeWrap.style.display = 'flex';
-            textArea.style.display = 'none';
-            if (typeof mdeInstance !== 'undefined' && mdeInstance) setTimeout(() => mdeInstance.codemirror.refresh(), 10);
-        } else {
-            if (mdeWrap) mdeWrap.style.display = 'none';
-            textArea.style.display = 'block';
-        }
-        preview.style.display = 'none';
-        toggleBtn.innerText = '👁️ Preview';
-        if (editZone) editZone.style.display = 'flex';
-        if (editDivider) editDivider.style.display = 'block';
-    }
-}
 async function viewAndCopy(filename) {
     currentModalFile = filename;
     currentModalIsFS = false;
     currentModalForceEdit = false;
     currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filename;
-
     const textArea = document.getElementById('modal-text');
-    const preview = document.getElementById('modal-preview');
-    const toggleBtn = document.getElementById('modal-toggle-btn');
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
-    
-    if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.value("Loading...");
         mdeInstance.codemirror.setOption("mode", codeMode);
         mdeInstance.codemirror.setOption("readOnly", "nocursor");
@@ -307,29 +119,15 @@ async function viewAndCopy(filename) {
     closeBrowseModal();
     const tb = document.getElementById('modal-action-toolbar');
     if (tb) tb.style.display = 'none';
-
     const mdeWrap = document.querySelector('.EasyMDEContainer');
-    if (isMarkdown) {
-        toggleBtn.style.display = 'block';
-        isPreviewMode = true;
+
+    if (isSupportedEditor && mdeWrap) {
+        mdeWrap.style.display = 'flex';
         textArea.style.display = 'none';
-        if (mdeWrap) mdeWrap.style.display = 'none';
-        preview.style.display = 'block';
-        toggleBtn.innerText = '📝 Edit';
-        preview.innerHTML = '<p>Loading...</p>';
-        setTimeout(() => preview.focus(), 50);
+        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
     } else {
-        toggleBtn.style.display = 'none';
-        isPreviewMode = false;
-        preview.style.display = 'none';
-        if (isSupportedEditor && mdeWrap) {
-            mdeWrap.style.display = 'flex';
-            textArea.style.display = 'none';
-            setTimeout(() => mdeInstance.codemirror.refresh(), 10);
-        } else {
-            if (mdeWrap) mdeWrap.style.display = 'none';
-            textArea.style.display = 'block';
-        }
+        if (mdeWrap) mdeWrap.style.display = 'none';
+        textArea.style.display = 'block';
     }
 
     try {
@@ -339,10 +137,9 @@ async function viewAndCopy(filename) {
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
     } catch (e) {
         const errText = "Error loading file content.";
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
+if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
         else textArea.value = errText;
         currentModalOriginalText = "";
-        if (isMarkdown && isPreviewMode) preview.innerHTML = '<p style="color:red;">Error loading file.</p>';
     }
 }
 
@@ -622,17 +419,12 @@ function cleanModalFile() {
     // Clean Orphaned Spans
     text = text.replace(/\((?:start_span|end_span)\)/gi, '');
     text = text.replace(/\[span_\d+\]/gi, '');
-
     if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.value(text);
-    } else {
+} else {
         document.getElementById('modal-text').value = text;
         document.getElementById('modal-text').dispatchEvent(new Event('input'));
-    }
-
-    if (ext === 'md' && isPreviewMode) {
-        renderMarkdownPreview();
-    }
+}
 
     // Persist changes to disk automatically
     if (currentModalIsFS && window.saveModalFile) {
@@ -1262,10 +1054,7 @@ export async function viewSourceFile(filepath, isFS = false) {
     currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filepath;
     const textArea = document.getElementById('modal-text');
-    const preview = document.getElementById('modal-preview');
-    const toggleBtn = document.getElementById('modal-toggle-btn');
-
-    const ext = filepath.split('.').pop().toLowerCase();
+const ext = filepath.split('.').pop().toLowerCase();
     const modeMap = {
         'md': 'markdown',
         'py': 'python',
@@ -1288,52 +1077,74 @@ export async function viewSourceFile(filepath, isFS = false) {
     document.getElementById('file-modal').style.display = 'block';
     closeBrowseModal();
     const tb = document.getElementById('modal-action-toolbar');
-    const editZone = document.getElementById('edit-zone-buttons');
-    const editDivider = document.getElementById('edit-zone-divider');
     const dlBtn = document.getElementById('modal-dl-btn');
     if (dlBtn && !currentModalIsMemoryOnly) {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
         dlBtn.dataset.filename = filepath.split('/').pop();
         dlBtn.dataset.fetchUrl = isFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(filepath)}` : `/download/${filepath}`;
     }
-
     if (isFS) {
         tb.style.display = 'flex';
-        document.getElementById('modal-clean-btn').style.display = (isMarkdown || ext === 'txt') ? 'block' : 'none';
 
+        const btnFile = document.getElementById('btn-menu-file');
+        const btnEdit = document.getElementById('btn-menu-edit');
+        const btnExt = document.getElementById('btn-menu-ext');
+
+        btnFile.onclick = (e) => {
+            window.inSetu.ui.Factory.createDropdown({
+                anchor: e.target,
+                items: [
+                    { label: 'Move', icon: '🚚', onClick: window.openMoveModal },
+                    { label: 'Archive', icon: '📦', onClick: window.archiveModalFile },
+                    { label: 'Delete', icon: '🗑️', onClick: window.deleteModalFile }
+                ]
+            });
+        };
+
+        btnEdit.onclick = (e) => {
+            const items = [
+                { label: 'Insert Link', icon: '🔗', onClick: window.openLinkModal }
+            ];
+            if (isMarkdown || ext === 'txt') {
+                items.push({ label: 'Clean AI Tags', icon: '🧹', onClick: window.cleanModalFile });
+            }
+            window.inSetu.ui.Factory.createDropdown({
+                anchor: e.target,
+                items: items
+            });
+        };
+
+        let extMenuItems = [];
         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-            window.inSetu.extensions.Registry.executeUIHook('zone:modal-file-toolbar', { filepath, isMarkdown, ext });
-            window.inSetu.extensions.Registry.executeUIHook('zone:modal-edit-toolbar', { filepath, isMarkdown, ext });
+            window.inSetu.extensions.Registry.executeUIHook('zone:modal-ext-menu', { filepath, isMarkdown, ext, menuItems: extMenuItems });
+        }
+
+        if (extMenuItems.length > 0) {
+            btnExt.style.display = 'block';
+            btnExt.onclick = (e) => {
+                window.inSetu.ui.Factory.createDropdown({
+                    anchor: e.target,
+                    items: extMenuItems
+                });
+            };
+        } else {
+            btnExt.style.display = 'none';
         }
     } else {
         tb.style.display = 'none';
     }
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
-    if (isMarkdown) {
-        toggleBtn.style.display = 'block';
-        isPreviewMode = true;
-        if (editZone) editZone.style.display = 'none';
-        if (editDivider) editDivider.style.display = 'none';
+
+    if (isSupportedEditor && mdeWrap) {
+        mdeWrap.style.display = 'flex';
         textArea.style.display = 'none';
-        if (mdeWrap) mdeWrap.style.display = 'none';
-        preview.style.display = 'block';
-        toggleBtn.innerText = '📝 Edit';
-        preview.innerHTML = '<p>Loading...</p>';
-        setTimeout(() => preview.focus(), 50);
+        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
     } else {
-        toggleBtn.style.display = 'none';
-        isPreviewMode = false;
-        preview.style.display = 'none';
-        if (isSupportedEditor && mdeWrap) {
-            mdeWrap.style.display = 'flex';
-            textArea.style.display = 'none';
-            setTimeout(() => mdeInstance.codemirror.refresh(), 10);
-        } else {
-            if (mdeWrap) mdeWrap.style.display = 'none';
-            textArea.style.display = 'block';
-        }
+        if (mdeWrap) mdeWrap.style.display = 'none';
+        textArea.style.display = 'block';
     }
+
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
         const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
@@ -1342,9 +1153,8 @@ export async function viewSourceFile(filepath, isFS = false) {
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
         const errText = "Error loading file content.";
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
+if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
         else textArea.value = errText;
-        if (isMarkdown && isPreviewMode) preview.innerHTML = '<p style="color:red;">Error loading file.</p>';
     }
 }
 let currentFileTree = {};
@@ -1598,16 +1408,37 @@ export function openBrowseModal(contextFilename) {
         autoDrilldown: true
     });
 }
+export function closeFileModal() {
+    const textArea = document.getElementById('modal-text');
+    const mdeWrap = document.querySelector('.EasyMDEContainer');
+    const isMDE = (mdeWrap && window.getComputedStyle(mdeWrap).display !== 'none' && typeof mdeInstance !== 'undefined');
+    const currentVal = isMDE ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
+
+    if (currentModalIsFS && currentVal !== currentModalOriginalText) {
+        if (!confirm("You have unsaved changes. Are you sure you want to close this file?")) {
+            return;
+        }
+    }
+
+    document.getElementById('file-modal').style.display = 'none';
+
+    // Reset state
+    currentModalOriginalText = '';
+    if (textArea) textArea.value = '';
+    if (isMDE) mdeInstance.value('');
+    const saveBtn = document.getElementById('modal-save-btn');
+    if (saveBtn) saveBtn.style.display = 'none';
+}
+
+window.closeFileModal = closeFileModal;
+
 export function openVirtualFile(filename, content) {
     currentModalFile = filename;
     currentModalIsFS = false;
     currentModalIsMemoryOnly = true;
     document.getElementById('modal-title').innerText = filename;
-    const textArea = document.getElementById('modal-text');
-    const preview = document.getElementById('modal-preview');
-    const toggleBtn = document.getElementById('modal-toggle-btn');
-
-    if (typeof mdeInstance !== 'undefined' && mdeInstance) {
+const textArea = document.getElementById('modal-text');
+if (typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.codemirror.setOption("mode", "markdown");
     }
 
@@ -1618,10 +1449,6 @@ export function openVirtualFile(filename, content) {
     closeBrowseModal();
     const tb = document.getElementById('modal-action-toolbar');
     if (tb) tb.style.display = 'none';
-
-    toggleBtn.style.display = 'block';
-    isPreviewMode = false;
-    preview.style.display = 'none';
 
     const mdeWrap = document.querySelector('.EasyMDEContainer');
     if (mdeWrap) {
@@ -1639,7 +1466,6 @@ window.saveNewFile = saveNewFile;
 window.openNewFolderModal = openNewFolderModal;
 window.saveNewFolder = saveNewFolder;
 window.checkFileExtension = checkFileExtension;
-window.toggleModalMode = toggleModalMode;
 window.saveModalFile = saveModalFile;
 window.copyFromModal = copyFromModal;
 window.openMoveModal = openMoveModal;
@@ -1924,26 +1750,42 @@ function executeLinkSearch(query) {
         container.appendChild(row);
     });
 }
-
 function insertLinkToEditor(path, name) {
     let finalPath = path;
 
     // Calculate intelligent relative path based on the file currently open in the modal
     if (currentModalFile) {
-        const currentParts = currentModalFile.split('/');
-        currentParts.pop(); // Remove filename to anchor at its directory
-        const targetParts = path.split('/');
+        const { targetConfigs } = window.inSetu.stores.App.getState();
 
-        let commonLength = 0;
+        // Rely on the SSOT configuration to prevent 'insetu/insetu' edge case failures
+        const getRepo = (p) => {
+            const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
+            return match ? match.repo_dir : p.split('/')[0];
+        };
+
+        const currentRepo = getRepo(currentModalFile);
+        const targetRepo = getRepo(path);
+
+        if (currentRepo !== targetRepo) {
+            // Cross-repo boundary! Use the explicit backend-supported syntax
+            const targetPathWithinRepo = path.substring(targetRepo.length + 1);
+            finalPath = `${targetRepo}::${targetPathWithinRepo}`;
+        } else {
+            // Same repo: Use standard relative path generation
+            const currentParts = currentModalFile.split('/');
+            currentParts.pop();
+            // Remove filename to anchor at its directory
+            const targetParts = path.split('/');
+            let commonLength = 0;
         while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
             commonLength++;
         }
-
         const upSteps = currentParts.length - commonLength;
         const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
         const downString = targetParts.slice(commonLength).join('/');
 
         finalPath = upString + downString;
+        }
     }
 
     const linkText = `[${name}](${finalPath})`;

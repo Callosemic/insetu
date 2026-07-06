@@ -510,3 +510,26 @@ def execute_bridge_sync(workspace_id, data):
             print(f"  [!] System processing fault: {str(e)}")
 
     return out.getvalue()
+
+# --- ASYNCHRONOUS LEDGER DELEGATION ---
+from insetu.workers import update_immediate_job_status, register_callback
+
+def _background_bridge_sync(job_id, workspace_id, **kwargs):
+    """Executes the bridge matrix off-thread and enforces the VFS synchronization barrier."""
+    try:
+        update_immediate_job_status(job_id, 'processing', "Analyzing patch matrices and running AST validation...", workspace_id=workspace_id)
+        
+        # Execute the pure operational logic
+        sync_output = execute_bridge_sync(workspace_id, kwargs)
+
+        # VFS BARRIER: Block the completion signal until physical disk writes settle
+        from insetu.routes_fs import _VFS_WRITE_QUEUE
+        _VFS_WRITE_QUEUE.join()
+
+        update_immediate_job_status(job_id, 'completed', sync_output, workspace_id=workspace_id)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        update_immediate_job_status(job_id, 'failed', f"Bridge Fatal Error: {str(e)}\n\n{err}", workspace_id=workspace_id)
+
+register_callback("bridge", "sync_task", _background_bridge_sync)

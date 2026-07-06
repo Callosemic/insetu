@@ -26,29 +26,33 @@ def get_connection(db_name, workspace_id=None):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
     db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
-
     # Key the connection by tenant
     cache_key = (workspace_id, db_name)
-    if cache_key not in _local.connections:
-        # Phase 3: LRU Eviction Policy (Max 5 Workspaces to prevent WAL lock exhaustion)
-        if len(_local.connections) > 5:
-            oldest_key = list(_local.connections.keys())[0]
-            try:
-                _local.connections[oldest_key].close()
-            except Exception: pass
-            del _local.connections[oldest_key]
 
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        # Bypassing same_thread check is safe here because we guarantee thread-local storage
-        conn = sqlite3.connect(db_path, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        
-        # Enforce Concurrent Data Safety Laws
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-        conn.commit()
-
+    # True LRU: Pop and re-insert to move the accessed key to the end of the dictionary
+    if cache_key in _local.connections:
+        conn = _local.connections.pop(cache_key)
         _local.connections[cache_key] = conn
+        return conn
 
-    return _local.connections[cache_key]
+    # Phase 3: LRU Eviction Policy (Max 5 Workspaces to prevent WAL lock exhaustion)
+    if len(_local.connections) >= 5:
+        oldest_key = list(_local.connections.keys())[0]
+        try:
+            _local.connections[oldest_key].close()
+        except Exception: pass
+        del _local.connections[oldest_key]
+
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    # Bypassing same_thread check is safe here because we guarantee thread-local storage
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    # Enforce Concurrent Data Safety Laws
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.commit()
+
+    _local.connections[cache_key] = conn
+    return conn

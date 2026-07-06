@@ -16,6 +16,7 @@ export const BridgeStore = createStore(
             payloadText: '',
             detectedFiles: [],
             activeFiles: new Set(),
+            activeBridgeJobId: null,
 
             setPayloadText: (text) => {
                 const val = text.replace(/\u00A0/g, ' ');
@@ -38,7 +39,7 @@ export const BridgeStore = createStore(
                 else updated.add(file);
                 return { activeFiles: updated };
             }),
-            clearPayload: () => set({ payloadText: '', detectedFiles: [], activeFiles: new Set() })
+            clearPayload: () => set({ payloadText: '', detectedFiles: [], activeFiles: new Set(), activeBridgeJobId: null })
         })),
         { name: 'BridgeStore' }
     )
@@ -189,13 +190,11 @@ export function sync(dryRunActive, bypassSandwich = false) {
 
     const activeFiles = Array.from(bridgeState.activeFiles);
 
-    statusBox.innerText = "Processing streaming matrices...";
+    statusBox.innerText = "Dispatching transaction to the Bridge...";
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     fetch(`/api/${activeWs}/bridge/sync`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 text: textVal,
                 active_files: activeFiles,
@@ -203,38 +202,73 @@ export function sync(dryRunActive, bypassSandwich = false) {
                 pinned_repos: Array.from(AppStore.getState().pinnedRepos)
             })
         })
-        .then(res => res.text())
+        .then(async res => {
+            if (!res.ok) throw new Error(await res.text());
+            return res.json();
+        })
         .then(data => {
-            let safeData = data.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
-                const safeP1 = p1.trim().replace(/\\/g, '\\\\');
-                const safeP2 = p2.trim().replace(/\\/g, '\\\\');
-                if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
-                return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
-            });
-            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
-                return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                    <button type="button" onclick="if(window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob('${b64err.trim()}'));" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
-                    <button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Diff', 2000)" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
-                </div>`;
-            });
-            safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
-                const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
-                <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
-            </div>`;
-            });
-
-            statusBox.innerHTML = safeData;
-
-            if (!data.includes('[!]') && !data.includes('ACTION_REQUIRED') && !dryRunActive) {
-                BridgeStore.getState().clearPayload();
-            }
+            BridgeStore.setState({ activeBridgeJobId: data.job_id });
+            statusBox.innerText = "Transaction accepted. Processing matrix off-thread...";
         }).catch(err => {
             statusBox.innerHTML = `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>`;
         });
 }
+// Map the polling loop to the Centralized Metronome
+window.addEventListener('DOMContentLoaded', () => {
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
+        // High-frequency 250ms polling for snappy Bridge UX
+        window.inSetu.extensions.Registry.registerTick('bridge', 250, async () => {
+            const { activeBridgeJobId } = BridgeStore.getState();
+            if (!activeBridgeJobId) return;
+
+            try {
+                const res = await fetch(`/api/system/jobs/${activeBridgeJobId}`);
+                if (!res.ok) return;
+                const statusData = await res.json();
+                const statusBox = document.getElementById('status-box');
+
+                if (statusData.status === 'processing' || statusData.status === 'pending') {
+                    if (statusBox) statusBox.innerText = statusData.message || "Processing...";
+                } else if (statusData.status === 'completed' || statusData.status === 'failed') {
+                    BridgeStore.setState({ activeBridgeJobId: null });
+                    
+                    const rawData = statusData.message || "";
+                    let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
+                        const safeP1 = p1.trim().replace(/\\/g, '\\\\');
+                        const safeP2 = p2.trim().replace(/\\/g, '\\\\');
+                        if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
+                        return `<br><button type="button" onclick="updateFilePath('${safeP1}', '${safeP2}')" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
+                    });
+                    
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
+                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
+                            <button type="button" onclick="if(window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob('${b64err.trim()}'));" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
+                            <button type="button" onclick="navigator.clipboard.writeText(atob('${b64err.trim()}')); this.innerText='✅ Copied!'; setTimeout(()=>this.innerText='📋 Copy Diff', 2000)" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
+                        </div>`;
+                    });
+                    
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
+                        const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
+                        <button type="button" onclick="fetchAndCopy('${safeP1}', this)" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
+                        <button type="button" onclick="fetchAndDownloadState('${safeP1}', this)" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
+                    </div>`;
+                    });
+
+                    if (statusBox) statusBox.innerHTML = safeData;
+
+                    if (statusData.status === 'completed' && !rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
+                        BridgeStore.getState().clearPayload();
+                    }
+                }
+            } catch(e) {
+                console.error("Bridge polling error:", e);
+            }
+        });
+    }
+});
 
 export function updateFilePath(oldPath, newPath) {
     const currentVal = BridgeStore.getState().payloadText;
