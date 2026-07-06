@@ -16,7 +16,7 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 
 ---
 ## 2. Active Extensions (V1 Finalized)
-These are fully built and compliant extensions currently operating within the system.
+These are fully built and compliant extensions currently operating within the system. Note that all domain extensions now reside physically in the `insetu/extensions/` and `insetu/static/js/extensions/` directories to preserve the micro-kernel boundary.
 
 ### A. Git Operations (`engine_git.py`)
 * **Status:** Active Extension (Fully Decoupled from Core Kernel space via lifecycle subscribers).
@@ -59,10 +59,16 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * UI Hooks: Injects `zone:modal-file-toolbar` actions.
     * Broadcasts `pre_compile_document` to intercept bibliography mappings.
-
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
 * **Status:** Active Extensions.
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
+
+### G. Terminal Interface (`engine_term.py`)
+* **Status:** Active (UI-Only Scaffold).
+* **Role:** Manages the isolated `ttyd` interactive terminal canvas.
+* **Dependencies (`__depends__`):** `None`
+* **Injection Surfaces:**
+    * UI Hooks: Primary Navigation Tab injection.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
 * **Injection Surfaces:**
