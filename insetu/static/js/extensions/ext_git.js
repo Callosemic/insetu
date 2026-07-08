@@ -1,5 +1,5 @@
 import {
-    compileContexts,
+    executeSystemCompile,
     setContextManifest,
     createFileCard
 } from '../app.js';
@@ -241,12 +241,10 @@ window.executeSweepPush = executeSweepPush;
 export function renderDiffFiles(files) {
     const loading = document.getElementById('diff-loading');
     const results = document.getElementById('diff-results');
-    const sweepBtn = document.getElementById('btn-sweep-remaining');
     if (loading) loading.style.display = 'none';
     if (results) results.replaceChildren();
 
     if (files.length > 0) {
-        if (sweepBtn) sweepBtn.style.display = 'block';
         const categories = {};
         const { categoryOrder, targetConfigs, hiddenOutputs } = AppStore.getState();
         files.forEach(fileObj => {
@@ -295,7 +293,6 @@ export function renderDiffFiles(files) {
             }
         }
     } else {
-        if (sweepBtn) sweepBtn.style.display = 'none';
         if (results) results.innerHTML = '<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>';
     }
 }
@@ -337,16 +334,11 @@ export async function generateDiffs(force = false) {
     }
 }
 window.generateDiffs = generateDiffs;
-
 const diffsScreen = window.inSetu.extensions.Registry.registerSubTab('context', 'diffs', 'Diffs');
 if (diffsScreen) {
     diffsScreen.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
-            <div style="display: flex; gap: 10px;">
-                <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;"
-onclick="openSweepModal()">🧹 Sweep Remaining</button>
-            </div>
         </div>
         <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
         <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
@@ -354,6 +346,38 @@ onclick="openSweepModal()">🧹 Sweep Remaining</button>
         </div>
     `;
 }
+
+import { LitElement, html, css } from 'lit';
+
+export class InSetuExtGitActions extends LitElement {
+    static properties = { hasChanges: { type: Boolean } };
+    static styles = css`
+        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: var(--input-bg); }
+    `;
+    constructor() { super(); this.hasChanges = false; }
+    connectedCallback() {
+        super.connectedCallback();
+        this._unsub = AppStore.subscribe(state => {
+            this.hasChanges = !!(state.cachedDiffFiles && state.cachedDiffFiles.length > 0);
+        });
+        this.hasChanges = !!(AppStore.getState().cachedDiffFiles && AppStore.getState().cachedDiffFiles.length > 0);
+    }
+    disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
+    _openMenu(e) {
+        if (!window.inSetu?.ui.Factory?.createDropdown) return;
+        const items = [];
+        if (this.hasChanges) {
+            items.push({ label: 'Sweep Remaining', icon: '🧹', onClick: () => { if (window.openSweepModal) window.openSweepModal(); } });
+        } else {
+            items.push({ label: 'No changes to sweep', icon: '✨', onClick: () => {} });
+        }
+        window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items });
+    }
+    render() { return html`<button @click=${this._openMenu}>☰</button>`; }
+}
+customElements.define('insetu-ext-git-actions', InSetuExtGitActions);
+window.ExtensionRegistry.registerSubTabAction('context', 'diffs', 'git', 'insetu-ext-git-actions', 1);
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
     window.inSetu.extensions.Registry.registerTick('git', 1000, async () => {
         const { activeSweepJobId, activePushJobId, activeDiffJobId } = AppStore.getState();
@@ -379,7 +403,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                         AppStore.setState({ activeSweepJobId: null, dirtyDiffRepos: newDirty });
 
                         await loadSweepFiles(); 
-                        compileContexts().then(() => generateDiffs());
+                        executeSystemCompile().then(() => generateDiffs());
                         alert(`✅ Sweep successful:\n\n${statusData.message}`);
                         if (btn) btn.style.display = 'block';
                         if (spinner) {
@@ -420,11 +444,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
                         alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                         window.inSetu.ui.Factory.closeModal('push-modal');
                         try {
-
-                            await compileContexts();
-                            const activeWs = AppStore.getState().activeWorkspace || 'default';
-                            const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
-                            if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                            await executeSystemCompile();
                         } catch (refreshErr) {
                             console.warn("Background refresh failed:", refreshErr);
                         } finally {

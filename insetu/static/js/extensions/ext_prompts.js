@@ -1,5 +1,5 @@
 // ext_prompts.js - Prompt Library Extension
-import { LitElement, html } from 'lit';
+import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
 import { mdeInstance } from '../app.js';
 import { sharedStyles } from '../shared_styles.js';
@@ -7,94 +7,67 @@ import { sharedStyles } from '../shared_styles.js';
 export class InSetuExtPrompts extends LitElement {
     static properties = {
         loading: { type: Boolean },
-        prompts: { type: Array }
+        prompts: { type: Array },
+        _isMenuOpen: { type: Boolean }
     };
     static styles = [sharedStyles];
-
 constructor() {
-        super();
-        this.loading = false;
-        this.prompts = [];
+    super();
+    this.loading = false;
+    this.prompts = [];
+}
+connectedCallback() {
+    super.connectedCallback();
+    this.fetchPrompts();
+    // Strict UDF binding: React seamlessly when the tenant boundaries change
+    this._unsub = AppStore.subscribe((state) => state.activeWorkspace, () => {
+        this.fetchPrompts();
+    });
+}
+disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._unsub) this._unsub();
 }
 
-    connectedCallback() {
-        super.connectedCallback();
-        this.fetchPrompts();
-        
-        // Strict UDF binding: React seamlessly when the tenant boundaries change
-        this._unsub = AppStore.subscribe((state) => state.activeWorkspace, () => {
-            this.fetchPrompts();
+async fetchPrompts() {
+    this.loading = true;
+    try {
+        await syncPromptsState();
+        this.prompts = AppStore.getState().gatherOptions.prompts || [];
+    } catch (e) {
+        console.error("Failed to fetch prompts:", e);
+    } finally {
+        this.loading = false;
+    }
+}
+static openPromptEmbedModal() {
+    if (window.openWorkspaceBrowser) {
+        const { gatherOptions } = AppStore.getState();
+        const prompts = gatherOptions.prompts || [];
+        if (prompts.length === 0) {
+            alert("No prompts available to embed. Compile contexts first.");
+            return;
+        }
+        window.openWorkspaceBrowser({
+            mode: 'file',
+            title: 'Select Prompt to Embed',
+            files: prompts,
+            autoDrilldown: true,
+
+            callback: (val) => {
+                const embedString = `{{include_prompt: ${val}}}`;
+                if (window.insertTextAtCursor) {
+                    window.insertTextAtCursor(embedString);
+                }
+
+            }
         });
     }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-    }
-
-    async fetchPrompts() {
-        this.loading = true;
-        try {
-            await syncPromptsState();
-            this.prompts = AppStore.getState().gatherOptions.prompts || [];
-        } catch (e) {
-            console.error("Failed to fetch prompts:", e);
-        } finally {
-            this.loading = false;
-        }
-    }
-
-    static openNewPromptFolderModal() {
-        if (window.openNewFolderModal) {
-            const cpPath = AppStore.getState().currentPromptsPath || [];
-            const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/";
-            window.openNewFolderModal(prefix);
-        }
-    }
-
-    static openNewPromptModal() {
-        if (window.openNewFileModal) {
-            const cpPath = AppStore.getState().currentPromptsPath || [];
-            const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/";
-            window.openNewFileModal(prefix);
-        }
-    }
-
-    static openPromptEmbedModal() {
-        if (window.openWorkspaceBrowser) {
-            const { gatherOptions } = AppStore.getState();
-            const prompts = gatherOptions.prompts || [];
-            if (prompts.length === 0) {
-                alert("No prompts available to embed. Compile contexts first.");
-                return;
-            }
-            window.openWorkspaceBrowser({
-                mode: 'file',
-                title: 'Select Prompt to Embed',
-                files: prompts,
-                autoDrilldown: true,
-                callback: (val) => {
-                    const embedString = `{{include_prompt: ${val}}}`;
-                    if (window.insertTextAtCursor) {
-                        window.insertTextAtCursor(embedString);
-                    }
-                }
-            });
-        }
-    }
-
-    render() {
-        return html`
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                <h2 style="margin: 0;">Prompt Library</h2>
-                <div style="display: flex; gap: 10px;">
-
-                    <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 12px; font-size: 0.9rem;"
-@click=${InSetuExtPrompts.openNewPromptFolderModal}>+ Folder</button>
-                    <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 4px 12px; font-size: 0.9rem;"
-@click=${InSetuExtPrompts.openNewPromptModal}>+ Prompt</button>
-                </div>
-            </div>
-            ${this.loading ? html`<div class="spinner" style="display:block;">Loading prompts...</div>` : html`
+}
+render() {
+    return html`
+        ${this.loading ?
+        html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts...</div>` : html`
                 <div @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}>
                     <insetu-file-tree 
                         .files=${this.prompts} 
@@ -102,26 +75,106 @@ constructor() {
                         basePath=".insetu/prompts/"
                         .currentPath=${AppStore.getState().currentPromptsPath || []}
                         .actions=${[
-                            { id: 'copy', label: '📋 Copy', style: 'success' },
+                            { id: 'copy', label: '📋 Copy', style: 'neutral' },
                             { id: 'download', label: '⬇️ DL', style: 'primary' }
                         ]}
                         @path-changed=${(e) => AppStore.setState({ currentPromptsPath: e.detail.path })}
-                        @action-copy=${(e) => { if(window.fetchAndCopy) window.fetchAndCopy(e.detail.filepath, e.detail.event.target); }}
-                        @action-download=${(e) => { if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target); }}>
+                        @action-copy=${async (e) => {
+                            const { filepath, filename, event } = e.detail;
+                            const activeWs = AppStore.getState().activeWorkspace || 'default';
+                            const dlUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(filepath)}`;
+                            const orig = event.target.innerText;
+                            event.target.innerText = '⏳';
+                            try {
+                                const res = await fetch(dlUrl);
+                                if (!res.ok) throw new Error("Failed to fetch");
+                                const text = await res.text();
+                                await navigator.clipboard.writeText(text);
+                                event.target.innerText = '✅';
+                            } catch(err) {
+                                alert("Error copying prompt.");
+                                event.target.innerText = '❌';
+                            } finally {
+                                setTimeout(() => event.target.innerText = orig, 2000);
+                            }
+                        }}
+                        @action-download=${async (e) => {
+                            const { filepath, filename, event } = e.detail;
+                            const activeWs = AppStore.getState().activeWorkspace || 'default';
+                            const dlUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(filepath)}`;
+                            const orig = event.target.innerText;
+                            event.target.innerText = '⏳...';
+                            try {
+                                const res = await fetch(dlUrl);
+                                if (!res.ok) throw new Error("Failed to fetch");
+                                const text = await res.text();
+                                const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+                                const url = window.URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.style.display = 'none';
+                                a.href = url;
+                                a.download = filename;
+                                document.body.appendChild(a);
+                                a.click();
+                                window.URL.revokeObjectURL(url);
+                                a.remove();
+                            } catch (err) {
+                                alert("Error downloading file.");
+                            } finally {
+                                event.target.innerText = orig;
+                            }
+                        }}>
                     </insetu-file-tree>
                 </div>
             `}
         `;
     }
 }
-
 customElements.define('insetu-ext-prompts', InSetuExtPrompts);
+export class InSetuExtPromptsActions extends LitElement {
+    static styles = css`
+        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: var(--input-bg); }
+    `;
+
+    _openMenu(e) {
+        if (!window.inSetu?.ui.Factory?.createDropdown) return;
+        window.inSetu.ui.Factory.createDropdown({
+            anchor: e.target,
+            items: [
+                { 
+                    label: 'New Folder', 
+                    icon: '📁', 
+                    onClick: () => { 
+                        const cpPath = AppStore.getState().currentPromptsPath || []; 
+                        const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                        if (window.openNewFolderModal) window.openNewFolderModal(prefix); 
+                    } 
+                },
+                { 
+                    label: 'New Prompt', 
+                    icon: '📄', 
+                    onClick: () => { 
+                        const cpPath = AppStore.getState().currentPromptsPath || []; 
+                        const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                        if (window.openNewFileModal) window.openNewFileModal(prefix); 
+                    } 
+                }
+            ]
+        });
+    }
+
+    render() {
+        return html`<button @click=${this._openMenu}>☰</button>`;
+    }
+}
+customElements.define('insetu-ext-prompts-actions', InSetuExtPromptsActions);
 
 // --- DECLARATIVE SCHEMA PAYLOAD ---
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
-    
+
     // The OS Bootloader now orchestrates our DOM injection statelessly
     layoutSlots: [
         {
@@ -131,6 +184,13 @@ window.ExtensionRegistry.registerExtension('prompts', {
             label: "Prompts",
             order: 3,
             component: "insetu-ext-prompts"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "context",
+            targetSub: "prompts",
+            component: "insetu-ext-prompts-actions",
+            order: 3
         }
     ],
 
@@ -145,12 +205,8 @@ window.ExtensionRegistry.registerExtension('prompts', {
             return null;
         },
         'zone:subtab-changed': (data) => {
-            // Strangler Fig Fallback: Manually mount the Lit tag during the hybrid transition phase if missing
             if (data.parentId === 'context' && data.subId === 'prompts') {
                 const container = document.getElementById('sub-prompts');
-                if (container && !container.querySelector('insetu-ext-prompts')) {
-                    container.innerHTML = '<insetu-ext-prompts></insetu-ext-prompts>';
-                }
                 const litEl = container?.querySelector('insetu-ext-prompts');
                 if (litEl && data.forceRefresh) litEl.fetchPrompts();
             }

@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { executeWorkspaceMutation, fetchAndCopy, fetchAndDownloadState } from '../app.js';
+import { executeWorkspaceMutation, fetchAndCopy, fetchAndDownloadState, executeSystemCompile } from '../app.js';
 import { AppStore } from '../store.js';
 import { sharedStyles } from '../shared_styles.js';
 
@@ -162,13 +162,17 @@ export class InSetuExtFlow extends LitElement {
             original_response_path: this._viewingBatch.response_path
         };
         if (this._viewingBatch.archive_path) payload.archive_path = `${artifactsDir}/${this._viewingBatch.archive_path}`;
-
         window.executeWorkspaceMutation(`/api/${activeWorkspace || 'default'}/fs/save`, payload, {
             loadingText: 'Saving...',
             onSuccess: () => {
                 this._viewingBatch = null;
-                const gatherEl = document.querySelector('insetu-ext-gather');
-                if (gatherEl && gatherEl.loadContext) gatherEl.loadContext();
+                executeSystemCompile().then(res => {
+                    if (res && res.status !== 'error') {
+                        fetch(`/api/${activeWorkspace || 'default'}/manifest?t=` + Date.now())
+                            .then(mRes => mRes.ok ? mRes.json() : {})
+                            .then(manifest => AppStore.setState({ manifest }));
+                    }
+                });
             }
         });
     }
@@ -179,7 +183,6 @@ export class InSetuExtFlow extends LitElement {
                     if (!categories[domain]) categories[domain] = [];
                     categories[domain].push(b);
             });
-
             const { categoryOrder, gatherOptions } = AppStore.getState();
             const sortedCats = Object.keys(categories).sort((a, b) => {
                     const iA = categoryOrder.indexOf(a) === -1 ? 999 : categoryOrder.indexOf(a);
@@ -187,15 +190,11 @@ export class InSetuExtFlow extends LitElement {
                     if (iA !== iB) return iA - iB;
                     return a.localeCompare(b);
             });
-
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
-
             return html`
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
                             <h2 style="margin: 0;">Context Batches & Workflows</h2>
-                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 12px; font-size: 0.9rem;"
-                                    @click=${() => this.openEditBatchModal(null)}>+ New Batch</button>
                     </div>
                     ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
 
@@ -230,7 +229,7 @@ export class InSetuExtFlow extends LitElement {
                                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                             <div style="flex: 1; min-width: 150px;">
                                                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Batch Title</label>
-                                                    <input type="text" .value=${this._editForm?.title || ''} placeholder="e.g. API Wrap-Up" style="padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;"
+                                                    <input type="text" .value=${this._editForm?.title || ''} placeholder="e.g. API Wrap-Up" style="font-weight: bold;"
                                                             @input=${(e) => { this._editForm.title = e.target.value; if(!this._editingBatch?.id){ this._editForm.id = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); } this.requestUpdate(); }}>
                                             </div>
                                             <div style="flex: 1; min-width: 150px; display: none;">
@@ -238,7 +237,7 @@ export class InSetuExtFlow extends LitElement {
                                             </div>
                                             <div style="flex: 1; min-width: 150px;">
                                                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Domain</label>
-                                                    <input type="text" .value=${this._editForm?.domain || 'Workflows'} placeholder="e.g. Workflows" style="padding: 10px; width: 100%; box-sizing: border-box;"
+                                                    <input type="text" .value=${this._editForm?.domain || 'Workflows'} placeholder="e.g. Workflows"
                                                             @input=${(e) => { this._editForm.domain = e.target.value; this.requestUpdate(); }}>
                                             </div>
                                     </div>
@@ -258,11 +257,10 @@ export class InSetuExtFlow extends LitElement {
                                             </div>
                                             ${this._editForm?.hasPrompt ? html`
                                                     <div style="display: flex; gap: 8px;">
-                                                            <input type="text" .value=${this._editForm.prompt} readonly placeholder="No prompt selected..." style="flex: 1; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); font-family: monospace; box-sizing: border-box; cursor: not-allowed; margin: 0;">
-                                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px 14px;" @click=${() => {
-                                                                    import('../ui.js').then(module => module.UIFactory.openSelectorModal('Select a Prompt', gatherOptions.prompts, (val) => { this._editForm.prompt = val; this.requestUpdate(); }));
-                                                            }}>📁 Select Prompt</button>
-                                                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0; padding: 10px 14px;" @click=${() => { this._editForm.prompt = ''; this.requestUpdate(); }}>❌</button>
+                                                            <select style="flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 4px;" .value=${this._editForm.prompt || ''} @change=${(e) => { this._editForm.prompt = e.target.value; this.requestUpdate(); }}>
+                                                                <option value="">-- Select a Prompt --</option>
+                                                                ${(gatherOptions.prompts || []).map(p => html`<option value="${p}">${p}</option>`)}
+                                                            </select>
                                                     </div>
                                             ` : ''}
                                     </div>
@@ -274,9 +272,9 @@ export class InSetuExtFlow extends LitElement {
                                             </div>
                                             ${this._editForm?.hasResponse ? html`
                                                     <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Response Path</label>
-                                                    <input type="text" .value=${this._editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; margin-bottom: 15px; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);" @input=${(e) => { this._editForm.responsePath = e.target.value; }}>
+                                                    <input type="text" .value=${this._editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: monospace; margin-bottom: 15px;" @input=${(e) => { this._editForm.responsePath = e.target.value; }}>
                                                     <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Archive Path (Optional)</label>
-                                                    <input type="text" .value=${this._editForm.archivePath} placeholder="e.g. sotu/archive/" style="padding: 10px; width: 100%; font-family: monospace; margin: 0; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text);" @input=${(e) => { this._editForm.archivePath = e.target.value; }}>
+                                                    <input type="text" .value=${this._editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: monospace;" @input=${(e) => { this._editForm.archivePath = e.target.value; }}>
                                             ` : ''}
                                     </div>
                             </div>
@@ -312,14 +310,14 @@ export class InSetuExtFlow extends LitElement {
                                                             </ul>
                                                     </div>
                                                     <div style="display: flex; gap: 10px;">
-                                                            <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => window.fetchAndCopy(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>📋 Copy Context</button>
-                                                            <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => window.fetchAndDownloadState(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>⬇️ Download .txt</button>
+                                                            <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => fetchAndCopy(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>📋 Copy Context</button>
+                                                            <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => fetchAndDownloadState(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>⬇️ Download .txt</button>
                                                     </div>
                                             </div>
                                             ${this._viewingBatch.include_prompt ? html`
                                                     <div>
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                                                            <textarea style="height: 150px; margin-bottom: 10px; width: 100%; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 4px;" readonly>${this._viewingBatchPromptText}</textarea>
+                                                            <textarea style="height: 150px; margin-bottom: 10px;" readonly>${this._viewingBatchPromptText}</textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                                                                     <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => {
                                                                             navigator.clipboard.writeText(this._viewingBatchPromptText);
@@ -336,7 +334,7 @@ export class InSetuExtFlow extends LitElement {
                                                     <div>
                                                             <h4 style="margin: 0 0 5px 0; color: var(--text); font-size: 1.05rem;">3. LLM Response Integration</h4>
                                                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste response to save to: <code style="word-break: break-all; color: var(--intent-success);">${this._viewingBatch.response_path}</code></p>
-                                                            <textarea id="batch-response-text" style="flex: 1; min-height: 250px; margin-bottom: 10px; width: 100%; box-sizing: border-box; background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 4px;" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} @input=${(e) => { this._responseContent = e.target.value; this.requestUpdate(); }}></textarea>
+                                                            <textarea id="batch-response-text" style="flex: 1; min-height: 250px; margin-bottom: 10px;" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} @input=${(e) => { this._responseContent = e.target.value; this.requestUpdate(); }}></textarea>
                                                             <button class="btn-sm" style="background: var(--intent-success); width: 100%; padding: 15px; font-size: 1.1rem; font-weight: bold;" @click=${this.saveBatchResponse}>💾 Save Response</button>
                                                     </div>
                                             ` : ''}
@@ -347,6 +345,27 @@ export class InSetuExtFlow extends LitElement {
     }
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
+
+export class InSetuExtFlowActions extends LitElement {
+    static styles = css`
+        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: var(--input-bg); }
+    `;
+    _openMenu(e) {
+        if (!window.inSetu?.ui.Factory?.createDropdown) return;
+        const flowEl = document.querySelector('insetu-ext-flow');
+        window.inSetu.ui.Factory.createDropdown({
+            anchor: e.target,
+            items: [
+                { label: 'New Batch', icon: '📦', onClick: () => { flowEl?.openEditBatchModal(null); } }
+            ]
+        });
+    }
+    render() {
+        return html`<button @click=${this._openMenu}>☰</button>`;
+    }
+}
+customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);
 
 window.ExtensionRegistry.registerExtension('flow', {
     name: "Workflows",
@@ -359,15 +378,19 @@ window.ExtensionRegistry.registerExtension('flow', {
             label: "Flow",
             order: 2,
             component: "insetu-ext-flow"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "context",
+            targetSub: "flow",
+            component: "insetu-ext-flow-actions",
+            order: 2
         }
     ],
     uiHooks: {
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'context' && data.subId === 'flow') {
                 const container = document.getElementById('sub-flow');
-                if (container && !container.querySelector('insetu-ext-flow')) {
-                    container.innerHTML = '<insetu-ext-flow></insetu-ext-flow>';
-                }
                 const litEl = container?.querySelector('insetu-ext-flow');
                 if (litEl && data.forceRefresh) litEl.fetchBatches();
             }

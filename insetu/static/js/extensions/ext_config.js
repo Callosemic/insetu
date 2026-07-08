@@ -2,20 +2,42 @@
 import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuExtConfig extends LitElement {
     static properties = {
-        configForm: { type: Object }
+        configForm: { type: Object },
+        _isOpen: { type: Boolean }
     };
     static styles = [sharedStyles];
 
     constructor() {
         super();
         this.configForm = null;
+        this._isOpen = false;
     }
 
-    async connectedCallback() {
+    connectedCallback() {
         super.connectedCallback();
+        this._unsubApp = AppStore.subscribe((state) => {
+            if (state.isConfigOpen && !this._isOpen) {
+                this.openModal();
+            } else if (!state.isConfigOpen && this._isOpen) {
+                this._isOpen = false;
+            }
+        });
+        // State Hydration Resilience: Re-fetch configurations natively when the active workspace tenant shifts
+        this._unsubWorkspace = AppStore.subscribe(state => state.activeWorkspace, () => {
+            if (this._isOpen) this.openModal();
+        });
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._unsubApp) this._unsubApp();
+        if (this._unsubWorkspace) this._unsubWorkspace();
+    }
+
+    async openModal() {
+        this._isOpen = true;
         try {
             const res = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
@@ -87,17 +109,17 @@ export class InSetuExtConfig extends LitElement {
                     
                     ${!isImplicit ? html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" .value=${b.id || ''} placeholder="my_bucket" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.id = e.target.value; this.requestUpdate(); }}></div>
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" .value=${b.title || ''} placeholder="Display Name" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.title = e.target.value; this.requestUpdate(); }}></div>
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" .value=${b.domain || ''} placeholder="Category" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}></div>
+                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" .value=${b.id || ''} placeholder="my_bucket" @input=${(e) => { b.id = e.target.value; this.requestUpdate(); }}></div>
+                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" .value=${b.title || ''} placeholder="Display Name" @input=${(e) => { b.title = e.target.value; this.requestUpdate(); }}></div>
+                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" .value=${b.domain || ''} placeholder="Category" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}></div>
                         </div>
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" .value=${b.description || ''} placeholder="What goes here?" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.description = e.target.value; this.requestUpdate(); }}></div>
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" .value=${b.out_file || ''} placeholder="out_context.txt" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.out_file = e.target.value; this.requestUpdate(); }}></div>
+                            <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" .value=${b.description || ''} placeholder="What goes here?" @input=${(e) => { b.description = e.target.value; this.requestUpdate(); }}></div>
+                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" .value=${b.out_file || ''} placeholder="out_context.txt" @input=${(e) => { b.out_file = e.target.value; this.requestUpdate(); }}></div>
                         </div>
                         <div>
                             <label style="font-size: 0.75rem; color:var(--text-muted);">Match Prefixes (comma separated)</label>
-                            <input type="text" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.match_prefixes = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
+                            <input type="text" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @input=${(e) => { b.match_prefixes = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
                         </div>
                         <div style="margin-top: 5px;">
                             <label style="font-size: 0.8rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!b.is_catch_all} @change=${(e) => { b.is_catch_all = e.target.checked; this.requestUpdate(); }}> Designate as Catch-All Bucket</label>
@@ -106,17 +128,17 @@ export class InSetuExtConfig extends LitElement {
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                             <div style="flex: 1;">
                                 <label style="font-size: 0.75rem; color:var(--text-muted);">Dynamic Split Prefix</label>
-                                <input type="text" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.dynamic_split_prefix = e.target.value; this.requestUpdate(); }}>
+                                <input type="text" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" @input=${(e) => { b.dynamic_split_prefix = e.target.value; this.requestUpdate(); }}>
                             </div>
                             <div style="flex: 1;">
                                 <label style="font-size: 0.75rem; color:var(--text-muted);">Shared Base Domain</label>
-                                <input type="text" .value=${b.domain || ''} placeholder="e.g. Dynamic Modules" style="padding:4px; font-size:0.8rem; width:100%; box-sizing:border-box;" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}>
+                                <input type="text" .value=${b.domain || ''} placeholder="e.g. Dynamic Modules" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}>
                             </div>
                         </div>
                         <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
                                 <label style="font-size: 0.75rem; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
-                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 2px 6px; font-size: 0.7rem;" @click=${() => {
+                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${() => {
                                     if (!b.meta_map) b.meta_map = {};
                                     const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
                                     b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
@@ -127,8 +149,8 @@ export class InSetuExtConfig extends LitElement {
                                 ${Object.keys(b.meta_map || {}).map(dirKey => {
                                     const meta = b.meta_map[dirKey];
                                     return html`
-                                        <div style="display: flex; gap: 5px; align-items: center; background: var(--input-bg); padding: 5px; border-radius: 4px; flex-wrap: wrap;">
-                                            <input type="text" .value=${dirKey} placeholder="Folder Name" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;" @change=${(e) => {
+                                        <div style="display: flex; gap: 5px; align-items: center; background: var(--bg); padding: 5px; border-radius: 4px; flex-wrap: wrap; border: 1px solid var(--border);">
+                                            <input type="text" .value=${dirKey} placeholder="Folder Name" style="flex: 1; min-width: 100px;" @change=${(e) => {
                                                 const newKey = e.target.value;
                                                 if (newKey && newKey !== dirKey && !b.meta_map[newKey]) {
                                                     b.meta_map[newKey] = b.meta_map[dirKey];
@@ -136,9 +158,9 @@ export class InSetuExtConfig extends LitElement {
                                                     this.requestUpdate();
                                                 }
                                             }}>
-                                            <input type="text" .value=${meta.title || ''} placeholder="Title" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;" @input=${(e) => { meta.title = e.target.value; this.requestUpdate(); }}>
-                                            <input type="text" .value=${meta.domain || ''} placeholder="Domain" style="flex: 1; padding:4px; font-size:0.8rem; min-width: 100px;" @input=${(e) => { meta.domain = e.target.value; this.requestUpdate(); }}>
-                                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1rem; padding: 0 5px; cursor: pointer;" @click=${() => {
+                                            <input type="text" .value=${meta.title || ''} placeholder="Title" style="flex: 1; min-width: 100px;" @input=${(e) => { meta.title = e.target.value; this.requestUpdate(); }}>
+                                            <input type="text" .value=${meta.domain || ''} placeholder="Domain" style="flex: 1; min-width: 100px;" @input=${(e) => { meta.domain = e.target.value; this.requestUpdate(); }}>
+                                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1.2rem; padding: 0 5px;" @click=${() => {
                                                 delete b.meta_map[dirKey];
                                                 this.requestUpdate();
                                             }}>×</button>
@@ -239,47 +261,64 @@ export class InSetuExtConfig extends LitElement {
             </div>
         `);
     }
-
     render() {
-        if (!this.configForm) return html`<div class="spinner" style="display:block;">Loading configuration...</div>`;
+        const bodyContent = !this.configForm 
+            ? html`<div class="spinner" style="display:block;">Loading configuration...</div>`
+            : html`
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-highlight);">Active Extensions</label>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked.</p>
+                        ${this.renderExtensions()}
+                    </div>
+
+                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-primary);">Target Repositories</label>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
+                        <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
+                            ${this.renderRepos()}
+                        </div>
+                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
+                            @click=${() => {
+                                if (!this.configForm.target_repos) this.configForm.target_repos = [];
+                                this.configForm.target_repos.push({  
+                                    repo_dir: '', title: '', domain: 'Workspaces', 
+                                    exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
+                                });
+                                this.requestUpdate();
+                                setTimeout(() => {
+                                    const modal = this.shadowRoot.querySelector('insetu-modal');
+                                    const container = modal?.shadowRoot?.querySelector('.body');
+                                    if (container) container.scrollTo(0, container.scrollHeight);
+                                }, 50);
+                            }}>➕ Add Repository</button>
+                    </div>
+                </div>
+            `;
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 20px;">
-                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-highlight);">Active Extensions</label>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions. The 'config' extension is locked.</p>
-                    ${this.renderExtensions()}
-                </div>
+            <insetu-modal 
+                ?open=${this._isOpen} 
+                titleText="Workspace Configuration" 
+                maxWidth="800px" 
+                @modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
 
-                <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-primary);">Target Repositories</label>
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
-                    <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
-                        ${this.renderRepos()}
-                    </div>
-                    <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${() => {
-                        if (!this.configForm.target_repos) this.configForm.target_repos = [];
-                        this.configForm.target_repos.push({  
-                            repo_dir: '', 
-                            title: '', 
-                            domain: 'Workspaces', 
-                            exts: ['.py', '.json', '.md', '.txt'], 
-                            apply_ignore: true,
-                            sub_buckets: [] 
-                        });
-                        this.requestUpdate();
-                        // Scroll to bottom
-                        setTimeout(() => {
-                            const container = this.shadowRoot.querySelector('.modal-body');
-                            if (container) container.scrollTo(0, container.scrollHeight);
-                        }, 50);
-                    }}>➕ Add Repository</button>
+                <div slot="body">${bodyContent}</div>
+
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
+                        @click=${this.saveConfig}>
+                        💾 Save & Reload
+                    </button>
                 </div>
-            </div>
+            </insetu-modal>
         `;
     }
 
-    async saveConfig() {
+    async saveConfig(e) {
+        const btn = e.target;
+        const origText = btn.innerText;
+        btn.innerText = '⏳ Saving...';
         try {
             const activeWs = AppStore.getState().activeWorkspace || 'default';
             const res = await fetch('/api/system/config', {
@@ -295,10 +334,19 @@ export class InSetuExtConfig extends LitElement {
             }
         } catch (e) {
             alert("Network error: " + e.message);
+        } finally {
+            if (btn) btn.innerText = origText;
         }
     }
 }
 customElements.define('insetu-ext-config', InSetuExtConfig);
+
+// Instantiated once as a persistent background event substrate on extension script load
+if (!document.getElementById('insetu-config-root')) {
+    const root = document.createElement('insetu-ext-config');
+    root.id = 'insetu-config-root';
+    document.body.appendChild(root);
+}
 
 // --- DECLARATIVE SCHEMA PAYLOAD ---
 window.ExtensionRegistry.registerExtension('config', {
@@ -310,24 +358,7 @@ window.ExtensionRegistry.registerExtension('config', {
             label: 'Configure Workspace',
             icon: '🛠️',
             onClick: () => {
-                const el = document.createElement('insetu-ext-config');
-                el.id = 'insetu-config-root';
-                window.inSetu.ui.Factory.createModal({
-                    id: 'config-editor-modal',
-                    title: 'Workspace Configuration',
-                    body: el,
-                    maxWidth: '800px',
-                    actions: [
-                        { label: '💾 Save & Reload', style: 'primary', id: 'config-editor-save', onClick: async () => {
-                            const btn = document.getElementById('config-editor-save');
-                            const orig = btn.innerText;
-                            btn.innerText = '⏳ Saving...';
-                            await document.getElementById('insetu-config-root').saveConfig();
-                            btn.innerText = orig;
-                            return true;
-                        }}
-                    ]
-                });
+                AppStore.setState({ isConfigOpen: true });
             }
         }
     ]

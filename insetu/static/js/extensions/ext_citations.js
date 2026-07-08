@@ -53,17 +53,17 @@ if (libraryScreen) {
                 <div class="sub-tab" id="st-lib-import" onclick="switchSubTab('lib-import')">Import</div>
             </div>
         </div>
-        <div id="sub-lib-main" class="sub-tab-content active" style="height: 100%;">
-            <div style="display: flex; flex-direction: column; height: 100%;">
+        <div id="sub-lib-main" class="sub-tab-content active">
+            <div>
                 <div id="lib-repo-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;"></div>
                 <div id="lib-bucket-pins" style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 15px;"></div>
                 <input type="text" id="lib-main-search" placeholder="Search personal library..." style="width: 100%; padding: 8px 10px; margin-bottom: 15px;">
                 <div id="lib-main-loading" class="spinner" style="display: block;">Loading library...</div>
-                <div id="lib-main-list" style="display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1;"></div>
+                <div id="lib-main-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
         </div>
-        <div id="sub-lib-explore" class="sub-tab-content" style="height: 100%;">
-            <div style="display: flex; flex-direction: column; height: 100%;">
+        <div id="sub-lib-explore" class="sub-tab-content">
+            <div>
                 <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
                     <div>
                         <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Catalog Source</label>
@@ -97,7 +97,7 @@ if (libraryScreen) {
                     <button id="btn-explore-search" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 10px; font-size: 1rem;">🔍 Search Catalog</button>
                 </div>
                 <div id="lib-explore-loading" class="spinner" style="display: none;">Querying global catalogs...</div>
-                <div id="lib-explore-list" style="display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1;">
+                <div id="lib-explore-list" style="display: flex; flex-direction: column; gap: 10px;">
                     <p style="color: var(--text-muted); font-style: italic;">Search the open science index to discover and import citations.</p>
                 </div>
             </div>
