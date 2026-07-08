@@ -163,6 +163,13 @@ def check_javascript_files():
 
                 is_lit_component = any(re.search(r'from\s+[\'"]lit[\'"]', l) for l in lines)
 
+                # Enforce Declarative Purity and DOM Read Ban within graduated components
+                full_content = "".join(lines)
+                if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
+                    report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
+                if "innerHTML =" in full_content and file != "ext_citations.js" and is_extension:
+                    report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
+
                 for i, line in enumerate(lines):
                     line_num = i + 1
 
