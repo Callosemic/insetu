@@ -1,0 +1,81 @@
+# Architecture Blueprint: Declarative Extensions & The LitElement Strangler Fig Migration
+
+**Date:** 2026-07-07
+**Status:** Accepted
+**Mission:** To eradicate imperative UI mounting, eliminate cross-tenant DOM leaks, and transition our extension ecosystem to native Web Components (LitElement) via a zero-bundler import map architecture.
+
+---
+
+## 1. The Core Problem: Imperative Extension Debt
+Historically, inSetu extensions executed dynamic DOM injections and registered event listeners immediately upon script load. They actively pushed themselves into the `ExtensionRegistry`. 
+This imperative architecture created severe technical debt:
+* **Brittle Teardown:** The core OS did not own the extension footprints, forcing reliance on fragile visibility checks and manual element sweeps during hot-swaps.
+* **Cross-Tenant Ghosting:** If an extension developer forgot to clear an interval or remove a DOM node inside their `unloadHook`, that state violently bled into the next tenant's workspace.
+* **Component Duplication:** UI paradigms like the "File Tree" and "File Card" were redundantly hardcoded via nested string literals across multiple extensions, violating DRY principles and our UI factory mandates.
+
+## 2. Phase 1: The Import Map (Zero-Bundler Global Lit)
+To transition to LitElement without violating our strict zero-bundler requirement, we will leverage native ES Module Import Maps.
+* **Execution:** We will inject a `<script type="importmap">` into the `<head>` of `index.html`. This creates a global registry mapping the bare specifier `'lit'` to a locked CDN URL.
+* **Result:** Inside any extension (e.g., `ext_prompts.js`), developers can simply write `import { LitElement, html, css } from 'lit';`. The browser's native module resolver guarantees that the exact same singleton instance of Lit is shared across all extensions, keeping the memory footprint incredibly low.
+
+## 3. Phase 2: Global Web Components (`ui_file_tree.js`)
+We will extract recurring UI patterns out of the extension silos and into foundational, global Web Components.
+* **`<insetu-file-card>`**: A pristine presentation component. It accepts properties (`filename`, `icon`, `domain`) and dispatches standard DOM events (e.g., `@card-clicked`).
+* **`<insetu-file-tree>`**: A smart layout component. It ingests a flat array of file paths, imports our pure `buildFileTree` utility, and recursively renders itself and `<insetu-file-card>` children.
+* **The Strangler Fig Integration:** Once stable, we will surgically drop the `<insetu-file-tree>` tag into the legacy Vanilla JS `fs.js` engine, completely eradicating its imperative DOM-looping functions .
+
+## 4. Phase 3: The Declarative OS Schema
+Extensions will be stripped of all self-executing initialization logic. They must instead expose a static configuration payload containing their metadata, hook subscribers, and layout mappings.
+
+The new `ExtensionRegistry.registerExtension(name, configPayload)` API defines three pillars:
+1. **Metadata:** Standard identity tracking (`name`, `version`, `description`).
+2. **Layout Slots:** Extensions declare their structural footprint (e.g., `slot: "slots:sub-navigation"`, `targetParent: "context"`). The OS reads this schema, performs a numerical sort, and programmatically mounts the DOM in a single batch render pass. The extension merely provides a `<insetu-ext-...>` tag.
+3. **Scoped Interceptors:** The OS registers UI hooks directly from the payload. If the extension is disabled in the active workspace's configuration, the Event Bus automatically filters and drops the callback, preventing unauthorized interception.
+
+## 5. Phase 4: The Prompts Pioneer (Execution Plan)
+We will use the Prompts extension (`ext_prompts.js`) as our pioneer to test the declarative boundaries.
+* **The Rewrite:** We will wipe the imperative `ext_prompts.js` script and replace it with an `<insetu-ext-prompts>` LitElement class and the declarative configuration payload.
+* **The Hybrid Bridge:** To ensure the OS remains stable during the transition, `app.js` will temporarily feature a backward-compatibility layer. When it parses the declarative `layoutSlots` from `ext_prompts.js`, it will translate them back into the legacy `registerSubTab()` engine under the hood.
+* **The Final Cleanup:** Once all extensions (Tracker, Research, Citations, Git) are fully migrated to Lit Web Components and Declarative Schemas, the legacy imperative registry functions will be permanently deleted from the OS.
+## 6. Learnings from Pioneer Migrations (Prompts, Gather, Flow)
+As we executed the first wave of migrations, several critical guardrails were established to prevent regression into legacy imperative habits:
+* **The Shadow DOM Styling Strategy:** Early migrations used Light DOM (`createRenderRoot() { return this; }`) to inherit `style.css`. Moving forward, we will extract global styles (buttons, inputs) into a `shared_styles.js` module exporting a Lit `css` literal. Components will declare `static styles = [sharedStyles, css\`...\`]` to achieve true Shadow DOM encapsulation without a bundler.
+* **The Imperative Reflex Trap (DOM Reading):** We caught early components (e.g., `ext_flow.js`) still attempting to read `document.getElementById('...').value`. In LitElement, input fields must strictly bind to reactive class properties via `@input=${(e) => this.myProp = e.target.value}`.
+* **Store Subscription Leaks:** Components subscribing to the Zustand `AppStore` during `connectedCallback()` must explicitly capture the unsubscribe function and execute it inside `disconnectedCallback()`.
+Failure to do so creates severe memory leaks and ghost updates during tenant hot-swaps.
+* **Fat Controllers & UDF Bleed:** Web Components must remain pure presentation layers. They should never forcefully bind their internal methods (e.g., `window.compileContexts = this.compileContexts.bind(this)`) to the global scope. Global fetching and state-mutating utility functions must live in the core `app.js` module so the OS can trigger them regardless of which component is currently mounted.
+* **The Imperative Modal Trap:** Dynamically generating `<insetu-modal>` elements via `document.createElement()` and injecting raw template strings via `innerHTML` is strictly a transitional bridge. It bypasses Lit's secure and efficient HTML tagged template pipeline. Graduated components must render their `<insetu-modal>` nodes entirely within their declarative `render()` functions, controlling visibility by binding the `open` attribute to reactive properties.
+* **Swallowed Exceptions in Components:** When tearing down fat controllers, ensure you verify `.bind(this)` calls in `connectedCallback()`.
+* **Swallowed Exceptions in Components:** When tearing down fat controllers, ensure you verify `.bind(this)` calls in `connectedCallback()`. A generic `try/catch` block handling a network request will eagerly swallow a `TypeError` (e.g., from calling a removed method), masking it as a network failure. Always `console.error` the raw exception.
+* **DOM-Driven Routing vs Stateless Routing:** Hardcoded `class="active"` attributes in the `index.html` skeleton will actively fight stateless `localStorage` routing during the boot sequence. `switchTab` must ignore the DOM on initial load to prevent violently overwriting the user's saved state.
+
+## 7. The Component Graduation Checklist (Compliance Guardrails)
+Before a component is considered fully compliant and "Graduated", the Architect must interrogate it against the following strict constraints:
+1. **Zero DOM Reading:** Are there *any* `document.getElementById` or `querySelector` calls attempting to read state from the UI? *(If yes, fail. Bind to Lit properties).*
+2. **Shadow DOM Encapsulation:** Does the component utilize native Shadow DOM with `sharedStyles` injected, completely isolating its structural footprint?
+3. **Teardown Hygiene:** Does the component clean up all Zustand store subscriptions (`this._unsub()`) and global `window` event listeners during `disconnectedCallback`?
+4. **Declarative Purity:** Is the extension completely stripped of self-executing imperative initialization code? Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSlots`?
+5. **DOM Annihilation Prevention:** Does the `render()` method utilize `lit-html` templates to surgically diff the UI, rather than falling back to `innerHTML` or `replaceChildren()`?
+
+## 8. Migration Tracker
+
+### Core OS UI Domains
+| Module | Domain Role | Migration Status | Target Component Architecture |
+| :--- | :--- | :--- | :--- |
+| `fs` | Virtual File System | **In Progress** | `<insetu-vfs-explorer>` |
+| `bridge` | Yomama Sync Bridge | Pending | `<insetu-sync-bridge>` |
+
+### Extensions
+| Extension ID | Domain Role | Migration Status | Target Component Architecture |
+| :--- | :--- | :--- | :--- |
+| `prompts` | Prompt Library | **Migrated (Native LitElement)** | `<insetu-ext-prompts>` |
+| `gather` | Context Gatherer | **Migrated (Native LitElement)** | `<insetu-ext-gather>` |
+| `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` |
+| `git` | Version Control | Pending | `<insetu-ext-git>` |
+| `tracker` | Kanban Board | **In Progress (<insetu-card> adopted)** | `<insetu-ext-tracker>` |
+| `research` | Triage Inbox | Pending | `<insetu-ext-research>` |
+| `citations` | Reference Manager | Pending | `<insetu-ext-citations>` |
+| `format` | Document Compilation | Pending | `<insetu-ext-format>` |
+| `ingest` | URL Ingestion | Pending | `<insetu-ext-ingest>` |
+| `config` | Workspace Settings | **Migrated (Declarative Schema)** | `<insetu-ext-config>` |
+| `term` | Terminal Canvas | Pending | `<insetu-ext-term>` |

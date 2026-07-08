@@ -24,14 +24,30 @@ The RAG compiler and Cartographer will then natively process these environments 
 * `@hooks.on('post_file_save')`: Fires after the VFS atomic commit, allowing an extension to update an SQLite cache instantly.
     * `@hooks.on('system_boot')`: Fires immediately after the core OS micro-kernel boots. Extensions must use this hook to execute their SQLite schema initializations (`CREATE TABLE`) and migrations (`ALTER TABLE`), guaranteeing that the runtime API routes remain fast, stateless, and free of inline database generation locks.
     * `@hooks.on('system_shutdown')`: Fires prior to a workspace swap (`os.execv`), signaling all active `threading.Event()` locks to commit SQLite transactions and release RAM before the process terminates.
+## 3. The Frontend Injection Surface (Declarative Schema)
+Direct DOM mutation and imperative initialization (e.g., self-executing `registerTab` calls) of the core OS elements are strictly forbidden.
+Extensions must expose a static configuration payload using the Declarative Schema. The OS bootloader reads this payload and orchestrates the DOM injection statelessly.
 
-## 3. The Frontend Injection Surface (JavaScript Zones)
-Direct DOM mutation of the core OS elements is strictly forbidden. The UI is partitioned into explicit "Zones" that extensions can hook into.
-* **The Primary Hooks:**
-    * `ExtensionRegistry.registerTab(id, label)`
-    * `ExtensionRegistry.registerSubTab(parentId, id, label)`
-* **Context-Aware Zone Injection:** Core UI files will expose specific anchor points. When triggered, the hook passes an `ExecutionContext` payload to the callback.
-    * `ExtensionRegistry.registerUIHook(zoneId, callback)`
+* **The Declarative Registration:**
+\`\`\`javascript
+window.ExtensionRegistry.registerExtension('ext_name', {
+    name: "Extension Title",
+    version: "2.0.0",
+    layoutSlots: [
+        { slot: "slots:primary-navigation", id: "my_tab", label: "My Tab" },
+        { slot: "slots:sub-navigation", targetParent: "edit", id: "my_subtab", label: "Sub Tab", component: "insetu-ext-component" }
+    ],
+    settingsActions: [
+        { id: 'config_id', label: 'Settings Label', icon: '⚙️', onClick: () => { ... } }
+    ],
+    uiHooks: {
+        'zone:file-card-actions': (data) => { ... }
+    }
+});
+\`\`\`
+
+* **Context-Aware Zone Injection:** Core UI files expose specific anchor points mapped via the \`uiHooks\` object in the schema.
+When triggered, the hook passes an \`ExecutionContext\` payload to the callback.
         * **Defined Zones:** * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`.
             * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
             * `zone:new-file-modal`: Callback receives `{ basePath }`.

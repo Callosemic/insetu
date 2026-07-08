@@ -11,7 +11,8 @@ The interface must feel like a native application, not a nested web document.
 * **Edge-to-Edge Canvases**: Primary workspaces (like the File Editor, Board, or Terminal) must consume the exact usable screen area. Use `100dvh` (accounting for mobile safe areas) and a `flex: 1` growing container to stretch the canvas.
 ## 2. The Fullscreen View Paradigm & Factory Construction
 Avoid the "box within a box" feeling.
-* **Centralized Modal Construction (`UIFactory`)**: Eradicate hardcoded HTML `<div class="fullscreen-modal">` blocks from templates. All interface expansions must route through `window.UIFactory.createModal`. This guarantees standardized padding, border-radiuses, backdrop z-indexing, and action alignments across all extensions and future-proofs global CSS changes.
+* **Centralized Modal Construction (`<insetu-modal>`)**: Eradicate hardcoded HTML `<div class="fullscreen-modal">` blocks and legacy `UIFactory.createModal` calls. All interface expansions must route through the `<insetu-modal>` Web Component.
+This guarantees standardized padding, border-radiuses, backdrop z-indexing, and isolated shadow DOM styling across all extensions.
 * **Flattening the "Box-in-Box" Anti-Pattern**: Avoid wrapping sections in unnecessary background-colored blocks (`background: var(--input-bg); border: 1px solid var(--border)`) inside of modals or views. Let the content flow edge-to-edge. Use bold typography and logical spacing (`gap: 15px`, `margin-bottom: 10px`) to establish visual hierarchy instead of enclosing everything in nested borders.
 * **Modals are for Transience**: Traditional constrained pop-ups (modals with backdrops) should only be used for quick, transient interactions (e.g., confirming a deletion, naming a new folder, or picking an option).
 * **Parallel Views for Work**: When a user opens a file or engages in a long-form workflow, it must act as a parallel fullscreen view.
