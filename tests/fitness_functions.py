@@ -150,15 +150,17 @@ def check_javascript_files():
     bracket_bypass_pattern = re.compile(r'\[[\'"](value|checked|classList)[\'"]\]')
     floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
     naive_xss_pattern = re.compile(r'\.replace\(/<script')
+    create_modal_pattern = re.compile(r'\.createModal\s*\(')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
             if file.endswith(".js"):
                 filepath = Path(root) / file
                 is_extension = file.startswith("ext_")
-
                 with open(filepath, "r", encoding="utf-8") as f:
                     lines = f.readlines()
+
+                is_lit_component = any(re.search(r'from\s+[\'"]lit[\'"]', l) for l in lines)
 
                 for i, line in enumerate(lines):
                     line_num = i + 1
@@ -199,10 +201,13 @@ def check_javascript_files():
                     # 7. Floating Globals / UDF Bleed
                     if is_extension and floating_global_pattern.match(line.strip()):
                         report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
-
                     # 8. Naive XSS Regex Ban
                     if naive_xss_pattern.search(line):
                         report_violation("XSS_VULNERABILITY", filepath, line_num, "Naive regex script stripping detected. Use DOMPurify.sanitize().")
+
+                    # 9. LitElement Imperative Modal Ban
+                    if is_lit_component and create_modal_pattern.search(line):
+                        report_violation("LIT_IMPERATIVE_MODAL_BAN", filepath, line_num, "Legacy UIFactory.createModal detected in a LitElement. Render <insetu-modal> declaratively instead.")
 
 if __name__ == "__main__":
     print("============================================================")

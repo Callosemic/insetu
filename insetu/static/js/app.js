@@ -9,6 +9,10 @@ import {
 import { BridgeStore } from './bridge.js';
 import { AppStore } from './store.js';
 import './ui.js';
+import './components/ui_file_tree.js';
+import './components/ui_folder_browser.js';
+import './components/ui_modal.js';
+import './gather.js';
 
 function getFlattenedBuckets(repoDir, includeSystem = false) {
     const { targetConfigs } = AppStore.getState();
@@ -76,6 +80,7 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export let mdeInstance = null;
 // --- EXTENSION REGISTRY ---
 window.inSetu.extensions.Registry = {
+    _manifests: new Map(), // Stores declarative schemas
     uiHooks: {},
     shortcuts: {},
     utils: {
@@ -105,6 +110,37 @@ window.inSetu.extensions.Registry = {
     registerUIHook: function(zone, callback) {
         if (!this.uiHooks[zone]) this.uiHooks[zone] = [];
         this.uiHooks[zone].push(callback);
+    },
+    registerExtension: function(extName, config) {
+        this._manifests.set(extName, config);
+
+        // 1. Register Scoped UI Hooks declaratively
+        if (config.uiHooks) {
+            Object.entries(config.uiHooks).forEach(([zone, callback]) => {
+                this.registerUIHook(zone, callback);
+            });
+        }
+
+        // 2. Hybrid Translation: Map declarative slots to legacy DOM injectors
+        if (config.layoutSlots) {
+            const sortedSlots = [...config.layoutSlots].sort((a, b) => (a.order || 99) - (b.order || 99));
+            sortedSlots.forEach(slotDef => {
+                if (slotDef.slot === 'slots:primary-navigation') {
+                    this.registerTab(slotDef.id, slotDef.label, extName);
+                } else if (slotDef.slot === 'slots:sub-navigation') {
+                    this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName);
+                }
+            });
+        }
+
+        // 3. Declarative Settings Actions
+        if (config.settingsActions) {
+            config.settingsActions.forEach(act => {
+                this.registerSettingsAction(act.id, act.label, act.icon, act.onClick);
+            });
+        }
+
+        console.log(`📦 Registered Declarative Extension: ${extName} v${config.version || '1.0'}`);
     },
     executeUIHook: function(zone, data) {
         if (this.uiHooks[zone]) {
@@ -260,6 +296,66 @@ window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
         else activeModal.style.display = 'none';
     }
 });
+// Global File Card Swipe/Hover/Click Actions Manager
+let cardTouchStartX = 0;
+let cardTouchStartY = 0;
+
+document.addEventListener('touchstart', (e) => {
+    const card = e.target.closest('.file-card');
+    if (card) {
+        cardTouchStartX = e.changedTouches[0].screenX;
+        cardTouchStartY = e.changedTouches[0].screenY;
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+    const card = e.target.closest('.file-card');
+    if (card) {
+        const touchEndX = e.changedTouches[0].screenX;
+        const touchEndY = e.changedTouches[0].screenY;
+        const diffX = cardTouchStartX - touchEndX;
+        const diffY = Math.abs(cardTouchStartY - touchEndY);
+
+        // Swipe Left (Reveal Actions)
+        if (diffX > 40 && diffY < 40) {
+            document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
+            card.classList.add('show-actions');
+        } 
+        // Swipe Right (Hide Actions)
+        else if (diffX < -40 && diffY < 40) {
+            card.classList.remove('show-actions');
+        }
+    }
+}, { passive: true });
+
+document.addEventListener('click', (e) => {
+    const card = e.target.closest('.file-card');
+
+    // 1. Click outside any card: dismiss all active menus
+    if (!card) {
+        document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
+        return;
+    }
+
+    // 2. Click inside the actions area: let the button process normally
+    if (e.target.closest('.file-actions') || e.target.closest('.cit-card-actions')) {
+        return;
+    }
+    const rect = card.getBoundingClientRect();
+    // 3. Click on right 25% edge: toggle actions, block card click
+    const triggerZone = rect.width * 0.25;
+    if (e.clientX > rect.right - triggerZone) {
+        e.preventDefault();
+        e.stopPropagation();
+        const isShowing = card.classList.contains('show-actions');
+        document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
+        if (!isShowing) card.classList.add('show-actions');
+        return;
+    }
+
+    // 4. Click elsewhere on the card (like the title): dismiss actions and let click pass through
+    document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
+}, { capture: true });
 
 window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
     const el = e.target;
@@ -344,7 +440,6 @@ setInterval(() => {
         });
     });
 }, 100);
-
 // --- STATELESS TENANT ROUTING (Fetch Interceptor) ---
 const originalFetch = window.fetch;
 window.fetch = async (resource, options = {}) => {
@@ -352,7 +447,8 @@ window.fetch = async (resource, options = {}) => {
     const isLocal = typeof resource === 'string' && (resource.startsWith('/') || resource.startsWith(window.location.origin));
     if (isLocal) {
         const headers = new Headers(options.headers || {});
-        const activeWs = localStorage.getItem('insetu_workspace') || 'default';
+        // UDF Tab Isolation: Rely on in-memory store or tab-scoped sessionStorage first to prevent cross-tab bleeding
+        const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
         if (!headers.has('X-Workspace-ID')) headers.append('X-Workspace-ID', activeWs);
         options.headers = headers;
     }
@@ -368,7 +464,7 @@ document.addEventListener('click', (e) => {
             if (match) tabId = match[1];
         }
         if (tabId) {
-            const ws = localStorage.getItem('insetu_workspace') || 'default';
+            const ws = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
             localStorage.setItem(`insetu_tab_${ws}`, tabId);
         }
     }
@@ -379,10 +475,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     clearTimeout(window.panicTimeout);
     const panicBtn = document.getElementById('js-panic-button');
     if (panicBtn) panicBtn.style.display = 'none';
-
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
-        const cRes = await fetch('/api/system/config');
+        const cRes = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
@@ -396,21 +491,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
-
     await bootExtensions();
-
-    setTimeout(() => {
-        const ws = localStorage.getItem('insetu_workspace') || 'default';
-        const savedTab = localStorage.getItem(`insetu_tab_${ws}`);
-        if (savedTab && typeof switchTab === 'function') {
-            const targetTabEl = document.querySelector(`.tab[data-id="${savedTab}"]`);
-            const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
-            if (!requiredExt || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(requiredExt))) {
-                switchTab(null, savedTab);
-            }
-        }
-    }, 50);
-
     const textArea = document.getElementById('modal-text');
     if (textArea && typeof EasyMDE !== 'undefined') {
         // Initialize the No-Nonsense Editor
@@ -419,7 +500,9 @@ window.addEventListener('DOMContentLoaded', async () => {
             toolbar: false,
             status: false,
             spellChecker: false,
-            forceSync: true
+            forceSync: true,
+            inputStyle: 'textarea',
+            nativeSpellcheck: false
         });
 
         // Bridge global CodeMirror modes (Python, JS, etc.) into EasyMDE's internal engine
@@ -453,11 +536,15 @@ window.addEventListener('DOMContentLoaded', async () => {
             }
         });
 }
-    const savedTab = localStorage.getItem('insetu_tab');
-    if (savedTab) {
+    const ws = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+    const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
+
+    const targetTabEl = document.querySelector(`.tab[data-id="${savedTab}"]`) || document.querySelector(`.tab[onclick*="${savedTab}"]`);
+    const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
+    if (!requiredExt || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(requiredExt))) {
         switchTab(null, savedTab);
-        const savedSub = localStorage.getItem('insetu_subtab_' + savedTab);
-        if (savedSub) switchSubTab(savedSub);
+    } else {
+        switchTab(null, 'context');
     }
 });
 
@@ -490,14 +577,17 @@ if (settingsToggle && settingsMenu) {
 }
 async function loadWorkspaces() {
     try {
-        const res = await fetch('/api/system/workspaces');
+        // Prevent aggressive browser caching (e.g., Safari on tablets) from hiding new workspaces
+        const res = await fetch('/api/system/workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
-            // Strictly prioritize the browser's local state for multi-tenant concurrency
-            let activeWs = localStorage.getItem('insetu_workspace');
+            // Strictly prioritize tab-scoped state for multi-tenant concurrency
+            let activeWs = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace');
             if (!activeWs || !data.workspaces[activeWs]) {
-                activeWs = data.active_workspace || Object.keys(data.workspaces)[0] || 'default';
+                activeWs = data.active_workspace ||
+                Object.keys(data.workspaces)[0] || 'default';
+                sessionStorage.setItem('insetu_workspace', activeWs);
                 localStorage.setItem('insetu_workspace', activeWs);
             }
             AppStore.setState({ activeWorkspace: activeWs });
@@ -525,9 +615,10 @@ async function loadWorkspaces() {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ active_workspace: key })
                     });
-                    // THE FIX: Immediately bind the new workspace to local storage 
-                    // so the fetch interceptor attaches the correct header.
-                    localStorage.setItem('insetu_workspace', key);
+                    // THE FIX: Immediately bind the new workspace to tab-scoped storage and memory
+                    // so the fetch interceptor attaches the correct header exclusively for this tab.
+                    sessionStorage.setItem('insetu_workspace', key);
+                    localStorage.setItem('insetu_workspace', key); // Only for newly opened tabs to inherit
                     AppStore.setState({ activeWorkspace: key });
 
                     // The Stateless Soft-Swap
@@ -566,71 +657,100 @@ function switchTab(event, tabId) {
         tabId = event;
         event = null;
     }
+
+    const targetContent = document.getElementById('tab-' + tabId);
+    const isAlreadyActive = targetContent && targetContent.classList.contains('active');
+
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
     if (event && event.currentTarget) {
         event.currentTarget.classList.add('active');
     } else {
         const targetTab = document.querySelector(`.tab[onclick*="${tabId}"], .tab[data-id="${tabId}"]`);
         if (targetTab) targetTab.classList.add('active');
     }
-    const targetContent = document.getElementById('tab-' + tabId);
     if (targetContent) targetContent.classList.add('active');
     localStorage.setItem('insetu_tab', tabId);
-    if (tabId === 'context') {
-        loadContext();
-        const activeSub = document.querySelector('#tab-context .sub-tab.active');
-        if (activeSub && activeSub.id !== 'st-bundles') switchSubTab(activeSub.id.replace('st-', ''));
+    if (isAlreadyActive && event !== null) {
+        // User manually tapped an already active tab: trigger a lazy refresh
+        const activeSub = targetContent.querySelector('.sub-tab.active');
+        if (activeSub) {
+            const subId = activeSub.id.replace('st-', '');
+            switchSubTab(subId, true); // Pass forceRefresh flag
+        } else {
+            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                window.ExtensionRegistry.executeUIHook('zone:force-refresh', tabId);
+            }
+            if (tabId === 'tasks' && window.loadTrackerBoard) window.loadTrackerBoard();
+            if (tabId === 'library' && window.loadMainLibrary) window.loadMainLibrary();
+        }
+        return; // Break standard initialization to avoid double-firing
     }
+
+    // Restore the last active sub-tab for this view statelessly
+    const savedSub = localStorage.getItem('insetu_subtab_' + tabId);
+    if (savedSub && document.getElementById('st-' + savedSub)) {
+        switchSubTab(savedSub);
+    } else if (targetContent) {
+        const firstSub = targetContent.querySelector('.sub-tab');
+        if (firstSub) switchSubTab(firstSub.id.replace('st-', ''));
+    }
+
+    if (tabId === 'context') {
+        // Trigger LitElement update
+        const gatherEl = document.querySelector('insetu-ext-gather');
+        if (gatherEl && (!window.inSetu.stores.App.getState().manifest || Object.keys(window.inSetu.stores.App.getState().manifest).length === 0)) {
+            gatherEl.loadContext();
+        }
+    }
+
     if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
         window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
     }
-    if (tabId === 'edit') {
-        const activeSub = document.querySelector('#tab-edit .sub-tab.active');
-        if (activeSub) switchSubTab(activeSub.id.replace('st-', ''));
-        const stFiles = document.getElementById('st-files');
-        if (stFiles && stFiles.classList.contains('active')) loadGlobalFS();
-    }
 }
 
-function switchSubTab(subId) {
-    // Scope sub-tab switching to the active parent tab to prevent clearing all sub-tabs globally
+function switchSubTab(subId, forceRefresh = false) {
     const activeTabContent = document.querySelector('.tab-content.active');
     if (!activeTabContent) return;
+
+    const targetSt = document.getElementById('st-' + subId);
+    const isAlreadyActive = targetSt && targetSt.classList.contains('active');
+    const actualForceRefresh = forceRefresh || (isAlreadyActive && !forceRefresh);
 
     activeTabContent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
     activeTabContent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
     const parentTabId = activeTabContent.id.replace('tab-', '');
     localStorage.setItem('insetu_subtab_' + parentTabId, subId);
 
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId });
-    }
-
-    const targetSt = document.getElementById('st-' + subId);
-    const targetSub = document.getElementById('sub-' + subId);
     if (targetSt) targetSt.classList.add('active');
+    const targetSub = document.getElementById('sub-' + subId);
     if (targetSub) targetSub.classList.add('active');
 
-    if (subId === 'files') loadGlobalFS();
+    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+        window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId, forceRefresh: actualForceRefresh });
+    }
+    if (actualForceRefresh) {
+        if (subId === 'gather') {
+            const gatherEl = document.querySelector('insetu-ext-gather');
+            if (gatherEl) gatherEl.loadContext();
+        } else if (subId === 'files') {
+            loadGlobalFS();
+        }
+    } else {
+        if (subId === 'files') loadGlobalFS();
+    }
     const pasteBtn = document.getElementById('btn-paste');
-    const newFileBtn = document.getElementById('btn-new-file');
-    const newFolderBtn = document.getElementById('btn-new-folder');
 
     // Bridge UI Hardening: Guarantee Paste button visibility using computed styles
     const consoleArea = document.getElementById('bridge-console-area');
     const isConsoleActive = consoleArea && window.getComputedStyle(consoleArea).display !== 'none';
     if (pasteBtn) {
-        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ?
-'block' : 'none';
+        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ? 'block' : 'none';
     }
-    const gbPath = AppStore.getState().globalBrowsePath || [];
-    if (newFileBtn) newFileBtn.style.display = (subId === 'files' && gbPath.length > 0) ?
-'block' : 'none';
+
     const fsMoreBtn = document.getElementById('btn-fs-more');
-    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files' && gbPath.length > 0) ?
-'block' : 'none';
-    if (newFolderBtn) newFolderBtn.style.display = (subId === 'files') ? 'block' : 'none';
+    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
 let lastRefreshed = null;
 
@@ -761,202 +881,9 @@ export async function executeWorkspaceMutation(url, payload, options = {}) {
         }
     }
 }
-export function renderContextFiles(files, msg) {
-    document.getElementById('result-message').style.display = 'none';
-    const downloadContainer = document.getElementById('context-download-links');
-    downloadContainer.replaceChildren();
-    if (files && files.length > 0) {
-        const categories = {};
-        const { categoryOrder, targetConfigs } = AppStore.getState();
-        files.forEach(file => {
-            if (typeof HIDDEN_OUTPUTS !== 'undefined' && HIDDEN_OUTPUTS.includes(file)) return;
+export const compileContexts = () => { if (window.compileContexts) return window.compileContexts(); return Promise.resolve(); };
 
-            const manifestObj = AppStore.getState().manifest[file] || {};
-            const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
-
-            // Allow extensions to override/claim UI metadata dynamically (e.g., ext_prompts.js)
-            let finalCat = meta.domain;
-            let finalDesc = meta.desc;
-            let finalTitle = meta.title;
-            let sizeStr = "";
-            if (meta.size_bytes !== undefined) {
-                const kb = Math.round(meta.size_bytes / 1024);
-                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-            }
-
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
-                if (extMeta) {
-                    finalCat = extMeta.cat;
-                    finalDesc = extMeta.desc;
-                    finalTitle = extMeta.displayName;
-                }
-            }
-
-            if (!categories[finalCat]) categories[finalCat] = [];
-            categories[finalCat].push({
-                filename: file,
-                displayName: finalTitle,
-                description: finalDesc,
-                sizeStr: sizeStr,
-                isFS: false
-            });
-        });
-        const sortedCats = Object.keys(categories).sort((a, b) => {
-            let iA = categoryOrder.indexOf(a);
-            let iB = categoryOrder.indexOf(b);
-            if (iA === -1) iA = 999;
-            if (iB === -1) iB = 999;
-            if (iA !== iB) return iA - iB;
-            return a.localeCompare(b);
-        });
-        for (const catName of sortedCats) {
-            const catFiles = categories[catName];
-            if (catFiles.length > 0) {
-                const heading = document.createElement('div');
-                heading.className = 'category-heading';
-
-                if (catName === "Quick-Pack Clipboard") {
-                    heading.style.display = 'flex';
-                    heading.style.justifyContent = 'space-between';
-                    heading.style.alignItems = 'center';
-                    heading.innerHTML = `<span>${catName}</span> <button class="btn-sm" style="background: var(--intent-danger); margin: 0; padding: 4px 10px; font-size: 0.8rem;" onclick="if(window.clearQuickPacks) window.clearQuickPacks()">🗑️ Clear</button>`;
-                } else {
-                    heading.innerText = catName;
-                }
-
-                downloadContainer.appendChild(heading);
-                catFiles.forEach(f => createFileCard(f, downloadContainer));
-            }
-        }
-    }
-}
-export function setContextManifest(m) {
-    AppStore.setState({ manifest: m });
-}
-export function filterContexts(query) {
-    window.inSetu.extensions.Registry.utils.debounce('contextSearch', () => {
-        const q = query.toLowerCase().trim();
-        const container = document.getElementById('context-download-links');
-        const categories = container.querySelectorAll('.category-heading');
-        categories.forEach(cat => {
-            let hasVisible = false;
-            let nextEl = cat.nextElementSibling;
-            while (nextEl && nextEl.classList.contains('file-card')) {
-                const title = nextEl.querySelector('.file-title').innerText.toLowerCase();
-                if (title.includes(q)) {
-                    nextEl.style.display = 'block';
-                    hasVisible = true;
-                } else {
-                    nextEl.style.display = 'none';
-                }
-                nextEl = nextEl.nextElementSibling;
-            }
-            cat.style.display = hasVisible ? 'block' : 'none';
-        });
-    }, 200);
-}
-async function finishContextLoad(result) {
-    try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-        if (mRes.ok) setContextManifest(await mRes.json());
-    } catch (e) {
-        console.error("Manifest error", e);
-    }
-    renderContextFiles(result.files, result.message);
-    lastRefreshed = new Date();
-    updateRefreshText();
-
-    document.getElementById('context-loading').style.display = 'none';
-    document.getElementById('context-results').style.display = 'block';
-}
-let compilePromise = null;
-let compilePromiseWs = null;
-export function compileContexts() {
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
-    compilePromiseWs = activeWs;
-
-    compilePromise = (async () => {
-        try {
-            const response = await fetch('/submit', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
-            });
-
-            const contentType = response.headers.get('Content-Type');
-            if (contentType && contentType.includes('application/json')) {
-                // Cached response returned immediately due to the compilation lock
-                return await response.json();
-            }
-
-            // Stream processing for NDJSON
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-            let result = null;
-            let buffer = '';
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep the incomplete chunk for the next iteration
-
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    const data = JSON.parse(line);
-
-                    if (data.status === 'progress') {
-                        setGlobalStatus(`⏳ ${data.message}`, null);
-                        const loadingEl = document.getElementById('context-loading');
-                        if (loadingEl && window.getComputedStyle(loadingEl).display !== 'none') {
-                            loadingEl.innerText = data.message;
-                        }
-                    } else {
-                        result = data;
-                    }
-                }
-            }
-            setGlobalStatus("✅ Sync Complete", 2000);
-            return result;
-        } catch (error) {
-            throw error;
-        } finally {
-            compilePromise = null;
-        }
-    })();
-
-    return compilePromise;
-}
-
-async function loadContext() {
-    document.getElementById('context-loading').style.display = 'block';
-    document.getElementById('context-results').style.display = 'none';
-    try {
-        const result = await compileContexts();
-        if (result.status === 'error') {
-            document.getElementById('result-message').innerText = "❌ " + result.message;
-            document.getElementById('result-message').style.color = "red";
-            document.getElementById('result-message').style.display = 'block';
-            document.getElementById('context-loading').style.display = 'none';
-            document.getElementById('context-results').style.display = 'block';
-        } else {
-            finishContextLoad(result);
-        }
-    } catch (error) {
-        document.getElementById('result-message').innerText = "❌ Network or syntax error compiling files.";
-        document.getElementById('result-message').style.color = "red";
-        document.getElementById('result-message').style.display = 'block';
-        document.getElementById('context-loading').style.display = 'none';
-        document.getElementById('context-results').style.display = 'block';
-    }
-}
+export const setContextManifest = (m) => { AppStore.setState({ manifest: m }); };
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload in 3 seconds. Continue?")) return;
     const btn = document.getElementById('simulate-panic-btn');
@@ -997,7 +924,7 @@ async function performSoftRefresh() {
             });
         }
         // 2. JIT Mount any missing JS extension payloads
-        const cRes = await fetch('/api/system/config');
+        const cRes = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
@@ -1097,13 +1024,19 @@ if (d.config_missing) {
     document.body.appendChild(banner);
 }
 });
-
 export async function fetchAndCopy(filePath, btnElement) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath));
+        let fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
+
+        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+            const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+            if (override) fetchUrl = override;
+        }
+
+        const res = await fetch(fetchUrl);
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
         await navigator.clipboard.writeText(text);
@@ -1120,7 +1053,14 @@ export async function fetchAndDownloadState(filePath, btnElement) {
     btnElement.innerText = "Fetching...";
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        await downloadFile(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath), filePath.split('/').pop());
+        let fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
+
+        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+            const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+            if (override) fetchUrl = override;
+        }
+
+        await downloadFile(fetchUrl, filePath.split('/').pop());
         btnElement.innerText = "✅ Downloaded!";
     } catch (e) {
         btnElement.innerText = "❌ Error: " + e.message;
@@ -1132,25 +1072,27 @@ export async function fetchAndDownloadState(filePath, btnElement) {
 /* ==========================================================================
     TRACKER LOGIC (Extracted to kanban.js)
     ========================================================================== */
-
 /* ==========================================================================
     AUTO-HYDRATION (RUNS ON PAGE LOAD)
     ========================================================================== */
 (async function hydrateEcosystem() {
     try {
-        // Silently compile context to ensure the file tree and tracker are fresh
-        await compileContexts();
-        // Fetch the newly compiled manifest
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+
+        // Lazy Hydration: Attempt to fetch existing manifest first to prevent N+1 compiler thrashing
+        let mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+        let manifestData = mRes.ok ? await mRes.json() : {};
+
+        // Only compile context if the manifest is genuinely empty (e.g., first daemon boot)
+        if (Object.keys(manifestData).length === 0) {
+            await compileContexts();
+            mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+            if (mRes.ok) manifestData = await mRes.json();
+        }
+
         if (mRes.ok) {
-            setContextManifest(await mRes.json());
-            // If the user happens to load directly into a tab that needs the manifest, render it
-            const tabEdit = document.getElementById('tab-edit');
-            const stFiles = document.getElementById('st-files');
-            if (tabEdit && tabEdit.classList.contains('active') && stFiles && stFiles.classList.contains('active')) {
-                loadGlobalFS();
-            }
+            setContextManifest(manifestData);
+
             // Emit a global hydrate event so extensions can refresh their states
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                 const activeTab = document.querySelector('.tab-content.active');
@@ -1177,6 +1119,3 @@ window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
 window.simulatePanic = simulatePanic;
 window.resolveEditorMode = resolveEditorMode;
-// Context / Gather
-window.filterContexts = filterContexts;
-window.loadContext = loadContext;

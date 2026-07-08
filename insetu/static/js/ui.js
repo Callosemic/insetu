@@ -256,12 +256,17 @@ export const UIFactory = {
         };
         return btn;
     },
-
     createDropdown: function(config) {
+        const existing = document.querySelector('.dynamic-dropdown');
+        if (existing && existing._anchor === config.anchor) {
+            existing.remove();
+            return null;
+        }
         // Destroy existing generic dropdowns to ensure a singleton instance
         document.querySelectorAll('.dynamic-dropdown').forEach(el => el.remove());
 
         const menu = document.createElement('div');
+        menu._anchor = config.anchor;
         menu.className = 'dynamic-dropdown';
         menu.style.cssText = `
             position: absolute;
@@ -310,11 +315,13 @@ export const UIFactory = {
         });
 
         document.body.appendChild(menu);
-
         // Bind outside click listener to auto-dismiss, with a tiny delay to avoid immediately firing on the triggering click
         setTimeout(() => {
             const closer = (e) => {
-                if (!menu.contains(e.target) && e.target !== config.anchor) {
+                // If clicking the anchor, the main factory invocation catches the toggle state.
+                if (e.target === config.anchor || config.anchor.contains(e.target)) return;
+
+                if (!menu.contains(e.target)) {
                     menu.remove();
                     document.removeEventListener('click', closer);
                 }

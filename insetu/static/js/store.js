@@ -3,11 +3,10 @@
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-
 export const AppStore = createStore(
     devtools(
         subscribeWithSelector((set) => ({
-            activeWorkspace: localStorage.getItem('insetu_workspace') || 'default',
+            activeWorkspace: sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default',
             manifest: {},
             allRepos: [],
             targetConfigs: [],

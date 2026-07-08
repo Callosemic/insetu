@@ -17,12 +17,39 @@ class HookRegistry:
             return func
         return decorator
 
+    def _is_authorized(self, cb, event_name, workspace_id):
+        """Boundary filter: checks if the callback's module is enabled in the active tenant scope."""
+        # Prevent blocking OS boot/shutdown or the config generation loop itself
+        if event_name in ['system_boot', 'system_shutdown', 'mutate_workspace_config']:
+            return True
+
+        mod = cb.__module__
+        if not mod: return True
+
+        mod_name = mod.split('.')[-1]
+
+        # Cross-reference extension engines with the tenant's configuration
+        if mod_name.startswith('engine_'):
+            ext_name = mod_name.replace('engine_', '')
+
+            # Whitelist core OS engines that are not optional extensions
+            if ext_name in ['bridge', 'gather']:
+                return True
+            # Utilize the central utility to evaluate extension clearance statelessly
+            from insetu.utils_core import is_extension_enabled
+            return is_extension_enabled(ext_name, workspace_id)
+
+        return True
+
     def emit(self, event_name, *args, **kwargs):
         """Core OS trigger to broadcast payloads to all subscribed extensions."""
+        workspace_id = kwargs.get('workspace_id')
         with self._lock:
             callbacks = self._hooks.get(event_name, []).copy()
         results = []
         for cb in callbacks:
+            if not self._is_authorized(cb, event_name, workspace_id):
+                continue
             try:
                 results.append(cb(*args, **kwargs))
             except Exception as e:
@@ -31,11 +58,14 @@ class HookRegistry:
 
     def emit_background(self, event_name, *args, **kwargs):
         """Dispatches long-running hooks to a background thread to prevent blocking."""
+        workspace_id = kwargs.get('workspace_id')
         with self._lock:
             callbacks = self._hooks.get(event_name, []).copy()
 
         def _run_hooks():
             for cb in callbacks:
+                if not self._is_authorized(cb, event_name, workspace_id):
+                    continue
                 try:
                     cb(*args, **kwargs)
                 except Exception as e:

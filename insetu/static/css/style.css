@@ -98,7 +98,6 @@ pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; l
 }
 .CodeMirror-search-match { background: #f59e0b; color: #000; }
 .CodeMirror-search-hint { color: #888; font-style: italic; }
-
 /* EasyMDE "No Nonsense" Overrides */
 .EasyMDEContainer .CodeMirror {
     background: var(--input-bg);
@@ -108,6 +107,14 @@ pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; l
     font-family: var(--font-mono) !important;
     font-size: 13px;
     line-height: 1.5;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.EasyMDEContainer .CodeMirror-scroll {
+    flex: 1;
+    min-height: 100%;
 }
 
 /* Flatten massive header scaling inside the raw editor */
@@ -129,18 +136,29 @@ pre { background: var(--input-bg); padding: 15px; border-radius: 4px; border-lef
 button { background: var(--btn); color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; margin-top: 20px; }
 button:hover { background: var(--btn-hover); }
 .spinner { display: none; margin-top: 20px; font-style: italic; color: #888; }
-.file-card { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 12px; }
+.file-card { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 12px; position: relative; overflow: hidden;
+}
 .file-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 15px; flex-wrap: nowrap; }
-.file-title { font-weight: bold; color: #4daafc; font-family: monospace; font-size: 1.05rem; word-break: break-all; flex: 1; min-width: 0; }
-.file-actions { flex-shrink: 0; display: flex; gap: 8px; align-items: center; }
+.file-title { font-weight: bold; color: #4daafc; font-family: monospace;
+font-size: 1.05rem; word-break: break-all; flex: 1; min-width: 0; }
+.file-actions, .cit-card-actions { 
+    position: absolute; right: 10px; top: 12px;
+    background: var(--input-bg); padding-left: 10px; box-shadow: -15px 0 15px var(--input-bg);
+    flex-shrink: 0; display: flex; gap: 8px; align-items: center;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; transform: translateX(10px);
+}
+.file-card:hover .file-actions, .file-card.show-actions .file-actions,
+.file-card:hover .cit-card-actions, .file-card.show-actions .cit-card-actions {
+    opacity: 1; pointer-events: auto; transform: translateX(0);
+}
 .folder-label { font-weight: bold; font-family: monospace; color: #facc15; font-size: 1.1rem; }
 .task-bug { color: #ef4444 !important; font-size: 0.95rem; }
 .task-todo { color: #10b981 !important; font-size: 0.95rem; }
 .task-queue { color: #a855f7 !important; font-size: 0.95rem; }
 .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; }
 .file-desc { color: #aaa; font-size: 0.9rem; margin-top: 8px; margin-bottom: 12px; }
-.category-heading { margin-top: 25px; margin-bottom: 15px; font-size: 1.2rem; font-weight: bold; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 5px; }
-.file-actions { display: flex; gap: 10px; }
+.category-heading { margin-top: 25px; margin-bottom: 15px; font-size: 1.2rem; font-weight: bold; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 5px;
+}
 .btn-sm { margin-top: 0; padding: 8px 14px; font-size: 14px; }
 /* iOS Modal Fixes */
 .fullscreen-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100dvh; background: rgba(0,0,0,0.85);
@@ -284,8 +302,9 @@ border: 1px solid #cbd5e1;
 /* E-Ink High Contrast Overrides */
 [data-theme="e-ink"] h1, [data-theme="e-ink"] h2, [data-theme="e-ink"] h3, 
 [data-theme="e-ink"] h4, [data-theme="e-ink"] h5, [data-theme="e-ink"] h6,
-[data-theme="e-ink"] .file-title { 
-    color: #000000 !important; 
+[data-theme="e-ink"] .file-title,
+[data-theme="e-ink"] .folder-label { 
+    color: #000000 !important;
     font-weight: 900;
 }
 [data-theme="e-ink"] .file-card {
