@@ -42,12 +42,18 @@ export const sharedStyles = css`
         transition: background 0.2s;
     }
     button:hover { background: var(--btn-hover); }
-
     .btn-sm {
-        margin-top: 0;
+        margin: 0;
         padding: 8px 14px;
         font-size: 14px;
     }
+
+    /* Sub-Tabs (Inherited for Shadow DOM components) */
+    .sub-tabs-bar { position: relative; display: flex; justify-content: space-between; align-items: center; background: var(--bg); z-index: 99; border-bottom: 1px solid var(--border); padding: 0 20px; height: 44px; box-sizing: border-box; }
+    .sub-tabs { display: flex; gap: 8px; margin: 0; padding: 0; overflow-x: auto; align-items: center; height: 100%; scrollbar-width: none; }
+    .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; }
+    .sub-tab:hover { color: var(--text); }
+    .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn); }
 
     /* Utilities */
     .spinner {

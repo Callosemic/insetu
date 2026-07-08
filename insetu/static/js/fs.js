@@ -1,14 +1,38 @@
+import { LitElement, html, css } from 'lit';
+import { sharedStyles } from './shared_styles.js';
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import {
     mdeInstance,
     executeWorkspaceMutation,
     setContextManifest,
-    compileContexts,
+    executeSystemCompile,
     fetchAndCopy,
     fetchAndDownloadState,
     normalizeAccentText,
     resolveEditorMode
 } from './app.js';
 import { AppStore } from './store.js';
+
+export const FsStore = createStore(
+    devtools(
+        subscribeWithSelector((set) => ({
+            searchQuery: '',
+            modals: {
+                move: { open: false, currentFile: '', destPath: '', initialParts: [] },
+                newFile: { open: false, basePath: '', fileName: '', content: '' }
+            },
+            setSearchQuery: (q) => set({ searchQuery: q }),
+            setModal: (modalName, data) => set(state => ({
+                modals: { ...state.modals, [modalName]: { ...state.modals[modalName], ...data } }
+            }))
+        })),
+        { name: 'FsStore' }
+    )
+);
+window.inSetu = window.inSetu || { stores: {} };
+window.inSetu.stores.Fs = FsStore;
+
 let currentModalFile = '';
 export let currentModalOriginalText = '';
 export let currentModalIsFS = false;
@@ -254,78 +278,25 @@ async function copyFromModal() {
     });
 }
 function openMoveModal() {
-    const bodyHtml = `
-        <div style="flex-shrink: 0; padding-bottom: 15px; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
-            <input type="text" id="move-dest-path" value="${currentModalFile}" placeholder="e.g. repo/new_folder/my_file.py" style="width: 100%; padding: 8px; font-family: monospace; box-sizing: border-box; margin: 0;">
-        </div>
-        <div id="move-browser-container" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 10px;">
-            <div class="spinner" style="display:block;">Loading folders...</div>
-        </div>
-    `;
-    const modal = document.createElement('insetu-modal');
-    modal.id = 'move-modal';
-    modal.titleText = 'Move File to...';
-    modal.innerHTML = `
-        <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden;">${bodyHtml}</div>
-        <div slot="footer">
-            <button id="execute-move-btn" class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;">🚚 Move File</button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.open = true;
-    modal.addEventListener('modal-closed', () => modal.remove());
-
-    modal.querySelector('#execute-move-btn').onclick = async () => {
-        await executeMove(modal.id);
-    };
-    let initialPathParts = [];
-    if (currentModalFile) {
-        const parts = currentModalFile.split('/').filter(p => p);
-        parts.pop();
-// remove filename
-        initialPathParts = parts;
-    }
-
-    setTimeout(() => {
-        mountFolderBrowser(document.getElementById('move-browser-container'), (selectedPath) => {
-            const filename = currentModalFile ? currentModalFile.split('/').pop() : '';
-            document.getElementById('move-dest-path').value = selectedPath ? (filename ? `${selectedPath}/${filename}` : selectedPath) : filename;
-        }, initialPathParts);
-    }, 50);
+    const parts = currentModalFile ? currentModalFile.split('/').filter(p => p) : [];
+    parts.pop();
+    // remove filename
+    FsStore.getState().setModal('move', { open: true, currentFile: currentModalFile, destPath: currentModalFile, initialParts: parts });
 }
-export function mountFolderBrowser(container, onSelect, initialPath = []) {
-    container.replaceChildren();
-    const allFiles = new Set();
-    const { manifest } = AppStore.getState();
-    Object.values(manifest).forEach(obj => {
-        if (obj.files) obj.files.forEach(f => allFiles.add(f));
-    });
 
-    const browser = document.createElement('insetu-folder-browser');
-    browser.files = Array.from(allFiles);
-    browser.currentPath = initialPath;
-    browser.addEventListener('path-changed', (e) => onSelect(e.detail.path));
-
-    container.appendChild(browser);
-}
-async function executeMove(modalId = 'move-modal') {
-    const destPath = document.getElementById('move-dest-path').value.trim();
-    if (!destPath || destPath === currentModalFile) return alert("Please enter a valid new destination path.");
+async function executeMove() {
+    const { currentFile, destPath } = FsStore.getState().modals.move;
+    if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     await executeWorkspaceMutation(`/api/${activeWs}/fs/move`, {
-        filepath: currentModalFile,
+        filepath: currentFile,
         dest_path: destPath
     }, {
-        btnId: 'execute-move-btn',
         loadingText: 'Moving...',
         onSuccess: () => {
-            const m = document.getElementById(modalId);
-            if (m && m.close) m.close();
-            else if (m) m.remove();
-
+            FsStore.getState().setModal('move', { open: false });
             document.getElementById('file-modal').style.display = 'none';
-
-            refreshActiveFileViews(currentModalFile, destPath);
+            refreshActiveFileViews(currentFile, destPath);
         }
     });
 }
@@ -360,15 +331,7 @@ async function deleteModalFile() {
 function cleanModalFile() {
     if (!confirm("Clean LLM cite and span tags from this file?")) return;
 
-    const ext = currentModalFile.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown',
-        'py': 'python',
-        'js': 'javascript',
-        'json': 'javascript',
-        'sh': 'shell'
-    };
-    const isSupportedEditor = !!modeMap[ext];
+    const { isSupported: isSupportedEditor } = resolveEditorMode(currentModalFile);
 
     let text = (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) 
         ? mdeInstance.value() 
@@ -455,218 +418,247 @@ export function createFileCard(fileInfo, container) {
         if (fileInfo.isSource) viewSourceFile(fileInfo.filename, fileInfo.isFS);
         else viewAndCopy(fileInfo.filename);
     });
-
     const { manifest } = AppStore.getState();
     if (!fileInfo.isSource && manifest[fileInfo.filename]) {
         const browseBtn = document.createElement('button');
         browseBtn.className = 'btn-sm';
-        browseBtn.style.background = 'var(--intent-highlight)';
+        browseBtn.style.background = 'var(--intent-neutral)';
+        browseBtn.style.margin = '0 5px 0 0';
         browseBtn.innerText = '📁 Browse';
         browseBtn.slot = 'actions';
         browseBtn.onclick = (e) => { e.stopPropagation(); openBrowseModal(fileInfo.filename); };
         card.appendChild(browseBtn);
     }
 
-    const actionsContainer = document.createElement('div');
-    actionsContainer.style.display = 'none';
-
+    const hookContainer = document.createElement('div');
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         window.inSetu.extensions.Registry.executeUIHook('zone:file-card-actions', {
             filepath: fileInfo.filename,
             repoDir: fileInfo.repoDir,
             isFS: fileInfo.isFS,
-            actionsContainer: actionsContainer
+            actionsContainer: hookContainer
         });
-        Array.from(actionsContainer.children).forEach(child => {
+        Array.from(hookContainer.children).forEach(child => {
             child.slot = 'actions';
+            child.style.margin = '0 5px 0 0';
             card.appendChild(child);
         });
     }
 
-    const dlBtn = document.createElement('button');
-    dlBtn.className = 'btn-sm ui-draggable-export';
-    dlBtn.style.background = 'var(--intent-primary)';
-    dlBtn.style.color = 'white';
-    dlBtn.style.border = 'none';
-    dlBtn.style.cursor = 'pointer';
-    dlBtn.innerText = '⬇️ DL';
-    dlBtn.draggable = true;
-    dlBtn.slot = 'actions';
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     let dlFetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
         const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', fileInfo.filename);
         if (overrideUrl) dlFetchUrl = overrideUrl;
     }
+    const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
 
-    dlBtn.dataset.fetchUrl = dlFetchUrl;
-    dlBtn.dataset.filename = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
-
+    const dlBtn = document.createElement('button');
+    dlBtn.className = 'btn-sm';
+    dlBtn.style.background = 'var(--intent-primary)';
+    dlBtn.style.margin = '0';
+    dlBtn.innerText = '⬇️ Download';
+    dlBtn.slot = 'actions';
     dlBtn.onclick = async (e) => {
         e.stopPropagation();
-        const origText = dlBtn.innerText;
+        const orig = dlBtn.innerText;
         dlBtn.innerText = '⏳...';
         try {
-            const res = await fetch(dlBtn.dataset.fetchUrl);
+            const res = await fetch(dlFetchUrl);
             if (!res.ok) throw new Error("Failed to fetch");
-
             const text = await res.text();
             const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
             a.href = url;
-            a.download = dlBtn.dataset.filename;
+            a.download = safeName;
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
             a.remove();
-            dlBtn.innerText = "✅ Done";
         } catch (err) {
             alert("Error downloading file: " + err.message);
-            dlBtn.innerText = origText;
         } finally {
-            setTimeout(() => dlBtn.innerText = origText, 2000);
+            dlBtn.innerText = orig;
         }
     };
     card.appendChild(dlBtn);
 
     container.appendChild(card);
 }
-let globalFileTree = {};
-let globalManifest = [];
-export function loadGlobalFS() {
-        const container = document.getElementById('global-fs-list');
-        const allFiles = new Set();
-        const { manifest, targetConfigs, globalBrowsePath } = AppStore.getState();
+export let globalManifest = [];
 
-        Object.values(manifest).forEach(obj => {
-                if (obj.files) obj.files.forEach(f => allFiles.add(f));
-        });
-        globalManifest = Array.from(allFiles);
+export class InSetuVFSExplorer extends LitElement {
+        static properties = {
+                searchQuery: { type: String },
+                manifestFiles: { type: Array },
+                globalBrowsePath: { type: Array }
+        };
+        static styles = [sharedStyles, css`
+                :host { display: flex; flex-direction: column; flex: 1; overflow-y: auto; }
+        `];
 
-        // Explicitly seed configured root repositories to allow initializing empty environments
-        if (targetConfigs) {
-                targetConfigs.forEach(cfg => {
-                        if (cfg.repo_dir && !globalManifest.some(f => f.startsWith(cfg.repo_dir + '/'))) {
-                                globalManifest.push(cfg.repo_dir + '/.gitkeep');
-                        }
-                });
+        constructor() {
+                super();
+                this.searchQuery = '';
+                this.manifestFiles = [];
+                this.globalBrowsePath = [];
         }
-
-        if (globalManifest.length === 0) {
-                container.innerHTML = '<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>';
-                return;
-        }
-
-        // Hide legacy UI elements since the Web Component handles breadcrumbs natively
-        const legacyHeader = document.getElementById('global-fs-header');
-        if (legacyHeader) legacyHeader.style.display = 'none';
-
-        container.innerHTML = `
-                <div @card-clicked="\${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
-                        <insetu-file-tree 
-                                id="global-fs-tree"
-                                basePath=""
-                                @path-changed="\${(e) => window._syncGlobalFSPath(e.detail.path)}">
-                        </insetu-file-tree>
-                </div>
-        `;
-
-        // Property binding must happen after HTML injection for complex arrays
-        const treeEl = container.querySelector('insetu-file-tree');
-        if (treeEl) {
-                treeEl.files = globalManifest;
-                treeEl.currentPath = globalBrowsePath || [];
-                treeEl.actions = [
-                        { id: 'download', label: '⬇️ DL', style: 'primary' }
-                ];
-
-                // Re-bind native Lit events since innerHTML loses template literal bindings
-                treeEl.addEventListener('card-clicked', (e) => {
-                        if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true);
+        _updateState(state) {
+                const allFiles = new Set();
+                Object.values(state.manifest || {}).forEach(obj => {
+                        if (obj.files) obj.files.forEach(f => allFiles.add(f));
                 });
-                treeEl.addEventListener('action-download', (e) => {
-                        if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target);
-                });
-                treeEl.addEventListener('path-changed', (e) => {
-                        window._syncGlobalFSPath(e.detail.path);
-                });
-        }
-
-        window._syncGlobalFSPath(globalBrowsePath || []);
-}
-window._syncGlobalFSPath = function(path) {
-        AppStore.setState({ globalBrowsePath: path });
-        const btnFsMore = document.getElementById('btn-fs-more');
-        if (btnFsMore) btnFsMore.style.display = 'block';
-};
-
-// Strict UDF Binding: Reactively re-render the file tree when the manifest arrives or changes
-AppStore.subscribe(
-    (state) => state.manifest,
-    () => {
-        const stFiles = document.getElementById('st-files');
-        if (stFiles && stFiles.classList.contains('active')) {
-            loadGlobalFS();
-        }
-    }
-);
-
-function filterGlobalFS(query) {
-        window.ExtensionRegistry.utils.debounce('globalFSSearch', () => {
-                const q = query.toLowerCase().trim();
-                const container = document.getElementById('global-fs-list');
-                const clearBtn = document.getElementById('global-fs-clear-btn');
-
-                if (!q) {
-                        if (clearBtn) clearBtn.style.display = 'none';
-                        loadGlobalFS();
-                        return;
+                if (state.targetConfigs) {
+                        state.targetConfigs.forEach(cfg => {
+                                if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
+                                        allFiles.add(cfg.repo_dir + '/.gitkeep');
+                                }
+                        });
                 }
-                if (clearBtn) clearBtn.style.display = 'block';
-                container.replaceChildren();
+                this.manifestFiles = Array.from(allFiles);
+                globalManifest = this.manifestFiles; // Update global export for legacy searches
+                this.globalBrowsePath = state.globalBrowsePath || [];
+        }
 
-                const gbPath = AppStore.getState().globalBrowsePath || [];
-                const currentPrefix = gbPath.length > 0 ? gbPath.join('/') + '/' : '';
+        connectedCallback() {
+                super.connectedCallback();
+                this._unsubApp = AppStore.subscribe((state) => {
+                        this._updateState(state);
+                });
+                this._unsubFs = FsStore.subscribe((state) => {
+                        this.searchQuery = state.searchQuery;
+                });
 
-                const terms = q.split(/\\s+/).filter(t => t);
-                const matches = globalManifest.filter(f => {
+                // Trigger initial read
+                this._updateState(AppStore.getState());
+                this.searchQuery = FsStore.getState().searchQuery || '';
+        }
+
+        disconnectedCallback() {
+                super.disconnectedCallback();
+                if (this._unsubApp) this._unsubApp();
+                if (this._unsubFs) this._unsubFs();
+        }
+
+        _handlePathChange(e) {
+                AppStore.setState({ globalBrowsePath: e.detail.path });
+                const btnFsMore = document.getElementById('btn-fs-more');
+                if (btnFsMore) btnFsMore.style.display = 'block';
+        }
+        render() {
+                        if (this.manifestFiles.length === 0) {
+                                        return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
+                        }
+                        const q = this.searchQuery.toLowerCase().trim();
+                        if (!q) {
+                                        return html`
+                                                        <div @card-clicked="${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
+                                                                        <insetu-file-tree  
+                                                                                        basePath=""
+                                                                                        .files=${this.manifestFiles}
+                                                                                        .currentPath=${this.globalBrowsePath}
+                                                                                        .actions=${[{ id: 'download', label: '⬇️ DL', style: 'primary' }]}
+                                                                                        @path-changed="${this._handlePathChange}"
+                                                                                        @action-download="${(e) => { if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target); }}">
+                                                                        </insetu-file-tree>
+                                                        </div>
+                                        `;
+                        }
+
+                // Search Results
+                const currentPrefix = this.globalBrowsePath.length > 0 ? this.globalBrowsePath.join('/') + '/' : '';
+                const terms = q.split(/\s+/).filter(t => t);
+                const matches = this.manifestFiles.filter(f => {
                         if (!f.startsWith(currentPrefix)) return false;
                         const sub = f.substring(currentPrefix.length).toLowerCase();
                         return terms.every(t => sub.includes(t));
                 });
+
                 if (matches.length === 0) {
-                        container.innerHTML = '<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>';
-                        return;
+                        return html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
                 }
 
-                const { browserConfig } = AppStore.getState();
-                matches.forEach(filepath => {
-                        const filename = filepath.split('/').pop();
-                        if (browserConfig && browserConfig.mode === 'file') {
-                                const card = document.createElement('insetu-card');
-                                card.filename = filepath;
-                                card.titleText = filename;
-                                card.descriptionText = filepath;
-                                card.icon = '📄';
-                                card.intentColor = 'var(--intent-success)';
-                                card.addEventListener('card-clicked', () => {
-                                        if (browserConfig && browserConfig.callback) browserConfig.callback(filepath);
-                                        closeBrowseModal();
-                                });
-                                container.appendChild(card);
-                        } else if (!browserConfig || browserConfig.mode !== 'folder') {
-                                createFileCard({
-                                        filename: filepath,
-                                        displayName: filename,
-                                        description: filepath,
-                                        isFS: true,
-                                        isSource: true
-                                }, container);
-                        }
-                });
+                return html`
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                                ${matches.map(filepath => {
+                                        const filename = filepath.split('/').pop();
+                                        return html`
+                                                <insetu-card
+                                                        .filename=${filepath}
+                                                        .titleText=${filename}
+                                                        .descriptionText=${filepath}
+                                                        icon="📄"
+                                                        intentColor="var(--intent-success)"
+                                                        @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
+                                                        <button slot="actions" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 8px;"
+                                                                @click=${(e) => {
+                                                                        e.stopPropagation();
+                                                                        const items = [
+                                                                                { label: 'Download', icon: '⬇️', onClick: (ev) => { ev.stopPropagation(); window.fetchAndDownloadState(filepath, e.target); } }
+                                                                        ];
+                                                                        window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items: items });
+                                                                }}>⚙️</button>
+                                                </insetu-card>
+                                        `;
+                                })}
+                        </div>
+                `;
+        }
+}
+customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
+
+export class InSetuVFSExplorerActions extends LitElement {
+    static styles = css`
+        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: var(--input-bg); }
+    `;
+    _openMenu(e) {
+        if (window.openFsDropdown) window.openFsDropdown(e.target);
+    }
+    render() {
+        return html`<button @click=${this._openMenu}>☰</button>`;
+    }
+}
+customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
+
+window.ExtensionRegistry.registerExtension('files', {
+    name: "Virtual File System",
+    version: "2.0.0",
+    layoutSlots: [
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "edit",
+            id: "files",
+            label: "Files",
+            order: 2,
+            component: "insetu-vfs-explorer"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "edit",
+            targetSub: "files",
+            component: "insetu-vfs-explorer-actions",
+            order: 2
+        }
+    ]
+});
+
+export function loadGlobalFS() {
+        const container = document.getElementById('global-fs-list');
+        if (container && !container.querySelector('insetu-vfs-explorer')) {
+                container.innerHTML = '<insetu-vfs-explorer></insetu-vfs-explorer>';
+        }
+        const legacyHeader = document.getElementById('global-fs-header');
+        if (legacyHeader) legacyHeader.style.display = 'none';
+}
+
+function filterGlobalFS(query) {
+        window.ExtensionRegistry.utils.debounce('globalFSSearch', () => {
+                FsStore.getState().setSearchQuery(query);
+                const clearBtn = document.getElementById('global-fs-clear-btn');
+                if (clearBtn) clearBtn.style.display = query.trim() ? 'block' : 'none';
         }, 200);
 }
 
@@ -953,7 +945,6 @@ export function insertTextAtCursor(textToInsert) {
         textArea.dispatchEvent(new Event('input'));
     }
 }
-
 export async function viewSourceFile(filepath, isFS = false) {
     // UDF/Extension Mandate: Allow extensions to hijack the rendering flow before booting the raw text modal
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
@@ -968,17 +959,8 @@ export async function viewSourceFile(filepath, isFS = false) {
     currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filepath;
     const textArea = document.getElementById('modal-text');
-const ext = filepath.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown',
-        'py': 'python',
-        'js': 'javascript',
-        'json': 'javascript',
-        'sh': 'shell'
-    };
-    const codeMode = modeMap[ext];
-    const isSupportedEditor = !!codeMode;
-    const isMarkdown = ext === 'md';
+
+    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
     if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
         mdeInstance.value("Loading...");
         mdeInstance.codemirror.setOption("mode", codeMode);
@@ -1369,6 +1351,7 @@ window.confirmFolderSelection = confirmFolderSelection;
 window.clearBrowseSearch = clearBrowseSearch;
 window.filterBrowse = filterBrowse;
 window.openWorkspaceBrowser = openWorkspaceBrowser;
+window.openBrowseModal = openBrowseModal;
 window.viewAndCopy = viewAndCopy;
 export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
     setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
@@ -1402,7 +1385,8 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
     }
 }
 export async function openQuickPackModal(targetDir) {
-    let current = globalFileTree;
+    const fullTree = buildFileTree(globalManifest);
+    let current = fullTree;
     const gbPath = AppStore.getState().globalBrowsePath || [];
     for (const p of gbPath) {
         if (current[p]) current = current[p];
@@ -1459,24 +1443,32 @@ export async function openQuickPackModal(targetDir) {
         modal.close();
     };
 }
-export function openFsDropdown(anchorElement) {
+export function openFsDropdown(anchorElement, options = {}) {
     if (!window.inSetu.ui.Factory || !window.inSetu.ui.Factory.createDropdown) return;
 
-    const gbPath = AppStore.getState().globalBrowsePath || [];
-    const currentPath = gbPath.join('/');
+    const isPrompts = options.isPrompts;
+    const activePathList = isPrompts ? (AppStore.getState().currentPromptsPath || []) : (AppStore.getState().globalBrowsePath || []);
+    const currentPath = activePathList.join('/');
 
     const items = [];
 
-    if (gbPath.length === 0) {
+    if (!isPrompts && activePathList.length === 0) {
         items.push({ label: 'New Repository', icon: '📦', onClick: () => window.openNewFolderModal() });
     } else {
-        items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(currentPath + '/') });
-        items.push({ label: 'New File', icon: '📄', onClick: () => window.openNewFileModal(currentPath + '/') });
-        items.push({ divider: true });
-        items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
-        items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
-        items.push({ divider: true });
-        items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
+        const prefix = isPrompts 
+            ? (activePathList.length > 0 ? ".insetu/prompts/" + currentPath + "/" : ".insetu/prompts/") 
+            : (activePathList.length > 0 ? currentPath + '/' : '');
+
+        items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(prefix) });
+        items.push({ label: isPrompts ? 'New Prompt' : 'New File', icon: '📄', onClick: () => window.openNewFileModal(prefix) });
+
+        if (!isPrompts) {
+            items.push({ divider: true });
+            items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
+            items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
+            items.push({ divider: true });
+            items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
+        }
     }
 
     window.inSetu.ui.Factory.createDropdown({
@@ -1699,3 +1691,72 @@ window.onLinkSearchInput = onLinkSearchInput;
 window.executeDeepLinkSearch = executeDeepLinkSearch;
 window.viewSourceFile = viewSourceFile;
 window.insertTextAtCursor = insertTextAtCursor;
+
+export class InSetuVFSModals extends LitElement {
+    static properties = {
+        modals: { type: Object }
+    };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.modals = {};
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this._unsub = FsStore.subscribe(state => {
+            this.modals = state.modals;
+        });
+        this.modals = FsStore.getState().modals;
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._unsub) this._unsub();
+    }
+
+    render() {
+        const m = this.modals;
+        if (!m) return '';
+
+        return html`
+            <insetu-modal ?open=${m.move?.open} titleText="Move File to..." @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
+                    <input type="text" .value=${m.move?.destPath || ''} @input=${e => FsStore.getState().setModal('move', { destPath: e.target.value })} style="margin-bottom: 15px; font-family: monospace;">
+                    <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 10px;">
+                        <insetu-folder-browser .files=${globalManifest} .currentPath=${m.move?.initialParts || []} @path-changed=${e => {
+                            const filename = m.move?.currentFile ? m.move.currentFile.split('/').pop() : '';
+                            FsStore.getState().setModal('move', { destPath: e.detail.path ? (e.detail.path + '/' + filename) : filename });
+                        }}></insetu-folder-browser>
+                    </div>
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${executeMove}>🚚 Move File</button>
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${m.newFile?.open} titleText="Create New Workspace File" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
+                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
+                    <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.checkFileExtension) window.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+                    <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
+                        <button @click=${() => { if(window.importFromUrl) window.importFromUrl(); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
+                    </div>
+
+                    <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-height: 200px;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${saveNewFile}>💾 Create & Save File</button>
+                </div>
+            </insetu-modal>
+        `;
+    }
+}
+customElements.define('insetu-vfs-modals', InSetuVFSModals);
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.body.appendChild(document.createElement('insetu-vfs-modals'));
+});

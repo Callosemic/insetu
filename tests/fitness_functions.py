@@ -134,7 +134,6 @@ def check_python_files():
                                 report_violation("EXTENSION_DAG", filepath, 1, f"Missing '__depends__ = []' declaration in extension engine.")
                     except SyntaxError:
                         print(f"⚠️  Skipping {file} due to SyntaxError.")
-
 # --- JAVASCRIPT REGEX LINTER ---
 def check_javascript_files():
     print("🔍 Sweeping JavaScript Frontend (Regex Analysis)...")
@@ -151,6 +150,8 @@ def check_javascript_files():
     floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
     naive_xss_pattern = re.compile(r'\.replace\(/<script')
     create_modal_pattern = re.compile(r'\.createModal\s*\(')
+    slug_dry_pattern = re.compile(r'\.normalize\([\'"]NFD[\'"]\)')
+    context_scraping_pattern = re.compile(r'\.active\b.*\.sub-tab|\.sub-tab.*\.active\b')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -164,7 +165,7 @@ def check_javascript_files():
 
                 for i, line in enumerate(lines):
                     line_num = i + 1
-                    
+
                     # Ignore comments
                     if line.strip().startswith("//"):
                         continue
@@ -204,19 +205,30 @@ def check_javascript_files():
                     # 8. Naive XSS Regex Ban
                     if naive_xss_pattern.search(line):
                         report_violation("XSS_VULNERABILITY", filepath, line_num, "Naive regex script stripping detected. Use DOMPurify.sanitize().")
-
                     # 9. LitElement Imperative Modal Ban
                     if is_lit_component and create_modal_pattern.search(line):
                         report_violation("LIT_IMPERATIVE_MODAL_BAN", filepath, line_num, "Legacy UIFactory.createModal detected in a LitElement. Render <insetu-modal> declaratively instead.")
+
+                    # 12. Lit Element Native Template Enforcement
+                    if is_lit_component and "insertAdjacentHTML" in line:
+                        report_violation("LIT_TEMPLATE_VIOLATION", filepath, line_num, "Imperative HTML insertion detected. Utilize LitElement render() templates to surgically diff components safely.")
+
+                    # 10. Slug Normalization DRY Violation
+                    if is_extension and slug_dry_pattern.search(line):
+                        report_violation("SLUG_DRY_VIOLATION", filepath, line_num, "Duplicate slug generation regex detected. Use the centralized generateSafeSlug() utility instead.")
+
+                    # 11. Context Scraping Ban
+                    if is_extension and context_scraping_pattern.search(line):
+                        report_violation("CONTEXT_SCRAPING_BAN", filepath, line_num, "DOM class context scraping detected. Actions must rely on localized dataset properties instead.")
 
 if __name__ == "__main__":
     print("============================================================")
     print("      inSetu Architectural Fitness Functions Validator      ")
     print("============================================================\n")
-    
+
     check_python_files()
     check_javascript_files()
-    
+
     print("============================================================")
     if violations_found == 0:
         print("✅ SUCCESS: Codebase complies with all engineering standards.")

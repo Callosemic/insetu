@@ -1,60 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { AppStore } from './store.js';
-import { setGlobalStatus } from './app.js';
+import { setGlobalStatus, executeSystemCompile } from './app.js';
 import { sharedStyles } from './shared_styles.js';
 
-let compilePromise = null;
-let compilePromiseWs = null;
-
-export const compileContexts = (onProgress = null) => {
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
-
-    compilePromiseWs = activeWs;
-    compilePromise = (async () => {
-        try {
-            const response = await fetch('/submit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({})
-            });
-            const contentType = response.headers.get('Content-Type');
-            if (contentType && contentType.includes('application/json')) {
-                return await response.json();
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-            let result = null;
-            let buffer = '';
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); 
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    const data = JSON.parse(line);
-                    if (data.status === 'progress') {
-                        setGlobalStatus(`⏳ ${data.message}`, null);
-                        if (onProgress) onProgress(data.message);
-                    } else {
-                        result = data;
-                    }
-                }
-            }
-            setGlobalStatus("✅ Sync Complete", 2000);
-            return result;
-        } catch (error) {
-            throw error;
-        } finally {
-            compilePromise = null;
-        }
-    })();
-    return compilePromise;
-};
-window.compileContexts = compileContexts;
 
 export class InSetuExtGather extends LitElement {
     static properties = {
@@ -87,15 +35,11 @@ constructor() {
         this.loading = true;
         this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         try {
-            const result = await compileContexts((msg) => {
+            const result = await executeSystemCompile((msg) => {
                 this.loadingMessage = msg;
             });
             if (result && result.status === 'error') {
                 alert("❌ " + result.message);
-            } else {
-                const activeWs = AppStore.getState().activeWorkspace || 'default';
-                const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-                if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
             }
         } catch (error) {
             console.error("Compilation error:", error);
@@ -157,22 +101,19 @@ constructor() {
             return a.localeCompare(b);
         });
         return html`
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <h2 style="margin: 0;">System Context</h2>
-                </div>
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
                 <span id="refresh-time" style="font-size: 0.9rem; color: var(--text-muted); font-style: italic;"></span>
             </div>
             <div style="margin-bottom: 15px;">
-                <input type="text" placeholder="Filter contexts..." style="width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" @keyup=${(e) => this.searchQuery = e.target.value}>
+                <input type="text" placeholder="Filter contexts..." @keyup=${(e) => this.searchQuery = e.target.value}>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block;">${this.loadingMessage}</div>` : ''}
-            
+
             <div style="display: ${this.loading ? 'none' : 'block'};">
                 ${sortedCats.map(catName => html`
                     <insetu-category-section titleText=${catName}>
                         ${catName === "Quick-Pack Clipboard" ? html`
-                            <button slot="header-actions" class="btn-sm" style="background: var(--intent-danger); margin: 0; padding: 4px 10px; font-size: 0.8rem;" @click=${() => { if(window.clearQuickPacks) window.clearQuickPacks(); }}>🗑️ Clear</button>
+                            <button slot="header-actions" class="btn-sm" style="background: var(--intent-danger);" @click=${() => { if(window.clearQuickPacks) window.clearQuickPacks(); }}>🗑️ Clear</button>
                         ` : ''}
                         ${categories[catName].map(f => html`
                             <insetu-card
@@ -183,49 +124,38 @@ constructor() {
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
                                 @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); else { window.currentModalFile = f.filename; window.currentModalIsFS = false; window.currentModalForceEdit = false; window.currentModalIsMemoryOnly = false; document.getElementById('modal-title').innerText = f.filename; /* fallback */ } }}>
-                                
-                                ${(window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) ? 
-                                    (() => {
-                                        const container = document.createElement('div');
-                                        window.ExtensionRegistry.executeUIHook('zone:file-card-actions', { filepath: f.filename, repoDir: f.repoDir, isFS: f.isFS, actionsContainer: container });
-                                        return Array.from(container.children).map(child => {
-                                            child.slot = 'actions';
-                                            return html`${child}`;
-                                        });
-                                    })() : ''
-                                }
-                                
-                                ${(AppStore.getState().manifest[f.filename]) ? html`
-                                    <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px; font-size: 0.85rem; font-weight: bold; border: none; cursor: pointer; color: white;" @click=${(e) => { e.stopPropagation(); if(window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
-                                ` : ''}
-                                <button slot="actions" class="btn-sm ui-draggable-export" style="background: var(--intent-primary); margin: 0; padding: 6px 12px; font-size: 0.85rem; font-weight: bold; border: none; cursor: pointer; color: white;" draggable="true" data-filename=${f.filename} data-fetch-url=${f.filename.includes('/prompts/') ? `/api/${AppStore.getState().activeWorkspace || 'default'}/prompts/resolve?file=${encodeURIComponent(f.filename)}` : `/download/${f.filename}`} @click=${async (e) => {
-                                    e.stopPropagation();
-                                    const btn = e.target;
-                                    const orig = btn.innerText;
-                                    btn.innerText = '⏳...';
-                                    try {
-                                        const res = await fetch(btn.dataset.fetchUrl);
-                                        if (!res.ok) throw new Error("Failed to fetch");
-                                        const text = await res.text();
-                                        const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-                                        const url = window.URL.createObjectURL(blob);
-                                        const a = document.createElement('a');
-                                        a.style.display = 'none';
-                                        a.href = url;
-                                        a.download = btn.dataset.filename;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        window.URL.revokeObjectURL(url);
-                                        a.remove();
-                                        btn.innerText = "✅ Done";
-                                    } catch (err) {
-                                        alert("Error downloading file.");
-                                        btn.innerText = orig;
-                                    } finally {
-                                        setTimeout(() => btn.innerText = orig, 2000);
-                                    }
-                                }}>⬇️ DL</button>
-                            </insetu-card>
+                                <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
+${AppStore.getState().manifest[f.filename] ? html`
+        <button slot="actions" class="btn-sm" style="background: var(--intent-neutral); margin: 0 5px 0 0;"
+                @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
+` : ''}
+<button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;"
+        @click=${async (e) => {
+                e.stopPropagation();
+                const dlUrl = f.filename.includes('/prompts/') ? `/api/${AppStore.getState().activeWorkspace || 'default'}/prompts/resolve?file=${encodeURIComponent(f.filename)}` : `/download/${f.filename}`;
+                const orig = e.target.innerText;
+                e.target.innerText = '⏳...';
+                try {
+                        const res = await fetch(dlUrl);
+                        if (!res.ok) throw new Error("Failed to fetch");
+                        const text = await res.text();
+                        const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = f.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        a.remove();
+                } catch (err) {
+                        alert("Error downloading file.");
+                } finally {
+                        e.target.innerText = orig;
+                }
+        }}>⬇️ Download</button>
+                                </insetu-card>
                         `)}
                     </insetu-category-section>
                 `)}
@@ -234,6 +164,23 @@ constructor() {
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
+
+export class InSetuFileActions extends LitElement {
+    static properties = { filepath: { type: String }, repoDir: { type: String }, isFS: { type: Boolean } };
+    createRenderRoot() { return this; } // Render in light DOM so slots naturally project into the parent asset card
+    updated() {
+        this.replaceChildren();
+        if (window.ExtensionRegistry?.executeUIHook) {
+            window.ExtensionRegistry.executeUIHook('zone:file-card-actions', {
+                filepath: this.filepath,
+                repoDir: this.repoDir,
+                isFS: this.isFS,
+                actionsContainer: this
+            });
+        }
+    }
+}
+customElements.define('insetu-file-actions', InSetuFileActions);
 document.addEventListener('DOMContentLoaded', () => {
     window.ExtensionRegistry.registerExtension('gather', {
         name: "Context Gatherer",
@@ -252,9 +199,6 @@ document.addEventListener('DOMContentLoaded', () => {
             'zone:subtab-changed': (data) => {
                 if (data.parentId === 'context' && data.subId === 'gather') {
                     const container = document.getElementById('sub-gather');
-                    if (container && !container.querySelector('insetu-ext-gather')) {
-                        container.innerHTML = '<insetu-ext-gather></insetu-ext-gather>';
-                    }
                     const litEl = container?.querySelector('insetu-ext-gather');
                     if (litEl && data.forceRefresh) litEl.loadContext();
                 }

@@ -12,6 +12,7 @@ import './ui.js';
 import './components/ui_file_tree.js';
 import './components/ui_folder_browser.js';
 import './components/ui_modal.js';
+import './components/ui_filter_pills.js';
 import './gather.js';
 
 function getFlattenedBuckets(repoDir, includeSystem = false) {
@@ -75,158 +76,7 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-
 export let mdeInstance = null;
-// --- EXTENSION REGISTRY ---
-window.inSetu.extensions.Registry = {
-    _manifests: new Map(), // Stores declarative schemas
-    uiHooks: {},
-    shortcuts: {},
-    utils: {
-        _timers: {},
-        debounce: function(key, callback, delay = 300) {
-            window.clearTimeout(this._timers[key]); // utils.debounce internal reset
-            this._timers[key] = setTimeout(callback, delay);
-        },
-        debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
-            this.debounce(`verify_${filepath}`, async () => {
-                try {
-                    const res = await fetch(`/api/${workspaceId}/fs/exists?file=` + encodeURIComponent(filepath));
-                    if (res.ok) {
-                        const data = await res.json();
-                        callback(data.exists, filepath);
-                    }
-                } catch(e) {
-                    console.warn("Silent verify failed", e);
-                }
-            }, delay);
-        }
-    },
-    registerShortcut: function(context, keyCombo, callback) {
-        if (!this.shortcuts[context]) this.shortcuts[context] = {};
-        this.shortcuts[context][keyCombo.toLowerCase()] = callback;
-    },
-    registerUIHook: function(zone, callback) {
-        if (!this.uiHooks[zone]) this.uiHooks[zone] = [];
-        this.uiHooks[zone].push(callback);
-    },
-    registerExtension: function(extName, config) {
-        this._manifests.set(extName, config);
-
-        // 1. Register Scoped UI Hooks declaratively
-        if (config.uiHooks) {
-            Object.entries(config.uiHooks).forEach(([zone, callback]) => {
-                this.registerUIHook(zone, callback);
-            });
-        }
-
-        // 2. Hybrid Translation: Map declarative slots to legacy DOM injectors
-        if (config.layoutSlots) {
-            const sortedSlots = [...config.layoutSlots].sort((a, b) => (a.order || 99) - (b.order || 99));
-            sortedSlots.forEach(slotDef => {
-                if (slotDef.slot === 'slots:primary-navigation') {
-                    this.registerTab(slotDef.id, slotDef.label, extName);
-                } else if (slotDef.slot === 'slots:sub-navigation') {
-                    this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName);
-                }
-            });
-        }
-
-        // 3. Declarative Settings Actions
-        if (config.settingsActions) {
-            config.settingsActions.forEach(act => {
-                this.registerSettingsAction(act.id, act.label, act.icon, act.onClick);
-            });
-        }
-
-        console.log(`📦 Registered Declarative Extension: ${extName} v${config.version || '1.0'}`);
-    },
-    executeUIHook: function(zone, data) {
-        if (this.uiHooks[zone]) {
-            for (let cb of this.uiHooks[zone]) {
-                const res = cb(data);
-                if (res) return res;
-            }
-        }
-        return null;
-    },
-    registerSettingsAction: (id, label, icon, callback) => {
-        const container = document.getElementById('settings-modal-links');
-        if (!container) return;
-        const btn = document.createElement('button');
-        btn.className = 'btn-sm';
-        btn.style.cssText = 'background: var(--input-bg); color: var(--text); border: 1px solid var(--border); text-align: left; padding: 10px 15px; font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 10px; font-weight: bold; transition: background 0.2s;';
-        btn.innerHTML = `<span style="font-size: 1.2rem;">${icon}</span> <span>${label}</span>`;
-        btn.onmouseover = () => btn.style.background = 'var(--bg)';
-        btn.onmouseout = () => btn.style.background = 'var(--input-bg)';
-        btn.onclick = () => {
-            document.getElementById('settings-modal').style.display = 'none';
-            callback();
-        };
-        container.appendChild(btn);
-    },
-    registerTab: (id, label, extName = null) => {
-        const container = document.getElementById('main-tabs-container');
-        if (!container) return null;
-
-        const tab = document.createElement('div');
-        tab.className = 'tab';
-        tab.dataset.id = id;
-        if (extName) tab.dataset.ext = extName;
-        tab.onclick = (e) => switchTab(e, id);
-        tab.innerText = label;
-        container.appendChild(tab);
-
-        // Dynamically reorder the DOM nodes to respect visual preferences over DAG boot order
-        const { tabOrder } = AppStore.getState();
-        if (tabOrder && tabOrder.length > 0) {
-            const tabs = Array.from(container.children);
-            tabs.sort((a, b) => {
-                // Safely extract the ID even for hardcoded index.html tabs via their onclick attribute
-                const idA = a.dataset.id || (a.getAttribute('onclick') || '').match(/'([^']+)'/)?.[1] || '';
-                const idB = b.dataset.id || (b.getAttribute('onclick') || '').match(/'([^']+)'/)?.[1] || '';
-
-                let iA = tabOrder.indexOf(idA);
-                let iB = tabOrder.indexOf(idB);
-                if (iA === -1) iA = 999;
-                if (iB === -1) iB = 999;
-                return iA - iB;
-            });
-            tabs.forEach(t => container.appendChild(t));
-        }
-        const content = document.createElement('div');
-        content.id = 'tab-' + id;
-        content.className = 'tab-content';
-        content.innerHTML = `<div class="screen active" id="screen-${id}"></div>`;
-        document.body.insertBefore(content, document.getElementById('file-modal'));
-        return content.querySelector('.screen');
-    },
-    registerSubTab: (parentId, id, label, extName = null) => {
-        const parentTab = document.getElementById('tab-' + parentId);
-        if (!parentTab) return null;
-
-        const subTabContainer = parentTab.querySelector('.sub-tabs');
-        if (subTabContainer) {
-            const st = document.createElement('div');
-            st.className = 'sub-tab';
-            st.id = 'st-' + id;
-            if (extName) st.dataset.ext = extName;
-            st.onclick = () => switchSubTab(id);
-            st.innerText = label;
-            subTabContainer.appendChild(st);
-        }
-
-        const screen = parentTab.querySelector('.screen');
-        if (!screen) return null;
-        const subContent = document.createElement('div');
-        subContent.id = 'sub-' + id;
-        subContent.className = 'sub-tab-content';
-        screen.appendChild(subContent);
-        return subContent;
-    }
-};
-window.ExtensionRegistry = window.inSetu.extensions.Registry; // Legacy alias
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 window.addEventListener('keydown', (e) => {
@@ -391,36 +241,6 @@ async function bootExtensions() {
         }
     }
 }
-// --- EXTENSION LIFECYCLE REGISTRY & TEARDOWN ENGINE ---
-if (!window.ExtensionRegistry) window.ExtensionRegistry = {};
-window.ExtensionRegistry._unloadHooks = new Map();
-window.ExtensionRegistry._ticks = new Map();
-
-window.ExtensionRegistry.registerUnloadHook = function(extName, callback) {
-    this._unloadHooks.set(extName, callback);
-};
-
-window.ExtensionRegistry.registerTick = function(extName, intervalMs, callback) {
-    if (!this._ticks.has(extName)) this._ticks.set(extName, []);
-    this._ticks.get(extName).push({ interval: intervalMs, lastRun: Date.now(), cb: callback });
-};
-
-window.ExtensionRegistry.executeUnload = function(extName) {
-    // 1. Execute custom teardown logic
-    if (this._unloadHooks.has(extName)) {
-        try {
-            this._unloadHooks.get(extName)();
-        } catch (e) {
-            console.error(`Error unloading extension [${extName}]:`, e);
-        }
-        this._unloadHooks.delete(extName);
-    }
-
-    // 2. Instantly garbage collect all polling loops for this extension
-    if (this._ticks.has(extName)) {
-        this._ticks.delete(extName);
-    }
-};
 // --- THE CENTRALIZED FRONTEND METRONOME ---
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
 
@@ -687,14 +507,13 @@ function switchTab(event, tabId) {
         }
         return; // Break standard initialization to avoid double-firing
     }
-
     // Restore the last active sub-tab for this view statelessly
     const savedSub = localStorage.getItem('insetu_subtab_' + tabId);
     if (savedSub && document.getElementById('st-' + savedSub)) {
-        switchSubTab(savedSub);
+        switchSubTab(savedSub, false, true);
     } else if (targetContent) {
         const firstSub = targetContent.querySelector('.sub-tab');
-        if (firstSub) switchSubTab(firstSub.id.replace('st-', ''));
+        if (firstSub) switchSubTab(firstSub.id.replace('st-', ''), false, true);
     }
 
     if (tabId === 'context') {
@@ -709,48 +528,37 @@ function switchTab(event, tabId) {
         window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
     }
 }
-
-function switchSubTab(subId, forceRefresh = false) {
+function switchSubTab(subId, forceRefresh = false, isProgrammatic = false) {
     const activeTabContent = document.querySelector('.tab-content.active');
     if (!activeTabContent) return;
-
     const targetSt = document.getElementById('st-' + subId);
     const isAlreadyActive = targetSt && targetSt.classList.contains('active');
-    const actualForceRefresh = forceRefresh || (isAlreadyActive && !forceRefresh);
+
+    // Prevent programmatic tab hydration from violently triggering a full system compile
+    const actualForceRefresh = forceRefresh || (isAlreadyActive && !forceRefresh && !isProgrammatic);
 
     activeTabContent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
     activeTabContent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
     const parentTabId = activeTabContent.id.replace('tab-', '');
     localStorage.setItem('insetu_subtab_' + parentTabId, subId);
-
     if (targetSt) targetSt.classList.add('active');
     const targetSub = document.getElementById('sub-' + subId);
     if (targetSub) targetSub.classList.add('active');
 
+    // Declarative Layout Slot Management: Update visibility states for registered sub-navigation actions
+    const actionsContainer = activeTabContent.querySelector('.sub-tabs-actions');
+    if (actionsContainer) {
+        Array.from(actionsContainer.children).forEach(act => {
+            act.style.display = act.dataset.subId === subId ? '' : 'none';
+        });
+    }
+
     if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
         window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId, forceRefresh: actualForceRefresh });
     }
-    if (actualForceRefresh) {
-        if (subId === 'gather') {
-            const gatherEl = document.querySelector('insetu-ext-gather');
-            if (gatherEl) gatherEl.loadContext();
-        } else if (subId === 'files') {
-            loadGlobalFS();
-        }
-    } else {
-        if (subId === 'files') loadGlobalFS();
+    if (subId === 'files') {
+        loadGlobalFS();
     }
-    const pasteBtn = document.getElementById('btn-paste');
-
-    // Bridge UI Hardening: Guarantee Paste button visibility using computed styles
-    const consoleArea = document.getElementById('bridge-console-area');
-    const isConsoleActive = consoleArea && window.getComputedStyle(consoleArea).display !== 'none';
-    if (pasteBtn) {
-        pasteBtn.style.display = (subId === 'bridge' && !isConsoleActive) ? 'block' : 'none';
-    }
-
-    const fsMoreBtn = document.getElementById('btn-fs-more');
-    if (fsMoreBtn) fsMoreBtn.style.display = (subId === 'files') ? 'block' : 'none';
 }
 let lastRefreshed = null;
 
@@ -881,7 +689,69 @@ export async function executeWorkspaceMutation(url, payload, options = {}) {
         }
     }
 }
-export const compileContexts = () => { if (window.compileContexts) return window.compileContexts(); return Promise.resolve(); };
+let compilePromise = null;
+let compilePromiseWs = null;
+
+export const executeSystemCompile = (onProgress = null) => {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
+
+    compilePromiseWs = activeWs;
+    compilePromise = (async () => {
+        try {
+            const response = await fetch('/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+
+            const contentType = response.headers.get('Content-Type');
+            if (contentType && contentType.includes('application/json')) {
+                return await response.json();
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+
+            let result = null;
+            let buffer = '';
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); 
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    const data = JSON.parse(line);
+                    if (data.status === 'progress') {
+                        setGlobalStatus(`⏳ ${data.message}`, null);
+                        if (onProgress) onProgress(data.message);
+                    } else {
+                        result = data;
+                    }
+                }
+            }
+
+            // OS-Level Hydration: Automatically update global manifest on success
+            if (result && result.status !== 'error') {
+                const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+                if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+            }
+
+            setGlobalStatus("✅ Sync Complete", 2000);
+            return result;
+        } catch (error) {
+            throw error;
+        } finally {
+            compilePromise = null;
+        }
+    })();
+    return compilePromise;
+};
+window.executeSystemCompile = executeSystemCompile;
+window.compileContexts = executeSystemCompile; // Legacy bridge alias
 
 export const setContextManifest = (m) => { AppStore.setState({ manifest: m }); };
 async function simulatePanic() {
@@ -943,7 +813,7 @@ async function performSoftRefresh() {
             document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext]').forEach(tabEl => {
                 const extName = tabEl.dataset.ext;
                 const tabId = tabEl.dataset.id || tabEl.id.replace('st-', '');
-                const isActive = window.ACTIVE_EXTENSIONS.includes(extName);
+                const isActive = ['bridge', 'gather'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
 
                 tabEl.style.display = isActive ? '' : 'none';
 
@@ -956,12 +826,9 @@ async function performSoftRefresh() {
                 }
             });
         }
-
         // 3. Compile context & physical file trees for the new tenant
-        await compileContexts();
+        await executeSystemCompile();
         const currentWsSafe = AppStore.getState().activeWorkspace || 'default';
-        const mRes = await fetch(`/api/${currentWsSafe}/manifest?t=` + Date.now());
-        if (mRes.ok) setContextManifest(await mRes.json());
 
         // 4. Hydrate active DOM views using native routing
 let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
@@ -1082,12 +949,10 @@ export async function fetchAndDownloadState(filePath, btnElement) {
         // Lazy Hydration: Attempt to fetch existing manifest first to prevent N+1 compiler thrashing
         let mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
-
         // Only compile context if the manifest is genuinely empty (e.g., first daemon boot)
         if (Object.keys(manifestData).length === 0) {
-            await compileContexts();
-            mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-            if (mRes.ok) manifestData = await mRes.json();
+            await executeSystemCompile();
+            manifestData = AppStore.getState().manifest;
         }
 
         if (mRes.ok) {

@@ -71,6 +71,7 @@ insetu/
 │   │   │   ├── bridge.js           # [Sync Bridge Payload UI]
 │   │   │   ├── components/         # [comment required]
 │   │   │   │   ├── ui_file_tree.js # [comment required]
+│   │   │   │   ├── ui_filter_pills.js # [comment required]
 │   │   │   │   ├── ui_folder_browser.js # [comment required]
 │   │   │   │   └── ui_modal.js     # [comment required]
 │   │   │   ├── extensions/         # [comment required]

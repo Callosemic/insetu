@@ -224,8 +224,10 @@ border-top: 1px solid var(--border, #444);
                     <slot></slot>
                 </div>
                 <div class="trigger-bar" 
-                    @pointerenter=${(e) => { if (e.pointerType === 'mouse') this._openOverlay(); }}
-                    @click=${(e) => { e.stopPropagation(); if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false; }}>
+                    @pointerenter=${(e) => { if (e.pointerType === 'mouse') this._openOverlay();
+                    }}
+                    @click=${(e) => { e.stopPropagation();
+if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false; }}>
                     <span class="trigger-icon">‹</span>
                 </div>
                 <div class="action-overlay ${this._overlayActive ? 'active' : ''} ${this.overlayExcludesTitle ? 'exclude-title' : ''}"

@@ -162,7 +162,9 @@ export const UIFactory = {
             return this.createFilterPill({
                 id: id, label: text, activeSet: activeRepos, isVisible,
                 onChange: (newSet, changedId, wasActive) => {
-                    if (wasActive && !reposExpanded) {
+                    if (wasActive && changedId === "ALL") {
+                        if (onRepoExpandToggle) onRepoExpandToggle();
+                    } else if (wasActive && !reposExpanded) {
                         if (onRepoExpandToggle) onRepoExpandToggle();
                     } else {
                         if (onRepoChange) onRepoChange(newSet);
