@@ -75,6 +75,7 @@ Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSl
 | Module | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
 | `fs` | Virtual File System | **Migrated** | `<insetu-vfs-explorer>` |
+| `config` | Workspace Settings | **Migrated (Native LitElement)** | `<insetu-ext-config>` |
 
 ### Extensions
 | Extension ID | Domain Role | Migration Status | Target Component Architecture |
@@ -83,11 +84,39 @@ Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSl
 | `prompts` | Prompt Library | **Migrated (Native LitElement)** | `<insetu-ext-prompts>` |
 | `gather` | Context Gatherer | **Migrated (Native LitElement)** | `<insetu-ext-gather>` | 
 | `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` | 
-| `git` | Version Control | **In Progress (Actions Migrated)** | `<insetu-ext-git>` | 
+| `git` | Version Control | **Migrated (Native LitElement)** | `<insetu-ext-git-diffs>` | 
 | `tracker` | Kanban Board | **Migrated (Native LitElement)** | `<insetu-ext-tracker>` |
 | `research` | Triage Inbox | **Migrated (Native LitElement)** | `<insetu-ext-research>` |
+| `favorites` | Favorites Bar | **Migrated (Native LitElement)** | `<insetu-ext-favorites>` |
+| `skills` | Skills Tracker | **Migrated (Native LitElement)** | `<insetu-ext-skills>` |
 | `citations` | Reference Manager | Pending | `<insetu-ext-citations>` |
 | `format` | Document Compilation | Pending | `<insetu-ext-format>` |
 | `ingest` | URL Ingestion | Pending | `<insetu-ext-ingest>` |
-| `config` | Workspace Settings | **Migrated (Native LitElement)** | `<insetu-ext-config>` |
 | `term` | Terminal Canvas | Pending | `<insetu-ext-term>` |
+
+## 9. Architectural Audit (2026-07-08)
+
+A retroactive audit against the Component Graduation Checklist revealed that several components marked as "Migrated" still harbor legacy imperative technical debt.
+
+### 🏆 The Gold Standard (100% Compliant)
+* **`ext_prompts.js`** (`<insetu-ext-prompts>`): Spotless. Pure Lit templates, clean teardown, pure Zustand state.
+* **`ext_gather.js`** (`<insetu-ext-gather>`): Passes all checks. Search inputs are safely bound to reactive class properties.
+* **`ext_favorites.js`** (`<insetu-ext-favorites>`): Flawless execution. No host contamination, proper memory sweeping.
+
+### ⚠️ The Minor Offenders (Mostly Compliant, Some Debt)
+* **`config.js`** (`<insetu-workspace-editor>`):
+    * **Violation (DOM Reading):** Imperatively reads the DOM (`this.shadowRoot.querySelector('#new-ws-id')`) instead of using data-binding (`@input`).
+* **`ext_research.js`** (`<insetu-ext-research>`):
+    * **Violation (Host Contamination):** Reaches outside its Shadow DOM to forcefully inject a back button into the OS skeleton (`document.querySelector('#tab-edit .sub-tabs-bar > div:last-child')`).
+    * **Violation (DOM Reading):** Manually scrapes the JSON textarea (`this.shadowRoot.getElementById('rs-ai-json-input')`).
+* **`fs.js`** (`<insetu-vfs-explorer>`):
+    * **Violation (Host Contamination):** Reaches out to the global document to toggle a button (`document.getElementById('btn-fs-more')`).
+### 🚨 The Major Offenders (Failing the Audit)
+* **`ext_git.js`** (`<insetu-ext-git-diffs>`):
+    * **Violation (Shadow DOM Bypass):** Explicitly breaks encapsulation (`createRenderRoot() { return this; }`). This bypasses encapsulated Unidirectional Data Flow specifically to allow the legacy `generateDiffs` method to continue imperatively scraping `document.getElementById('diff-loading')`.
+    * **Violation (DOM Annihilation):** Imperatively wipes the container (`results.replaceChildren()`).
+    * **Violation (DOM Reading):** Relies entirely on `document.getElementById('diff-results')` to manipulate the DOM.
+    * **Verdict:** This is a legacy imperative script wearing a LitElement trench coat.
+
+* **`engine_skills.py`** (Backend Extension):
+    * **Violation (VFS Bypass):** Despite importing `execute_vfs_save`, the engine executes unguarded, synchronous native Python file writes (`with open(abs_path, 'w', encoding='utf-8') as f: f.write(...)`). This completely bypasses the asynchronous background commit queue, violating both ADR 0004 and ADR 0010.

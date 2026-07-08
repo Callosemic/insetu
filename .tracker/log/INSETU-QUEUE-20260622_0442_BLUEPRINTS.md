@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INSETU-QUEUE-20260622_0442_BLUEPRINTS
 title: "Backend Maintainability: Modularize Flask App with Blueprints"
 created_at: 2026-06-22T04:42:00

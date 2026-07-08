@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INSETU-BUG-20260701_0150_ROUTES_FS_TENANT_LEAK
 title: "Multi-Tenant Leakage & Path Hardcoding in routes_fs.py"
 created_at: 2026-07-01T01:50:00

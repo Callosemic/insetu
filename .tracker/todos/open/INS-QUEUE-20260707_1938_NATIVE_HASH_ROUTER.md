@@ -1,12 +1,13 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260707_1938_NATIVE_HASH_ROUTER
 title: "Zero-Bundler SPA Router (Native Hash Routing) for Virtual Pathing"
 created_at: 2026-07-07T19:38:26
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-07-26"
 tags: [Architecture, Frontend, Routing, UX]
 ---
 

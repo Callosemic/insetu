@@ -1,12 +1,13 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260703_1200_DOCKER_ENVIRONMENT
 title: "Infrastructure: Scaffold Multi-Tenant Docker Environment for Cross-Platform Dependency Parity"
 created_at: 2026-07-03T12:00:00
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-09-06"
 tags: ["Infrastructure", "Deployment", "Standardization"]
 ---
 

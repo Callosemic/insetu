@@ -63,7 +63,19 @@ These are fully built and compliant extensions currently operating within the sy
 * **Status:** Active Extensions.
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
 
-### G. Terminal Interface (`engine_term.py`)
+### G. Favorites (`engine_favorites.py`)
+* **Status:** Active Extension.
+* **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `~/.insetu/data/favorites.db`
+
+### H. Skills Tracker (`engine_skills.py`)
+* **Status:** Active Extension.
+* **Role:** Spaced repetition and track logging using the SM-2 algorithm.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
+
+### I. Terminal Interface (`engine_term.py`)
 * **Status:** Active (UI-Only Scaffold).
 * **Role:** Manages the isolated `ttyd` interactive terminal canvas.
 * **Dependencies (`__depends__`):** `None`
@@ -97,6 +109,8 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `tracker` | `<Micro-Kernel>` | None (Currently) |
 | `git` | `<Micro-Kernel>` | `release` |
 | `release` | `git` | None |
+| `favorites` | `<Micro-Kernel>` | None (Currently) |
+| `skills` | `<Micro-Kernel>` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
 > For **Soft Dependencies** (opportunistic cross-talk, such as the `git` extension asking the `tracker` extension for recent tickets to populate a UI), extensions MUST use the Event Bus. This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing.

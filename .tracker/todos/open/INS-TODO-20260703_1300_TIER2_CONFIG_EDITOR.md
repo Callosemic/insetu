@@ -7,6 +7,7 @@ title: "Feature: Upgrade Config Editor for Tier 2 Global Settings and Secure Cre
 created_at: 2026-07-03T13:00:00
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-08-09"
 tags: ["Frontend", "Config-Editor", "Security", "Feature"]
 ---
 

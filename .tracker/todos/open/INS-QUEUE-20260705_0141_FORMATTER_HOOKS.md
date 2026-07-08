@@ -1,12 +1,13 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260705_0141_FORMATTER_HOOKS
 title: "Evaluate Exposing JS Formatter as Pre-Commit Hook or File Browser Action"
 created_at: 2026-07-05T01:41:52
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-07-26"
 tags: ["Tooling", "Formatting", "UX"]
 ---
 
