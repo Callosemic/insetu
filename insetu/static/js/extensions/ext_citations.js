@@ -46,36 +46,6 @@ window.CitationStore = CitationStore; // Legacy alias
 const libraryScreen = window.inSetu.extensions.Registry.registerTab('library', 'Library', 'citations');
 if (libraryScreen) {
     libraryScreen.innerHTML = `
-        <style>
-            .cit-card-wrapper {
-                display: flex;
-                flex-direction: column;
-                position: relative;
-            }
-            .cit-card-actions {
-                order: 2;
-                margin-top: 12px;
-                padding-top: 12px;
-                border-top: 1px solid var(--border);
-                display: flex;
-                gap: 6px;
-                justify-content: flex-end;
-                flex-wrap: wrap;
-            }
-            @media (min-width: 768px) {
-                .cit-card-actions {
-                    position: absolute;
-                    top: 10px;
-                    right: 10px;
-                    margin-top: 0;
-                    padding-top: 0;
-                    border-top: none;
-                }
-                .cit-title-push {
-                    padding-right: 230px; /* Prevent title from sliding under buttons on desktop */
-                }
-            }
-        </style>
         <div class="sub-tabs-bar">
             <div class="sub-tabs">
                 <div class="sub-tab active" id="st-lib-main" onclick="switchSubTab('lib-main')">Main</div>
@@ -1128,28 +1098,28 @@ if (match) {
     })();
 
     citationsMap[finalPrettyId] = citation.id;
-
     const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(citationsMap).map(k => `  ${k}: "${citationsMap[k]}"\n`).join('') + "---";
+
     const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
     const linkText = `[@${finalPrettyId}]`;
+
+    // 1. Update the hidden background text payload to reflect the new backmatter
     if (isMDE) {
         const cm = mdeInstance.codemirror;
         const cursor = cm.getCursor();
         cm.setValue(updatedText);
         cm.setCursor(cursor);
-        cm.replaceSelection(linkText);
-        cm.focus();
     } else if (textArea) {
-        const start = textArea.selectionStart;
-        const end = textArea.selectionEnd;
-        textArea.value = updatedText.substring(0, start) + linkText + updatedText.substring(end);
-        textArea.selectionStart = textArea.selectionEnd = start + linkText.length;
-        textArea.focus();
-        textArea.dispatchEvent(new Event('input'));
+        textArea.value = updatedText;
     }
 
-        window.inSetu.ui.Factory.closeModal('citation-insert-modal');
-        if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
+    // 2. Drop the tag exactly at the active cursor
+    if (window.insertTextAtCursor) {
+        window.insertTextAtCursor(linkText);
+    }
+
+    window.inSetu.ui.Factory.closeModal('citation-insert-modal');
+    if (currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
 }
 export async function syncDocumentCitations() {
     const mdeWrap = document.querySelector('.EasyMDEContainer');

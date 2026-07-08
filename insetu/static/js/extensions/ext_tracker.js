@@ -329,30 +329,23 @@ if (containerId) targetLists[containerId].push(t);
     });
 }
 function createTaskCard(task, container) {
-    const card = document.createElement('div');
-    card.className = 'file-card';
+    const card = document.createElement('insetu-card');
     card.dataset.taskId = task.id;
-    card.style.marginBottom = '10px';
-    const header = document.createElement('div');
-    header.className = 'file-card-header';
-    const titleLink = document.createElement('a');
-    titleLink.className = `file-title ${task.isBug ? 'task-bug' : task.isQueue ? 'task-queue' : 'task-todo'}`;
-    titleLink.innerText = task.title;
-    titleLink.style.cursor = 'pointer';
-    titleLink.style.textDecoration = 'none';
-    titleLink.onclick = (e) => {
-        e.preventDefault();
-        viewSourceFile(task.filepath, true);
-    };
-    header.appendChild(titleLink);
-    const desc = document.createElement('div');
-    desc.className = 'file-desc';
-    desc.style.fontSize = '0.75rem';
+    card.filename = task.filepath;
+    card.titleText = task.title;
+    card.overlayExcludesTitle = true;
+
+    if (task.isBug) card.intentColor = 'var(--intent-danger)';
+    else if (task.isQueue) card.intentColor = 'var(--intent-highlight)';
+    else card.intentColor = 'var(--intent-success)';
+
+    card.icon = task.isBug ? '🐛' : task.isQueue ? '🔬' : '✨';
+
     const shortDate = task.timestamp ? task.timestamp.split('T')[0] : 'Unknown Date';
     const bucketStr = (task.subBucket && task.subBucket !== 'None') ? ` | 🗂️ ${task.subBucket}` : '';
     const statusStr = (task.status !== 'closed') ? ` | ${task.status.charAt(0).toUpperCase() + task.status.slice(1)}` : '';
-    const descText = `${task.repo}${bucketStr}${statusStr} | ${shortDate}`;
-    desc.innerText = descText;
+    card.descriptionText = `${task.repo}${bucketStr}${statusStr} | ${shortDate}`;
+
     if (task.tags && task.tags.length > 0) {
         const tagsDiv = document.createElement('div');
         tagsDiv.style.marginTop = '6px';
@@ -363,80 +356,65 @@ function createTaskCard(task, container) {
             const tagSpan = document.createElement('span');
             tagSpan.className = 'task-tag';
             tagSpan.innerText = `#${t}`;
-
             tagsDiv.appendChild(tagSpan);
         });
-        desc.appendChild(tagsDiv);
+        card.appendChild(tagsDiv);
     }
-    const actions = document.createElement('div');
-    actions.className = 'file-actions';
-    actions.style.marginTop = '10px';
-    actions.style.display = 'grid';
-    actions.style.gridTemplateColumns = 'repeat(3, 1fr)';
-    actions.style.gap = '5px';
 
-    // 1. Start / Accept Button (Left)
+    card.addEventListener('card-clicked', () => {
+        viewSourceFile(task.filepath, true);
+    });
+
+    // 1. Start / Accept Button
     const startBtn = document.createElement('button');
     startBtn.className = 'btn-sm';
-    startBtn.style.gridColumn = '1';
-    startBtn.style.margin = '0';
-    startBtn.style.width = '100%';
+    startBtn.slot = 'actions';
     if (task.status === 'open' && !task.isQueue) {
         startBtn.innerText = '▶️ Start';
         startBtn.style.background = 'var(--intent-warning)';
-        startBtn.onclick = () => transitionTask(task, 'active');
+        startBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'active'); };
+        card.appendChild(startBtn);
     } else if (task.status === 'closed') {
         startBtn.innerText = '🔄 Re-open';
         startBtn.style.background = 'var(--intent-highlight)';
-        startBtn.onclick = () => transitionTask(task, 'open');
+        startBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'open'); };
+        card.appendChild(startBtn);
     } else if (task.status !== 'closed' && task.isQueue) {
         startBtn.innerText = '✅ Accept';
         startBtn.style.background = 'var(--intent-success)';
-        startBtn.onclick = () => transitionTask(task, 'open', 'todo');
-    } else {
-        startBtn.style.visibility = 'hidden';
+        startBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'open', 'todo'); };
+        card.appendChild(startBtn);
     }
-    actions.appendChild(startBtn);
 
-    // 2. Pause Button (Middle)
+    // 2. Pause Button
     const pauseBtn = document.createElement('button');
     pauseBtn.className = 'btn-sm';
     pauseBtn.innerText = '⏸️ Pause';
-    pauseBtn.style.gridColumn = '2';
-    pauseBtn.style.margin = '0';
-    pauseBtn.style.width = '100%';
+    pauseBtn.slot = 'actions';
     if (task.status === 'active' && !task.isQueue) {
         pauseBtn.style.background = 'var(--intent-neutral)';
-        pauseBtn.onclick = () => transitionTask(task, 'open');
-    } else {
-        pauseBtn.style.visibility = 'hidden';
+        pauseBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'open'); };
+        card.appendChild(pauseBtn);
     }
-    actions.appendChild(pauseBtn);
 
-    // 3. Close/Resolve Button (Right)
+    // 3. Close/Resolve Button
     const closeBtn = document.createElement('button');
     closeBtn.className = 'btn-sm';
-    closeBtn.style.gridColumn = '3';
-    closeBtn.style.margin = '0';
-    closeBtn.style.width = '100%';
+    closeBtn.slot = 'actions';
     if (task.status !== 'closed' && task.status !== 'archived') {
         if (task.isQueue) {
             closeBtn.innerText = '✅ Resolve';
             closeBtn.style.background = 'var(--intent-neutral)';
-            closeBtn.onclick = () => transitionTask(task, 'closed');
+            closeBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'closed'); };
+            card.appendChild(closeBtn);
         } else {
             closeBtn.innerText = '✅ Close';
             closeBtn.style.background = 'var(--intent-success)';
-            closeBtn.onclick = () => transitionTask(task, 'closed');
+            closeBtn.onclick = (e) => { e.stopPropagation(); transitionTask(task, 'closed'); };
+            card.appendChild(closeBtn);
         }
-    } else {
-        closeBtn.style.visibility = 'hidden';
     }
-    actions.appendChild(closeBtn);
 
-    card.appendChild(header);
-    card.appendChild(desc);
-    card.appendChild(actions);
     container.appendChild(card);
 }
 async function transitionTask(task, newStatus, newType = null) {
@@ -850,11 +828,10 @@ KanbanStore.subscribe((state) => state.bucketsExpanded, renderAll);
 KanbanStore.subscribe((state) => state.tagsExpanded, renderAll);
 // Zustand doesn't fire an initial blast, trigger manually once
 setTimeout(renderAll, 100);
-
 // --- TRACKER SETTINGS CONFIGURATION ---
 async function openTrackerConfigModal() {
     try {
-        const res = await fetch('/api/system/config');
+        const res = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) throw new Error("Failed to fetch config");
         const config = await res.json();
 const trackerCfg = (config.extension_config && config.extension_config.tracker) ? config.extension_config.tracker : {};

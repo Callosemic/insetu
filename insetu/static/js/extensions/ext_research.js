@@ -111,10 +111,8 @@ onchange="window.inSetu.stores.Research.getState().setSearchForm('parser', event
                     </div>
                     <button id="rs-start-btn" class="btn-sm" style="background: var(--intent-highlight); width: 100%; margin: 0; padding: 10px; font-weight: bold;">🚀 Start Scraping</button>
                 </div>
-
                 <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 10px;">
                     <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
-                    <button id="rs-refresh-btn" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; padding: 2px 8px;">🔄 Refresh</button>
                 </div>
                 <div id="rs-jobs-list" style="display: flex; flex-direction: column; gap: 10px;"></div>
             </div>
@@ -457,9 +455,7 @@ if (!input) return;
         actionContainer.prepend(backBtn);
     }
     // Observer replaced by pure UDF zone:subtab-changed UI Hook
-
     document.getElementById('rs-start-btn').onclick = startJob;
-    document.getElementById('rs-refresh-btn').onclick = fetchState;
     document.getElementById('rs-date-range').addEventListener('change', (e) => {
         document.getElementById('rs-custom-dates').style.display = e.target.value === 'custom' ? 'flex' : 'none';
         document.getElementById('rs-custom-years').style.display = e.target.value === 'custom_year' ? 'flex' : 'none';
@@ -923,6 +919,7 @@ type="button" onclick="if(window.openFolderBrowser) window.openFolderBrowser((p)
         window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
             if (data.parentId === 'edit') {
                 ResearchStore.setState({ isTabActive: data.subId === 'research' });
+                if (data.subId === 'research' && data.forceRefresh) fetchState();
             }
         });
     }

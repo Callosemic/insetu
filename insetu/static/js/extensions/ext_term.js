@@ -14,15 +14,13 @@ if (termScreen) {
     // 2. Inject the sub-tabs-bar to match the global layout
     const subTabBar = document.createElement('div');
     subTabBar.className = 'sub-tabs-bar';
-    subTabBar.innerHTML = `
+subTabBar.innerHTML = `
         <div class="sub-tabs">
             <div class="sub-tab active">Console</div>
         </div>
-        <button class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 12px; margin: 0; font-size: 0.85rem;" onclick="document.getElementById('term-iframe').src += ''">🔄 Restart</button>
     `;
     termScreen.parentElement.insertBefore(subTabBar, termScreen);
-
-    // 3. Build the iframe target
+// 3. Build the iframe target
     termScreen.innerHTML = `
         <iframe id="term-iframe" style="flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px;"></iframe>
     `;
@@ -34,13 +32,22 @@ if (termScreen) {
             termIframe.src = window.location.protocol + '//' + window.location.hostname + ':' + d.term_port;
         }
     }).catch(e => console.error("Failed to fetch term port:", e));
-
     // 4. Force focus into the iframe when the tab is clicked to prevent ghost typing
-    const termTabBtn = document.querySelector('.tab[onclick*="term"]');
+        const termTabBtn = document.querySelector('.tab[onclick*="term"]');
     if (termTabBtn) {
-        termTabBtn.addEventListener('click', () => {
-            const iframe = document.getElementById('term-iframe');
-            if (iframe) iframe.focus();
+            termTabBtn.addEventListener('click', () => {
+                const iframe = document.getElementById('term-iframe');
+                if (iframe) iframe.focus();
+            });
+    }
+
+    // 5. Native tab-tap refresh support
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
+        window.inSetu.extensions.Registry.registerUIHook('zone:force-refresh', (tabId) => {
+            if (tabId === 'term') {
+                const iframe = document.getElementById('term-iframe');
+                if (iframe) iframe.src += '';
+            }
         });
     }
-}
+    }

@@ -344,8 +344,8 @@ if (diffsScreen) {
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
             <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
             <div style="display: flex; gap: 10px;">
-                <button id="btn-refresh-diffs" class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 12px; font-size: 0.9rem;" onclick="generateDiffs(true)">🔄 Refresh</button>
-                <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;" onclick="openSweepModal()">🧹 Sweep Remaining</button>
+                <button id="btn-sweep-remaining" class="btn-sm" style="background: var(--intent-warning); margin: 0; padding: 4px 12px; font-size: 0.9rem; display: none;"
+onclick="openSweepModal()">🧹 Sweep Remaining</button>
             </div>
         </div>
         <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
@@ -508,10 +508,9 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
 
     window.inSetu.extensions.Registry.registerUIHook('zone:post-file-save', markRepoDirty);
     window.inSetu.extensions.Registry.registerUIHook('zone:post-file-delete', markRepoDirty);
-
     window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
         if (data.parentId === 'context' && data.subId === 'diffs') {
-            generateDiffs();
+            generateDiffs(data.forceRefresh);
         }
         return false;
     });
