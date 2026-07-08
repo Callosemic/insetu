@@ -48,34 +48,46 @@ Failure to do so creates severe memory leaks and ghost updates during tenant hot
 * **Swallowed Exceptions in Components:** When tearing down fat controllers, ensure you verify `.bind(this)` calls in `connectedCallback()`.
 * **Swallowed Exceptions in Components:** When tearing down fat controllers, ensure you verify `.bind(this)` calls in `connectedCallback()`. A generic `try/catch` block handling a network request will eagerly swallow a `TypeError` (e.g., from calling a removed method), masking it as a network failure. Always `console.error` the raw exception.
 * **DOM-Driven Routing vs Stateless Routing:** Hardcoded `class="active"` attributes in the `index.html` skeleton will actively fight stateless `localStorage` routing during the boot sequence. `switchTab` must ignore the DOM on initial load to prevent violently overwriting the user's saved state.
-
+* **The Imperative Modal Trap (`ext_config.js`):** While `ext_config.js` maps its settings trigger declaratively, it falls back to using `UIFactory.createModal` inside the `onClick` handler. Graduated components must render `<insetu-modal>` natively within their own declarative `render()` functions.
+* **State Hydration Resilience (`ext_config.js`):** Components must subscribe to the `AppStore`'s `activeWorkspace`. Fetching configuration once during `connectedCallback()` fails to refresh the UI when a user hot-swaps tenants. 
+* **Stateless Routing Mandate (`index.html`):** Hardcoded DOM classes like `<div class="tab active" onclick="switchTab(event, 'edit')">` and `<div id="tab-edit" class="tab-content active">` physically fight against `localStorage` when the bootloader tries to hydrate the user's previously saved tab state. These must be stripped. 
+* **Contextual Action Slot Unification (`slots:sub-navigation-actions`):** Forcing components to scrape global stores or query class loops from the DOM to determine their active coordinates is a core anti-pattern . By introducing a dedicated sub-navigation actions container managed natively by the core layout engine, components remain isolated, context-aware presentation primitives reflecting state directly from their instance dataset attributes (`this.dataset.subId`) .
 ## 7. The Component Graduation Checklist (Compliance Guardrails)
 Before a component is considered fully compliant and "Graduated", the Architect must interrogate it against the following strict constraints:
-1. **Zero DOM Reading:** Are there *any* `document.getElementById` or `querySelector` calls attempting to read state from the UI? *(If yes, fail. Bind to Lit properties).*
+1. **Zero DOM Reading:** Are there *any* `document.getElementById` or `querySelector` calls attempting to read state from the UI?
+*(If yes, fail. Bind to Lit properties).*
 2. **Shadow DOM Encapsulation:** Does the component utilize native Shadow DOM with `sharedStyles` injected, completely isolating its structural footprint?
 3. **Teardown Hygiene:** Does the component clean up all Zustand store subscriptions (`this._unsub()`) and global `window` event listeners during `disconnectedCallback`?
-4. **Declarative Purity:** Is the extension completely stripped of self-executing imperative initialization code? Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSlots`?
+4. **Declarative Purity:** Is the extension completely stripped of self-executing imperative initialization code?
+Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSlots`?
 5. **DOM Annihilation Prevention:** Does the `render()` method utilize `lit-html` templates to surgically diff the UI, rather than falling back to `innerHTML` or `replaceChildren()`?
-
+6. **Subscription Memory Hygiene:** Are store unsubscriptions explicitly tracked, captured, and cleared during the component teardown cycle to prevent memory leaks and multi-tenant data contamination?
+7. **Zero Host Contamination:** Is the component styling completely self-contained within its Shadow DOM, ensuring it never pollutes or alters layout elements outside its boundaries?
 ## 8. Migration Tracker
 
+### Global OS Components (Primitives)
+| Component | Role | Migration Status | Notes |
+| :--- | :--- | :--- | :--- |
+| `<insetu-card>` | File/Item Presentation | **Migrated** | |
+| `<insetu-modal>` | Transient Dialogs | **Migrated** | |
+| `<insetu-filter-group>` | Universal Arrays | **Migrated** | Replaces imperative `UIFactory.createNestedRepoFilters`. |
 ### Core OS UI Domains
 | Module | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
-| `fs` | Virtual File System | **In Progress** | `<insetu-vfs-explorer>` |
-| `bridge` | Yomama Sync Bridge | Pending | `<insetu-sync-bridge>` |
+| `fs` | Virtual File System | **Migrated** | `<insetu-vfs-explorer>` |
 
 ### Extensions
 | Extension ID | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
+| `bridge` | Yomama Sync Bridge | **Migrated (Native LitElement)** | `<insetu-ext-bridge>` |
 | `prompts` | Prompt Library | **Migrated (Native LitElement)** | `<insetu-ext-prompts>` |
-| `gather` | Context Gatherer | **Migrated (Native LitElement)** | `<insetu-ext-gather>` |
-| `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` |
-| `git` | Version Control | Pending | `<insetu-ext-git>` |
-| `tracker` | Kanban Board | **In Progress (<insetu-card> adopted)** | `<insetu-ext-tracker>` |
-| `research` | Triage Inbox | Pending | `<insetu-ext-research>` |
+| `gather` | Context Gatherer | **Migrated (Native LitElement)** | `<insetu-ext-gather>` | 
+| `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` | 
+| `git` | Version Control | **In Progress (Actions Migrated)** | `<insetu-ext-git>` | 
+| `tracker` | Kanban Board | **Migrated (Native LitElement)** | `<insetu-ext-tracker>` |
+| `research` | Triage Inbox | **Migrated (Native LitElement)** | `<insetu-ext-research>` |
 | `citations` | Reference Manager | Pending | `<insetu-ext-citations>` |
 | `format` | Document Compilation | Pending | `<insetu-ext-format>` |
 | `ingest` | URL Ingestion | Pending | `<insetu-ext-ingest>` |
-| `config` | Workspace Settings | **Migrated (Declarative Schema)** | `<insetu-ext-config>` |
+| `config` | Workspace Settings | **Migrated (Native LitElement)** | `<insetu-ext-config>` |
 | `term` | Terminal Canvas | Pending | `<insetu-ext-term>` |
