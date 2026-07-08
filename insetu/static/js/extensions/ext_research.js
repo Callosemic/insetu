@@ -184,11 +184,10 @@ export class InSetuExtResearch extends LitElement {
     async handleDisposition(inboxId, status) {
         const item = this.inbox.find(i => i.id === inboxId);
         if (!item) return;
-
         if (status === 'accepted') {
             const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
             const slug = (() => {
-                const generated = item.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                const generated = window.generateSafeSlug(item.title);
                 return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
             })();
             const filepath = targetDir + slug + '.md';

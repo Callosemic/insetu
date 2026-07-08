@@ -81,7 +81,7 @@ export async function executeImportUrl(modalId = 'import-url-modal') {
             const nameEl = document.getElementById('new-file-name');
             if (nameEl.value.trim() === '') {
                 const slug = (() => {
-                    const titleBase = (data.title && data.title !== 'Imported Content') ? data.title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
+                    const titleBase = (data.title && data.title !== 'Imported Content') ? window.generateSafeSlug(data.title) : '';
                     const urlBase = (() => {
                         if (titleBase) return titleBase;
                         try {

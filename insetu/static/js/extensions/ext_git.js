@@ -334,20 +334,24 @@ export async function generateDiffs(force = false) {
     }
 }
 window.generateDiffs = generateDiffs;
-const diffsScreen = window.inSetu.extensions.Registry.registerSubTab('context', 'diffs', 'Diffs');
-if (diffsScreen) {
-    diffsScreen.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-            <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
-        </div>
-        <div id="diff-loading" class="spinner">Analyzing Git trees across sister repositories... please wait.</div>
-        <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
-            <p style="color: var(--text-muted); font-style: italic;">Diffs automatically map when this tab is opened.</p>
-        </div>
-    `;
-}
-
 import { LitElement, html, css } from 'lit';
+
+export class InSetuExtGitDiffs extends LitElement {
+    createRenderRoot() { return this; } // Render in Light DOM to maintain legacy ID bindings
+
+    render() {
+        return html`
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
+                <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
+            </div>
+            <div id="diff-loading" class="spinner" style="display: none;">Analyzing Git trees across sister repositories... please wait.</div>
+            <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
+                <p style="color: var(--text-muted); font-style: italic;">Diffs automatically map when this tab is opened.</p>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
 
 export class InSetuExtGitActions extends LitElement {
     static properties = { hasChanges: { type: Boolean } };
@@ -377,7 +381,29 @@ export class InSetuExtGitActions extends LitElement {
     render() { return html`<button @click=${this._openMenu}>☰</button>`; }
 }
 customElements.define('insetu-ext-git-actions', InSetuExtGitActions);
-window.ExtensionRegistry.registerSubTabAction('context', 'diffs', 'git', 'insetu-ext-git-actions', 1);
+
+window.ExtensionRegistry.registerExtension('git', {
+    name: "Version Control",
+    version: "2.0.0",
+    layoutSlots: [
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "context",
+            id: "diffs",
+            label: "Diffs",
+            order: 2,
+            component: "insetu-ext-git-diffs"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "context",
+            targetSub: "diffs",
+            component: "insetu-ext-git-actions",
+            order: 1
+        }
+    ]
+});
+
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
     window.inSetu.extensions.Registry.registerTick('git', 1000, async () => {
         const { activeSweepJobId, activePushJobId, activeDiffJobId } = AppStore.getState();

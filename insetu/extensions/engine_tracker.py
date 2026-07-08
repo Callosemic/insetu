@@ -5,7 +5,7 @@ import re
 import json
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-from insetu.utils_core import get_sister_repos, get_workspace_physics
+from insetu.utils_core import get_sister_repos, get_workspace_physics, sniff_tenant_id
 from insetu.hooks import hooks
 from insetu.db import get_connection
 
@@ -27,7 +27,6 @@ def init_tracker_db():
                 workspace_ids.append("default")
         except Exception:
             pass
-
     for ws_id in workspace_ids:
         conn = get_connection('tracker', workspace_id=ws_id)
         conn.execute("""
@@ -42,6 +41,7 @@ def init_tracker_db():
                 sub_bucket TEXT,
                 created_at TEXT,
                 closed_at TEXT,
+                delivery_date TEXT,
                 filepath TEXT
             )
         """)
@@ -76,7 +76,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
         closed_at = None
         sub_bucket = "None"
         tags = "[]"
-
+        delivery_date = None
         if yaml_match:
             for line in yaml_match.group(1).split('\n'):
                 line = line.strip()
@@ -86,6 +86,9 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
                 elif line.startswith('closed_at:'):  
                     val = line.split('closed_at:', 1)[1].strip()
                     if val.lower() != 'null': closed_at = val.strip('\'"')
+                elif line.startswith('delivery_date:'):
+                    val = line.split('delivery_date:', 1)[1].strip()
+                    if val.lower() != 'null': delivery_date = val.strip('\'"')
                 elif line.startswith('sub_bucket:'): sub_bucket = line.split('sub_bucket:', 1)[1].strip().strip('\'"')
                 elif line.startswith('tags:'):
                     tags_raw = line.split('tags:', 1)[1].strip()
@@ -125,17 +128,15 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
                     elif "archiv" in raw_s: status = "archived"
                     elif "log" in raw_s: status = "logged"
                     else: status = "open"
-
         conn = get_connection('tracker', workspace_id=workspace_id)
         conn.execute("""
             INSERT OR REPLACE INTO tracker_tickets 
-            (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, filepath)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (t_id, repo, ticket_type, status, title, desc, tags, sub_bucket, created_at, closed_at, rel_path))
+            (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, delivery_date, filepath)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (t_id, repo, ticket_type, status, title, desc, tags, sub_bucket, created_at, closed_at, delivery_date, rel_path))
         conn.commit()
     except Exception as e:
         print(f"Error parsing ticket {rel_path}: {e}")
-
 def _sync_disk_to_db(workspace_id=None):
     _, ws_root, _ = get_workspace_physics(workspace_id)
     conn = get_connection('tracker', workspace_id=workspace_id)
@@ -151,8 +152,16 @@ def _sync_disk_to_db(workspace_id=None):
         sub_bucket TEXT,
         created_at TEXT,
         closed_at TEXT,
+        delivery_date TEXT,
         filepath TEXT
     )''')
+
+    # Live Migration Guardrail: Retroactively self-heal legacy V1 cache database fields
+    try:
+        conn.execute("ALTER TABLE tracker_tickets ADD COLUMN delivery_date TEXT")
+        conn.commit()
+    except Exception:
+        pass
 
     conn.execute("DELETE FROM tracker_tickets")
     for repo in get_sister_repos(workspace_id):
@@ -214,11 +223,12 @@ def get_tracker_path(repo, ticket_type, status, workspace_id=None):
 
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
     return Path(base).joinpath(folder_type, status).as_posix()
-def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bucket="None", workspace_id=None):
+def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, workspace_id=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     # Create a short prefix dynamically from the repo name
     repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
     if not repo_prefix: 
+
         repo_prefix = "TKT"
 
     now = datetime.now()
@@ -231,6 +241,7 @@ def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bu
     os.makedirs(target_dir, exist_ok=True)
     filepath = Path(target_dir).joinpath(filename).as_posix()
     tags_yaml = f"\ntags: [{', '.join(f'{t.strip()}' for t in tags.split(',') if t.strip())}]" if tags else ""
+    delivery_yaml = f'\ndelivery_date: "{delivery_date}"' if delivery_date else "\ndelivery_date: null"
     content = f"""---
 repo: "{repo}"
 type: "{ticket_type}"
@@ -239,7 +250,7 @@ id: {ticket_id}
 title: "{title.replace('"', "'")}"
 created_at: {now.isoformat(timespec='seconds')}
 closed_at: null
-sub_bucket: "{sub_bucket}"{tags_yaml}
+sub_bucket: "{sub_bucket}"{tags_yaml}{delivery_yaml}
 ---
 
 ## Description
@@ -252,14 +263,14 @@ sub_bucket: "{sub_bucket}"{tags_yaml}
     target_ws = workspace_id or "default"
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
     ticket_path = f"{repo}/.tracker/{folder_type}/{status}/{filename}"
-
     # Synchronously seed the local ledger cache row to guarantee transactional accuracy on immediate CQRS query sweeps
     conn = get_connection('tracker', workspace_id=target_ws)
     conn.execute("""
         INSERT OR REPLACE INTO tracker_tickets 
-        (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, filepath)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (ticket_id, repo, ticket_type, status, title, description, json.dumps([t.strip() for t in tags.split(',') if t.strip()]), sub_bucket, now.isoformat(), None, ticket_path))
+        (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, delivery_date, filepath)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
+    """, (ticket_id, repo, ticket_type, status, title, description, json.dumps([t.strip() for t in tags.split(',') if t.strip()]), sub_bucket, now.isoformat(), None, delivery_date, ticket_path))
     conn.commit()
 
     execute_vfs_save(target_ws, ticket_path, content)
@@ -619,7 +630,7 @@ def archive_stale_tickets(workspace_id=None):
     return archived_count
 @tracker_bp.route('/api/tracker/new', methods=['POST'])
 def api_tracker_new():
-    workspace_id = request.headers.get('X-Workspace-ID')
+    workspace_id = sniff_tenant_id()
     data = request.json
     try:
         new_path = create_ticket(
@@ -630,6 +641,7 @@ def api_tracker_new():
             description=data['description'],
             tags=data.get('tags', ''),
             sub_bucket=data.get('sub_bucket', 'None'),
+            delivery_date=data.get('delivery_date'),
             workspace_id=workspace_id
         )
         return jsonify({"status": "success", "filepath": new_path})
@@ -637,7 +649,7 @@ def api_tracker_new():
         return jsonify({"error": str(e)}), 500
 @tracker_bp.route('/api/tracker/files', methods=['GET'])
 def api_tracker_files():
-    workspace_id = request.headers.get('X-Workspace-ID')
+    workspace_id = sniff_tenant_id()
     try:
         conn = get_connection('tracker', workspace_id=workspace_id)
 
@@ -645,7 +657,6 @@ def api_tracker_files():
         count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
         if count_check == 0:
             _sync_disk_to_db(workspace_id)
-
         cursor = conn.execute("SELECT * FROM tracker_tickets")
         tasks = []
         for row in cursor.fetchall():
@@ -662,6 +673,7 @@ def api_tracker_files():
                 "subBucket": row['sub_bucket'],
                 "timestamp": row['created_at'],
                 "closedAt": row['closed_at'],
+                "deliveryDate": row['delivery_date'],
                 "filepath": row['filepath']
             })
         return jsonify({"tasks": tasks})
@@ -669,7 +681,7 @@ def api_tracker_files():
         return jsonify({"error": str(e)}), 500
 @tracker_bp.route('/api/tracker/transition', methods=['POST'])
 def api_tracker_transition():
-    workspace_id = request.headers.get('X-Workspace-ID')
+    workspace_id = sniff_tenant_id()
     data = request.json
     try:
         new_path = transition_ticket(

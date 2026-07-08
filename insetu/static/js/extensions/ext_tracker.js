@@ -7,6 +7,10 @@ import {
 import { AppStore } from '../store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { EditorState } from 'https://esm.sh/@codemirror/state';
+import { EditorView, basicSetup } from 'https://esm.sh/codemirror';
+import { markdown } from 'https://esm.sh/@codemirror/lang-markdown';
+import { oneDark } from 'https://esm.sh/@codemirror/theme-one-dark';
 const _getActiveWs = () => AppStore.getState().activeWorkspace || 'default';
 
 const _safeParseLocalStorageSet = (key) => {
@@ -32,8 +36,8 @@ export const KanbanStore = createStore(
             bucketsExpanded: {},
             tagsExpanded: false,
             modals: { new: false, edit: false, config: false },
-            newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '' },
-            editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '' },
+            newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
+            editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '' },
             trackerConfigForm: { domainStrat: 'default', customVal: '' },
             setNewTaskField: (field, value) => set((state) => ({ newTaskForm: { ...state.newTaskForm, [field]: value } })),
             setEditTaskField: (field, value) => set((state) => ({ editTaskForm: { ...state.editTaskForm, [field]: value } })),
@@ -44,7 +48,6 @@ export const KanbanStore = createStore(
         { name: 'KanbanStore' }
     )
 );
-
 window.inSetu.stores.Kanban = KanbanStore;
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
@@ -70,7 +73,8 @@ export class InSetuExtTracker extends LitElement {
         pinnedTags: { type: Object },
         allRepos: { type: Array },
         activeTab: { type: String },
-        _modals: { type: Object }
+        _modals: { type: Object },
+        _yamlExpanded: { type: Boolean }
     };
 static styles = [
 sharedStyles,
@@ -84,7 +88,105 @@ css`
     }
     .column { flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px; }
     .column h3 { margin-top: 0; font-size: 1.1rem; }
-    .filter-container { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
+    .filter-container { display: flex;
+    flex-direction: column; gap: 10px; margin-bottom: 15px; }
+    /* Fullscreen EasyMDE/CodeMirror Parity Overrides */
+    .EasyMDEContainer {
+        border: none !important;
+        box-shadow: none !important;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        position: relative;
+    }
+    .EasyMDEContainer .CodeMirror {
+        background: var(--bg) !important;
+        color: var(--text) !important;
+        border: none !important;
+        padding: 16px 24px !important;
+        font-family: var(--font-mono) !important;
+        font-size: 14px;
+        line-height: 1.6;
+        flex: 1;
+        min-height: 0 !important;
+        position: relative;
+        overflow: hidden;
+        box-sizing: content-box;
+    }
+
+    /* CodeMirror Structural Coordinate Layout Fixes */
+    .EasyMDEContainer .CodeMirror-scroll {
+        min-height: 0 !important;
+        overflow: scroll !important;
+        margin-bottom: -30px; margin-right: -30px;
+        padding-bottom: 30px;
+        height: 100%;
+        position: relative;
+        outline: none;
+        box-sizing: content-box;
+    }
+    .EasyMDEContainer .CodeMirror-sizer {
+        position: relative;
+        border-right: 30px solid transparent;
+        box-sizing: content-box;
+    }
+    .EasyMDEContainer .CodeMirror-lines {
+        cursor: text;
+        min-height: 1px;
+        padding: 4px 0;
+    }
+    .EasyMDEContainer .CodeMirror-code {
+        outline: none;
+    }
+    .EasyMDEContainer .CodeMirror pre.CodeMirror-line {
+        word-break: break-word !important;
+        white-space: pre-wrap !important;
+        background: transparent;
+        margin: 0;
+        padding: 0;
+        position: relative;
+        overflow: visible;
+        color: inherit;
+        z-index: 2;
+    }
+    .EasyMDEContainer .CodeMirror-cursor {
+        position: absolute;
+        pointer-events: none;
+        border-left: 2px solid var(--text) !important;
+        width: 0;
+        z-index: 3;
+        visibility: visible !important;
+    }
+    insetu-modal {
+        position: fixed;
+        z-index: 2100 !important;
+    }
+    .cm-editor {
+        flex: 1;
+        height: 100%;
+        min-height: 0;
+        background: var(--bg) !important;
+        color: var(--text) !important;
+    }
+    .cm-scroller {
+        overflow: auto !important;
+        height: 100%;
+    }
+    .cm-gutters {
+        background-color: var(--input-bg) !important;
+        border-right: 1px solid var(--border) !important;
+        color: var(--text-muted) !important;
+    }
+
+    /* Metadata Input Hardening */
+    select, input[type="date"] {
+        background: var(--input-bg) !important;
+        color: var(--text) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 4px !important;
+        box-sizing: border-box;
+    }
 `
 ];
 constructor() {
@@ -96,6 +198,7 @@ this.pinnedBuckets = new Set(['ALL']);
         this.allRepos = [];
         this.activeTab = 'todos';
         this._modals = { new: false, edit: false, config: false };
+        this._yamlExpanded = false;
 }
     connectedCallback() {
         super.connectedCallback();
@@ -112,6 +215,7 @@ this.pinnedBuckets = new Set(['ALL']);
             this.pinnedBuckets = state.pinnedBuckets;
             this.pinnedTags = state.pinnedTags;
             this._modals = state.modals;
+            this.requestUpdate();
         });
 const kState = KanbanStore.getState();
         this.tasks = kState.tasks || [];
@@ -120,11 +224,57 @@ const kState = KanbanStore.getState();
         this.pinnedTags = kState.pinnedTags;
         this._modals = kState.modals;
 }
-
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._unsubApp) this._unsubApp();
         if (this._unsubKanban) this._unsubKanban();
+        if (this._cmView) {
+            this._cmView.destroy();
+            this._cmView = null;
+        }
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        const editModalOpen = this._modals?.edit;
+        const container = this.shadowRoot.getElementById('cm6-editor-container');
+
+        if (editModalOpen && container) {
+            const currentForm = KanbanStore.getState().editTaskForm;
+            if (!this._cmView) {
+                this._cmView = new EditorView({
+                    state: EditorState.create({
+                        doc: currentForm.desc || '',
+                        extensions: [
+                            basicSetup,
+                            markdown(),
+                            oneDark,
+                            EditorView.lineWrapping,
+                            EditorView.updateListener.of((update) => {
+                                if (update.docChanged) {
+                                    const nextText = update.state.doc.toString();
+                                    KanbanStore.setState(s => ({ 
+                                        editTaskForm: { ...s.editTaskForm, desc: nextText } 
+                                    }));
+                                }
+                            })
+                        ]
+                    }),
+                    parent: container,
+                    root: this.shadowRoot
+                });
+            } else {
+                const docText = this._cmView.state.doc.toString();
+                if (docText !== currentForm.desc) {
+                    this._cmView.dispatch({
+                        changes: { from: 0, to: docText.length, insert: currentForm.desc || '' }
+                    });
+                }
+            }
+        } else if (!editModalOpen && this._cmView) {
+            this._cmView.destroy();
+            this._cmView = null;
+        }
     }
 
     async _transitionTask(task, newStatus, newType = null) {
@@ -178,6 +328,7 @@ const kState = KanbanStore.getState();
         let icon = '✨';
         if (t.isBug) { intentColor = 'var(--intent-danger)'; icon = '🐛'; }
         if (t.isQueue) { intentColor = 'var(--intent-highlight)'; icon = '🔬'; }
+        const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
 
         return html`
             <insetu-card
@@ -190,11 +341,14 @@ const kState = KanbanStore.getState();
                 ?overlayExcludesTitle=${true}
                 @card-clicked=${() => viewSourceFile(t.filepath, true)}>
 
-                ${t.tags && t.tags.length > 0 ? html`
-                    <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
-                        ${t.tags.map(tag => html`<span class="task-tag">#${tag}</span>`)}
-                    </div>
-                ` : ''}
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                    ${t.deliveryDate ? html`
+                        <span class="task-tag" style="background: ${isOverdue ? 'var(--intent-danger)' : 'var(--input-bg)'}; color: ${isOverdue ? '#fff' : 'var(--text)'}; border: 1px solid var(--border);">
+                            📅 Due: ${t.deliveryDate}
+                        </span>
+                    ` : ''}
+                    ${t.tags && t.tags.length > 0 ? t.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
+                </div>
 
                 ${(t.status === 'open' && !t.isQueue) ? html`
                     <button slot="actions" class="btn-sm" style="background: var(--intent-warning);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'active'); }}>▶️ Start</button>
@@ -221,12 +375,22 @@ const kState = KanbanStore.getState();
             </insetu-card>
         `;
     }
-
     _renderColumns(type, filteredTasks) {
-        const typeFilter = t => type === 'todos' ? t.isTodo : type === 'bugs' ? t.isBug : t.isQueue;
+        const typeFilter = t => type === 'todos' ?
+        t.isTodo : type === 'bugs' ? t.isBug : t.isQueue;
 
-        const openTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'open').sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-        const activeTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'active').sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        // Deadline Precedence with FIFO Fallback Sorting Engine
+        const sortChronological = (a, b) => {
+            if (a.deliveryDate && b.deliveryDate) {
+                return a.deliveryDate.localeCompare(b.deliveryDate);
+            }
+            if (a.deliveryDate) return -1; // Deadlines float to the top
+            if (b.deliveryDate) return 1;
+            return a.timestamp.localeCompare(b.timestamp); // Fallback to Oldest-First FIFO
+        };
+
+        const openTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'open').sort(sortChronological);
+        const activeTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'active').sort(sortChronological);
         const closedTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'closed').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 
         if (type === 'queue') {
@@ -268,13 +432,13 @@ const kState = KanbanStore.getState();
         const defaultType = isBugs ? 'bug' : (isQueue ? 'queue' : 'todo');
         const prePopulatedTags = Array.from(this.pinnedTags).filter(t => t !== 'ALL');
         const defaultTagsStr = prePopulatedTags.join(', ');
-
         state.setNewTaskField('type', defaultType);
         state.setNewTaskField('tags', defaultTagsStr);
         state.setNewTaskField('title', '');
         state.setNewTaskField('desc', '');
         state.setNewTaskField('status', 'open');
         state.setNewTaskField('bucket', 'None');
+        state.setNewTaskField('deliveryDate', '');
         if (this.allRepos.length > 0) state.setNewTaskField('repo', this.allRepos[0]);
         if (this.pinnedRepos.size === 1 && !this.pinnedRepos.has('ALL')) {
             const pinnedRepo = Array.from(this.pinnedRepos)[0];
@@ -285,9 +449,8 @@ if (this.allRepos.includes(pinnedRepo)) {
 
         state.setModal('new', true);
 }
-
     async _saveNewTask() {
-        const { repo, type, status, title, tags, desc, bucket } = KanbanStore.getState().newTaskForm;
+        const { repo, type, status, title, tags, desc, bucket, deliveryDate } = KanbanStore.getState().newTaskForm;
         const sub_bucket = bucket || 'None';
 
         if (!title || !desc) {
@@ -299,7 +462,7 @@ if (this.allRepos.includes(pinnedRepo)) {
             const res = await fetch('/api/tracker/new', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo, type, status, title, tags, description: desc, sub_bucket })
+                body: JSON.stringify({ repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate })
             });
             if (res.ok) {
                 KanbanStore.getState().setModal('new', false);
@@ -311,8 +474,9 @@ loadTrackerBoard();
             alert("Network error.");
         }
     }
-
     _renderNewTaskModal() {
+        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
+        if (this.activeTab !== globalActiveSub) return '';
         const { newTaskForm } = KanbanStore.getState();
         const selectedRepo = newTaskForm.repo || this.allRepos[0];
         const buckets = selectedRepo ? getFlattenedBuckets(selectedRepo) : [];
@@ -343,11 +507,14 @@ loadTrackerBoard();
                             <option value="active">Active (In Progress)</option>
                         </select>
                         <select style="flex: 1; min-width: 120px;"
-                            .value=${newTaskForm.bucket}
+                        .value=${newTaskForm.bucket}
                             @change=${(e) => KanbanStore.getState().setNewTaskField('bucket', e.target.value)}>
                             <option value="None">No Bucket</option>
                             ${buckets.map(b => html`<option value=${b.id}>${b.title}</option>`)}
                         </select>
+                        <input type="date" style="flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);"
+                            .value=${newTaskForm.deliveryDate || ''}
+                            @change=${(e) => KanbanStore.getState().setNewTaskField('deliveryDate', e.target.value)}>
                     </div>
                     <input type="text" placeholder="Ticket Title (e.g., Fix schema registry timeout)" style="margin-bottom: 10px; font-weight: bold;"
                         .value=${newTaskForm.title}
@@ -466,19 +633,26 @@ this.pinnedRepos.size > 1;
             const repo = filepath.split('/')[0];
             const defaultTitle = filepath.split('/').pop();
             const yamlMatch = content.match(/^\s*---\n([\s\S]*?)\n\s*---/);
-            const { parsedTitle, parsedSubBucket, parsedTags } = (() => {
-                if (!yamlMatch) return { parsedTitle: defaultTitle, parsedSubBucket: 'None', parsedTags: [] };
+            const inferredType = filepath.includes('/bugs/') ? 'bug' : filepath.includes('/queue/') ? 'queue' : 'todo';
+            const inferredStatus = filepath.includes('/active/') ? 'active' : filepath.includes('/closed/') ? 'closed' : filepath.includes('/archived/') ? 'archived' : filepath.includes('/log/') ? 'logged' : 'open';
+
+            const { parsedTitle, parsedSubBucket, parsedTags, parsedDeliveryDate, parsedType, parsedStatus, parsedRepo } = (() => {
+                if (!yamlMatch) return { parsedTitle: defaultTitle, parsedSubBucket: 'None', parsedTags: [], parsedDeliveryDate: '', parsedType: inferredType, parsedStatus: inferredStatus, parsedRepo: repo };
 
                 return yamlMatch[1].split('\n').reduce((acc, l) => {
                     if (l.startsWith('title:')) acc.parsedTitle = l.replace('title:', '').replace(/"/g, '').replace(/'/g, '').trim();
                     if (l.startsWith('sub_bucket:')) acc.parsedSubBucket = l.replace('sub_bucket:', '').replace(/"/g, '').replace(/'/g, '').trim() || 'None';
+                    if (l.startsWith('delivery_date:')) acc.parsedDeliveryDate = l.replace('delivery_date:', '').replace(/"/g, '').replace(/'/g, '').trim() || '';
+                    if (l.startsWith('type:')) acc.parsedType = l.replace('type:', '').replace(/"/g, '').replace(/'/g, '').trim().toLowerCase();
+                    if (l.startsWith('status:')) acc.parsedStatus = l.replace('status:', '').replace(/"/g, '').replace(/'/g, '').trim().toLowerCase();
+                    if (l.startsWith('repo:')) acc.parsedRepo = l.replace('repo:', '').replace(/"/g, '').replace(/'/g, '').trim();
                     if (l.startsWith('tags:')) {
                         const rawTags = l.replace('tags:', '').trim();
                         const cleanTags = rawTags.startsWith('[') ? rawTags.replace(/^\[|\]$/g, '').split(',') : rawTags.split(',');
                         acc.parsedTags = cleanTags.map(t => t.trim().replace(/['"]/g, '')).filter(t => t);
                     }
                     return acc;
-                }, { parsedTitle: defaultTitle, parsedSubBucket: 'None', parsedTags: [] });
+                }, { parsedTitle: defaultTitle, parsedSubBucket: 'None', parsedTags: [], parsedDeliveryDate: '', parsedType: inferredType, parsedStatus: inferredStatus, parsedRepo: repo });
             })();
 
             const cleanTags = parsedTags.filter(t => t);
@@ -488,14 +662,28 @@ this.pinnedRepos.size > 1;
                 const stripped = content.replace(yamlMatch[0], '').trim();
                 return stripped.startsWith('## Description') ? stripped.replace(/^## Description\n+/, '') : stripped;
             })();
-
             const state = KanbanStore.getState();
             state.setEditTaskField('filepath', filepath);
             state.setEditTaskField('title', parsedTitle);
             state.setEditTaskField('tagsRaw', cleanTags.join(', '));
             state.setEditTaskField('bucket', parsedSubBucket);
             state.setEditTaskField('desc', parsedDesc.trim());
-state.setEditTaskField('origYaml', yamlMatch ? yamlMatch[1] : '');
+            state.setEditTaskField('deliveryDate', parsedDeliveryDate === 'null' ? '' : parsedDeliveryDate);
+            state.setEditTaskField('type', parsedType || inferredType);
+            state.setEditTaskField('status', parsedStatus || inferredStatus);
+            state.setEditTaskField('repo', parsedRepo || repo);
+            state.setEditTaskField('origYaml', yamlMatch ? yamlMatch[1] : '');
+
+            this._originalTaskSnapshot = {
+                title: parsedTitle,
+                tagsRaw: cleanTags.join(', '),
+                bucket: parsedSubBucket,
+                desc: parsedDesc.trim(),
+                deliveryDate: parsedDeliveryDate === 'null' ? '' : parsedDeliveryDate,
+                type: parsedType || inferredType,
+                status: parsedStatus || inferredStatus,
+                repo: parsedRepo || repo
+            };
 
             state.setModal('edit', true);
         } catch (e) {
@@ -503,50 +691,60 @@ state.setEditTaskField('origYaml', yamlMatch ? yamlMatch[1] : '');
         }
     }
 
+    _isDirty() {
+        if (!this._originalTaskSnapshot) return false;
+        const current = KanbanStore.getState().editTaskForm;
+        const orig = this._originalTaskSnapshot;
+        return current.title !== orig.title ||
+                current.tagsRaw !== orig.tagsRaw ||
+                current.bucket !== orig.bucket ||
+                current.desc !== orig.desc ||
+                current.deliveryDate !== orig.deliveryDate ||
+                current.type !== orig.type ||
+                current.status !== orig.status ||
+                current.repo !== orig.repo;
+    }
+
+    _handleModalClosing(e) {
+        if (this._isDirty() && !confirm("You have unsaved changes. Are you sure you want to go back?")) {
+            e.preventDefault();
+        }
+    }
+
     async _saveEditTask() {
-        const { filepath, title, tagsRaw, bucket, desc, origYaml } = KanbanStore.getState().editTaskForm;
-        if (!title || !desc) {
+        const { filepath, title, tagsRaw, bucket, deliveryDate, origYaml, type, status, repo, desc } = KanbanStore.getState().editTaskForm;
+        if (!title || !desc.trim()) {
             alert("Title and Description are required.");
             return;
         }
+        const tagsArr = tagsRaw.split(',').map(t => t.trim()).filter(t => t);
+        const tagsYaml = tagsArr.length > 0 ? `tags: [${tagsArr.join(', ')}]` : `tags: []`;
+        const deliveryYaml = deliveryDate ?
+            `delivery_date: "${deliveryDate}"` : `delivery_date: null`;
+        const ticketId = filepath.split('/').pop().replace('.md', '');
+        // Pristine Declarative Frontmatter Generation Blueprint
+        const newContent = `---\nrepo: "${repo}"\ntype: "${type}"\nstatus: "${status}"\nid: "${ticketId}"\ntitle: "${title.replace(/"/g, "'")}"\nsub_bucket: "${bucket}"\n${tagsYaml}\n${deliveryYaml}\n---\n\n## Description\n${desc}\n`;
 
-        const lines = origYaml.split('\n');
+        // Dynamic Path Re-Routing Configuration
+        const filename = filepath.split('/').pop();
+        const folderType = type === 'queue' ? 'queue' : `${type}s`;
+        const intendedRelPath = `${repo}/.tracker/${folderType}/${status}/${filename}`;
 
-        const analysis = lines.reduce((acc, l) => {
-            if (l.startsWith('title:')) {
-                acc.newLines.push(`title: "${title.replace(/"/g, "'")}"`);
-            } else if (l.startsWith('tags:')) {
-                const tagsArr = tagsRaw.split(',').map(t => t.trim()).filter(t => t);
-                acc.newLines.push(tagsArr.length > 0 ? `tags: [${tagsArr.join(', ')}]` : `tags: []`);
-                acc.hasTags = true;
-            } else if (l.startsWith('sub_bucket:')) {
-                acc.newLines.push(`sub_bucket: "${bucket}"`);
-                acc.hasBucket = true;
-            } else {
-                acc.newLines.push(l);
-            }
-            return acc;
-        }, { newLines: [], hasTags: false, hasBucket: false });
-
-        if (!analysis.hasTags && tagsRaw.trim()) {
-            const tagsArr = tagsRaw.split(',').map(t => t.trim()).filter(t => t);
-            analysis.newLines.push(`tags: [${tagsArr.join(', ')}]`);
-        }
-        if (!analysis.hasBucket) {
-            analysis.newLines.push(`sub_bucket: "${bucket}"`);
-        }
-
-        const newContent = `---\n${analysis.newLines.join('\n')}\n---\n\n## Description\n${desc}\n`;
         try {
             const activeWs = AppStore.getState().activeWorkspace || 'default';
             const res = await fetch(`/api/${activeWs}/fs/save`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filepath: filepath, content: newContent })
+                body: JSON.stringify({ 
+                    filepath: intendedRelPath, 
+                    content: newContent,
+                    delete_source: filepath !== intendedRelPath ? filepath : null
+                })
             });
             if (res.ok) {
                 KanbanStore.getState().setModal('edit', false);
-loadTrackerBoard();
+                this._originalTaskSnapshot = null;
+                loadTrackerBoard();
             } else {
                 alert("Failed to save changes.");
             }
@@ -554,43 +752,96 @@ loadTrackerBoard();
             alert("Network error.");
         }
     }
-
     _renderEditTaskModal() {
+        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
+        if (this.activeTab !== globalActiveSub) return '';
         const { editTaskForm } = KanbanStore.getState();
-        const repo = editTaskForm.filepath ? editTaskForm.filepath.split('/')[0] : '';
-        const buckets = repo ? getFlattenedBuckets(repo) : [];
+        const activeRepo = editTaskForm.repo || '';
+        const buckets = activeRepo ? getFlattenedBuckets(activeRepo) : [];
         return html`
             <insetu-modal 
                 ?open=${this._modals?.edit} 
-                titleText="Edit Ticket Metadata"
-                @modal-closed=${() => KanbanStore.getState().setModal('edit', false)}>
-                <div slot="body">
-                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                        <select style="flex: 1;"
-                            .value=${editTaskForm.bucket}
-                            @change=${(e) => { KanbanStore.getState().setEditTaskField('bucket', e.target.value); this.requestUpdate(); }}>
-                            <option value="None">No Bucket</option>
-                            ${buckets.map(b => html`<option value=${b.id}>${b.title}</option>`)}
-                        </select>
+                titleText="Edit Workspace Ticket Blueprint"
+                maxWidth="100vw"
+                @modal-closing=${this._handleModalClosing}
+                @modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
+
+                <div slot="body" style="margin: -20px; height: calc(100% + 40px); display: flex; flex-direction: column; overflow: hidden; background: var(--bg);">
+                    <div style="padding: 6px 20px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg);">
+                        <input type="text" placeholder="Ticket Summary Blueprint..." style="font-weight: bold; font-size: 0.9rem; border: none !important; outline: none !important; box-shadow: none !important; padding: 2px 0; background: transparent; 
+width: 100%; color: var(--text);"
+                            .value=${editTaskForm.title}
+                            @input=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: e.target.value } }))}>
                     </div>
-                    <input type="text" placeholder="Ticket Title" style="margin-bottom: 10px; font-weight: bold;"
-                        .value=${editTaskForm.title}
-                        @input=${(e) => KanbanStore.getState().setEditTaskField('title', e.target.value)}>
-                    <input type="text" placeholder="Tags (comma separated)" style="margin-bottom: 10px;"
-                        .value=${editTaskForm.tagsRaw}
-                        @input=${(e) => KanbanStore.getState().setEditTaskField('tagsRaw', e.target.value)}>
-                    <textarea style="flex: 1; margin-bottom: 10px; min-height: 150px;"
-                        placeholder="Markdown description..."
-                        .value=${editTaskForm.desc}
-                        @input=${(e) => KanbanStore.getState().setEditTaskField('desc', e.target.value)}></textarea>
+
+                    <div style="border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0; width: 100%;">
+
+                        <div @click=${() => { this._yamlExpanded = !this._yamlExpanded;
+this.requestUpdate(); }} 
+                            style="padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; font-size: 0.75rem; font-weight: bold; color: var(--text-muted); background: var(--input-bg);">
+                            <span style="display: flex; align-items: center; gap: 6px;">⚙️ Ticket Metadata</span>
+
+                            <span>${this._yamlExpanded ?
+'▲ Hide' : '▼ Show'}</span>
+                        </div>
+                        ${this._yamlExpanded ? html`
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 4px 20px 16px 20px; border-top: 1px solid var(--border);">
+                                <div>
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository</label>
+                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.repo} @change=${(e) => { KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, repo: e.target.value, bucket: 'None' } })); this.requestUpdate(); }}>
+                                        ${this.allRepos.map(r => html`<option value="${r}">${r}</option>`)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticket Type</label>
+                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.type} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: e.target.value } }))}>
+                                        <option value="todo">To-Do (Task)</option>
+                                        <option value="bug">Bug</option>
+                                        <option value="queue">Queue (Research)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Status Zone</label>
+                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.status} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, status: e.target.value } }))}>
+                                        <option value="open">Open (Backlog)</option>
+                                        <option value="active">Active (In Progress)</option>
+                                        <option value="closed">Closed (Resolved)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Sub-Bucket Mapping</label>
+                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.bucket} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: e.target.value } }))}>
+                                        <option value="None">No Bucket</option>
+                                        ${buckets.map(b => html`<option value=${b.id}>${b.title}</option>`)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Delivery Deadline</label>
+                                    <input type="date" style="width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;"
+                                        .value=${editTaskForm.deliveryDate || ''}
+                                        @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, deliveryDate: e.target.value } }))}>
+                                </div>
+                                <div style="grid-column: 1 / -1; margin-top: 4px;">
+                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Tags (comma-separated tokens)</label>
+                                    <input type="text" placeholder="Tags (comma-separated tokens, e.g. architecture, latency)..." style="width: 100%; padding: 6px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
+                                        .value=${editTaskForm.tagsRaw}
+                                        @input=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, tagsRaw: e.target.value } }))}>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; background: var(--bg); height: 100%;">
+                        <div id="cm6-editor-container" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; height: 100%;"></div>
+                    </div>
                 </div>
+
                 <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold;"
-                        @click=${this._saveEditTask}>💾 Save Changes</button>
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold; font-size: 1.1rem; border-radius: 0; display: ${this._isDirty() ? 'block' : 'none'};"
+                        @click=${this._saveEditTask}>💾 Save & Sync Ticket</button>
                 </div>
             </insetu-modal>
-        `;
-    }
+`;
+}
     _generateHistoricalChangelog(allRepos = false) {
         const state = KanbanStore.getState();
         const closedTasks = state.tasks.filter(t => {
@@ -687,8 +938,9 @@ if (window.executeSystemCompile) window.executeSystemCompile();
             alert("Network error.");
         }
     }
-
     _renderConfigModal() {
+        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
+        if (this.activeTab !== globalActiveSub) return '';
         const state = KanbanStore.getState().trackerConfigForm;
         return html`
             <insetu-modal
@@ -745,10 +997,8 @@ export class InSetuExtTrackerActions extends LitElement {
     `;
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
-        const trackerEl = document.querySelector('insetu-ext-tracker');
-
-        // Context Isolation: Reflect directly from the node's own slot dataset configurations
         const activeSubTab = this.dataset.subId || 'todos';
+        const trackerEl = document.querySelector(`#sub-${activeSubTab} insetu-ext-tracker`);
 
         const items = [];
         if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
@@ -852,7 +1102,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
         'zone:file-edit-override': (filepath) => {
             if (filepath.includes('.tracker/')) {
                 document.getElementById('file-modal').style.display = 'none';
-                const trackerEl = document.querySelector('insetu-ext-tracker');
+                const activeSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
+                const trackerEl = document.querySelector(`#sub-${activeSub} insetu-ext-tracker`);
                 if (trackerEl) trackerEl._openEditTaskModal(filepath);
                 return true;
             }
