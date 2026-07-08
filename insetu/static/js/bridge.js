@@ -49,6 +49,14 @@ export const BridgeStore = createStore(
                 activeFiles: new Set(), 
                 activeBridgeJobId: null
             }),
+            resetState: () => set({
+                payloadText: '', 
+                detectedFiles: [], 
+                activeFiles: new Set(), 
+                activeBridgeJobId: null,
+                viewMode: 'input',
+                consoleOutput: 'Ready...'
+            }),
             setViewMode: (mode) => set({ viewMode: mode }),
             setConsoleOutput: (out) => set({ consoleOutput: out })
         })),

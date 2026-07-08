@@ -77,12 +77,29 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
                     if self.filename not in VFS_WRITE_WHITELIST:
                         report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
-
         # Pathlib Migration Mandate (os.path.join)
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
             if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr == 'join':
                 report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, "os.path.join detected. Migrate to pathlib.Path.")
 
+        # Enforce sniff_tenant_id over raw header extraction
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
+            if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'headers':
+                if getattr(node.func.value.value, 'id', '') == 'request':
+                    if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'X-Workspace-ID':
+                        report_violation("TENANT_SNIFF_MANDATE", self.filepath, node.lineno, "Raw request.headers.get('X-Workspace-ID') detected. Use sniff_tenant_id() from utils_core.")
+
+        self.generic_visit(node)
+
+    def visit_With(self, node):
+        for item in node.items:
+            if isinstance(item.context_expr, ast.Call):
+                func = item.context_expr.func
+                if isinstance(func, ast.Name) and func.id == 'open':
+                    args = item.context_expr.args
+                    if len(args) > 1 and isinstance(args[1], ast.Constant) and args[1].value in ['w', 'a', 'wb', 'ab']:
+                        if self.filename not in VFS_WRITE_WHITELIST:
+                            report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native 'open' in write mode detected. Route through execute_vfs_save.")
         self.generic_visit(node)
 
     def visit_Import(self, node):

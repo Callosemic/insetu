@@ -14,6 +14,7 @@ import './components/ui_folder_browser.js';
 import './components/ui_modal.js';
 import './components/ui_filter_pills.js';
 import './gather.js';
+import './config.js';
 
 function getFlattenedBuckets(repoDir, includeSystem = false) {
     const { targetConfigs } = AppStore.getState();
@@ -76,7 +77,52 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-export let mdeInstance = null;
+import { EditorState, Compartment } from 'https://esm.sh/@codemirror/state';
+import { EditorView, basicSetup } from 'https://esm.sh/codemirror';
+import { oneDark } from 'https://esm.sh/@codemirror/theme-one-dark';
+import { markdown } from 'https://esm.sh/@codemirror/lang-markdown';
+import { python } from 'https://esm.sh/@codemirror/lang-python';
+import { javascript } from 'https://esm.sh/@codemirror/lang-javascript';
+
+const languageConf = new Compartment();
+const readOnlyConf = new Compartment();
+
+export let mdeInstance = {
+    view: null,
+    get codemirror() {
+        return {
+            getValue: () => this.view ? this.view.state.doc.toString() : '',
+            setValue: (text) => {
+                if (this.view) {
+                    this.view.dispatch({
+                        changes: { from: 0, to: this.view.state.doc.length, insert: text }
+                    });
+                }
+            },
+            setOption: (option, value) => {
+                if (!this.view) return;
+                if (option === "readOnly") {
+                    this.view.dispatch({
+                        effects: readOnlyConf.reconfigure(EditorView.editable.of(value === false))
+                    });
+                } else if (option === "mode") {
+                    let ext = [];
+                    if (value === 'markdown') ext = markdown();
+                    if (value === 'python') ext = python();
+                    if (value === 'javascript') ext = javascript();
+                    this.view.dispatch({
+                        effects: languageConf.reconfigure(ext)
+                    });
+                }
+            },
+            refresh: () => {}
+        };
+    },
+    value: function(text) {
+        if (text === undefined) return this.codemirror.getValue();
+        this.codemirror.setValue(text);
+    }
+};
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 window.addEventListener('keydown', (e) => {
@@ -231,6 +277,7 @@ window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s',
 async function bootExtensions() {
     if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.length > 0) {
         for (const ext of window.ACTIVE_EXTENSIONS) {
+            if (ext === 'config') continue; // Core OS module, already hard-imported
             try {
                 // Dynamically load the module native to the browser
                 await import(`/static/js/extensions/ext_${ext}.js`);
@@ -312,50 +359,29 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     await bootExtensions();
+    const container = document.getElementById('modal-cm6-container');
     const textArea = document.getElementById('modal-text');
-    if (textArea && typeof EasyMDE !== 'undefined') {
-        // Initialize the No-Nonsense Editor
-        mdeInstance = new EasyMDE({
-            element: textArea,
-            toolbar: false,
-            status: false,
-            spellChecker: false,
-            forceSync: true,
-            inputStyle: 'textarea',
-            nativeSpellcheck: false
+    if (container) {
+        mdeInstance.view = new EditorView({
+            state: EditorState.create({
+                doc: textArea.value || '',
+                extensions: [
+                    basicSetup,
+                    oneDark,
+                    EditorView.lineWrapping,
+                    languageConf.of([]),
+                    readOnlyConf.of(EditorView.editable.of(true)),
+                    EditorView.updateListener.of((update) => {
+                        if (update.docChanged) {
+                            textArea.value = update.state.doc.toString();
+                            textArea.dispatchEvent(new Event('input'));
+                        }
+                    })
+                ]
+            }),
+            parent: container
         });
-
-        // Bridge global CodeMirror modes (Python, JS, etc.) into EasyMDE's internal engine
-        if (window.CodeMirror && window.CodeMirror.modes) {
-            Object.assign(mdeInstance.codemirror.constructor.modes, window.CodeMirror.modes);
-            Object.assign(mdeInstance.codemirror.constructor.mimeModes, window.CodeMirror.mimeModes);
-        }
-        // Proxy changes back to the native textarea so legacy logic survives
-        mdeInstance.codemirror.on("change", () => {
-            textArea.value = mdeInstance.value();
-            textArea.dispatchEvent(new Event('input'));
-        });
-
-        // Native Checkbox Toggling
-        mdeInstance.codemirror.on("mousedown", (cm, e) => {
-            if (cm.getOption("readOnly") && cm.getOption("readOnly") !== false) return;
-            const pos = cm.coordsChar({left: e.clientX, top: e.clientY});
-            const lineText = cm.getLine(pos.line);
-            const match = lineText.match(/^(\s*[-*+]\s+\[)( |x|X)(\])/);
-
-            if (match) {
-                const startCh = match[1].length - 1; // Index of '['
-                const endCh = match[1].length + 1;   // Index of ']'
-                // If user clicks anywhere near the brackets
-                if (pos.ch >= startCh && pos.ch <= endCh + 1) {
-                    e.preventDefault();
-                    const isChecked = match[2] !== ' ';
-                    const newLine = match[1] + (isChecked ? ' ' : 'x') + match[3] + lineText.substring(match[0].length);
-                    cm.replaceRange(newLine, {line: pos.line, ch: 0}, {line: pos.line, ch: lineText.length});
-                }
-            }
-        });
-}
+    }
     const ws = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
 
@@ -509,10 +535,11 @@ function switchTab(event, tabId) {
     }
     // Restore the last active sub-tab for this view statelessly
     const savedSub = localStorage.getItem('insetu_subtab_' + tabId);
-    if (savedSub && document.getElementById('st-' + savedSub)) {
+    const savedSubEl = document.getElementById('st-' + savedSub);
+    if (savedSubEl && savedSubEl.style.display !== 'none') {
         switchSubTab(savedSub, false, true);
     } else if (targetContent) {
-        const firstSub = targetContent.querySelector('.sub-tab');
+        const firstSub = targetContent.querySelector('.sub-tab:not([style*="display: none"])');
         if (firstSub) switchSubTab(firstSub.id.replace('st-', ''), false, true);
     }
 
@@ -813,7 +840,8 @@ async function performSoftRefresh() {
             document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext]').forEach(tabEl => {
                 const extName = tabEl.dataset.ext;
                 const tabId = tabEl.dataset.id || tabEl.id.replace('st-', '');
-                const isActive = ['bridge', 'gather'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
+                const isActive = 
+['bridge', 'gather', 'config'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
 
                 tabEl.style.display = isActive ? '' : 'none';
 

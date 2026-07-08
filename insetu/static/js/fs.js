@@ -47,12 +47,11 @@ window.loadFullModalText = function() {
 
     const { ext, isSupported, isMarkdown: extIsMd } = resolveEditorMode(currentModalFile);
     const isSupportedEditor = isSupported || currentModalForceEdit;
-    const isMarkdown = extIsMd || currentModalForceEdit;
     const shouldBeReadOnly = !(currentModalIsFS || currentModalForceEdit);
 
     const textArea = document.getElementById('modal-text');
 
-    if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
         mdeInstance.value(currentModalFullText);
         mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
     } else {
@@ -61,7 +60,6 @@ window.loadFullModalText = function() {
     }
     currentModalOriginalText = currentModalFullText;
 };
-
 function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
     const TRUNCATE_LIMIT = 200000;
     currentModalFullText = text;
@@ -76,7 +74,7 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
         document.getElementById('modal-truncation-msg').innerHTML = `⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.`;
         if (banner) banner.style.display = 'flex';
 
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+        if (isSupportedEditor && mdeInstance && mdeInstance.view) {
             mdeInstance.value(textToRender);
             mdeInstance.codemirror.setOption("readOnly", "nocursor"); // Lock while truncated to prevent accidental overwrites
         } else {
@@ -87,7 +85,7 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
     } else {
         isModalTruncated = false;
         if (banner) banner.style.display = 'none';
-        if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+        if (isSupportedEditor && mdeInstance && mdeInstance.view) {
             mdeInstance.value(text);
             mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
         } else {
@@ -130,7 +128,7 @@ export async function viewAndCopy(filename) {
     const textArea = document.getElementById('modal-text');
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
-if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
         mdeInstance.value("Loading...");
         mdeInstance.codemirror.setOption("mode", codeMode);
         mdeInstance.codemirror.setOption("readOnly", "nocursor");
@@ -143,14 +141,13 @@ if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
     closeBrowseModal();
     const tb = document.getElementById('modal-action-toolbar');
     if (tb) tb.style.display = 'none';
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
+    const cm6Wrap = document.getElementById('modal-cm6-container');
 
-    if (isSupportedEditor && mdeWrap) {
-        mdeWrap.style.display = 'flex';
+    if (isSupportedEditor && cm6Wrap) {
+        cm6Wrap.style.display = 'flex';
         textArea.style.display = 'none';
-        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
     } else {
-        if (mdeWrap) mdeWrap.style.display = 'none';
+        if (cm6Wrap) cm6Wrap.style.display = 'none';
         textArea.style.display = 'block';
     }
 
@@ -333,7 +330,7 @@ function cleanModalFile() {
 
     const { isSupported: isSupportedEditor } = resolveEditorMode(currentModalFile);
 
-    let text = (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) 
+    let text = (isSupportedEditor && mdeInstance && mdeInstance.view) 
         ? mdeInstance.value() 
         : document.getElementById('modal-text').value;
 
@@ -365,8 +362,8 @@ async function downloadFromModal() {
     try {
         if (currentModalIsMemoryOnly) {
             let text = '';
-            const mdeWrap = document.querySelector('.EasyMDEContainer');
-            if (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined' && mdeInstance) {
+            const cm6Wrap = document.getElementById('modal-cm6-container');
+            if (cm6Wrap && cm6Wrap.style.display !== 'none' && mdeInstance && mdeInstance.view) {
                 text = mdeInstance.value();
             } else {
                 text = document.getElementById('modal-text').value;
@@ -579,7 +576,6 @@ export class InSetuVFSExplorer extends LitElement {
                 if (matches.length === 0) {
                         return html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
                 }
-
                 return html`
                         <div style="display: flex; flex-direction: column; gap: 8px;">
                                 ${matches.map(filepath => {
@@ -592,6 +588,7 @@ export class InSetuVFSExplorer extends LitElement {
                                                         icon="📄"
                                                         intentColor="var(--intent-success)"
                                                         @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
+                                                        <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
                                                         <button slot="actions" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 8px;"
                                                                 @click=${(e) => {
                                                                         e.stopPropagation();
@@ -929,13 +926,16 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
 }
 export function insertTextAtCursor(textToInsert) {
     const textArea = document.getElementById('modal-text');
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
-    const isMDE = (mdeWrap && window.getComputedStyle(mdeWrap).display !== 'none' && typeof mdeInstance !== 'undefined' && mdeInstance);
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && mdeInstance && mdeInstance.view);
 
-    if (isMDE) {
-        const cm = mdeInstance.codemirror;
-        cm.replaceSelection(textToInsert);
-        cm.focus();
+    if (isCM6) {
+        const view = mdeInstance.view;
+        view.dispatch(view.state.update({
+            changes: view.state.selection.ranges.map(r => ({ from: r.from, to: r.to, insert: textToInsert })),
+            scrollIntoView: true
+        }));
+        view.focus();
     } else if (textArea) {
         const start = textArea.selectionStart;
         const end = textArea.selectionEnd;
@@ -961,7 +961,7 @@ export async function viewSourceFile(filepath, isFS = false) {
     const textArea = document.getElementById('modal-text');
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
-    if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
+    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
         mdeInstance.value("Loading...");
         mdeInstance.codemirror.setOption("mode", codeMode);
         mdeInstance.codemirror.setOption("readOnly", isFS ? false : "nocursor");
@@ -1035,15 +1035,13 @@ export async function viewSourceFile(filepath, isFS = false) {
     } else {
         tb.style.display = 'none';
     }
+    const cm6Wrap = document.getElementById('modal-cm6-container');
 
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
-
-    if (isSupportedEditor && mdeWrap) {
-        mdeWrap.style.display = 'flex';
+    if (isSupportedEditor && cm6Wrap) {
+        cm6Wrap.style.display = 'flex';
         textArea.style.display = 'none';
-        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
     } else {
-        if (mdeWrap) mdeWrap.style.display = 'none';
+        if (cm6Wrap) cm6Wrap.style.display = 'none';
         textArea.style.display = 'block';
     }
 
@@ -1277,9 +1275,9 @@ export function openBrowseModal(contextFilename) {
 }
 export function closeFileModal() {
     const textArea = document.getElementById('modal-text');
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
-    const isMDE = (mdeWrap && window.getComputedStyle(mdeWrap).display !== 'none' && typeof mdeInstance !== 'undefined');
-    const currentVal = isMDE ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && mdeInstance && mdeInstance.view);
+    const currentVal = isCM6 ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
 
     if (currentModalIsFS && currentVal !== currentModalOriginalText) {
         if (!confirm("You have unsaved changes. Are you sure you want to close this file?")) {
@@ -1292,7 +1290,7 @@ export function closeFileModal() {
     // Reset state
     currentModalOriginalText = '';
     if (textArea) textArea.value = '';
-    if (isMDE) mdeInstance.value('');
+    if (isCM6) mdeInstance.value('');
     const saveBtn = document.getElementById('modal-save-btn');
     if (saveBtn) saveBtn.style.display = 'none';
 }
@@ -1304,24 +1302,23 @@ export function openVirtualFile(filename, content) {
     currentModalIsFS = false;
     currentModalIsMemoryOnly = true;
     document.getElementById('modal-title').innerText = filename;
-const textArea = document.getElementById('modal-text');
-if (typeof mdeInstance !== 'undefined' && mdeInstance) {
+    const textArea = document.getElementById('modal-text');
+    if (mdeInstance) {
         mdeInstance.codemirror.setOption("mode", "markdown");
     }
 
     currentModalForceEdit = true;
-    injectTextToModal(content, (typeof mdeInstance !== 'undefined' && !!mdeInstance), true, false, true);
+    injectTextToModal(content, true, true, false, true);
     document.getElementById('modal-save-btn').style.display = 'none';
     document.getElementById('file-modal').style.display = 'block';
     closeBrowseModal();
     const tb = document.getElementById('modal-action-toolbar');
     if (tb) tb.style.display = 'none';
 
-    const mdeWrap = document.querySelector('.EasyMDEContainer');
-    if (mdeWrap) {
-        mdeWrap.style.display = 'flex';
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    if (cm6Wrap) {
+        cm6Wrap.style.display = 'flex';
         textArea.style.display = 'none';
-        setTimeout(() => mdeInstance.codemirror.refresh(), 10);
     } else {
         textArea.style.display = 'block';
     }
@@ -1461,7 +1458,6 @@ export function openFsDropdown(anchorElement, options = {}) {
 
         items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(prefix) });
         items.push({ label: isPrompts ? 'New Prompt' : 'New File', icon: '📄', onClick: () => window.openNewFileModal(prefix) });
-
         if (!isPrompts) {
             items.push({ divider: true });
             items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
@@ -1469,6 +1465,10 @@ export function openFsDropdown(anchorElement, options = {}) {
             items.push({ divider: true });
             items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
         }
+    }
+
+    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+        window.inSetu.extensions.Registry.executeUIHook('zone:fs-dropdown-menu', { currentPath, isPrompts, menuItems: items });
     }
 
     window.inSetu.ui.Factory.createDropdown({

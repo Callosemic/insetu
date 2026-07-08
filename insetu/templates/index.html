@@ -14,18 +14,7 @@
         }
     }
     </script>
-
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/dialog/dialog.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/searchcursor.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/addon/search/search.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/python/python.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/shell/shell.min.js"></script>
 </head>
 <body>
     <div id="js-panic-button" style="padding: 40px 20px; text-align: center; font-family: var(--font-mono); color: var(--text); z-index: 9999; position: relative;">
@@ -86,14 +75,13 @@
     body:has(#file-modal[style*="display: block"]) { 
         overflow: hidden; 
     }
-
-    /* 2. Force EasyMDE (CodeMirror) to have no borders since it's full-screen now */
-    #file-modal .EasyMDEContainer .CodeMirror { border: none !important; border-radius: 0 !important; background: var(--bg) !important; padding: 20px !important; }
-    #file-modal .editor-toolbar { border: none !important; border-bottom: 1px solid var(--border) !important; background: var(--input-bg) !important; }
-
+    /* 2. Force CodeMirror 6 to have no borders and fit full-screen */
+    #file-modal .cm-editor { border: none !important; height: 100%; background: var(--bg) !important; color: var(--text) !important; }
+    #file-modal .cm-scroller { overflow: auto !important; }
+    #file-modal .cm-gutters { background-color: var(--input-bg) !important; border-right: 1px solid var(--border) !important; color: var(--text-muted) !important; }
     /* 3. Force ALL other modals (Browse, Tasks, config) to act as native edge-to-edge parallel views */
     .fullscreen-modal { background: var(--bg) !important; padding: 0 !important; }
-    .fullscreen-modal .modal-content, .fullscreen-modal .modal-panel { border: none !important; border-radius: 0 !important; max-width: 100vw !important; max-height: 100dvh !important; height: 100dvh !important; box-shadow: none !important; background: var(--bg) !important; }
+    .fullscreen-modal .modal-content, .fullscreen-modal .modal-panel, #file-modal > div { border: none !important; border-radius: 0 !important; max-width: 100vw !important; max-height: 100dvh !important; height: 100dvh !important; box-shadow: none !important; background: var(--bg) !important; }
 .fullscreen-modal .modal-header, .fullscreen-modal .modal-footer { background: var(--input-bg) !important;
 }
 </style>
@@ -118,7 +106,8 @@
             <span id="modal-truncation-msg">⚠️ Truncated</span>
             <button onclick="loadFullModalText()" class="btn-sm" style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000;">Show All</button>
         </div>
-        <textarea id="modal-text" style="flex: 1; margin: 0; padding: 20px; font-size: 14px; font-family: var(--font-mono); line-height: 1.6; resize: none; border: none; outline: none; background: var(--bg); color: var(--text); box-sizing: border-box;"></textarea>
+        <div id="modal-cm6-container" class="EasyMDEContainer" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);"></div>
+        <textarea id="modal-text" style="display: none;"></textarea>
         <div class="modal-footer">
             <button id="modal-dl-btn" draggable="true" class="ui-draggable-export" onclick="downloadFromModal()" style="background: #0284c7; color: white;">⬇️ Download</button>
             <button onclick="copyFromModal()" style="background: #10b981; color: white;">📋 Copy</button>

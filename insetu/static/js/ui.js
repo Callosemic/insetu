@@ -199,13 +199,14 @@ export const UIFactory = {
                     if (onBucketExpandToggle) bLbl.onclick = () => onBucketExpandToggle(repo, !isBExpanded);
                     bWrap.appendChild(bLbl);
                     const createBPill = (bId, bLabel, forceVisible = false) => {
-                        const isVisible = forceVisible || activeBuckets.has(bId) || isBExpanded;
+                        const isVisible = forceVisible ||
+                            activeBuckets.has(bId) || isBExpanded;
                         return this.createFilterPill({
                             id: bId, label: bLabel, activeSet: activeBuckets, isVisible,
                             styleOverride: { padding: '2px 6px', fontSize: '0.7rem' },
                             onChange: (newSet, changedId, wasActive) => {
-                                if (wasActive && !isBExpanded) {
-                                    if (onBucketExpandToggle) onBucketExpandToggle(repo, true);
+                                if (changedId === "ALL" && wasActive) {
+                                    if (onBucketExpandToggle) onBucketExpandToggle(repo, !isBExpanded);
                                 } else {
                                     if (onBucketChange) onBucketChange(newSet, repo);
                                 }

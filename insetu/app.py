@@ -55,6 +55,7 @@ def load_workspace_extensions():
     # DAG Node Resolution
     modules = {}
     for ext in list(raw_extensions):
+        if ext == "config": continue # Pure frontend UI extension
         try:
             # Try the extensions folder first, fallback to core chassis
             try:
@@ -229,10 +230,10 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.Lock()
         return _COMPILER_LOCKS[wid]
-
 @app.route('/submit', methods=['POST'])
 def submit():
-    workspace_id = request.headers.get('X-Workspace-ID')
+    from insetu.utils_core import sniff_tenant_id
+    workspace_id = sniff_tenant_id()
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
 
@@ -302,7 +303,8 @@ def api_manifest(workspace_id):
     return jsonify({}), 200, headers
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    workspace_id = request.headers.get('X-Workspace-ID')
+    from insetu.utils_core import sniff_tenant_id
+    workspace_id = sniff_tenant_id()
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
 

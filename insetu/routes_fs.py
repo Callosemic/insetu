@@ -191,6 +191,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 old_abs_path = resolve_workspace_path(delete_source, workspace_id)
                 if os.path.exists(old_abs_path) and os.path.abspath(old_abs_path) != os.path.abspath(resolved_path):
                         os.remove(old_abs_path)
+                        hooks.emit_background('post_file_delete', filepath=delete_source, workspace_id=workspace_id)
 
                         # Clean up empty ghost directories left behind
                         try:

@@ -15,10 +15,19 @@ export class InSetuModal extends LitElement {
             padding: 15px; box-sizing: border-box;
         }
         :host([open]) .backdrop { display: flex; }
+        :host([maxWidth="100vw"]) .backdrop {
+            padding: 0 !important;
+        }
         .panel {
             background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
             width: 100%; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden;
             box-shadow: 0 10px 30px rgba(0,0,0,0.6); box-sizing: border-box; margin: 0 auto;
+        }
+        :host([maxWidth="100vw"]) .panel {
+            max-height: 100dvh !important;
+            height: 100dvh !important;
+            border-radius: 0 !important;
+            border: none !important;
         }
         .header {
             padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg);
@@ -35,8 +44,10 @@ export class InSetuModal extends LitElement {
         super();
         this.open = false;
     }
-
     close() {
+        const event = new CustomEvent('modal-closing', { bubbles: true, composed: true, cancelable: true });
+        this.dispatchEvent(event);
+        if (event.defaultPrevented) return;
         this.open = false;
         this.dispatchEvent(new CustomEvent('modal-closed', { bubbles: true, composed: true }));
     }

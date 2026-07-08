@@ -194,16 +194,17 @@ export class InSetuRepoFilter extends LitElement {
         super();
         this.collapsed = true;
     }
-
-    _handleRepoToggle(e) {
-        e.stopPropagation();
-        const { id, active } = e.detail;
-        let newSet = new Set(this.activeRepos);
-        
-        if (id === 'ALL') {
-            newSet.clear();
-            newSet.add('ALL');
-        } else {
+        _handleRepoToggle(e) {
+            e.stopPropagation();
+            const { id, active } = e.detail;
+            let newSet = new Set(this.activeRepos);
+            if (id === 'ALL') {
+                newSet.clear();
+                newSet.add('ALL');
+                if (this.activeRepos.includes('ALL')) {
+                    this.collapsed = !this.collapsed;
+                }
+            } else {
             newSet.delete('ALL');
             if (active) newSet.add(id);
             else newSet.delete(id);

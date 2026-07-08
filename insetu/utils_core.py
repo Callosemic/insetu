@@ -541,7 +541,6 @@ def get_all_workspace_ids():
         except Exception:
             pass
     return workspace_ids
-
 def generate_idempotency_hash(payload: dict) -> str:
     """
     Generates a deterministic JSON string representation of a payload 
@@ -549,3 +548,24 @@ def generate_idempotency_hash(payload: dict) -> str:
     """
     import json
     return json.dumps(payload, sort_keys=True)
+
+def slugify(text):
+    """Converts a string into a clean, filesystem-safe ASCII slug, with multi-lingual safety hooks."""
+    if not text:
+        return ""
+    import unicodedata
+    import re
+
+    # Manual pre-mapping translation table for non-decomposable stroke characters
+    charmap = {
+        'Đ': 'D', 'đ': 'd',
+        'Æ': 'AE', 'æ': 'ae',
+        'Ø': 'O', 'ø': 'o',
+        'ß': 'ss'
+    }
+    for broken, fixed in charmap.items():
+        text = text.replace(broken, fixed)
+
+    clean = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+    clean = re.sub(r'[^a-zA-Z0-9_-]', '_', clean.lower())
+    return re.sub(r'_+', '_', clean).strip('_')

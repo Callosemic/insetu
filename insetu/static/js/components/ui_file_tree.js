@@ -383,7 +383,6 @@ constructor() {
                     const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
                     const filepath = `${this.basePath}${pathPrefix}${key}`;
                     if (this.hideFiles) return '';
-
                     return html`
                         <insetu-card
                             .filename=${filepath}
@@ -393,6 +392,7 @@ constructor() {
                             intentColor="var(--intent-primary)"
                             icon="📄">
 
+                            <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
                             ${this.actions.map(act => html`
                                 <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer;" 
                                     @click=${(e) => this._handleAction(e, act.id, filepath, key)}>
