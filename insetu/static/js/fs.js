@@ -605,15 +605,17 @@ export class InSetuVFSExplorer extends LitElement {
             }
             return html`
                 <div style="display: flex; flex-direction: column; height: 100%;">
-                    <div class="sticky-header" style="display: flex; gap: 10px; align-items: center; flex-shrink: 0;">
-                        <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
-                            @input=${(e) => {
-                                const val = e.target.value;
-                                window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
-                                    window.inSetu.stores.Fs.getState().setSearchQuery(val);
-                                }, 200);
-                            }}>
-                        ${q ? html`<button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => window.inSetu.stores.Fs.getState().setSearchQuery('')}>❌ Clear</button>` : ''}
+                    <div class="sticky-header" style="flex-shrink: 0;">
+                        <div class="fuzzy-search-wrapper">
+                            <input type="text" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
+                                @input=${(e) => {
+                                    const val = e.target.value;
+                                    window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
+                                        window.inSetu.stores.Fs.getState().setSearchQuery(val);
+                                    }, 200);
+                                }}>
+                            ${q ? html`<button class="fuzzy-search-clear" @click=${() => window.inSetu.stores.Fs.getState().setSearchQuery('')}>Clear</button>` : ''}
+                        </div>
                     </div>
                     ${contentUI}
                 </div>
@@ -621,17 +623,13 @@ export class InSetuVFSExplorer extends LitElement {
         }
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
-
 export class InSetuVFSExplorerActions extends LitElement {
-    static styles = css`
-        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button:hover { background: var(--input-bg); }
-    `;
+    static styles = [sharedStyles];
     _openMenu(e) {
         if (window.openFsDropdown) window.openFsDropdown(e.target);
     }
     render() {
-        return html`<button @click=${this._openMenu}>☰</button>`;
+        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
     }
 }
 customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);

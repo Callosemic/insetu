@@ -25,11 +25,15 @@ constructor() {
         this._unsub = AppStore.subscribe(state => state.manifest, (m) => {
             this.manifestFiles = Object.keys(m || {});
         });
+        this._unsubRefresh = AppStore.subscribe(state => state.gatherForceRefreshTick, (tick) => {
+            if (tick) this.loadContext();
+        });
         this.manifestFiles = Object.keys(AppStore.getState().manifest || {});
     }
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
+        if (this._unsubRefresh) this._unsubRefresh();
     }
     async loadContext() {
         this.loading = true;
@@ -109,7 +113,10 @@ constructor() {
         });
         return html`
             <div class="sticky-header" style="display: flex; align-items: center; gap: 10px;">
-                <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value} style="flex: 1;">
+                <div class="fuzzy-search-wrapper" style="margin-bottom: 0; flex: 1;">
+                    <input type="text" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                    ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                </div>
                 <span id="refresh-time" style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; white-space: nowrap;"></span>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block;">${this.loadingMessage}</div>` : ''}
@@ -169,23 +176,6 @@ ${AppStore.getState().manifest[f.filename] ? html`
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
-
-export class InSetuFileActions extends LitElement {
-    static properties = { filepath: { type: String }, repoDir: { type: String }, isFS: { type: Boolean } };
-    createRenderRoot() { return this; } // Render in light DOM so slots naturally project into the parent asset card
-    updated() {
-        this.replaceChildren();
-        if (window.ExtensionRegistry?.executeUIHook) {
-            window.ExtensionRegistry.executeUIHook('zone:file-card-actions', {
-                filepath: this.filepath,
-                repoDir: this.repoDir,
-                isFS: this.isFS,
-                actionsContainer: this
-            });
-        }
-    }
-}
-customElements.define('insetu-file-actions', InSetuFileActions);
 document.addEventListener('DOMContentLoaded', () => {
     window.ExtensionRegistry.registerExtension('gather', {
         name: "Context Gatherer",
@@ -203,9 +193,9 @@ document.addEventListener('DOMContentLoaded', () => {
         uiHooks: {
             'zone:subtab-changed': (data) => {
                 if (data.parentId === 'context' && data.subId === 'gather') {
-                    const container = document.getElementById('sub-gather');
-                    const litEl = container?.querySelector('insetu-ext-gather');
-                    if (litEl && data.forceRefresh) litEl.loadContext();
+                    if (data.forceRefresh) {
+                        window.inSetu.stores.App.setState({ gatherForceRefreshTick: Date.now() });
+                    }
                 }
             }
         }

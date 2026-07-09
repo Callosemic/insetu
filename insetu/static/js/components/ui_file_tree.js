@@ -404,6 +404,23 @@ constructor() {
         `;
     }
 }
+export class InSetuFileActions extends LitElement {
+    static properties = { filepath: { type: String }, repoDir: { type: String }, isFS: { type: Boolean } };
+    createRenderRoot() { return this; } // Render in light DOM so slots naturally project into the parent asset card
+
+    render() {
+        const templates = [];
+        if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:file-card-actions']) {
+            for (let cb of window.ExtensionRegistry.uiHooks['zone:file-card-actions']) {
+                const res = cb({ filepath: this.filepath, repoDir: this.repoDir, isFS: this.isFS });
+                if (res) templates.push(res);
+            }
+        }
+        return templates;
+    }
+}
+
 customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-category-section', InSetuCategorySection);
 customElements.define('insetu-file-tree', InSetuFileTree);
+customElements.define('insetu-file-actions', InSetuFileActions);

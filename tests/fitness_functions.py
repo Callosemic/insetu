@@ -171,6 +171,7 @@ def check_javascript_files():
     context_scraping_pattern = re.compile(r'\.active\b.*\.sub-tab|\.sub-tab.*\.active\b')
     form_data_pattern = re.compile(r'new\s+FormData\b')
     local_fetch_wrapper_pattern = re.compile(r'(const|let|var)\s+apiFetch\s*=')
+    imperative_dom_create_pattern = re.compile(r'document\.createElement\(')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -249,10 +250,13 @@ def check_javascript_files():
                     # 13. UDF FormData Bypass
                     if is_lit_component and form_data_pattern.search(line):
                         report_violation("UDF_FORM_DATA_BAN", filepath, line_num, "new FormData() detected in LitElement. Bind inputs to reactive properties via @input instead.")
-
                     # 14. Global Fetch Interceptor Bypass
                     if is_extension and local_fetch_wrapper_pattern.search(line):
                         report_violation("GLOBAL_UTILITY_BYPASS", filepath, line_num, "Localized API fetch wrapper detected. Utilize the centralized window.inSetu.fetch utility to ensure global interceptor compliance.")
+
+                    # 15. Imperative DOM Creation Ban in Extensions
+                    if is_extension and is_lit_component and imperative_dom_create_pattern.search(line):
+                        report_violation("IMPERATIVE_DOM_CREATION", filepath, line_num, "document.createElement detected in a LitElement extension. Construct templates declaratively using lit-html.")
 
 if __name__ == "__main__":
     print("============================================================")

@@ -47,10 +47,14 @@ export const sharedStyles = css`
         padding: 8px 14px;
         font-size: 14px;
     }
-
     /* Sub-Tabs (Inherited for Shadow DOM components) */
     .sub-tabs-bar { position: relative; display: flex; justify-content: space-between; align-items: center; background: var(--bg); z-index: 99; border-bottom: 1px solid var(--border); padding: 0 20px; height: 44px; box-sizing: border-box; }
+    .sub-tabs-actions:empty { display: none !important; }
     .sub-tabs { display: flex; gap: 8px; margin: 0; padding: 0; overflow-x: auto; align-items: center; height: 100%; scrollbar-width: none; }
+
+    .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
+    .system-action-btn:hover { background: var(--input-bg); }
+
     .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; }
     .sub-tab:hover { color: var(--text); }
 .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
@@ -59,21 +63,55 @@ export const sharedStyles = css`
 @media (max-width: 1024px), (max-aspect-ratio: 1/1) {
     .sticky-header { top: -15px; margin: -15px -5px 10px -5px; padding: 6px 5px; }
 }
-
-input[type="text"].fuzzy-search-input {
+.fuzzy-search-wrapper {
+    display: flex;
+    align-items: center;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 10px;
     width: 100%;
-    padding: 4px 0 !important;
-    margin: 0 !important;
+    box-sizing: border-box;
+}
+.fuzzy-search-wrapper input {
+    flex: 1;
     border: none !important;
     background: transparent !important;
-    font-size: 0.95rem;
     outline: none;
-    box-shadow: none !important;
     color: var(--text);
+    padding: 8px 0;
+    margin: 0;
+    font-size: 0.95rem;
+    box-shadow: none !important;
 }
-.fuzzy-search-input::placeholder {
+.fuzzy-search-wrapper input::placeholder {
     color: var(--text-muted);
     opacity: 0.6;
+}
+.fuzzy-search-clear {
+    background: var(--intent-neutral);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    font-weight: bold;
+    padding: 2px 8px;
+    cursor: pointer;
+    margin-left: 8px;
+}
+:host-context([data-theme="light"]) .fuzzy-search-wrapper {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+}
+:host-context([data-theme="e-ink"]) .fuzzy-search-wrapper {
+    border: none !important;
+    border-bottom: 2px solid #0ea5e9 !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+}
+:host-context([data-theme="e-ink"]) .fuzzy-search-wrapper input {
+    border: none !important;
+    box-shadow: none !important;
 }
 
 /* Utilities */

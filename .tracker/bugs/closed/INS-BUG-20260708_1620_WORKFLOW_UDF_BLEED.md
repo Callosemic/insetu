@@ -7,7 +7,6 @@ title: "Workflow & Gather UDF State Splice Failures"
 created_at: 2026-07-08T16:20:00
 closed_at: 2026-07-09T11:26:53
 sub_bucket: "None"
-delivery_date: "2026-08-23"
 tags: ["Frontend", "UDF", "Performance"]
 ---
 

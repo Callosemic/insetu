@@ -340,14 +340,13 @@ export class InSetuExtBridge extends LitElement {
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
-
 export class InSetuExtBridgeActions extends LitElement {
     static properties = { viewMode: { type: String } };
-    static styles = css`
-        button { background: var(--btn); color: white; border: none; padding: 6px 12px; font-size: 0.85rem; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; }
-        button:hover { background: var(--btn-hover); }
-        button.back-btn { background: var(--intent-neutral); }
-    `;
+    static styles = [sharedStyles, css`
+        .bridge-action-btn { background: var(--btn); color: white; border: none; padding: 0 12px; font-size: 0.85rem; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; height: 34px; display: flex; align-items: center; }
+        .bridge-action-btn:hover { background: var(--btn-hover); }
+        .bridge-action-btn.back-btn { background: var(--intent-neutral); }
+    `];
     constructor() { super(); this.viewMode = 'input'; }
     connectedCallback() {
         super.connectedCallback();
@@ -364,8 +363,8 @@ export class InSetuExtBridgeActions extends LitElement {
     _back() { BridgeStore.setState({ viewMode: 'input' }); }
     render() {
         return this.viewMode === 'input' 
-            ? html`<button @click=${this._paste}>📋 Paste</button>` 
-            : html`<button class="back-btn" @click=${this._back}>🔙 Back to Edit</button>`;
+            ? html`<button class="bridge-action-btn" @click=${this._paste}>📋 Paste</button>` 
+            : html`<button class="bridge-action-btn back-btn" @click=${this._back}>🔙 Back to Edit</button>`;
     }
 }
 customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);

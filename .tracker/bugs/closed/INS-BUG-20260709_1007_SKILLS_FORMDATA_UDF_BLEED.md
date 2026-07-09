@@ -4,10 +4,9 @@ type: "bug"
 status: "closed"
 id: INS-BUG-20260709_1007_SKILLS_FORMDATA_UDF_BLEED
 title: "Skills Extension Bypasses UDF via FormData"
-created_at: "2026-07-09T10:03:14"
+created_at: 2026-07-09T10:03:14
 closed_at: 2026-07-09T11:23:39
 sub_bucket: "None"
-delivery_date: null
 tags: ["Frontend", "Compliance", "UDF"]
 ---
 

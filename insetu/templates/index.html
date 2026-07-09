@@ -33,9 +33,9 @@
             <div class="tab" onclick="switchTab(event, 'context')">Context</div>
             <div class="tab" onclick="switchTab(event, 'edit')">Edit</div>
         </div>
-        <div style="position: absolute; right: 15px; top: 10px;">
-            <button id="settings-toggle" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); font-size: 1.1rem; padding: 4px 8px;">{{ emoji }}</button>
-            <div id="settings-menu" style="display: none; position: absolute; right: 0; top: 40px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; min-width: 150px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 200;">
+        <div style="display: flex; align-items: center; justify-content: flex-end;">
+            <button id="settings-toggle" class="system-action-btn">{{ emoji }}</button>
+            <div id="settings-menu" style="display: none; position: absolute; top: 100%; right: 0; margin-top: 10px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); width: 280px; z-index: 2000; overflow: hidden;">
                 <h4 id="workspaces-header" style="display: none; margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">Workspace</h4>
                 <div id="workspaces-list" style="display: none; flex-direction: column; gap: 5px; margin-bottom: 15px;"></div>
 
