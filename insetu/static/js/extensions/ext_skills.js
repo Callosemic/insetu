@@ -4,6 +4,18 @@ import { sharedStyles } from '../shared_styles.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 
+// Prototype API Gateway (to be migrated globally to window.inSetu.fetch)
+const apiFetch = async (endpoint, options = {}) => {
+    const wsId = AppStore.getState().activeWorkspace || 'default';
+    const isGet = !options.method || options.method === 'GET';
+    const url = `/api/${wsId}${endpoint}${isGet ? '?_t=' + Date.now() : ''}`;
+    
+    return await fetch(url, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+    });
+};
+
 export const SkillsStore = createStore(
     devtools(
         subscribeWithSelector((set, get) => ({
@@ -19,10 +31,11 @@ export const SkillsStore = createStore(
             formStatus: '',
             formMetrics: {},
 
-            fetchPlaylist: async () => {
-                set({ loading: true });
+            clearPayload: () => set({ playlist: [], allSkills: [], groupsList: [] }),
+            fetchPlaylist: async (silent = false) => {
+                if (!silent) set({ loading: true });
                 try {
-                    const res = await fetch('/api/skills/playlist');
+                    const res = await apiFetch('/skills/playlist');
                     if (res.ok) {
                         const data = await res.json();
                         set({ playlist: data.playlist || [] });
@@ -30,15 +43,17 @@ export const SkillsStore = createStore(
                 } catch (e) {
                     console.error("Failed to load skills queue:", e);
                 } finally {
-                    set({ loading: false });
+                    if (!silent) set({ loading: false });
                 }
             },
             fetchAllSkills: async () => {
                 try {
-                    const res = await fetch('/api/skills/list');
+                    const res = await apiFetch('/skills/list');
                     if (res.ok) {
                         const data = await res.json();
-                        set({ allSkills: data.skills || [] });
+                        const skills = data.skills || [];
+                        const uniqueGroups = Array.from(new Set(skills.map(s => s.group_name).filter(g => g))).sort();
+                        set({ allSkills: skills, groupsList: uniqueGroups });
                     }
                 } catch (e) {
                     console.error("Failed to load repertoire listing:", e);
@@ -46,7 +61,7 @@ export const SkillsStore = createStore(
             },
             fetchDomainConfig: async () => {
                 try {
-                    const res = await fetch('/api/system/config');
+                    const res = await apiFetch('/system/config');
                     if (res.ok) {
                         const config = await res.json();
                         const skillCfg = config.extension_config?.skills_practice?.domains || {
@@ -65,8 +80,7 @@ export const SkillsStore = createStore(
                                 ]
                             }
                         };
-                        const groupsCfg = config.extension_config?.skills_practice?.groups || [];
-                        set({ domainConfig: skillCfg, groupsList: groupsCfg });
+                        set({ domainConfig: skillCfg });
                     }
                 } catch (e) {
                     console.warn("Failed to dynamically pull configurations matrix.", e);
@@ -134,11 +148,13 @@ export class InSetuExtSkills extends LitElement {
         this._editTags = '';
         this._editGroup = '';
     }
-
     get currentViewMode() {
-        if (this.closest('#sub-active')) return 'active';
-        if (this.closest('#sub-groups')) return 'groups';
-        return 'repertoire';
+        // Strictly prefer the dataset attribute injected by the OS layout engine
+        if (this.dataset.subId) return this.dataset.subId;
+
+        // Fallback for legacy static mounting
+        const parentId = this.parentNode?.id || '';
+        return parentId.replace('sub-', '') || 'repertoire';
     }
 
     get isActiveTab() {
@@ -182,17 +198,15 @@ export class InSetuExtSkills extends LitElement {
         if (this._unsub) this._unsub();
         if (this._unsubWs) this._unsubWs();
     }
-
-    _reloadAll() {
-        SkillsStore.getState().fetchPlaylist();
+    _reloadAll(silent = false) {
+        SkillsStore.getState().fetchPlaylist(silent);
         SkillsStore.getState().fetchAllSkills();
         SkillsStore.getState().fetchDomainConfig();
     }
-
     async _handleCreateSkill(e) {
         e.preventDefault();
-        const fd = new FormData(e.target);
-        const domain = fd.get('domain');
+        const fd = new FormData(e.currentTarget);
+        const domain = fd.get('domain') || this._newSkillDomain || Object.keys(this.domainConfig)[0];
 
         const metrics = {};
         const domainMeta = this.domainConfig[domain];
@@ -215,14 +229,12 @@ export class InSetuExtSkills extends LitElement {
             metrics: metrics
         };
         try {
-            const res = await fetch('/api/skills/create', {
+            const res = await apiFetch('/skills/create', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
                 SkillsStore.setState({ newSkillModalOpen: false });
-                this._reloadAll();
             } else {
                 const faultText = await res.json().catch(() => ({}));
                 alert(`Failed to compile item structure: ${faultText.error || res.statusText}`);
@@ -231,17 +243,16 @@ export class InSetuExtSkills extends LitElement {
             alert(`Network synchronization failure: ${err.message}`);
         }
     }
-
     async _openConfigModal() {
         try {
-            const res = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await apiFetch('/system/config');
             if (res.ok) {
                 this._rawSystemConfig = await res.json();
                 this._configText = JSON.stringify(this._rawSystemConfig.extension_config?.skills_practice?.domains || {}, null, 2);
                 this._configModalOpen = true;
-                this.requestUpdate();
             }
         } catch(e) {
+            console.error("Config load error:", e);
             alert("Failed to load skills targets.");
         }
     }
@@ -259,13 +270,8 @@ export class InSetuExtSkills extends LitElement {
 
     _togglePartCompletion(part, isChecked) {
         const currentPartsStr = this.formMetrics.completed_parts || '';
-        let completedParts = currentPartsStr.split(',').map(p => p.trim()).filter(p => p);
-
-        if (isChecked) {
-            if (!completedParts.includes(part)) completedParts.push(part);
-        } else {
-            completedParts = completedParts.filter(p => p !== part);
-        }
+        const parsedParts = currentPartsStr.split(',').map(p => p.trim()).filter(p => p);
+        const completedParts = isChecked ? (parsedParts.includes(part) ? parsedParts : [...parsedParts, part]) : parsedParts.filter(p => p !== part);
 
         SkillsStore.getState().updateMetricField('completed_parts', completedParts.join(', '));
     }
@@ -309,10 +315,9 @@ export class InSetuExtSkills extends LitElement {
             if (!config.extension_config) config.extension_config = {};
             if (!config.extension_config.skills_practice) config.extension_config.skills_practice = {};
             config.extension_config.skills_practice.domains = domains;
-
-            const res = await fetch('/api/system/config', {
+            
+            const res = await apiFetch('/system/config', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
             });
             if (res.ok) {
@@ -323,22 +328,20 @@ export class InSetuExtSkills extends LitElement {
                 alert("Failed to preserve configuration framework.");
             }
         } catch (err) {
-            alert("Invalid JSON schema structure detected inside domains configuration.");
+            console.error("Configuration Save Error:", err);
+            alert("Invalid JSON schema structure detected inside domains configuration. Check the console for details.");
         }
     }
     async _deleteSkillItem() {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
-
         try {
-            const res = await fetch('/api/skills/delete', {
+            const res = await apiFetch('/skills/delete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filepath: this.selectedItem.filepath })
             });
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
-                this._reloadAll();
                 alert("Track permanently wiped from file system.");
             } else {
                 const faultText = await res.json().catch(() => ({}));
@@ -360,16 +363,13 @@ export class InSetuExtSkills extends LitElement {
             parts: this.formMetrics.parts || '',
             custom_steps: this.formMetrics.custom_steps || ''
         };
-
         try {
-            const res = await fetch('/api/skills/update', {
+            const res = await apiFetch('/skills/update', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
-                this._reloadAll();
                 alert("Structural configuration updated successfully!");
             } else {
                 const faultText = await res.json().catch(() => ({}));
@@ -391,20 +391,18 @@ export class InSetuExtSkills extends LitElement {
             group: this._editGroup,
             metrics: this.formMetrics
         };
-
         try {
-            const res = await fetch('/api/skills/log', {
+            const res = await apiFetch('/skills/log', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
-                this._reloadAll();
                 alert("Practice entry committed atomically into text ledger!");
             }
         } catch (e) {
-            alert("Network error sync loop failed.");
+            console.error("Practice logging failed:", e);
+            alert("Network error sync loop failed. Check the console for details.");
         }
     }
     _renderMetricInput(key, def) {
@@ -439,11 +437,7 @@ export class InSetuExtSkills extends LitElement {
         `;
     }
     _renderGroupsTab() {
-        // Collect all distinct groups mentioned across live items plus configured groups
-        const distinctGroups = new Set([...this.groupsList]);
-        this.allSkills.forEach(s => { if (s.group_name) distinctGroups.add(s.group_name); });
-        const structuredGroups = Array.from(distinctGroups).sort();
-
+        const structuredGroups = [...this.groupsList];
         if (structuredGroups.length === 0) {
             return html`<p style="color: var(--text-muted); font-style: italic; padding: 20px 0;">No grouped track items established. Assign a "Group" value in an item's Edit panel to start.</p>`;
         }
@@ -453,16 +447,8 @@ export class InSetuExtSkills extends LitElement {
                 ${structuredGroups.map(groupName => {
                     const linkedItems = this.allSkills.filter(s => s.group_name === groupName);
                     if (linkedItems.length === 0) return '';
-
-                    let absoluteParts = 0;
-                    let absoluteCompleted = 0;
-
-                    linkedItems.forEach(item => {
-                        const parts = item.metrics?.parts ? item.metrics.parts.split(',').map(p => p.trim()).filter(p => p) : [];
-                        const completed = item.metrics?.completed_parts ? item.metrics.completed_parts.split(',').map(p => p.trim()).filter(p => p) : [];
-                        absoluteParts += parts.length;
-                        absoluteCompleted += completed.length;
-                    });
+                    const absoluteParts = linkedItems.reduce((acc, item) => acc + (item.metrics?.parts ? item.metrics.parts.split(',').map(p => p.trim()).filter(p => p).length : 0), 0);
+                    const absoluteCompleted = linkedItems.reduce((acc, item) => acc + (item.metrics?.completed_parts ? item.metrics.completed_parts.split(',').map(p => p.trim()).filter(p => p).length : 0), 0);
 
                     const progressPercentage = absoluteParts > 0 ? Math.round((absoluteCompleted / absoluteParts) * 100) : 0;
 
@@ -511,16 +497,15 @@ export class InSetuExtSkills extends LitElement {
             </div>
         `;
     }
-
     render() {
         if (!this.isActiveTab) return '';
-        if (this.loading) return html`<div class="spinner" style="display:block;">Sweeping session items...</div>`;
 
         const viewMode = this.currentViewMode;
         const activeNewDomain = this._newSkillDomain || Object.keys(this.domainConfig)[0] || 'musical_repertoire';
 
         return html`
             <div style="display: flex; flex-direction: column; gap: 20px;">
+                ${this.loading ? html`<div class="spinner" style="display:block; margin-top: 0;">Sweeping session items...</div>` : ''}
                 <div style="display: flex; justify-content: flex-end; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: -10px;">
                     <button class="btn-sm" style="background: var(--intent-success); font-weight: bold;" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}>➕ New Skill Item</button>
                 </div>
@@ -605,15 +590,7 @@ export class InSetuExtSkills extends LitElement {
                     ${(() => {
                         if (!this.selectedItem) return '';
                         const domainMeta = this.domainConfig[this.selectedItem.domain];
-                        let options = [];
-
-                        if (this.selectedItem.metrics && this.selectedItem.metrics.custom_steps) {
-                            options = this.selectedItem.metrics.custom_steps.split(',').map(s => ({ key: s.trim(), label: s.trim() }));
-                        } else if (domainMeta && domainMeta.step_labels) {
-                            options = Array.isArray(domainMeta.step_labels)
-                                ? domainMeta.step_labels
-                                : Object.keys(domainMeta.step_labels).map(k => ({ key: k, label: domainMeta.step_labels[k] }));
-                        }
+                        const options = (this.selectedItem.metrics && this.selectedItem.metrics.custom_steps) ? this.selectedItem.metrics.custom_steps.split(',').map(s => ({ key: s.trim(), label: s.trim() })) : ((domainMeta && domainMeta.step_labels) ? (Array.isArray(domainMeta.step_labels) ? domainMeta.step_labels : Object.keys(domainMeta.step_labels).map(k => ({ key: k, label: domainMeta.step_labels[k] }))) : []);
 
                         if (options.length === 0) return '';
                         return html`
@@ -655,10 +632,10 @@ export class InSetuExtSkills extends LitElement {
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Parent Collection Group</label>
-                            <select .value=${this._editGroup} @change=${(e) => this._editGroup = e.target.value}>
-                                <option value="">None (Standalone Entry)</option>
-                                ${this.groupsList.map(g => html`<option value="${g}">${g}</option>`)}
-                            </select>
+                            <input type="text" list="edit-group-list" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @input=${(e) => this._editGroup = e.target.value} style="width:100%;">
+                            <datalist id="edit-group-list">
+                                ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
+                            </datalist>
                         </div>
                     </div>
                     <div>
@@ -675,7 +652,8 @@ export class InSetuExtSkills extends LitElement {
                     </div>
                 </div>
                 <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
-                    <button class="btn-sm" style="background: #dc3545; color: white; font-weight: bold; padding: 12px 18px; border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
+<button class="btn-sm" style="background: var(--intent-danger); color: white; font-weight: bold; padding: 12px 18px; 
+border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
                     <button style="background: var(--intent-primary); font-weight: bold; flex: 1; padding: 12px;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
                 </div>
             </insetu-modal>
@@ -691,10 +669,10 @@ export class InSetuExtSkills extends LitElement {
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Collection Group</label>
-                            <select name="group">
-                                <option value="">None (Standalone Entry)</option>
-                                ${this.groupsList.map(g => html`<option value="${g}">${g}</option>`)}
-                            </select>
+                            <input type="text" name="group" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%;">
+                            <datalist id="new-group-list">
+                                ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
+                            </datalist>
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Target Domain Framework</label>
@@ -717,13 +695,7 @@ export class InSetuExtSkills extends LitElement {
                             <select name="status">
                                 ${(() => {
                                     const cfg = this.domainConfig[activeNewDomain];
-                                    let options = [];
-                                    if (cfg && cfg.step_labels) {
-                                        options = Array.isArray(cfg.step_labels)
-                                            ? cfg.step_labels
-                                            : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }));
-                                    }
-                                    if (options.length === 0) options = [{ key: 'untouched', label: 'Untouched' }];
+                                    const options = (cfg && cfg.step_labels) ? (Array.isArray(cfg.step_labels) ? cfg.step_labels : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }))) : [{ key: 'untouched', label: 'Untouched' }];
                                     return options.map(opt => html`<option value="${opt.key}">${opt.label}</option>`);
                                 })()}
                             </select>
@@ -851,13 +823,13 @@ window.ExtensionRegistry.registerExtension('skills', {
     uiHooks: {
         'zone:tab-changed': (tabId) => {
             if (tabId === 'skills') {
-                SkillsStore.getState().fetchPlaylist();
+                SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'skills') {
-                SkillsStore.getState().fetchPlaylist();
+                SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }
         },
@@ -865,6 +837,20 @@ window.ExtensionRegistry.registerExtension('skills', {
             if (data.filepath && data.filepath.includes('.skills/')) {
                 // Future capability extension hooks can bind downstream items here
             }
+        },
+        'zone:post-file-save': (filepath) => {
+            if (filepath && filepath.includes('.insetu/skills/')) {
+                SkillsStore.getState().fetchPlaylist(true);
+                SkillsStore.getState().fetchAllSkills();
+            }
+            return false;
+        },
+        'zone:post-file-delete': (filepath) => {
+            if (filepath && filepath.includes('.insetu/skills/')) {
+                SkillsStore.getState().fetchPlaylist(true);
+                SkillsStore.getState().fetchAllSkills();
+            }
+            return false;
         }
     }
 });

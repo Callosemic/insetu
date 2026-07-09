@@ -2,11 +2,11 @@ import { LitElement, html, css } from 'lit';
 import { executeWorkspaceMutation, fetchAndCopy, fetchAndDownloadState, executeSystemCompile } from '../app.js';
 import { AppStore } from '../store.js';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuExtFlow extends LitElement {
     static properties = {
         batches: { type: Array },
         loading: { type: Boolean },
+        searchQuery: { type: String },
         _editingBatch: { type: Object },
         _viewingBatch: { type: Object },
         _showSelectContexts: { type: Boolean },
@@ -16,11 +16,11 @@ export class InSetuExtFlow extends LitElement {
         _responseContent: { type: String }
     };
     static styles = [sharedStyles];
-
     constructor() {
         super();
         this.batches = [];
         this.loading = false;
+        this.searchQuery = '';
         this._editingBatch = null;
         this._viewingBatch = null;
         this._showSelectContexts = false;
@@ -178,7 +178,11 @@ export class InSetuExtFlow extends LitElement {
     }
     render() {
             const categories = {};
-            this.batches.forEach(b => {
+            const filteredBatches = this.searchQuery 
+                ? window.fuzzyFilterObjects(this.batches, this.searchQuery, b => `${b.title} ${b.id} ${b.domain}`) 
+                : this.batches;
+
+            filteredBatches.forEach(b => {
                     const domain = b.domain || 'Workflows';
                     if (!categories[domain]) categories[domain] = [];
                     categories[domain].push(b);
@@ -193,13 +197,15 @@ export class InSetuExtFlow extends LitElement {
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                            <h2 style="margin: 0;">Context Batches & Workflows</h2>
-                    </div>
-                    ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
+                                    <div class="sticky-header" style="display: flex; flex-direction: column;">
+                                        <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                                    </div>
+
+        ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
 
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
-                            ${this.batches.length === 0 ? html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
+                                ${this.batches.length === 0 ?
+html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
                             ${sortedCats.map(cat => html`
                                     <insetu-category-section titleText=${cat}>
                                             ${categories[cat].map(b => html`

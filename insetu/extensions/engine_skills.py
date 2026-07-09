@@ -3,6 +3,7 @@ import re
 import json
 import uuid
 import datetime
+from pathlib import Path
 from flask import Blueprint, request, jsonify
 from insetu.db import get_connection
 from insetu.hooks import hooks
@@ -11,53 +12,57 @@ from insetu.routes_fs import execute_vfs_save
 
 skills_bp = Blueprint('skills', __name__)
 __depends__ = []
+
 def _get_user_skills_dir():
     """Resolves and commands the global system user space directory structure."""
     base_dir = os.path.expanduser('~/.insetu/skills')
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
+
 @hooks.on('system_boot')
 def init_skills_db():
     """Initializes a unified global user-level SQLite cache schema for cross-workspace tracking."""
-    conn = get_connection("skills", workspace_id=None)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS skills_ledger (
-            id TEXT PRIMARY KEY,
-            domain TEXT NOT NULL,
-            tags TEXT DEFAULT '',
-            group_name TEXT DEFAULT '',
-            name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            last_practiced TEXT,
-            interval_days INTEGER DEFAULT 1,
-            next_review TEXT,
-            filepath TEXT NOT NULL,
-            metrics_json TEXT DEFAULT '{}'
-        )
-    """)
-    conn.commit()
+    from insetu.utils_core import get_all_workspace_ids
+    for ws_id in get_all_workspace_ids():
+        conn = get_connection("skills", workspace_id=ws_id)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS skills_ledger (
+                id TEXT PRIMARY KEY,
+                domain TEXT NOT NULL,
+                tags TEXT DEFAULT '',
+                group_name TEXT DEFAULT '',
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_practiced TEXT,
+                interval_days INTEGER DEFAULT 1,
+                next_review TEXT,
+                filepath TEXT NOT NULL,
+                metrics_json TEXT DEFAULT '{}'
+            )
+        """)
+        conn.commit()
 
-    # Safe Schema Migration Check: Inject columns if table predates updates
-    try:
-        cursor = conn.execute("PRAGMA table_info(skills_ledger)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if 'tags' not in columns:
-            conn.execute("ALTER TABLE skills_ledger ADD COLUMN tags TEXT DEFAULT ''")
-            conn.commit()
-        if 'group_name' not in columns:
-            conn.execute("ALTER TABLE skills_ledger ADD COLUMN group_name TEXT DEFAULT ''")
-            conn.commit()
-    except Exception as migration_err:
-        print(f"Skills migration safety bypassed: {migration_err}")
+        # Safe Schema Migration Check: Inject columns if table predates updates
+        try:
+            cursor = conn.execute("PRAGMA table_info(skills_ledger)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'tags' not in columns:
+                conn.execute("ALTER TABLE skills_ledger ADD COLUMN tags TEXT DEFAULT ''")
+                conn.commit()
+            if 'group_name' not in columns:
+                conn.execute("ALTER TABLE skills_ledger ADD COLUMN group_name TEXT DEFAULT ''")
+                conn.commit()
+        except Exception as migration_err:
+            print(f"Skills migration safety bypassed: {migration_err}")
 
-    # Sync filesystem entries to database cache on system spin-up
-    skills_dir = _get_user_skills_dir()
-    for filename in os.listdir(skills_dir):
-        if filename.endswith(".md"):
-            abs_path = os.path.join(skills_dir, filename)
-            _parse_and_upsert_skill(abs_path, filename)
+        # Sync filesystem entries to database cache on system spin-up
+        skills_dir = _get_user_skills_dir()
+        for filename in os.listdir(skills_dir):
+            if filename.endswith(".md"):
+                abs_path = Path(skills_dir).joinpath(filename).as_posix()
+                _parse_and_upsert_skill(abs_path, filename, workspace_id=ws_id)
 
-def _parse_and_upsert_skill(abs_path, filename):
+def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
     try:
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -97,9 +102,9 @@ def _parse_and_upsert_skill(abs_path, filename):
                                 metrics[k] = float(v)
                             except ValueError:
                                 metrics[k] = v
-        conn = get_connection("skills", workspace_id=None)
+        conn = get_connection("skills", workspace_id=workspace_id)
         conn.execute("""
-            INSERT OR REPLACE INTO skills_ledger 
+            INSERT OR REPLACE INTO skills_ledger  
             (id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filepath, metrics_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (s_id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filename, json.dumps(metrics)))
@@ -108,10 +113,11 @@ def _parse_and_upsert_skill(abs_path, filename):
         print(f"Error parsing global skill file {filename}: {e}")
 
 @skills_bp.route('/api/skills/playlist', methods=['GET'])
-def get_practice_playlist():
+@skills_bp.route('/api/<workspace_id>/skills/playlist', methods=['GET'])
+def get_practice_playlist(workspace_id=None):
     """Compiles a unified practice batch across all domains sorted globally."""
     try:
-        conn = get_connection("skills", workspace_id=None)
+        conn = get_connection("skills", workspace_id=workspace_id)
         today_str = datetime.date.today().isoformat()
         cursor = conn.execute("""
             SELECT * FROM skills_ledger 
@@ -128,7 +134,8 @@ def get_practice_playlist():
         return jsonify({"error": str(e)}), 500
 
 @skills_bp.route('/api/skills/log', methods=['POST'])
-def log_skill_practice():
+@skills_bp.route('/api/<workspace_id>/skills/log', methods=['POST'])
+def log_skill_practice(workspace_id=None):
     """Logs a practice run against the user's global profile tracking framework."""
     data = request.json or {}
     filename = data.get('filepath')  # Maps strictly to user space base filename
@@ -139,7 +146,7 @@ def log_skill_practice():
         return jsonify({"error": "Filename tracking reference required"}), 400
 
     try:
-        conn = get_connection("skills", workspace_id=None)
+        conn = get_connection("skills", workspace_id=workspace_id)
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
@@ -155,7 +162,7 @@ def log_skill_practice():
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
 
-        abs_path = os.path.join(_get_user_skills_dir(), filename)
+        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -184,26 +191,33 @@ def log_skill_practice():
             else: new_yaml.append(f'{k}: {v}')
         new_yaml.append("---\n")
 
-        with open(abs_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(new_yaml) + "\n" + body_content)
         # Rename physical file if track title is systematically edited
+        final_content = "\n".join(new_yaml) + "\n" + body_content
         final_filename = filename
+        
         if name.lower() != row['name'].lower():
             from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = os.path.join(_get_user_skills_dir(), new_filename)
-            os.rename(abs_path, new_abs_path)
+            new_abs_path = Path(_get_user_skills_dir()).joinpath(new_filename).as_posix()
+            if os.path.exists(abs_path):
+                from insetu.routes_fs import execute_vfs_delete
+                execute_vfs_delete(workspace_id, abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
-        _parse_and_upsert_skill(abs_path, final_filename)
+            
+        from insetu.routes_fs import execute_vfs_save
+        execute_vfs_save(workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+        
+        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=workspace_id)
         return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @skills_bp.route('/api/skills/update', methods=['POST'])
-def update_skill_structure():
+@skills_bp.route('/api/<workspace_id>/skills/update', methods=['POST'])
+def update_skill_structure(workspace_id=None):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
     data = request.json or {}
     filename = data.get('filepath')
@@ -211,12 +225,12 @@ def update_skill_structure():
         return jsonify({"error": "Filename tracking reference required"}), 400
 
     try:
-        conn = get_connection("skills", workspace_id=None)
+        conn = get_connection("skills", workspace_id=workspace_id)
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
 
-        abs_path = os.path.join(_get_user_skills_dir(), filename)
+        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -250,26 +264,32 @@ def update_skill_structure():
                 else: new_yaml.append(f'{k}: {v}')
         new_yaml.append("---\n")
 
-        with open(abs_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(new_yaml) + "\n" + body_content)
-
+        final_content = "\n".join(new_yaml) + "\n" + body_content
         final_filename = filename
+        
         if name.lower() != row['name'].lower():
             from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = os.path.join(_get_user_skills_dir(), new_filename)
-            os.rename(abs_path, new_abs_path)
+            new_abs_path = Path(_get_user_skills_dir()).joinpath(new_filename).as_posix()
+            if os.path.exists(abs_path):
+                from insetu.routes_fs import execute_vfs_delete
+                execute_vfs_delete(workspace_id, abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
-        _parse_and_upsert_skill(abs_path, final_filename)
+            
+        from insetu.routes_fs import execute_vfs_save
+        execute_vfs_save(workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+        
+        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=workspace_id)
         return jsonify({"status": "success", "filepath": final_filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @skills_bp.route('/api/skills/delete', methods=['POST'])
-def delete_skill_item():
+@skills_bp.route('/api/<workspace_id>/skills/delete', methods=['POST'])
+def delete_skill_item(workspace_id=None):
     """Permanently purges a skill markdown asset from user space disk and index ledger."""
     data = request.json or {}
     filename = data.get('filepath')
@@ -277,11 +297,12 @@ def delete_skill_item():
         return jsonify({"error": "Filename tracking reference required"}), 400
 
     try:
-        conn = get_connection("skills", workspace_id=None)
-        abs_path = os.path.join(_get_user_skills_dir(), filename)
+        conn = get_connection("skills", workspace_id=workspace_id)
+        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
 
         if os.path.exists(abs_path):
-            os.remove(abs_path)
+            from insetu.routes_fs import execute_vfs_delete
+            execute_vfs_delete(workspace_id, abs_path)
 
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
         conn.commit()
@@ -290,10 +311,11 @@ def delete_skill_item():
         return jsonify({"error": str(e)}), 500
 
 @skills_bp.route('/api/skills/list', methods=['GET'])
-def get_all_skills():
+@skills_bp.route('/api/<workspace_id>/skills/list', methods=['GET'])
+def get_all_skills(workspace_id=None):
     """Returns every tracking item registered across the user profile layout."""
     try:
-        conn = get_connection("skills", workspace_id=None)
+        conn = get_connection("skills", workspace_id=workspace_id)
         cursor = conn.execute("SELECT * FROM skills_ledger ORDER BY name ASC")
         items = []
         for row in cursor.fetchall():
@@ -303,8 +325,10 @@ def get_all_skills():
         return jsonify({"skills": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 @skills_bp.route('/api/skills/create', methods=['POST'])
-def create_new_skill():
+@skills_bp.route('/api/<workspace_id>/skills/create', methods=['POST'])
+def create_new_skill(workspace_id=None):
     """Generates a physical markdown file structure inside global user space."""
     data = request.json or {}
     name = data.get('name', '').strip()
@@ -321,7 +345,7 @@ def create_new_skill():
     try:
         from insetu.utils_core import slugify
         filename = f"{slugify(name)}.md"
-        abs_path = os.path.join(_get_user_skills_dir(), filename)
+        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
         new_yaml = [
             "---",
@@ -346,11 +370,11 @@ def create_new_skill():
 
         new_yaml.append("---\n")
         new_yaml.append(f"## Practice Logs: {name}\n")
+        
+        from insetu.routes_fs import execute_vfs_save
+        execute_vfs_save(workspace_id, abs_path, "\n".join(new_yaml), data={"is_absolute_artifact": True})
 
-        with open(abs_path, 'w', encoding='utf-8') as f:
-            f.write("\n".join(new_yaml))
-
-        _parse_and_upsert_skill(abs_path, filename)
+        _parse_and_upsert_skill(abs_path, filename, workspace_id=workspace_id)
         return jsonify({"status": "success", "filepath": filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

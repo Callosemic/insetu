@@ -1,141 +1,170 @@
-export function importFromUrl() {
-    const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
-        <input type="text" id="import-url-input" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="window.inSetu.stores.App.setState({ ingestUrl: this.value })">
+import { LitElement, html, css } from 'lit';
+import { sharedStyles } from '../shared_styles.js';
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { AppStore } from '../store.js';
+import { generateSafeSlug } from '../app.js';
 
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
-<div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;"
-onchange="window.inSetu.stores.App.setState({ ingestMethod: event.target.value })">
+export const IngestStore = createStore(
+    devtools(
+        subscribeWithSelector((set) => ({
+            ingestModalOpen: false,
+            ingestUrl: '',
+            ingestMethod: 'jina',
+            ingestStatus: null,
+            ingestError: null
+        })),
+        { name: 'IngestStore' }
+    )
+);
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+window.inSetu.stores.Ingest = IngestStore;
 
-            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                    <input type="radio" name="import-method" value="jina" checked>  
-                <b>Jina Reader API</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
-            </label>
-            <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                <input type="radio" name="import-method" value="bs4"> 
-                <b>BeautifulSoup Local</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
-            </label>
-        </div>
-    `;
-    window.inSetu.ui.Factory.createModal({
-        id: 'import-url-modal',
-        title: 'Import from URL',
-        body: bodyHtml,
-        actions: [
-            { label: '📥 Fetch & Convert', style: 'primary', onClick: async (e, modal) => {
-                await executeImportUrl(modal.id);
-                return true;
-            }}
-        ]
-    });
-    setTimeout(() => {
-        const input = document.getElementById('import-url-input');
-        if (input) input.focus();
-    }, 100);
-}
-export async function executeImportUrl(modalId = 'import-url-modal') {
-    const state = window.inSetu.stores.App.getState();
-    const url = (state.ingestUrl || '').trim();
-    if (!url) return alert("Please enter a valid URL.");
-    const method = state.ingestMethod || 'jina';
+export class InSetuExtIngestModals extends LitElement {
+    static properties = {
+        ingestModalOpen: { type: Boolean },
+        ingestUrl: { type: String },
+        ingestMethod: { type: String },
+        ingestStatus: { type: String },
+        ingestError: { type: String }
+    };
+    static styles = [sharedStyles];
 
-    if (window.inSetu.ui.Factory) window.inSetu.ui.Factory.closeModal(modalId);
-    else {
-        const m = document.getElementById(modalId);
-        if (m) m.style.display = 'none';
+    constructor() {
+        super();
+        this.ingestModalOpen = false;
+        this.ingestUrl = '';
+        this.ingestMethod = 'jina';
+        this.ingestStatus = null;
+        this.ingestError = null;
     }
 
-    const statusEl = document.getElementById('import-url-status');
-    const contentEl = document.getElementById('new-file-content');
-
-    if(statusEl) {
-        statusEl.style.display = 'inline-block';
-        statusEl.innerText = "Fetching and converting...";
-        statusEl.style.color = "var(--text-muted)";
-    }
-
-    try {
-        const res = await fetch('/api/ingest/url', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, method })
+    connectedCallback() {
+        super.connectedCallback();
+        this._unsub = IngestStore.subscribe(state => {
+            this.ingestModalOpen = state.ingestModalOpen;
+            this.ingestUrl = state.ingestUrl;
+            this.ingestMethod = state.ingestMethod;
+            this.ingestStatus = state.ingestStatus;
+            this.ingestError = state.ingestError;
         });
-        const data = await res.json();
+    }
 
-        if (res.ok) {
-            // Append or overwrite content seamlessly
-            if (contentEl.value.trim() !== '') {
-                if (confirm("Overwrite existing content with imported markdown?")) {
-                    contentEl.value = data.markdown;
-                } else {
-                    contentEl.value += '\n\n' + data.markdown;
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._unsub) this._unsub();
+    }
+
+    async _executeImportUrl() {
+        const url = this.ingestUrl.trim();
+        if (!url) return alert("Please enter a valid URL.");
+
+        IngestStore.setState({ ingestStatus: 'Fetching and converting...', ingestError: null });
+
+        try {
+            const res = await fetch('/api/ingest/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, method: this.ingestMethod })
+            });
+            const data = await res.json();
+
+            if (res.ok) {
+                const fsState = window.inSetu.stores.Fs.getState();
+                const currentContent = fsState.modals.newFile?.content || '';
+
+                let shouldOverwrite = false;
+                if (currentContent.trim() !== '') {
+                    shouldOverwrite = confirm("Overwrite existing content with imported markdown?");
                 }
-            } else {
-                contentEl.value = data.markdown;
-            }
 
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', data);
-            }
-            // Try to auto-guess a clean filename if the user hasn't typed one
-            const nameEl = document.getElementById('new-file-name');
-            if (nameEl.value.trim() === '') {
-                const slug = (() => {
-                    const titleBase = (data.title && data.title !== 'Imported Content') ? window.generateSafeSlug(data.title) : '';
-                    const urlBase = (() => {
-                        if (titleBase) return titleBase;
-                        try {
-                            const urlObj = new URL(data.resolved_url || url);
-                            return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-                        } catch(e) { return ''; }
+                const newContent = (shouldOverwrite || currentContent.trim() === '') 
+                    ? data.markdown 
+                    : currentContent + '\n\n' + data.markdown;
+
+                fsState.setModal('newFile', { content: newContent });
+
+                if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                    window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', data);
+                }
+
+                const currentFileName = fsState.modals.newFile?.fileName || '';
+                if (currentFileName.trim() === '') {
+                    const slug = (() => {
+                        const titleBase = (data.title && data.title !== 'Imported Content') ? generateSafeSlug(data.title) : '';
+                        const urlBase = (() => {
+                            if (titleBase) return titleBase;
+                            try {
+                                const urlObj = new URL(data.resolved_url || url);
+                                return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+                            } catch(e) { return ''; }
+                        })();
+                        return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
                     })();
-                    return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
-                })();
-                nameEl.value = slug + '.md';
-                if(typeof checkFileExtension === 'function') checkFileExtension(nameEl.value);
-            }
+                    fsState.setModal('newFile', { fileName: slug + '.md' });
+                }
 
-            if(statusEl) {
-                statusEl.innerText = "✅ Success";
-                statusEl.style.color = "var(--intent-success)";
+                IngestStore.setState({ ingestStatus: '✅ Success' });
+                setTimeout(() => IngestStore.setState({ ingestModalOpen: false, ingestStatus: null, ingestUrl: '' }), 1000);
+            } else {
+                IngestStore.setState({ ingestStatus: null, ingestError: data.error || "Failed to import URL." });
             }
-        } else {
-            if(statusEl) {
-                statusEl.innerText = "❌ Error";
-                statusEl.style.color = "var(--intent-danger)";
-            }
-            alert(data.error || "Failed to import URL.");
+        } catch (e) {
+            IngestStore.setState({ ingestStatus: null, ingestError: "Network error: " + e.message });
         }
-    } catch (e) {
-        if(statusEl) {
-            statusEl.innerText = "❌ Error";
-            statusEl.style.color = "var(--intent-danger)";
-        }
-        alert("Network error: " + e.message);
     }
 
-    if(statusEl) {
-        setTimeout(() => {
-            statusEl.style.display = 'none';
-        }, 3000);
+    render() {
+        return html`
+            <insetu-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
+                <div slot="body">
+                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
+                    <input type="text" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;"
+                        .value=${this.ingestUrl} @input=${e => IngestStore.setState({ ingestUrl: e.target.value })}>
+
+                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
+                    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;"
+                        @change=${e => IngestStore.setState({ ingestMethod: e.target.value })}>
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="import-method" value="jina" ?checked=${this.ingestMethod === 'jina'}>  
+                            <b>Jina Reader API</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
+                        </label>
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="import-method" value="bs4" ?checked=${this.ingestMethod === 'bs4'}> 
+                            <b>BeautifulSoup Local</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
+                        </label>
+                    </div>
+                    ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
+                    ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
+                        ?disabled=${!!this.ingestStatus && this.ingestStatus !== '✅ Success'} @click=${this._executeImportUrl}>
+                        📥 Fetch & Convert
+                    </button>
+                </div>
+            </insetu-modal>
+        `;
     }
 }
+customElements.define('insetu-ext-ingest-modals', InSetuExtIngestModals);
 
-// Mount to window so the hardcoded UI elements in the New File Modal can trigger it natively
-window.importFromUrl = importFromUrl;
-window.executeImportUrl = executeImportUrl;
-
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    window.inSetu.extensions.Registry.registerUIHook('zone:new-file-options', () => {
-        const toolbar = document.getElementById('new-file-toolbar');
-        if (toolbar) toolbar.style.display = 'flex';
-        return false;
-    });
-}
-
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUnloadHook) {
-    window.inSetu.extensions.Registry.registerUnloadHook('ingest', () => {
-        const toolbar = document.getElementById('new-file-toolbar');
-        if (toolbar) toolbar.style.display = 'none';
-    });
-}
+window.ExtensionRegistry.registerExtension('ingest', {
+    name: "URL Ingestion",
+    version: "2.0.0",
+    layoutSlots: [
+        {
+            slot: "slots:global",
+            component: "insetu-ext-ingest-modals"
+        }
+    ],
+    uiHooks: {
+        'zone:new-file-options-lit': () => {
+            return html`
+                <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
+                    <button @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
+                </div>
+            `;
+        }
+    }
+});

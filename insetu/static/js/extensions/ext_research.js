@@ -34,7 +34,8 @@ export class InSetuExtResearch extends LitElement {
         selectedItemId: { type: String },
         targetDir: { type: String },
         aiTriageMode: { type: Boolean },
-        searchForm: { type: Object }
+        searchForm: { type: Object },
+        _aiJsonInput: { type: String }
     };
     static styles = [        css`
             .rs-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
@@ -42,7 +43,6 @@ export class InSetuExtResearch extends LitElement {
             .rs-view.active { display: flex; }
         `
     ];
-
     constructor() {
         super();
         this.jobs = [];
@@ -52,6 +52,7 @@ export class InSetuExtResearch extends LitElement {
         this.targetDir = 'research/';
         this.aiTriageMode = false;
         this.searchForm = {};
+        this._aiJsonInput = '';
     }
 
     connectedCallback() {
@@ -75,39 +76,12 @@ export class InSetuExtResearch extends LitElement {
         this.targetDir = state.targetDir;
         this.aiTriageMode = state.aiTriageMode;
         this.searchForm = state.searchForm;
-
         this.fetchState();
-
-        // Dynamically inject the global back button into the external tab bar
-        setTimeout(() => {
-            const actionContainer = document.querySelector('#tab-edit .sub-tabs-bar > div:last-child');
-            if (actionContainer && !document.getElementById('rs-global-back-btn')) {
-                const backBtn = document.createElement('button');
-                backBtn.id = 'rs-global-back-btn';
-                backBtn.className = 'btn-sm';
-                backBtn.style.cssText = 'background: var(--intent-neutral); margin: 0; padding: 4px 12px; display: none;';
-                backBtn.innerText = '🔙 Back to Jobs';
-                backBtn.onclick = () => ResearchStore.setState({ selectedJobId: null, selectedItemId: null });
-                actionContainer.prepend(backBtn);
-            }
-        }, 100);
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
-        const globalBackBtn = document.getElementById('rs-global-back-btn');
-        if (globalBackBtn) globalBackBtn.remove();
-    }
-
-    updated(changedProperties) {
-        if (changedProperties.has('selectedJobId') || changedProperties.has('isTabActive')) {
-            const globalBackBtn = document.getElementById('rs-global-back-btn');
-            const isTabActive = ResearchStore.getState().isTabActive;
-            if (globalBackBtn) {
-                globalBackBtn.style.display = (this.selectedJobId && isTabActive) ? 'block' : 'none';
-            }
-        }
     }
 
     async fetchState() {
@@ -246,10 +220,8 @@ export class InSetuExtResearch extends LitElement {
             btn.innerText = "📦 Pack Context Files";
         }
     }
-
     async executeAITriage(e) {
-        const inputEl = this.shadowRoot.getElementById('rs-ai-json-input');
-        const input = (inputEl.value || '').trim();
+        const input = (this._aiJsonInput || '').trim();
         if (!input) return;
 
         const payload = (() => {
@@ -277,7 +249,8 @@ export class InSetuExtResearch extends LitElement {
             for (const id of rejectIds) if (id) await this.handleDisposition(id, 'rejected');
             for (const id of rescanIds) if (id) await this.handleDisposition(id, 'force_scrape');
 
-            inputEl.value = '';
+            this._aiJsonInput = '';
+            this.requestUpdate();
             await this.fetchState();
             alert(`✅ Triage complete:\n- ${acceptIds.length} Accepted to Workspace\n- ${rejectIds.length} Rejected\n- ${rescanIds.length} Queued for Rescan`);
             ResearchStore.setState({ aiTriageMode: false, selectedItemId: null });
@@ -388,10 +361,9 @@ export class InSetuExtResearch extends LitElement {
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>
-
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
-                    <textarea id="rs-ai-json-input" placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
+                    <textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @input=${e => this._aiJsonInput = e.target.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
                     <button class="btn-sm" style="background: var(--intent-highlight); width: 100%; margin: 0; padding: 10px; font-weight: bold;" @click=${this.executeAITriage}>🤖 Execute Triage</button>
                 </div>
             ` : html`
@@ -528,10 +500,37 @@ export class InSetuExtResearch extends LitElement {
 }
 customElements.define('insetu-ext-research', InSetuExtResearch);
 
+export class InSetuExtResearchActions extends LitElement {
+    static properties = { selectedJobId: { type: String } };
+    static styles = css`
+        button { background: var(--intent-neutral); color: white; border: none; padding: 4px 12px; font-size: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; }
+        button:hover { filter: brightness(1.2); }
+    `;
+    constructor() { super(); this.selectedJobId = null; }
+    connectedCallback() {
+        super.connectedCallback();
+        this._unsub = ResearchStore.subscribe(state => this.selectedJobId = state.selectedJobId);
+        this.selectedJobId = ResearchStore.getState().selectedJobId;
+    }
+    disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
+    render() {
+        if (!this.selectedJobId) return html``;
+        return html`<button @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null })}>🔙 Back to Jobs</button>`;
+    }
+}
+customElements.define('insetu-ext-research-actions', InSetuExtResearchActions);
+
 window.ExtensionRegistry.registerExtension('research', {
     name: "Research Inbox",
     version: "2.0.0",
     layoutSlots: [
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "edit",
+            targetSub: "research",
+            component: "insetu-ext-research-actions",
+            order: 1
+        },
         {
             slot: "slots:sub-navigation",
             targetParent: "edit",

@@ -4,253 +4,228 @@ import {
     createFileCard
 } from '../app.js';
 import { AppStore } from '../store.js';
-export async function openPushModal(diffFilename, repoDir) {
-    AppStore.setState({ currentPushDiffFile: diffFilename, currentPushRepo: repoDir, gitPushMessage: '' });
-const bodyHtml = `
-        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Recent Changelogs:</label>
-        <select id="push-changelog-select" style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;"
-onchange="window.inSetu.stores.App.setState({ gitPushMessage: this.value }); const pm = document.getElementById('push-message'); if(pm) pm.value = this.value;">
-            <option value="">-- Type a custom message below --</option>
-        </select>
-        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-        <textarea id="push-message" placeholder="Enter commit message..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; margin-top: 0; width: 100%; box-sizing: border-box;"
-oninput="window.inSetu.stores.App.setState({ gitPushMessage: event.target.value })"></textarea>
-        <div id="push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Pushing to remote... please wait.</div>
-    `;
+export async function generateDiffs(force = false) {
+    const { cachedDiffFiles, dirtyDiffRepos } = AppStore.getState();
+    const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
+        ? null 
+        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
 
-    window.inSetu.ui.Factory.createModal({
-        id: 'push-modal',
-        title: `🚀 Commit & Push: <span style="color: var(--intent-highlight);">${repoDir || "Unknown Repo"}</span>`,
-        body: bodyHtml,
-        actions: [
-            { label: '🚀 Execute Push', style: 'primary', id: 'execute-push-btn', onClick: async (e, modal) => {
-                await executePush(modal.id);
-                return true;
-            }}
-        ]
-    });
-
-    try {
-        const select = document.getElementById('push-changelog-select');
-        const res = await fetch(`/api/git/changelogs?repo=${encodeURIComponent(repoDir || '')}&t=${Date.now()}`);
-        if (res.ok) {
-            const data = await res.json();
-            if (data.changelogs && data.changelogs.length > 0) {
-                data.changelogs.forEach(cl => {
-                    const opt = document.createElement('option');
-                    opt.value = cl.title;
-                    opt.innerText = cl.title;
-                    select.appendChild(opt);
-                });
-                                    select.selectedIndex = 1;
-                                    const pm = document.getElementById('push-message');
-                                    if (pm) pm.value = data.changelogs[0].title;
-                                    AppStore.setState({ gitPushMessage: data.changelogs[0].title });
-}
-        }
-    } catch (e) {
-        console.error("Failed to load changelogs.");
-    }
-}
-export async function executePush(modalId = 'push-modal') {
-    const { currentPushRepo, currentPushDiffFile, gitPushMessage } = AppStore.getState();
-    const msg = (gitPushMessage || '').trim();
-
-    if (!msg) {
-        alert("Please enter a commit message.");
-        return;
-    }
-    if (!currentPushRepo) {
-        alert("Repository context missing.");
+    if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
         return;
     }
 
-    const btn = document.getElementById('execute-push-btn');
-    const spinner = document.getElementById('push-spinner');
-    if (btn) btn.style.display = 'none';
-    if (spinner) spinner.style.display = 'block';
     try {
-        const res = await fetch('/api/git/push', {
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await fetch(`/api/${activeWs}/diffs/generate`, { 
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                repo: currentPushRepo,
-                message: msg,
-                diff_file: currentPushDiffFile
-            })
+            body: JSON.stringify({ target_repos: targetRepos })
         });
-        
         if (!res.ok) {
             const err = await res.json();
-            throw new Error(err.error || "Push request failed.");
+            throw new Error(err.error || "Diff generation request failed.");
         }
         const data = await res.json();
-        AppStore.setState({ activePushJobId: data.job_id });
-    } catch (e) {
-        alert("Network error executing push: " + e.message);
-        if (btn) btn.style.display = 'block';
-        if (spinner) spinner.style.display = 'none';
+        AppStore.setState({ activeDiffJobId: data.job_id, diffJobError: null });
+    } catch (error) {
+        AppStore.setState({ diffJobError: error.message });
     }
 }
-export async function openSweepModal() {
-    AppStore.setState({ gitSweepMessage: '' });
-    const bodyHtml = `
-        <div id="sweep-loading" class="spinner" style="display:block; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>
-        <div id="sweep-files-container" style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; min-height: 200px;">
-        </div>
-        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Commit Message:</label>
-        <textarea id="sweep-message" placeholder="e.g. chore: format, lint, and clear orphans" style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; margin-top: 0; resize: none; width: 100%; box-sizing: border-box;" oninput="window.inSetu.stores.App.setState({ gitSweepMessage: event.target.value })"></textarea>
-        <div id="sweep-push-spinner" class="spinner" style="margin-top:0; margin-bottom:15px; display:none;">Committing and pushing...</div>
-    `;
+window.generateDiffs = generateDiffs;
+import { LitElement, html, css } from 'lit';
+import { sharedStyles } from '../shared_styles.js';
 
-    window.inSetu.ui.Factory.createModal({
-        id: 'sweep-modal',
-        title: '🧹 Selective Sweep',
-        body: bodyHtml,
-        maxWidth: '700px',
-        actions: [
-            { label: '🚀 Commit & Push Selected', style: 'primary', id: 'execute-sweep-btn', onClick: async (e, modal) => {
-                await executeSweepPush(modal.id);
-                return true;
-            }}
-        ]
-    });
+export class InSetuExtGitDiffs extends LitElement {
+    static properties = {
+        cachedDiffFiles: { type: Array },
+        activeDiffJobId: { type: String },
+        diffJobMessage: { type: String },
+        diffJobError: { type: String },
+        searchQuery: { type: String },
+        categoryOrder: { type: Array },
+        hiddenOutputs: { type: Array },
+        pushModalOpen: { type: Boolean },
+        sweepModalOpen: { type: Boolean },
+        pushChangelogs: { type: Array },
+        sweepFiles: { type: Object },
+        selectedSweepFiles: { type: Object },
+        sweepLoading: { type: Boolean },
+        gitPushMessage: { type: String },
+        gitSweepMessage: { type: String },
+        currentPushRepo: { type: String },
+        currentPushDiffFile: { type: String },
+        activePushJobId: { type: String },
+        activeSweepJobId: { type: String }
+    };
+    static styles = [sharedStyles];
 
-    await loadSweepFiles();
-}
-async function loadSweepFiles() {
-    const container = document.getElementById('sweep-files-container');
-    const loading = document.getElementById('sweep-loading');
-    const btn = document.getElementById('execute-sweep-btn');
+    constructor() {
+        super();
+        this.cachedDiffFiles = [];
+        this.activeDiffJobId = null;
+        this.diffJobMessage = null;
+        this.diffJobError = null;
+        this.searchQuery = '';
+        this.categoryOrder = [];
+        this.hiddenOutputs = [];
+        this.pushModalOpen = false;
+        this.sweepModalOpen = false;
+        this.pushChangelogs = [];
+        this.sweepFiles = {};
+        this.selectedSweepFiles = {};
+        this.sweepLoading = false;
+        this.gitPushMessage = '';
+        this.gitSweepMessage = '';
+        this.currentPushRepo = '';
+        this.currentPushDiffFile = '';
+        this.activePushJobId = null;
+        this.activeSweepJobId = null;
+    }
 
-    container.replaceChildren();
-    loading.style.display = 'block';
-    btn.disabled = true;
+    connectedCallback() {
+        super.connectedCallback();
+        this._unsub = AppStore.subscribe((state) => {
+            this.cachedDiffFiles = state.cachedDiffFiles || [];
+            this.activeDiffJobId = state.activeDiffJobId;
+            this.diffJobMessage = state.diffJobMessage;
+            this.diffJobError = state.diffJobError;
+            this.categoryOrder = state.categoryOrder || [];
+            this.hiddenOutputs = state.hiddenOutputs || [];
+            this.activePushJobId = state.activePushJobId;
+            this.activeSweepJobId = state.activeSweepJobId;
+        });
+        const state = AppStore.getState();
+        this.cachedDiffFiles = state.cachedDiffFiles || [];
+        this.activeDiffJobId = state.activeDiffJobId;
+        this.diffJobMessage = state.diffJobMessage;
+        this.diffJobError = state.diffJobError;
+        this.categoryOrder = state.categoryOrder || [];
+        this.hiddenOutputs = state.hiddenOutputs || [];
+        this.activePushJobId = state.activePushJobId;
+        this.activeSweepJobId = state.activeSweepJobId;
 
-    try {
-        const res = await fetch('/api/git/sweep/status');
-        if (!res.ok) throw new Error("Failed to fetch status");
-        const data = await res.json();
+        // Secure boundary event listeners to allow external triggers (e.g. from file cards)
+        this._boundHandleOpenPush = this._handleOpenPush.bind(this);
+        this._boundHandleOpenSweep = this._handleOpenSweep.bind(this);
+        window.addEventListener('open-push-modal', this._boundHandleOpenPush);
+        window.addEventListener('open-sweep-modal', this._boundHandleOpenSweep);
+    }
 
-        loading.style.display = 'none';
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._unsub) this._unsub();
+        window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
+        window.removeEventListener('open-sweep-modal', this._boundHandleOpenSweep);
+    }
 
-        if (Object.keys(data.repos).length === 0) {
-            container.innerHTML = '<p style="color: var(--intent-success); font-weight: bold; text-align: center; margin-top: 20px;">✨ Working tree clean! Nothing to sweep.</p>';
-            return;
+    async _handleOpenPush(e) {
+        const { diffFile, repo } = e.detail;
+        this.currentPushDiffFile = diffFile;
+        this.currentPushRepo = repo;
+        this.gitPushMessage = '';
+        this.pushChangelogs = [];
+        this.pushModalOpen = true;
+
+        try {
+            const res = await fetch('/api/git/changelogs?repo=' + encodeURIComponent(repo || '') + '&t=' + Date.now());
+            if (res.ok) {
+                const data = await res.json();
+                if (data.changelogs && data.changelogs.length > 0) {
+                    this.pushChangelogs = data.changelogs;
+                    this.gitPushMessage = data.changelogs[0].title;
+                }
+            }
+        } catch (err) {
+            console.error("Failed to load changelogs.");
         }
+    }
 
-        btn.disabled = false;
+    async _executePush() {
+        const msg = this.gitPushMessage.trim();
+        if (!msg) return alert("Please enter a commit message.");
+        if (!this.currentPushRepo) return alert("Repository context missing.");
 
-        for (const [repo, files] of Object.entries(data.repos)) {
-            const repoHeader = document.createElement('h4');
-            repoHeader.innerText = `📦 ${repo}`;
-            repoHeader.style.cssText = "margin: 10px 0 5px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 3px;";
-
-            // "Select All" toggle for the repo
-            const selectAllWrap = document.createElement('div');
-            selectAllWrap.style.cssText = "display: flex; align-items: center; gap: 8px; margin-bottom: 8px; margin-left: 5px;";
-            const selectAllCb = document.createElement('input');
-            selectAllCb.type = 'checkbox';
-            selectAllCb.className = `sweep-select-all-${repo}`;
-            selectAllCb.onchange = (e) => {
-                document.querySelectorAll(`.sweep-cb-${repo}`).forEach(cb => cb.checked = e.target.checked);
-            };
-            const selectAllLbl = document.createElement('label');
-            selectAllLbl.innerText = "Select All";
-            selectAllLbl.style.cssText = "font-size: 0.8rem; font-weight: bold; color: var(--text-muted); cursor: pointer;";
-            selectAllLbl.onclick = () => selectAllCb.click();
-
-            selectAllWrap.appendChild(selectAllCb);
-            selectAllWrap.appendChild(selectAllLbl);
-
-            container.appendChild(repoHeader);
-            container.appendChild(selectAllWrap);
-
-            files.forEach(f => {
-                const row = document.createElement('div');
-                row.style.cssText = "display: flex; align-items: center; gap: 10px; margin-bottom: 4px; margin-left: 15px;";
-
-                const cb = document.createElement('input');
-                cb.type = 'checkbox';
-                cb.className = `sweep-cb sweep-cb-${repo}`;
-                cb.dataset.repo = repo;
-                cb.dataset.path = f.path;
-
-                const lbl = document.createElement('label');
-                lbl.innerText = `[${f.status}] ${f.path}`;
-                lbl.style.cssText = "font-family: monospace; font-size: 0.85rem; word-break: break-all; cursor: pointer;";
-                lbl.onclick = () => cb.click();
-
-                row.appendChild(cb);
-                row.appendChild(lbl);
-                container.appendChild(row);
+        try {
+            const res = await fetch('/api/git/push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    repo: this.currentPushRepo,
+                    message: msg,
+                    diff_file: this.currentPushDiffFile
+                })
             });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || "Push request failed.");
+            }
+            const data = await res.json();
+            AppStore.setState({ activePushJobId: data.job_id });
+            this.pushModalOpen = false;
+        } catch (err) {
+            alert("Network error executing push: " + err.message);
         }
-    } catch (e) {
-        loading.style.display = 'none';
-        container.innerHTML = `<p style="color: red;">Error scanning workspaces: ${e.message}</p>`;
     }
-}
-export async function executeSweepPush() {
-    const msg = (AppStore.getState().gitSweepMessage || '').trim();
-    if (!msg) {
-        alert("Please enter a commit message for this sweep.");
-        return;
+    async _handleOpenSweep() {
+        this.gitSweepMessage = '';
+        this.sweepModalOpen = true;
+        this.sweepLoading = true;
+        this.sweepFiles = {};
+        this.selectedSweepFiles = {};
+
+        try {
+            const res = await fetch('/api/git/sweep/status');
+            if (!res.ok) throw new Error("Failed to fetch status");
+            const data = await res.json();
+            this.sweepFiles = data.repos || {};
+        } catch (err) {
+            alert("Error scanning workspaces: " + err.message);
+        } finally {
+            this.sweepLoading = false;
+        }
     }
+    async _executeSweep() {
+        const msg = this.gitSweepMessage.trim();
+        if (!msg) return alert("Please enter a commit message for this sweep.");
 
-    const selections = {};
-    document.querySelectorAll('.sweep-cb:checked').forEach(cb => {
-        const repo = cb.dataset.repo;
-        if (!selections[repo]) selections[repo] = [];
-        selections[repo].push(cb.dataset.path);
-    });
-
-    if (Object.keys(selections).length === 0) {
-        alert("No files selected.");
-        return;
-    }
-
-    const btn = document.getElementById('execute-sweep-btn');
-    const spinner = document.getElementById('sweep-push-spinner');
-    btn.style.display = 'none';
-    spinner.style.display = 'block';
-    try {
-        const res = await fetch('/api/git/sweep/push', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ selections, message: msg })
+        // Filter out empty arrays to ensure we only send repos with actual selections
+        const selections = {};
+        Object.keys(this.selectedSweepFiles).forEach(repo => {
+            if (this.selectedSweepFiles[repo] && this.selectedSweepFiles[repo].length > 0) {
+                selections[repo] = this.selectedSweepFiles[repo];
+            }
         });
 
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || "Sweep request failed.");
+        if (Object.keys(selections).length === 0) return alert("No files selected.");
+
+        try {
+            const res = await fetch('/api/git/sweep/push', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ selections, message: msg })
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || "Sweep request failed.");
+            }
+            const data = await res.json();
+            AppStore.setState({ activeSweepJobId: data.job_id });
+            this.sweepModalOpen = false;
+        } catch (e) {
+            alert("Network error executing sweep: " + e.message);
         }
-        const data = await res.json();
-        AppStore.setState({ activeSweepJobId: data.job_id });
-    } catch (e) {
-        alert("Network error executing sweep: " + e.message);
-        btn.style.display = 'block';
-        spinner.style.display = 'none';
     }
-}
 
-window.openPushModal = openPushModal;
-window.executePush = executePush;
-window.openSweepModal = openSweepModal;
-window.executeSweepPush = executeSweepPush;
-export function renderDiffFiles(files) {
-    const loading = document.getElementById('diff-loading');
-    const results = document.getElementById('diff-results');
-    if (loading) loading.style.display = 'none';
-    if (results) results.replaceChildren();
-
-    if (files.length > 0) {
+    render() {
         const categories = {};
-        const { categoryOrder, targetConfigs, hiddenOutputs } = AppStore.getState();
-        files.forEach(fileObj => {
+        const sq = this.searchQuery;
+        const filteredFiles = sq ? window.fuzzyFilterObjects(this.cachedDiffFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : this.cachedDiffFiles;
+
+        filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
-            if (hiddenOutputs && hiddenOutputs.includes(file)) return;
+            if (this.hiddenOutputs && this.hiddenOutputs.includes(file)) return;
 
             const safeFile = file.split('/').pop();
             const baseFile = safeFile.replace('_diffs.txt', '_context.txt');
@@ -274,80 +249,128 @@ export function renderDiffFiles(files) {
                 repoDir: repoDir
             });
         });
+
         const sortedCats = Object.keys(categories).sort((a, b) => {
             if (a === "Quick-Pack Clipboard") return -1;
             if (b === "Quick-Pack Clipboard") return 1;
-            const iA = categoryOrder.indexOf(a) === -1 ? 999 : categoryOrder.indexOf(a);
-            const iB = categoryOrder.indexOf(b) === -1 ? 999 : categoryOrder.indexOf(b);
+            const iA = this.categoryOrder.indexOf(a) === -1 ? 999 : this.categoryOrder.indexOf(a);
+            const iB = this.categoryOrder.indexOf(b) === -1 ? 999 : this.categoryOrder.indexOf(b);
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-        for (const catName of sortedCats) {
-            const catFiles = categories[catName];
-            if (catFiles.length > 0) {
-                const heading = document.createElement('div');
-                heading.className = 'category-heading';
-                heading.innerText = catName;
-                results.appendChild(heading);
-                catFiles.forEach(f => createFileCard(f, results));
-            }
-        }
-    } else {
-        if (results) results.innerHTML = '<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>';
-    }
-}
-export async function generateDiffs(force = false) {
-    const loading = document.getElementById('diff-loading');
-    const results = document.getElementById('diff-results');
-    if (!loading || !results) return;
-    const { cachedDiffFiles, dirtyDiffRepos } = AppStore.getState();
 
-    const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
-        ? null 
-        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
-
-    if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
-        renderDiffFiles(cachedDiffFiles);
-        return;
-    }
-
-    loading.style.display = 'block';
-    results.replaceChildren();
-
-    try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/diffs/generate`, { 
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_repos: targetRepos })
-        });
-
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || "Diff generation request failed.");
-        }
-        const data = await res.json();
-        AppStore.setState({ activeDiffJobId: data.job_id });
-    } catch (error) {
-        loading.style.display = 'none';
-        results.innerHTML = `<p style="color: red;">Error requesting diff analysis: ${error.message}</p>`;
-    }
-}
-window.generateDiffs = generateDiffs;
-import { LitElement, html, css } from 'lit';
-
-export class InSetuExtGitDiffs extends LitElement {
-    createRenderRoot() { return this; } // Render in Light DOM to maintain legacy ID bindings
-
-    render() {
         return html`
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;">
-                <h2 style="margin: 0;">Pending Architecture (Diffs)</h2>
+            <div class="sticky-header" style="display: flex; flex-direction: column;">
+                <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} @input=${e => this.searchQuery = e.target.value}>
             </div>
-            <div id="diff-loading" class="spinner" style="display: none;">Analyzing Git trees across sister repositories... please wait.</div>
-            <div id="diff-results" style="display: flex; flex-direction: column; margin-top: 15px;">
-                <p style="color: var(--text-muted); font-style: italic;">Diffs automatically map when this tab is opened.</p>
+            ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
+            ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
+
+            <div style="display: flex; flex-direction: column; margin-top: 15px;">
+                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 ? html`<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>` : ''}
+                ${sortedCats.map(catName => html`
+                    <div class="category-heading">${catName}</div>
+                    ${categories[catName].map(f => html`
+                        <insetu-card
+                            .filename=${f.filename}
+                            .titleText=${f.displayName}
+                            .descriptionText=${f.description}
+                            icon="📦"
+                            intentColor="var(--intent-highlight)"
+                            @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                            <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
+                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${async (e) => {
+                                e.stopPropagation();
+                                const dlUrl = '/download/' + f.filename;
+                                const orig = e.target.innerText;
+                                e.target.innerText = '⏳...';
+                                try {
+                                    const res = await fetch(dlUrl);
+                                    if (!res.ok) throw new Error("Failed to fetch");
+                                    const text = await res.text();
+                                    const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+                                    const url = window.URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.style.display = 'none';
+                                    a.href = url;
+                                    a.download = f.filename;
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    window.URL.revokeObjectURL(url);
+                                    a.remove();
+                                } catch (err) {
+                                    alert("Error downloading file.");
+                                } finally {
+                                    e.target.innerText = orig;
+                                }
+                            }}>⬇️ Download</button>
+                        </insetu-card>
+                    `)}
+                `)}
+                ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
             </div>
+
+            <insetu-modal ?open=${this.pushModalOpen} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column;">
+                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
+                    <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" @change=${(e) => this.gitPushMessage = e.target.value}>
+                        <option value="">-- Type a custom message below --</option>
+                        ${this.pushChangelogs.map(cl => html`<option value="${cl.title}" ?selected=${this.gitPushMessage === cl.title}>${cl.title}</option>`)}
+                    </select>
+                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
+                    <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; width: 100%; box-sizing: border-box;"></textarea>
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${this.sweepModalOpen} titleText="🧹 Selective Sweep" maxWidth="700px" @modal-closed=${() => this.sweepModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
+                    ${this.sweepLoading ? html`<div class="spinner" style="display:block; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>` : html`
+                        <div style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; min-height: 200px;">
+                            ${Object.keys(this.sweepFiles).length === 0 ? html`<p style="color: var(--intent-success); font-weight: bold; text-align: center; margin-top: 20px;">✨ Working tree clean! Nothing to sweep.</p>` : ''}
+                            ${Object.entries(this.sweepFiles).map(([repo, files]) => html`
+                                <h4 style="margin: 10px 0 5px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 3px;">📦 ${repo}</h4>
+                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; margin-left: 5px;">
+                                    <input type="checkbox" 
+                                        .checked=${this.selectedSweepFiles?.[repo]?.length === files.length && files.length > 0}
+                                        @change=${(e) => {
+                                        const isChecked = e.target.checked;
+                                        this.selectedSweepFiles = {
+                                            ...this.selectedSweepFiles,
+                                            [repo]: isChecked ? files.map(f => f.path) : []
+                                        };
+                                    }}>
+                                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); cursor: pointer;">Select All</label>
+                                </div>
+                                ${files.map(f => html`
+                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px; margin-left: 15px;">
+                                        <input type="checkbox" 
+                                            .checked=${(this.selectedSweepFiles?.[repo] || []).includes(f.path)}
+                                            @change=${(e) => {
+                                                const isChecked = e.target.checked;
+                                                const currentList = this.selectedSweepFiles?.[repo] || [];
+                                                this.selectedSweepFiles = {
+                                                    ...this.selectedSweepFiles,
+                                                    [repo]: isChecked 
+                                                        ? [...currentList, f.path] 
+                                                        : currentList.filter(p => p !== f.path)
+                                                };
+                                            }}>
+                                        <label style="font-family: monospace; font-size: 0.85rem; word-break: break-all; cursor: pointer;">[${f.status}] ${f.path}</label>
+                                    </div>
+                                `)}
+                            `)}
+                        </div>
+                    `}
+                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
+                    <textarea placeholder="e.g. chore: format, lint, and clear orphans" .value=${this.gitSweepMessage} @input=${(e) => this.gitSweepMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; resize: none; width: 100%; box-sizing: border-box;"></textarea>
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" ?disabled=${this.sweepLoading} @click=${this._executeSweep}>🚀 Commit & Push Selected</button>
+                </div>
+            </insetu-modal>
         `;
     }
 }
@@ -372,7 +395,7 @@ export class InSetuExtGitActions extends LitElement {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
         const items = [];
         if (this.hasChanges) {
-            items.push({ label: 'Sweep Remaining', icon: '🧹', onClick: () => { if (window.openSweepModal) window.openSweepModal(); } });
+            items.push({ label: 'Sweep Remaining', icon: '🧹', onClick: () => window.dispatchEvent(new CustomEvent('open-sweep-modal')) });
         } else {
             items.push({ label: 'No changes to sweep', icon: '✨', onClick: () => {} });
         }
@@ -489,52 +512,50 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         }
         // Diff Generation Polling
         if (activeDiffJobId) {
-            try {
-                const statusRes = await fetch(`/api/system/jobs/${activeDiffJobId}`);
-                if (statusRes.ok) {
-                    const statusData = await statusRes.json();
-                    const loading = document.getElementById('diff-loading');
-                    const results = document.getElementById('diff-results');
-                    const sweepBtn = document.getElementById('btn-sweep-remaining');
+                try {
+                        const statusRes = await fetch(`/api/system/jobs/${activeDiffJobId}`);
+                        if (statusRes.ok) {
+                                const statusData = await statusRes.json();
+                                AppStore.setState({ diffJobMessage: statusData.message });
 
-                    if (loading) loading.innerText = statusData.message || "Analyzing Git trees...";
-                    if (statusData.status === 'completed') {
-                        const newFiles = statusData.artifact.files || [];
-                        const targetRepos = statusData.artifact.target_repos;
+                                if (statusData.status === 'completed') {
+                                        const newFiles = statusData.artifact.files || [];
+                                        const targetRepos = statusData.artifact.target_repos;
 
-                        const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
-                        const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
+                                        const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
+                                        const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
+                                        const updatedCachedFiles = (() => {
+                                                if (!targetRepos) {
+                                                        updatedDirtyRepos.clear();
+                                                        return newFiles;
+                                                } else {
+                                                        targetRepos.forEach(r => updatedDirtyRepos.delete(r));
+                                                        const filtered = prevCachedFiles.filter(f => {
+                                                                const repo = typeof f === 'object' ? f.repo : null;
+                                                                return !repo || !targetRepos.includes(repo);
+                                                        });
+                                                        return filtered.concat(newFiles);
+                                                }
+                                        })();
 
-                        const updatedCachedFiles = (() => {
-                            if (!targetRepos) {
-                                updatedDirtyRepos.clear();
-                                return newFiles;
-                            } else {
-                                targetRepos.forEach(r => updatedDirtyRepos.delete(r));
-                                const filtered = prevCachedFiles.filter(f => {
-                                    const repo = typeof f === 'object' ? f.repo : null;
-                                    return !repo || !targetRepos.includes(repo);
-                                });
-                                return filtered.concat(newFiles);
-                            }
-                        })();
-
-                        AppStore.setState({  
-                            activeDiffJobId: null, 
-                            cachedDiffFiles: updatedCachedFiles,
-                            dirtyDiffRepos: updatedDirtyRepos
-                        });
-
-                        renderDiffFiles(updatedCachedFiles);
-                    } else if (statusData.status === 'failed') {
-                        AppStore.setState({ activeDiffJobId: null });
-                        if (loading) loading.style.display = 'none';
-                        if (results) results.innerHTML = `<p style="color: var(--intent-danger);">Error analyzing diffs: ${statusData.message}</p>`;
-                    }
+                                        AppStore.setState({  
+                                                activeDiffJobId: null, 
+                                                cachedDiffFiles: updatedCachedFiles,
+                                                dirtyDiffRepos: updatedDirtyRepos,
+                                                diffJobMessage: null,
+                                                diffJobError: null
+                                            });
+                                } else if (statusData.status === 'failed') {
+                                        AppStore.setState({ 
+                                                activeDiffJobId: null, 
+                                                diffJobError: statusData.message,
+                                                diffJobMessage: null
+                                        });
+                                }
+                        }
+                } catch (e) {
+                        console.error("Diff polling error:", e);
                 }
-            } catch (e) {
-                console.error("Diff polling error:", e);
-            }
         }
     });
 }
@@ -567,7 +588,6 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return false;
     });
 }
-
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {
         if (data.filepath && data.filepath.endsWith('_diffs.txt')) {
@@ -575,7 +595,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
             pushBtn.className = 'btn-sm';
             pushBtn.style.background = 'var(--intent-highlight)';
             pushBtn.innerText = '🚀 Push';
-            pushBtn.onclick = () => openPushModal(data.filepath, data.repoDir);
+            pushBtn.onclick = () => window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
             data.actionsContainer.appendChild(pushBtn);
         }
         return false; 

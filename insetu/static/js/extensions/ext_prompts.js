@@ -3,18 +3,19 @@ import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
 import { mdeInstance } from '../app.js';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuExtPrompts extends LitElement {
     static properties = {
         loading: { type: Boolean },
         prompts: { type: Array },
+        searchQuery: { type: String },
         _isMenuOpen: { type: Boolean }
     };
-    static styles = [sharedStyles];
+static styles = [sharedStyles];
 constructor() {
     super();
     this.loading = false;
     this.prompts = [];
+    this.searchQuery = '';
 }
 connectedCallback() {
     super.connectedCallback();
@@ -65,12 +66,17 @@ static openPromptEmbedModal() {
     }
 }
 render() {
+    const filteredPrompts = this.searchQuery ? window.fuzzyFilterObjects(this.prompts, this.searchQuery) : this.prompts;
     return html`
+        <div class="sticky-header">
+            <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search prompts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+        </div>
         ${this.loading ?
-        html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts...</div>` : html`
-                <div @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}>
+html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts...</div>` : html`
+                <div @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true);
+}}>
                     <insetu-file-tree 
-                        .files=${this.prompts} 
+                        .files=${filteredPrompts} 
                         stripPrefix="prompts/"
                         basePath=".insetu/prompts/"
                         .currentPath=${AppStore.getState().currentPromptsPath || []}

@@ -1,53 +1,63 @@
 // ext_term.js - Terminal Extension
+import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
-const termScreen = window.inSetu.extensions.Registry.registerTab('term', 'Term', 'term');
 
-if (termScreen) {
-    // 1. Inject custom CSS rules for the terminal canvas
-    termScreen.style.height = '100%';
-    termScreen.style.padding = '15px';
-    termScreen.style.boxSizing = 'border-box';
-    termScreen.style.display = 'flex';
-    termScreen.style.flexDirection = 'column';
-    termScreen.style.overflow = 'hidden';
-    termScreen.style.background = 'var(--console-bg)';
-    // 2. Inject the sub-tabs-bar to match the global layout
-    const subTabBar = document.createElement('div');
-    subTabBar.className = 'sub-tabs-bar';
-subTabBar.innerHTML = `
-        <div class="sub-tabs">
-            <div class="sub-tab active">Console</div>
-        </div>
+export class InSetuExtTerm extends LitElement {
+    static properties = {
+        termPort: { type: Number }
+    };
+    static styles = css`
+        :host { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; overflow: hidden; background: var(--console-bg); }
+        iframe { flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px; }
     `;
-    termScreen.parentElement.insertBefore(subTabBar, termScreen);
-// 3. Build the iframe target
-    termScreen.innerHTML = `
-        <iframe id="term-iframe" style="flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px;"></iframe>
-    `;
-    // 3. Fetch the port mapping from the backend and boot TTYD
+    constructor() {
+        super();
+        this.termPort = null;
+    }
+    connectedCallback() {
+        super.connectedCallback();
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        fetch(`/api/${activeWs}/repos`).then(r => r.json()).then(d => {
-            const termIframe = document.getElementById('term-iframe');
-        if (termIframe && d.term_port) {
-            termIframe.src = window.location.protocol + '//' + window.location.hostname + ':' + d.term_port;
-        }
-    }).catch(e => console.error("Failed to fetch term port:", e));
-    // 4. Force focus into the iframe when the tab is clicked to prevent ghost typing
-        const termTabBtn = document.querySelector('.tab[onclick*="term"]');
-    if (termTabBtn) {
-            termTabBtn.addEventListener('click', () => {
-                const iframe = document.getElementById('term-iframe');
-                if (iframe) iframe.focus();
-            });
+        fetch('/api/' + activeWs + '/repos').then(r => r.json()).then(d => {
+            if (d.term_port) this.termPort = d.term_port;
+        }).catch(e => console.error("Failed to fetch term port:", e));
     }
+    render() {
+        if (!this.termPort) return html`<div style="color: var(--text-muted); font-style: italic;">Connecting to local TTYD terminal...</div>`;
+        return html`<iframe id="term-iframe" src="${window.location.protocol}//${window.location.hostname}:${this.termPort}"></iframe>`;
+    }
+}
+customElements.define('insetu-ext-term', InSetuExtTerm);
 
-    // 5. Native tab-tap refresh support
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-        window.inSetu.extensions.Registry.registerUIHook('zone:force-refresh', (tabId) => {
+window.ExtensionRegistry.registerExtension('term', {
+    name: "Terminal Interface",
+    version: "2.0.0",
+    layoutSlots: [
+        {
+            slot: "slots:primary-navigation",
+            id: "term",
+            label: "Term",
+            order: 6,
+            component: "insetu-ext-term"
+        }
+    ],
+    uiHooks: {
+        'zone:force-refresh': (tabId) => {
             if (tabId === 'term') {
-                const iframe = document.getElementById('term-iframe');
-                if (iframe) iframe.src += '';
+                const termEl = document.querySelector('insetu-ext-term');
+                if (termEl) {
+                    const iframe = termEl.shadowRoot.getElementById('term-iframe');
+                    if (iframe) iframe.src += '';
+                }
             }
-        });
+        },
+        'zone:tab-changed': (tabId) => {
+            if (tabId === 'term') {
+                const termEl = document.querySelector('insetu-ext-term');
+                if (termEl) {
+                    const iframe = termEl.shadowRoot.getElementById('term-iframe');
+                    if (iframe) iframe.focus();
+                }
+            }
+        }
     }
-    }
+});
