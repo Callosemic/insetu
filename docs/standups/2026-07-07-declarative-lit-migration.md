@@ -74,25 +74,25 @@ Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSl
 ### Core OS UI Domains
 | Module | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
-| `fs` | Virtual File System | **Migrated** | `<insetu-vfs-explorer>` |
+| `fs` | Virtual File System | **Gold Standard** | `<insetu-vfs-explorer>`, `<insetu-vfs-modals>` |
 | `config` | Workspace Settings | **Migrated (Native LitElement)** | `<insetu-ext-config>` |
 
 ### Extensions
 | Extension ID | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
 | `bridge` | Yomama Sync Bridge | **Migrated (Native LitElement)** | `<insetu-ext-bridge>` |
-| `prompts` | Prompt Library | **Migrated (Native LitElement)** | `<insetu-ext-prompts>` |
-| `gather` | Context Gatherer | **Migrated (Native LitElement)** | `<insetu-ext-gather>` | 
+| `prompts` | Prompt Library | **Gold Standard** | `<insetu-ext-prompts>` |
+| `gather` | Context Gatherer | **Gold Standard** | `<insetu-ext-gather>` | 
 | `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` | 
-| `git` | Version Control | **Migrated (Native LitElement)** | `<insetu-ext-git-diffs>` | 
+| `git` | Version Control | **Gold Standard** | `<insetu-ext-git-diffs>` | 
 | `tracker` | Kanban Board | **Migrated (Native LitElement)** | `<insetu-ext-tracker>` |
 | `research` | Triage Inbox | **Migrated (Native LitElement)** | `<insetu-ext-research>` |
-| `favorites` | Favorites Bar | **Migrated (Native LitElement)** | `<insetu-ext-favorites>` |
-| `skills` | Skills Tracker | **Migrated (Native LitElement)** | `<insetu-ext-skills>` |
-| `citations` | Reference Manager | Pending | `<insetu-ext-citations>` |
-| `format` | Document Compilation | Pending | `<insetu-ext-format>` |
-| `ingest` | URL Ingestion | Pending | `<insetu-ext-ingest>` |
-| `term` | Terminal Canvas | Pending | `<insetu-ext-term>` |
+| `favorites` | Favorites Bar | **Gold Standard** | `<insetu-ext-favorites>` |
+| `skills` | Skills Tracker | **Debt (Minor)** | `<insetu-ext-skills>` |
+| `citations` | Reference Manager | **Gold Standard** | `<insetu-ext-citations>` |
+| `format` | Document Compilation | **Debt (Host Contamination)** | `<insetu-ext-format>` |
+| `ingest` | URL Ingestion | **Debt (Host Contamination)** | `<insetu-ext-ingest>` |
+| `term` | Terminal Canvas | **Migrated (Native LitElement)** | `<insetu-ext-term>` |
 
 ## 9. Architectural Audit (2026-07-08)
 
@@ -120,3 +120,30 @@ A retroactive audit against the Component Graduation Checklist revealed that sev
 
 * **`engine_skills.py`** (Backend Extension):
     * **Violation (VFS Bypass):** Despite importing `execute_vfs_save`, the engine executes unguarded, synchronous native Python file writes (`with open(abs_path, 'w', encoding='utf-8') as f: f.write(...)`). This completely bypasses the asynchronous background commit queue, violating both ADR 0004 and ADR 0010.
+
+## 10. Architectural Audit (2026-07-09)
+
+A follow-up audit confirms that all major and minor offenders flagged on 2026-07-08 have been successfully remediated and fully brought into compliance with the V2 architecture.
+
+### 🏆 The Gold Standard (100% Compliant)
+* **`ext_prompts.js`**, **`ext_gather.js`**, **`ext_favorites.js`**: Continue to serve as pristine references.
+* **`ext_git.js`** (`<insetu-ext-git-diffs>`): **Remediated**. Legacy imperative scraping replaced with reactive Zustand subscriptions and true Shadow DOM encapsulation.
+* **`fs.js`** (`<insetu-vfs-explorer>`): **Remediated**. Host contamination eradicated.
+* **`config.js`** (`<insetu-workspace-editor>`): **Remediated**. Imperative DOM reads replaced with native Lit `@input` data bindings.
+* **`ext_research.js`** (`<insetu-ext-research>`): **Remediated**. Host contamination removed; back button migrated to declarative `<insetu-ext-research-actions>` slot. JSON input state mapped reactively.
+* **`ext_term.js`** (`<insetu-ext-term>`): **Migrated**. Successfully transitioned from legacy script to a fully compliant declarative Web Component.
+* **`engine_skills.py`** (Backend): **Remediated**. Banned synchronous file writes successfully routed through the asynchronous `execute_vfs_save` pipeline.
+## 11. Deep Architectural Audit (2026-07-09 - Final LitElement Review)
+
+A final sweep confirms the successful graduation of the remaining Phase 1 targets into compliant declarative architectures. 
+
+### 🏆 The Gold Standard (100% Compliant)
+* **`ext_citations.js`**: **Remediated.** Replaced imperative DOM traversal and modal appending with a strict Zustand UDF model and internal `<insetu-modal>` rendering. 
+* **`ext_git.js`**: **Remediated.** The `_executeSweep()` method correctly utilizes bound Lit properties (`this.selectedSweepFiles`) rather than scraping the Shadow DOM for `.sweep-cb:checked` elements.
+* **`ext_format.js` & `ext_ingest.js`**: **Remediated.** Host contamination eradicated. Modals render securely inside the declarative template, and metronome intervals are correctly registered.
+* **`ext_term.js`**: **Migrated.** Now utilizing a native, shadow-encapsulated iframe construct.
+### 🚨 Remaining Technical Debt (The Hitlist)
+* **`ext_skills.js`**: Minor UDF bleed. Still relies on `new FormData(e.currentTarget)` inside `_handleCreateSkill` to read inputs instead of safely binding them to reactive `@input` Lit properties.
+* **`ext_flow.js`**: N+1 Fetch Penalty. `saveEditBatch()` and `deleteEditBatch()` invoke `this.fetchBatches()` upon completion. This forces the UI to execute a full API pull and full list re-render, violating the surgical UDF mutation mandate.
+
+*(Update 2026-07-09: `fs.js` imperative modals have been successfully dismantled and migrated to the declarative `FsStore.modals` architecture, securing full compliance for the VFS Explorer.)*
