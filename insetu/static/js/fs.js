@@ -10,7 +10,8 @@ import {
     fetchAndCopy,
     fetchAndDownloadState,
     normalizeAccentText,
-    resolveEditorMode
+    resolveEditorMode,
+    fuzzyFilterObjects
 } from './app.js';
 import { AppStore } from './store.js';
 
@@ -20,7 +21,11 @@ export const FsStore = createStore(
             searchQuery: '',
             modals: {
                 move: { open: false, currentFile: '', destPath: '', initialParts: [] },
-                newFile: { open: false, basePath: '', fileName: '', content: '' }
+                newFile: { open: false, basePath: '', fileName: '', content: '' },
+                newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
+                linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
+                browser: { open: false, title: '', manifest: [], searchQuery: '' },
+                quickPack: { open: false, targetDir: '', files: [], selectedFiles: new Set() }
             },
             setSearchQuery: (q) => set({ searchQuery: q }),
             setModal: (modalName, data) => set(state => ({
@@ -205,14 +210,15 @@ function updateManifestState(oldPath, newPath = null) {
             }
         }
     });
-    if (document.getElementById('browse-modal').style.display === 'block') {
-        const index = currentBrowseManifest.indexOf(oldPath);
+    if (FsStore.getState().modals.browser?.open) {
+        const mState = FsStore.getState().modals.browser;
+        const updatedManifest = [...mState.manifest];
+        const index = updatedManifest.indexOf(oldPath);
         if (index > -1) {
-            currentBrowseManifest.splice(index, 1);
-            if (newPath) currentBrowseManifest.push(newPath);
+            updatedManifest.splice(index, 1);
+            if (newPath) updatedManifest.push(newPath);
+            FsStore.getState().setModal('browser', { manifest: updatedManifest });
         }
-        currentFileTree = buildFileTree(currentBrowseManifest);
-        renderBrowseLevel();
     }
 }
 
@@ -484,7 +490,7 @@ export function createFileCard(fileInfo, container) {
 
     container.appendChild(card);
 }
-export let globalManifest = [];
+export const getGlobalManifest = () => Array.from(new Set(Object.values(AppStore.getState().manifest || {}).flatMap(obj => obj.files || [])));
 
 export class InSetuVFSExplorer extends LitElement {
         static properties = {
@@ -493,7 +499,7 @@ export class InSetuVFSExplorer extends LitElement {
                 globalBrowsePath: { type: Array }
         };
         static styles = [sharedStyles, css`
-                :host { display: flex; flex-direction: column; flex: 1; overflow-y: auto; }
+                :host { display: flex; flex-direction: column; flex: 1; overflow-y: auto; overflow-x: hidden; }
         `];
 
         constructor() {
@@ -515,7 +521,6 @@ export class InSetuVFSExplorer extends LitElement {
                         });
                 }
                 this.manifestFiles = Array.from(allFiles);
-                globalManifest = this.manifestFiles; // Update global export for legacy searches
                 this.globalBrowsePath = state.globalBrowsePath || [];
         }
 
@@ -538,70 +543,81 @@ export class InSetuVFSExplorer extends LitElement {
                 if (this._unsubApp) this._unsubApp();
                 if (this._unsubFs) this._unsubFs();
         }
-
         _handlePathChange(e) {
                 AppStore.setState({ globalBrowsePath: e.detail.path });
-                const btnFsMore = document.getElementById('btn-fs-more');
-                if (btnFsMore) btnFsMore.style.display = 'block';
         }
         render() {
-                        if (this.manifestFiles.length === 0) {
-                                        return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
-                        }
-                        const q = this.searchQuery.toLowerCase().trim();
-                        if (!q) {
-                                        return html`
-                                                        <div @card-clicked="${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
-                                                                        <insetu-file-tree  
-                                                                                        basePath=""
-                                                                                        .files=${this.manifestFiles}
-                                                                                        .currentPath=${this.globalBrowsePath}
-                                                                                        .actions=${[{ id: 'download', label: '⬇️ DL', style: 'primary' }]}
-                                                                                        @path-changed="${this._handlePathChange}"
-                                                                                        @action-download="${(e) => { if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target); }}">
-                                                                        </insetu-file-tree>
-                                                        </div>
-                                        `;
-                        }
+            if (this.manifestFiles.length === 0) {
+                return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
+            }
+            const q = this.searchQuery.trim();
+            const currentPrefix = this.globalBrowsePath.length > 0 ? this.globalBrowsePath.join('/') + '/' : '';
+            const availableFiles = currentPrefix ? this.manifestFiles.filter(f => f.startsWith(currentPrefix)) : this.manifestFiles;
 
-                // Search Results
-                const currentPrefix = this.globalBrowsePath.length > 0 ? this.globalBrowsePath.join('/') + '/' : '';
-                const terms = q.split(/\s+/).filter(t => t);
-                const matches = this.manifestFiles.filter(f => {
-                        if (!f.startsWith(currentPrefix)) return false;
-                        const sub = f.substring(currentPrefix.length).toLowerCase();
-                        return terms.every(t => sub.includes(t));
-                });
+            let contentUI;
+
+            if (!q) {
+                contentUI = html`
+                    <div @card-clicked="${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
+                        <insetu-file-tree  
+                            basePath=""
+                            .files=${this.manifestFiles}
+                            .currentPath=${this.globalBrowsePath}
+                            .actions=${[{ id: 'download', label: '⬇️ DL', style: 'primary' }]}
+                            @path-changed="${this._handlePathChange}"
+                            @action-download="${(e) => { if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target); }}">
+                        </insetu-file-tree>
+                    </div>
+                `;
+            } else {
+                const matches = window.fuzzyFilterObjects(availableFiles, q, f => f.substring(currentPrefix.length));
 
                 if (matches.length === 0) {
-                        return html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
-                }
-                return html`
-                        <div style="display: flex; flex-direction: column; gap: 8px;">
-                                ${matches.map(filepath => {
-                                        const filename = filepath.split('/').pop();
-                                        return html`
-                                                <insetu-card
-                                                        .filename=${filepath}
-                                                        .titleText=${filename}
-                                                        .descriptionText=${filepath}
-                                                        icon="📄"
-                                                        intentColor="var(--intent-success)"
-                                                        @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
-                                                        <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                                                        <button slot="actions" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 8px;"
-                                                                @click=${(e) => {
-                                                                        e.stopPropagation();
-                                                                        const items = [
-                                                                                { label: 'Download', icon: '⬇️', onClick: (ev) => { ev.stopPropagation(); window.fetchAndDownloadState(filepath, e.target); } }
-                                                                        ];
-                                                                        window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items: items });
-                                                                }}>⚙️</button>
-                                                </insetu-card>
-                                        `;
-                                })}
+                    contentUI = html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
+                } else {
+                    contentUI = html`
+                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px;">
+                            ${matches.map(filepath => {
+                                const filename = filepath.split('/').pop();
+                                return html`
+                                    <insetu-card
+                                        .filename=${filepath}
+                                        .titleText=${filename}
+                                        .descriptionText=${filepath}
+                                        icon="📄"
+                                        intentColor="var(--intent-success)"
+                                        @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
+                                        <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
+                                        <button slot="actions" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 8px;"
+                                            @click=${(e) => {
+                                                e.stopPropagation();
+                                                const items = [
+                                                    { label: 'Download', icon: '⬇️', onClick: (ev) => { ev.stopPropagation(); window.fetchAndDownloadState(filepath, e.target); } }
+                                                ];
+                                                window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items: items });
+                                            }}>⚙️</button>
+                                    </insetu-card>
+                                `;
+                            })}
                         </div>
-                `;
+                    `;
+                }
+            }
+            return html`
+                <div style="display: flex; flex-direction: column; height: 100%;">
+                    <div class="sticky-header" style="display: flex; gap: 10px; align-items: center; flex-shrink: 0;">
+                        <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
+                            @input=${(e) => {
+                                const val = e.target.value;
+                                window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
+                                    window.inSetu.stores.Fs.getState().setSearchQuery(val);
+                                }, 200);
+                            }}>
+                        ${q ? html`<button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => window.inSetu.stores.Fs.getState().setSearchQuery('')}>❌ Clear</button>` : ''}
+                    </div>
+                    ${contentUI}
+                </div>
+            `;
         }
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
@@ -651,18 +667,6 @@ export function loadGlobalFS() {
         if (legacyHeader) legacyHeader.style.display = 'none';
 }
 
-function filterGlobalFS(query) {
-        window.ExtensionRegistry.utils.debounce('globalFSSearch', () => {
-                FsStore.getState().setSearchQuery(query);
-                const clearBtn = document.getElementById('global-fs-clear-btn');
-                if (clearBtn) clearBtn.style.display = query.trim() ? 'block' : 'none';
-        }, 200);
-}
-
-function clearGlobalFSSearch() {
-        document.getElementById('global-fs-search').value = '';
-        filterGlobalFS('');
-}
 function checkFileExtension(filename) {
     const warningEl = document.getElementById('new-file-ext-warning');
     if (!warningEl) return;
@@ -697,48 +701,16 @@ function checkFileExtension(filename) {
 }
 function openNewFileModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
-    const prefix = typeof overridePath === 'string' ?
-overridePath : (gbPath.length > 0 ? gbPath.join('/') + '/' : '');
-
-    const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-file-base-path" style="font-family: monospace; color: var(--intent-highlight);">${prefix}</span></label>
-        <input type="text" id="new-file-name" placeholder="Filename (e.g. my-prompt.md)..." style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;" oninput="if(typeof checkFileExtension === 'function') checkFileExtension(this.value)">
-        <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
-        <div id="new-file-toolbar" style="display: none; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-            <button onclick="if(window.importFromUrl) window.importFromUrl()" class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
-            <span id="import-url-status" style="font-size: 0.8rem; color: var(--text-muted); display: none;">Fetching...</span>
-        </div>
-
-        <div id="zone-new-file-options" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;"></div>
-
-        <textarea id="new-file-content" style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top:0; width: 100%; box-sizing: border-box; min-height: 200px;" placeholder="Enter file content here..."></textarea>
-    `;
-    const modal = document.createElement('insetu-modal');
-    modal.id = 'new-file-modal';
-    modal.titleText = 'Create New Workspace File';
-    modal.innerHTML = `
-        <div slot="body">${bodyHtml}</div>
-        <div slot="footer">
-            <button id="temp-save-file-btn" class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;">💾 Create & Save File</button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.open = true;
-    modal.addEventListener('modal-closed', () => modal.remove());
-
-    modal.querySelector('#temp-save-file-btn').onclick = async () => {
-        await saveNewFile(modal.id);
-    };
-
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        window.inSetu.extensions.Registry.executeUIHook('zone:new-file-options', null);
-    }
+    const prefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? gbPath.join('/') + '/' : '');
+    FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName: '', content: '' });
 }
 
-async function saveNewFile(modalId = 'new-file-modal') {
-    const basePath = document.getElementById('new-file-base-path').innerText;
-    let fileName = document.getElementById('new-file-name').value.trim();
-    let content = document.getElementById('new-file-content').value;
+async function saveNewFile() {
+    const mState = FsStore.getState().modals.newFile;
+    const basePath = mState.basePath;
+    let fileName = mState.fileName.trim();
+    let content = mState.content;
+
     if (!fileName || !content) {
         alert("Filename and content are required.");
         return;
@@ -747,24 +719,19 @@ async function saveNewFile(modalId = 'new-file-modal') {
     const filepath = basePath + fileName;
 
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        // Let extensions intercept the payload and inject metadata/headers before writing to disk
         content = await window.inSetu.extensions.Registry.executeUIHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
     }
 
-    const btn = document.getElementById('temp-save-file-btn');
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
         filepath,
         content
     }, {
-        btnId: btn ? btn.id : null,
         loadingText: 'Saving...',
         onSuccess: async () => {
-            const m = document.getElementById(modalId);
-            if (m && m.close) m.close();
-            else if (m) m.remove();
+            FsStore.getState().setModal('newFile', { open: false });
 
-            // Surgically inject into the local manifest state to avoid full re-compilation
+            // Surgically inject into the local manifest state
             const { manifest } = AppStore.getState();
             const repoDir = filepath.split('/')[0];
             const defaultBucket = `${repoDir}_context.txt`;
@@ -774,7 +741,6 @@ async function saveNewFile(modalId = 'new-file-modal') {
                     manifest[defaultBucket].files.push(filepath);
                 }
             } else {
-                // Create the bucket if it's a completely new repo
                 manifest[defaultBucket] = {
                     files: [filepath],
                     meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
@@ -795,61 +761,19 @@ function openNewFolderModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     const isRoot = overridePath === null && gbPath.length === 0;
     const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : gbPath.join('/') + '/');
-    const modalTitle = isRoot ? 'Create New Repository' : 'Create New Folder';
-    const submitLabel = isRoot ? '📦 Initialize Repository' : '📁 Create Folder';
-
-    const bodyHtml = `
-        <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span id="new-folder-base-path" style="font-family: monospace; color: var(--intent-highlight);">${prefix}</span></label>
-        <input type="text" id="new-folder-name" placeholder="Directory name..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
-
-        <div id="new-repo-fields" style="display: ${isRoot ? 'flex' : 'none'}; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-            <h4 style="margin: 0; margin-bottom: 5px; color: var(--intent-primary);">Repository Configuration</h4>
-            <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository Title</label>
-                <input type="text" id="new-repo-title" placeholder="e.g., Core API" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
-            </div>
-            <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Domain Category</label>
-                <input type="text" id="new-repo-domain" value="Workspaces" placeholder="e.g., Workspaces" style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
-            </div>
-            <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Description</label>
-                <input type="text" id="new-repo-desc" placeholder="Short summary..." style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box;">
-            </div>
-            <div>
-                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Tracked Extensions</label>
-                <input type="text" id="new-repo-exts" value=".py, .json, .md, .sh, .txt, .html, .css, .js" placeholder="e.g., .py, .json, .md" style="padding: 8px; margin: 0; width: 100%; font-family: monospace; box-sizing: border-box;">
-            </div>
-        </div>
-    `;
-    const modal = document.createElement('insetu-modal');
-    modal.id = 'new-folder-modal';
-    modal.titleText = modalTitle;
-    modal.innerHTML = `
-        <div slot="body">${bodyHtml}</div>
-        <div slot="footer">
-            <button id="btn-submit-new-folder" class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-${isRoot ? 'primary' : 'primary'}); color: white; border: none; font-weight: bold; cursor: pointer;">${submitLabel}</button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.open = true;
-    modal.addEventListener('modal-closed', () => modal.remove());
-
-    modal.querySelector('#btn-submit-new-folder').onclick = async () => {
-        await saveNewFolder(modal.id);
-    };
+    FsStore.getState().setModal('newFolder', { open: true, basePath: prefix, folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' });
 }
 
-async function saveNewFolder(modalId = 'new-folder-modal') {
-    const basePath = document.getElementById('new-folder-base-path').innerText;
-    let folderName = document.getElementById('new-folder-name').value.trim();
+async function saveNewFolder() {
+    const mState = FsStore.getState().modals.newFolder;
+    const basePath = mState.basePath;
+    let folderName = mState.folderName.trim();
 
     if (!folderName) {
         alert("Name is required.");
         return;
     }
 
-    // Clean leading/trailing slashes if user included them to prevent double slashes
     folderName = folderName.replace(/^\/+|\/+$/g, '');
     let isNewRepo = false;
     let payloadExt = {};
@@ -857,33 +781,25 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
     if (basePath === '') {
         isNewRepo = true;
         payloadExt = {
-            repo_title: document.getElementById('new-repo-title').value.trim(),
-            repo_domain: document.getElementById('new-repo-domain').value.trim(),
-            repo_desc: document.getElementById('new-repo-desc').value.trim(),
-            repo_exts: document.getElementById('new-repo-exts').value.trim()
+            repo_title: mState.repoTitle.trim(),
+            repo_domain: mState.repoDomain.trim(),
+            repo_desc: mState.repoDesc.trim(),
+            repo_exts: mState.repoExts.trim()
         };
     }
 
     const filepath = basePath + folderName + "/.gitkeep";
-    const btn = document.getElementById('btn-submit-new-folder');
-    const origText = btn.innerText;
-    btn.innerText = "Creating...";
-    try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/fs/save`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                filepath,
-                content: "",
-                is_new_repo: isNewRepo,
-                repo_dir: folderName,
-                ...payloadExt
-            })
-        });
-        if (res.ok) {
+
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
+        filepath,
+        content: "",
+        is_new_repo: isNewRepo,
+        repo_dir: folderName,
+        ...payloadExt
+    }, {
+        loadingText: "Creating...",
+        onSuccess: async () => {
             if (isNewRepo) {
                 const rRes = await fetch(`/api/${activeWs}/repos?t=` + Date.now());
                 if (rRes.ok) {
@@ -892,7 +808,6 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
                 }
             }
 
-            // Surgically inject into the local manifest state
             const { manifest } = AppStore.getState();
             const repoDir = filepath.split('/')[0];
             const defaultBucket = `${repoDir}_context.txt`;
@@ -908,21 +823,13 @@ async function saveNewFolder(modalId = 'new-folder-modal') {
                 };
             }
             AppStore.setState({ manifest: manifest });
-            const m = document.getElementById(modalId);
-            if (m && m.close) m.close();
-            else if (m) m.remove();
+            FsStore.getState().setModal('newFolder', { open: false });
 
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
                 loadGlobalFS();
             }
-        } else {
-            alert("Failed to create folder.");
         }
-    } catch (e) {
-        alert("Network error occurred.");
-    } finally {
-        btn.innerText = origText;
-    }
+    });
 }
 export function insertTextAtCursor(textToInsert) {
     const textArea = document.getElementById('modal-text');
@@ -1057,16 +964,13 @@ if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeI
         else textArea.value = errText;
     }
 }
-let currentFileTree = {};
-let currentBrowseManifest = [];
 function closeBrowseModal() {
-    const m = document.getElementById('browse-modal');
-    if (m && m.close) m.close();
+    FsStore.getState().setModal('browser', { open: false });
     AppStore.setState({ browserConfig: { mode: 'view', callback: null } });
 }
 export function openWorkspaceBrowser(options = {}) {
     const {
-        mode = 'view', // 'view', 'folder', 'file'
+        mode = 'view',
         title = 'Browse Workspace',
         files = null,
         callback = null,
@@ -1074,97 +978,23 @@ export function openWorkspaceBrowser(options = {}) {
     } = options;
     AppStore.setState({ browserConfig: { mode, callback } });
 
-    document.getElementById('browse-select-folder-btn').style.display = mode === 'folder' ? 'block' : 'none';
-    document.getElementById('browse-search').style.display = mode === 'folder' ? 'none' : 'block';
-
-    let targetManifest = [];
-    if (files) {
-        targetManifest = files;
-    } else {
-        const allFiles = new Set();
-        const { manifest } = AppStore.getState();
-        Object.values(manifest).forEach(obj => {
-            if (obj.files) obj.files.forEach(f => allFiles.add(f));
-        });
-        targetManifest = Array.from(allFiles);
-    }
-    currentBrowseManifest = targetManifest;
-    currentFileTree = buildFileTree(currentBrowseManifest);
+    let targetManifest = files || getGlobalManifest();
 
     let cbPath = [];
-    document.getElementById('browse-search').value = '';
-    const clearBtn = document.getElementById('browse-clear-btn');
-    if (clearBtn) clearBtn.style.display = 'none';
-
     if (autoDrilldown) {
-        let current = currentFileTree;
+        let current = buildFileTree(targetManifest);
         while (true) {
             const keys = Object.keys(current).filter(k => k !== '_isFile');
-            if (keys.length === 1) {
-                const onlyKey = keys[0];
-                if (!current[onlyKey]._isFile) {
-                    cbPath.push(onlyKey);
-                    current = current[onlyKey];
-                    continue;
-                }
+            if (keys.length === 1 && !current[keys[0]]._isFile) {
+                cbPath.push(keys[0]);
+                current = current[keys[0]];
+                continue;
             }
             break;
         }
     }
     AppStore.setState({ currentBrowsePath: cbPath });
-
-    let modal = document.getElementById('browse-modal');
-    if (!modal) {
-        modal = document.createElement('insetu-modal');
-        modal.id = 'browse-modal';
-        modal.innerHTML = `
-            <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
-                <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
-                    <input type="text" id="browse-search" placeholder="Fuzzy find files..." style="flex: 1; min-width: 200px; margin: 0; padding: 6px 10px; font-size: 14px;" onkeyup="filterBrowse(this.value)">
-                    <button id="browse-clear-btn" onclick="clearBrowseSearch()" class="btn-sm" style="background: #64748b; margin: 0; display: none;">❌ Clear Search</button>
-                </div>
-                <div id="browse-list" style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;"></div>
-            </div>
-            <div slot="footer">
-                <button id="browse-select-folder-btn" onclick="confirmFolderSelection()" class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer; display: none;">✅ Select This Folder</button>
-            </div>
-        `;
-        document.body.appendChild(modal);
-        modal.addEventListener('modal-closed', () => {
-            modal.remove();
-            AppStore.setState({ browserConfig: { mode: 'view', callback: null } });
-        });
-    }
-
-    modal.titleText = title;
-    modal.open = true;
-
-    document.getElementById('browse-select-folder-btn').style.display = mode === 'folder' ? 'block' : 'none';
-    document.getElementById('browse-search').style.display = mode === 'folder' ? 'none' : 'block';
-
-    const container = document.getElementById('browse-list');
-
-    container.innerHTML = `
-        <div @card-clicked="\${(e) => window._handleBrowserCardClick(e.detail)}">
-            <insetu-file-tree 
-                id="browse-fs-tree"
-                basePath=""
-                @path-changed="\${(e) => window.inSetu.stores.App.setState({ currentBrowsePath: e.detail.path })}">
-            </insetu-file-tree>
-        </div>
-    `;
-
-    const treeEl = container.querySelector('insetu-file-tree');
-    if (treeEl) {
-        treeEl.files = currentBrowseManifest;
-        treeEl.currentPath = cbPath;
-        treeEl.hideFiles = (mode === 'folder');
-
-        treeEl.addEventListener('card-clicked', (e) => window._handleBrowserCardClick(e.detail));
-        treeEl.addEventListener('path-changed', (e) => {
-            AppStore.setState({ currentBrowsePath: e.detail.path });
-        });
-    }
+    FsStore.getState().setModal('browser', { open: true, title, manifest: targetManifest, searchQuery: '' });
 }
 
 window._handleBrowserCardClick = function(detail) {
@@ -1197,52 +1027,6 @@ function confirmFolderSelection() {
     if (moveInput) moveInput.value = finalPath;
     closeBrowseModal();
 }
-
-function clearBrowseSearch() {
-    document.getElementById('browse-search').value = '';
-    document.getElementById('browse-clear-btn').style.display = 'none';
-    filterBrowse('');
-}
-
-function filterBrowse(query) {
-    window.ExtensionRegistry.utils.debounce('browseSearch', () => {
-        const q = query.toLowerCase().trim();
-        const container = document.getElementById('browse-list');
-        const clearBtn = document.getElementById('browse-clear-btn');
-        if (!q) {
-            if (clearBtn) clearBtn.style.display = 'none';
-            const { browserConfig } = AppStore.getState();
-            const modal = document.getElementById('browse-modal');
-            openWorkspaceBrowser({ mode: browserConfig.mode, title: modal ? modal.titleText : 'Browse', files: currentBrowseManifest });
-            return;
-        }
-
-        if (clearBtn) clearBtn.style.display = 'block';
-        container.replaceChildren();
-
-        const terms = q.split(/\\s+/).filter(t => t);
-        const matches = currentBrowseManifest.filter(f => {
-            const lowerF = f.toLowerCase();
-            return terms.every(t => lowerF.includes(t));
-        });
-
-        if (matches.length === 0) {
-            container.innerHTML = '<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>';
-            return;
-        }
-        matches.forEach(filepath => {
-            const filename = filepath.split('/').pop();
-            createFileCard({
-                filename: filepath,
-                displayName: filename,
-                description: filepath,
-                isFS: true,
-                isSource: true
-            }, container);
-        });
-    }, 200);
-}
-
 export function buildFileTree(files) {
     const tree = {};
     files.forEach(filepath => {
@@ -1338,15 +1122,10 @@ window.archiveModalFile = archiveModalFile;
 window.deleteModalFile = deleteModalFile;
 window.cleanModalFile = cleanModalFile;
 window.downloadFromModal = downloadFromModal;
-window.clearGlobalFSSearch = clearGlobalFSSearch;
-window.filterGlobalFS = filterGlobalFS;
 window.openFsDropdown = openFsDropdown;
-
 window.closeBrowseModal = closeBrowseModal;
 window.openFolderBrowser = openFolderBrowser;
 window.confirmFolderSelection = confirmFolderSelection;
-window.clearBrowseSearch = clearBrowseSearch;
-window.filterBrowse = filterBrowse;
 window.openWorkspaceBrowser = openWorkspaceBrowser;
 window.openBrowseModal = openBrowseModal;
 window.viewAndCopy = viewAndCopy;
@@ -1382,7 +1161,7 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
     }
 }
 export async function openQuickPackModal(targetDir) {
-    const fullTree = buildFileTree(globalManifest);
+    const fullTree = buildFileTree(getGlobalManifest());
     let current = fullTree;
     const gbPath = AppStore.getState().globalBrowsePath || [];
     for (const p of gbPath) {
@@ -1397,49 +1176,20 @@ export async function openQuickPackModal(targetDir) {
         return;
     }
 
-    // State Tracking (Zero DOM Reading)
-    const selectedFiles = new Set();
-
-    let checkboxesHtml = '';
-    fileKeys.forEach((key, index) => {
-        const fullPath = current[key].fullPath;
-        selectedFiles.add(fullPath); // Default all to checked
-
-        checkboxesHtml += `
-            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
-                <input type="checkbox" id="qp-cb-${index}" value="${fullPath}" style="cursor: pointer; transform: scale(1.2);" checked 
-                    onchange="if(this.checked) { window._qpSet.add(this.value); } else { window._qpSet.delete(this.value); }">
-                <label for="qp-cb-${index}" style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);">${key}</label>
-            </div>
-        `;
-    });
-
-    // Expose transient state to the DOM string handlers
-    window._qpSet = selectedFiles;
-    const modal = document.createElement('insetu-modal');
-    modal.id = 'quick-pack-modal-' + Date.now();
-    modal.titleText = `Quick-Pack Select: ${targetDir}`;
-    modal.innerHTML = `
-        <div slot="body" style="display: flex; flex-direction: column; gap: 5px; max-height: 50vh; overflow-y: auto; padding-right: 10px;">${checkboxesHtml}</div>
-        <div slot="footer">
-            <button id="btn-pack-selected" class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;">📦 Pack Selected</button>
-        </div>
-    `;
-    document.body.appendChild(modal);
-    modal.open = true;
-    modal.addEventListener('modal-closed', () => modal.remove());
-
-    modal.querySelector('#btn-pack-selected').onclick = () => {
-        const selectedArray = Array.from(window._qpSet);
-        if (selectedArray.length === 0) {
-            alert("Please select at least one file.");
-            return;
-        }
-        executeQuickPack(targetDir, false, selectedArray);
-        delete window._qpSet; // Clean up transient state
-        modal.close();
-    };
+    const selectedFiles = new Set(fileKeys.map(k => current[k].fullPath));
+    FsStore.getState().setModal('quickPack', { open: true, targetDir, files: fileKeys.map(k => ({ key: k, path: current[k].fullPath })), selectedFiles });
 }
+
+window.executeQuickPackSelected = function() {
+    const { targetDir, selectedFiles } = FsStore.getState().modals.quickPack;
+    const selectedArray = Array.from(selectedFiles);
+    if (selectedArray.length === 0) {
+        alert("Please select at least one file.");
+        return;
+    }
+    executeQuickPack(targetDir, false, selectedArray);
+    FsStore.getState().setModal('quickPack', { open: false });
+};
 export function openFsDropdown(anchorElement, options = {}) {
     if (!window.inSetu.ui.Factory || !window.inSetu.ui.Factory.createDropdown) return;
 
@@ -1501,151 +1251,74 @@ export async function clearQuickPacks() {
 }
 
 window.clearQuickPacks = clearQuickPacks;
-let activeLinkTab = 'filename';
-export function openLinkModal() {
-    // Hydrate manifest explicitly if missing to ensure files are available
-    if (!globalManifest || globalManifest.length === 0) {
-        const allFiles = new Set();
-        const { manifest } = AppStore.getState();
-        Object.values(manifest).forEach(obj => {
-            if (obj.files) obj.files.forEach(f => {
-                if (f.toLowerCase().endsWith('.md')) allFiles.add(f);
-            });
-        });
-        globalManifest = Array.from(allFiles);
-    }
-    const bodyHtml = `
-        <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
-            <div class="sub-tabs">
-                <div class="sub-tab active" id="lt-filename" onclick="switchLinkTab('filename')">Filename</div>
-                <div class="sub-tab" id="lt-deep" onclick="switchLinkTab('deep')">Deep Search</div>
-            </div>
-        </div>
-        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-shrink: 0;">
-            <input type="text" id="link-search-input" placeholder="Search files..." style="flex: 1; padding: 8px;  margin: 0;" oninput="if(typeof onLinkSearchInput === 'function') onLinkSearchInput(this.value)">
-            <button id="btn-deep-search" onclick="executeDeepLinkSearch()" class="btn-sm" style="background: var(--intent-highlight); margin: 0; display: none;">🔍 Search</button>
-        </div>
-        <div id="link-results-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
-            <span style="color:var(--text-muted); font-style:italic;">Type to search...</span>
-        </div>
-    `;
-    const modal = document.createElement('insetu-modal');
-    modal.id = 'link-insert-modal';
-    modal.titleText = 'Insert Link';
-    modal.innerHTML = `<div slot="body" style="display: flex; flex-direction: column; height: 100%;">${bodyHtml}</div>`;
-    document.body.appendChild(modal);
-    modal.open = true;
-    modal.addEventListener('modal-closed', () => modal.remove());
+export function openLinkModal(initialQuery = '', initialTab = 'filename') {
 
-    switchLinkTab('filename');
+    FsStore.getState().setModal('linkInsert', { 
+        open: true, 
+        activeTab: initialTab, 
+        searchQuery: initialQuery, 
+        searchResults: [],
+        deepSearchLoading: false 
+    });
+
+    if (initialQuery) {
+        if (initialTab === 'deep') executeDeepLinkSearch(initialQuery);
+        else executeLinkSearch(initialQuery);
+    }
 }
 
 export function switchLinkTab(tab) {
-    activeLinkTab = tab;
-    document.getElementById('lt-filename').classList.toggle('active', tab === 'filename');
-    document.getElementById('lt-deep').classList.toggle('active', tab === 'deep');
-
-    if (tab === 'filename') {
-        document.getElementById('btn-deep-search').style.display = 'none';
-        onLinkSearchInput(document.getElementById('link-search-input').value);
-    } else {
-        document.getElementById('btn-deep-search').style.display = 'block';
-        document.getElementById('link-results-list').innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Hit search to rank by multi-word matching...</span>';
-    }
+    FsStore.getState().setModal('linkInsert', { activeTab: tab, searchResults: [] });
+    const { searchQuery } = FsStore.getState().modals.linkInsert;
+    if (tab === 'filename' && searchQuery) executeLinkSearch(searchQuery);
 }
+
 export function onLinkSearchInput(val) {
-    if (activeLinkTab !== 'filename') return;
+    FsStore.getState().setModal('linkInsert', { searchQuery: val });
+    const { activeTab } = FsStore.getState().modals.linkInsert;
+    if (activeTab !== 'filename') return;
+
     window.ExtensionRegistry.utils.debounce('linkSearch', () => {
         executeLinkSearch(val);
     }, 300);
 }
-export async function executeDeepLinkSearch() {
-    const val = document.getElementById('link-search-input').value;
-    const container = document.getElementById('link-results-list');
-    const q = val.toLowerCase().trim();
 
-    if (!q) {
-        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search contents...</span>';
+export async function executeDeepLinkSearch(overrideQuery = null) {
+    const query = (overrideQuery || FsStore.getState().modals.linkInsert.searchQuery).toLowerCase().trim();
+    if (!query) {
+        FsStore.getState().setModal('linkInsert', { searchResults: [] });
         return;
     }
-    container.innerHTML = '<div class="spinner" style="display:block; margin-top:0;">Searching file contents across workspace...</div>';
-    document.getElementById('btn-deep-search').disabled = true;
+
+    FsStore.getState().setModal('linkInsert', { deepSearchLoading: true, searchResults: [] });
 
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(q));
+        const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(query));
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
-
-        container.replaceChildren();
-        if (data.results.length === 0) {
-            container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No files found matching contents.</span>';
-            return;
-        }
-
-        data.results.forEach(item => {
-            const name = item.path.split('/').pop();
-            const card = document.createElement('insetu-card');
-            card.filename = item.path;
-            card.titleText = name;
-            card.detailText = item.path;
-            if (item.snippet) {
-                card.descriptionText = `"...${item.snippet.replace(/</g, '&lt;')}"`;
-            }
-            card.icon = '📄';
-            card.intentColor = 'var(--intent-primary)';
-
-            const scoreTag = document.createElement('span');
-            scoreTag.slot = 'header-tags';
-            scoreTag.style.cssText = 'font-size: 0.7rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px;';
-            scoreTag.innerText = `Score: ${item.score}`;
-            card.appendChild(scoreTag);
-
-            card.addEventListener('card-clicked', () => insertLinkToEditor(item.path, name));
-            container.appendChild(card);
-        });
+        FsStore.getState().setModal('linkInsert', { searchResults: data.results || [] });
     } catch (e) {
-        container.innerHTML = `<span style="color:red;">Error: ${e.message}</span>`;
+        console.error("Deep search error:", e);
     } finally {
-        document.getElementById('btn-deep-search').disabled = false;
+        FsStore.getState().setModal('linkInsert', { deepSearchLoading: false });
     }
 }
-
 function executeLinkSearch(query) {
-    const container = document.getElementById('link-results-list');
-    const q = query.toLowerCase().trim();
-
+    const q = query.trim();
     if (!q) {
-        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>';
+        FsStore.getState().setModal('linkInsert', { searchResults: [] });
         return;
     }
-    const results = globalManifest.filter(path => path.toLowerCase().includes(q)).slice(0, 50);
-
-    container.replaceChildren();
-    if (results.length === 0) {
-        container.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">No markdown files found.</span>';
-        return;
-    }
-    results.forEach(path => {
-        const name = path.split('/').pop();
-        const card = document.createElement('insetu-card');
-        card.filename = path;
-        card.titleText = name;
-        card.detailText = path;
-        card.icon = '📄';
-        card.intentColor = 'var(--intent-primary)';
-        card.addEventListener('card-clicked', () => insertLinkToEditor(path, name));
-        container.appendChild(card);
-    });
+    const mdFiles = getGlobalManifest().filter(f => f.toLowerCase().endsWith('.md'));
+    const results = fuzzyFilterObjects(mdFiles, q).slice(0, 50).map(path => ({ path }));
+    FsStore.getState().setModal('linkInsert', { searchResults: results });
 }
-function insertLinkToEditor(path, name) {
-    let finalPath = path;
 
-    // Calculate intelligent relative path based on the file currently open in the modal
+export function insertLinkToEditor(path, name) {
+    let finalPath = path;
     if (currentModalFile) {
         const { targetConfigs } = window.inSetu.stores.App.getState();
-
-        // Rely on the SSOT configuration to prevent 'insetu/insetu' edge case failures
         const getRepo = (p) => {
             const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
             return match ? match.repo_dir : p.split('/')[0];
@@ -1655,33 +1328,28 @@ function insertLinkToEditor(path, name) {
         const targetRepo = getRepo(path);
 
         if (currentRepo !== targetRepo) {
-            // Cross-repo boundary! Use the explicit backend-supported syntax
             const targetPathWithinRepo = path.substring(targetRepo.length + 1);
             finalPath = `${targetRepo}::${targetPathWithinRepo}`;
         } else {
-            // Same repo: Use standard relative path generation
             const currentParts = currentModalFile.split('/');
             currentParts.pop();
-            // Remove filename to anchor at its directory
             const targetParts = path.split('/');
             let commonLength = 0;
-        while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
-            commonLength++;
-        }
-        const upSteps = currentParts.length - commonLength;
-        const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
-        const downString = targetParts.slice(commonLength).join('/');
-
-        finalPath = upString + downString;
+            while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
+                commonLength++;
+            }
+            const upSteps = currentParts.length - commonLength;
+            const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
+            const downString = targetParts.slice(commonLength).join('/');
+            finalPath = upString + downString;
         }
     }
     const linkText = `[${name}](${finalPath})`;
-
     if (window.insertTextAtCursor) {
         window.insertTextAtCursor(linkText);
     }
 
-    window.inSetu.ui.Factory.closeModal('link-insert-modal');
+    FsStore.getState().setModal('linkInsert', { open: false });
 }
 
 // Expose new functions to the window so HTML element handlers can reach them
@@ -1691,16 +1359,19 @@ window.onLinkSearchInput = onLinkSearchInput;
 window.executeDeepLinkSearch = executeDeepLinkSearch;
 window.viewSourceFile = viewSourceFile;
 window.insertTextAtCursor = insertTextAtCursor;
-
 export class InSetuVFSModals extends LitElement {
     static properties = {
-        modals: { type: Object }
+        modals: { type: Object },
+        browserConfig: { type: Object },
+        currentBrowsePath: { type: Array }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: contents; }`];
 
     constructor() {
         super();
         this.modals = {};
+        this.browserConfig = {};
+        this.currentBrowsePath = [];
     }
 
     connectedCallback() {
@@ -1708,12 +1379,19 @@ export class InSetuVFSModals extends LitElement {
         this._unsub = FsStore.subscribe(state => {
             this.modals = state.modals;
         });
+        this._unsubApp = AppStore.subscribe(state => {
+            this.browserConfig = state.browserConfig;
+            this.currentBrowsePath = state.currentBrowsePath;
+        });
         this.modals = FsStore.getState().modals;
+        this.browserConfig = AppStore.getState().browserConfig;
+        this.currentBrowsePath = AppStore.getState().currentBrowsePath;
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
+        if (this._unsubApp) this._unsubApp();
     }
 
     render() {
@@ -1723,9 +1401,9 @@ export class InSetuVFSModals extends LitElement {
         return html`
             <insetu-modal ?open=${m.move?.open} titleText="Move File to..." @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
-                    <input type="text" .value=${m.move?.destPath || ''} @input=${e => FsStore.getState().setModal('move', { destPath: e.target.value })} style="margin-bottom: 15px; font-family: monospace;">
+                    <input type="text" .value=${m.move?.destPath || ''} @input=${e => FsStore.getState().setModal('move', { destPath: e.target.value })} style="margin-bottom: 15px; font-family: monospace; min-width: 0; box-sizing: border-box;">
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 10px;">
-                        <insetu-folder-browser .files=${globalManifest} .currentPath=${m.move?.initialParts || []} @path-changed=${e => {
+                        <insetu-folder-browser .files=${getGlobalManifest()} .currentPath=${m.move?.initialParts || []} @path-changed=${e => {
                             const filename = m.move?.currentFile ? m.move.currentFile.split('/').pop() : '';
                             FsStore.getState().setModal('move', { destPath: e.detail.path ? (e.detail.path + '/' + filename) : filename });
                         }}></insetu-folder-browser>
@@ -1738,18 +1416,172 @@ export class InSetuVFSModals extends LitElement {
 
             <insetu-modal ?open=${m.newFile?.open} titleText="Create New Workspace File" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
-                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
-                    <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.checkFileExtension) window.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;">
+                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
+                    <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.checkFileExtension) window.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
                     <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
+                    ${window.inSetu.extensions.Registry?.executeUIHook('zone:new-file-options-lit', null) || ''}
 
-                    <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-                        <button @click=${() => { if(window.importFromUrl) window.importFromUrl(); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
-                    </div>
-
-                    <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-height: 200px;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
+                    <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-width: 0; min-height: 200px; resize: vertical;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
                 </div>
                 <div slot="footer">
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${saveNewFile}>💾 Create & Save File</button>
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${m.newFolder?.open} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
+                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFolder?.basePath}</span></label>
+                    <input type="text" placeholder="Directory name..." .value=${m.newFolder?.folderName || ''} @input=${e => FsStore.getState().setModal('newFolder', { folderName: e.target.value })} style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
+
+                    ${m.newFolder?.basePath === '' ? html`
+                        <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 15px; background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
+                            <h4 style="margin: 0; margin-bottom: 5px; color: var(--intent-primary);">Repository Configuration</h4>
+                            <div>
+                                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository Title</label>
+                                <input type="text" placeholder="e.g., Core API" .value=${m.newFolder.repoTitle} @input=${e => FsStore.getState().setModal('newFolder', { repoTitle: e.target.value })} style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box; min-width: 0;">
+                            </div>
+                            <div>
+                                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Domain Category</label>
+                                <input type="text" placeholder="e.g., Workspaces" .value=${m.newFolder.repoDomain} @input=${e => FsStore.getState().setModal('newFolder', { repoDomain: e.target.value })} style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box; min-width: 0;">
+                            </div>
+                            <div>
+                                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Description</label>
+                                <input type="text" placeholder="Short summary..." .value=${m.newFolder.repoDesc} @input=${e => FsStore.getState().setModal('newFolder', { repoDesc: e.target.value })} style="padding: 8px; margin: 0; width: 100%; box-sizing: border-box; min-width: 0;">
+                            </div>
+                            <div>
+                                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Tracked Extensions</label>
+                                <input type="text" placeholder="e.g., .py, .json, .md" .value=${m.newFolder.repoExts} @input=${e => FsStore.getState().setModal('newFolder', { repoExts: e.target.value })} style="padding: 8px; margin: 0; width: 100%; font-family: monospace; box-sizing: border-box; min-width: 0;">
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${saveNewFolder}>
+                        ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
+                    </button>
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${m.linkInsert?.open} titleText="Insert Link" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; height: 100%;">
+                    <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
+                        <div class="sub-tabs">
+                            <div class="sub-tab ${m.linkInsert?.activeTab === 'filename' ? 'active' : ''}" @click=${() => window.switchLinkTab('filename')}>Filename</div>
+                            <div class="sub-tab ${m.linkInsert?.activeTab === 'deep' ? 'active' : ''}" @click=${() => window.switchLinkTab('deep')}>Deep Search</div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-shrink: 0;">
+                        <input type="text" placeholder="Search files..." style="flex: 1; min-width: 0; padding: 8px; margin: 0;"
+                            .value=${m.linkInsert?.searchQuery || ''}
+                            @input=${e => window.onLinkSearchInput(e.target.value)}>
+                        ${m.linkInsert?.activeTab === 'deep' ? html`
+                            <button @click=${() => window.executeDeepLinkSearch()} class="btn-sm" style="background: var(--intent-highlight); margin: 0;" ?disabled=${m.linkInsert?.deepSearchLoading}>
+                                ${m.linkInsert?.deepSearchLoading ? '⏳...' : '🔍 Search'}
+                            </button>
+                        ` : ''}
+                    </div>
+                    <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px; min-height: 200px;">
+                        ${m.linkInsert?.deepSearchLoading ? html`<div class="spinner" style="display:block; margin-top:0;">Searching file contents across workspace...</div>` : ''}
+
+                        ${(!m.linkInsert?.deepSearchLoading && (!m.linkInsert?.searchResults || m.linkInsert.searchResults.length === 0)) ? html`
+                            <span style="color:var(--text-muted); font-style:italic;">
+                                ${(!m.linkInsert?.searchQuery) ? 'Type to search...' : 'No files found.'}
+                            </span>
+                        ` : ''}
+
+                        ${m.linkInsert?.searchResults?.map(item => {
+                            const name = item.path.split('/').pop();
+                            return html`
+                                <insetu-card
+                                    .filename=${item.path}
+                                    .titleText=${name}
+                                    .detailText=${item.path}
+                                    .descriptionText=${item.snippet ? '"...' + item.snippet.replace(/</g, '&lt;') + '"' : ''}
+                                    icon="📄"
+                                    intentColor="var(--intent-primary)"
+                                    @card-clicked=${() => window.insertLinkToEditor(item.path, name)}>
+                                    ${item.score !== undefined ? html`
+                                        <span slot="header-tags" style="font-size: 0.7rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px;">
+                                            Score: ${item.score}
+                                        </span>
+                                    ` : ''}
+                                </insetu-card>
+                            `;
+                        })}
+                    </div>
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} @modal-closed=${window.closeBrowseModal}>
+                <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
+                    ${this.browserConfig?.mode !== 'folder' ? html`
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
+                            <input type="text" placeholder="Fuzzy find files..." style="flex: 1; min-width: 0; padding: 6px 10px;"
+                                .value=${m.browser?.searchQuery || ''}
+                                @input=${e => FsStore.getState().setModal('browser', { searchQuery: e.target.value })}>
+                        </div>
+                    ` : ''}
+                    <div style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;">
+                        ${m.browser?.searchQuery ? html`
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                ${fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).slice(0, 50).map(filepath => {
+                                    const filename = filepath.split('/').pop();
+                                    return html`
+                                        <insetu-card
+                                            .filename=${filepath}
+                                            .titleText=${filename}
+                                            .descriptionText=${filepath}
+                                            icon="📄"
+                                            intentColor="var(--intent-primary)"
+                                            @card-clicked=${() => window._handleBrowserCardClick({ filename: filepath, isSource: true })}>
+                                        </insetu-card>
+                                    `;
+                                })}
+                                ${fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No files found.</span>` : ''}
+                            </div>
+                        ` : html`
+                            <insetu-file-tree 
+                                basePath=""
+                                .files=${m.browser?.manifest || []}
+                                .currentPath=${this.currentBrowsePath || []}
+                                .hideFiles=${this.browserConfig?.mode === 'folder'}
+                                @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
+                                @card-clicked=${e => window._handleBrowserCardClick(e.detail)}>
+                            </insetu-file-tree>
+                        `}
+                    </div>
+                </div>
+                ${this.browserConfig?.mode === 'folder' ? html`
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${window.confirmFolderSelection}>✅ Select This Folder</button>
+                </div>
+                ` : ''}
+            </insetu-modal>
+
+            <insetu-modal ?open=${m.quickPack?.open} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 5px; max-height: 50vh; overflow-y: auto; padding-right: 10px;">
+                    ${m.quickPack?.files?.map(f => html`
+                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
+                            <input type="checkbox" .value=${f.path} style="cursor: pointer; transform: scale(1.2);"
+                                .checked=${m.quickPack.selectedFiles.has(f.path)}
+                                @change=${(e) => {
+                                    const newSet = new Set(m.quickPack.selectedFiles);
+                                    if (e.target.checked) newSet.add(f.path);
+                                    else newSet.delete(f.path);
+                                    FsStore.getState().setModal('quickPack', { selectedFiles: newSet });
+                                }}>
+                            <label style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);"
+                                @click=${() => {
+                                    const newSet = new Set(m.quickPack.selectedFiles);
+                                    if (newSet.has(f.path)) newSet.delete(f.path);
+                                    else newSet.add(f.path);
+                                    FsStore.getState().setModal('quickPack', { selectedFiles: newSet });
+                                }}>${f.key}</label>
+                        </div>
+                    `)}
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${window.executeQuickPackSelected}>📦 Pack Selected</button>
                 </div>
             </insetu-modal>
         `;

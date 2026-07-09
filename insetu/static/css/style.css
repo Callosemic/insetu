@@ -73,7 +73,9 @@ body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg);
 .tab-content { display: none; max-width: 100%; margin: 0 auto; padding: 0; padding-top: 98px; padding-bottom: 30px; height: 100dvh; box-sizing: border-box; }
 .tab-content.active { display: block; }
 #tab-term { padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
-.screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto; box-sizing: border-box; border-radius: 0; box-shadow: none; }
+.screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto;
+box-sizing: border-box; border-radius: 0; box-shadow: none; }
+.sticky-header { position: sticky; top: -20px; margin: -20px -20px 15px -20px; padding: 20px 20px 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: block; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
 textarea { height: 250px; margin-top: 10px; }
@@ -198,8 +200,9 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 }
 [data-theme="e-ink"] .yaml-frontmatter { border: 1px dashed #000; color: #000; background: transparent; font-weight: bold; }
 /* Bridge Specific */
-#target-files { max-height: 200px; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; flex-shrink: 0; }
-#target-files:empty { display: none; }
+#target-files { background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; flex-shrink: 0; }
+#target-files:empty { display: none;
+}
 .checkbox-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .file-label { font-family: monospace; font-weight: bold; cursor: pointer; }
 /* Kanban Board Layout Classes */
@@ -226,7 +229,9 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 width: 100%; gap: 10px; }
     .tasks-controls select { flex: 1;
 }
-.screen { padding: 15px 5px; border-radius: 0; height: 100%; background: transparent; box-shadow: none; }
+.screen { padding: 15px 5px; border-radius: 0; height: 100%; background: transparent;
+box-shadow: none; }
+    .sticky-header { top: -15px; margin: -15px -5px 15px -5px; padding: 15px 5px 15px 5px; }
 .file-card { padding: 12px 10px; border-radius: 4px; margin-bottom: 8px; }
 #tab-term { padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box; }
 .tab-content { padding-top: 98px; padding-bottom: 30px; }

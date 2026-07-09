@@ -366,11 +366,9 @@ export function openSelectorModal(title, items, onSelect) {
     const searchEl = document.getElementById('selector-search');
     const renderList = (filter = '') => {
         if (listEl) listEl.replaceChildren();
-        const lowerFilter = filter.toLowerCase();
 
         // Filter and limit to 50 items to prevent DOM lag on massive author/pub lists
-        const filtered = items.filter(i => i.toLowerCase().includes(lowerFilter)).slice(0, 50);
-
+        const filtered = window.fuzzyFilterObjects(items, filter).slice(0, 50);
         if (filtered.length === 0) {
             listEl.innerHTML = '<span style="color: var(--text-muted); font-style: italic;">No matches found.</span>';
             return;

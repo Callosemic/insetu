@@ -114,23 +114,6 @@
         </div>
     </div>
 </div>
-
-<div id="browse-modal" class="fullscreen-modal" style="z-index: 1070;">
-    <div class="modal-content">
-        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
-            <h3 id="browse-modal-title" style="margin:0; font-size: 1.1rem; word-break: break-all;">Browse Files</h3>
-            <input type="text" id="browse-search" placeholder="Fuzzy find files..." style="flex: 1; min-width: 200px; margin: 0; padding: 6px 10px; font-size: 14px;" onkeyup="filterBrowse(this.value)">
-            <button onclick="closeBrowseModal()" class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
-        </div>
-        <div class="modal-body" id="browse-list" style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">
-        </div>
-        <div class="modal-footer">
-            <button id="browse-clear-btn" onclick="clearBrowseSearch()" style="background: #64748b; display: none;">❌ Clear Search</button>
-            <button id="browse-select-folder-btn" onclick="confirmFolderSelection()" style="background: #10b981; display: none;">✅ Select This Folder</button>
-        </div>
-    </div>
-</div>
-
     <div id="settings-modal" class="fullscreen-modal" style="z-index: 1100;">
         <div class="modal-content" style="max-height: 500px; height: auto; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">

@@ -13,7 +13,7 @@ def sniff_tenant_id():
     try:
         from flask import request
         if request and 'X-Workspace-ID' in request.headers:
-            return request.headers.get('X-Workspace-ID')
+            return request.headers['X-Workspace-ID']
     except RuntimeError:
         pass
     return "default"
@@ -166,7 +166,7 @@ def save_json_file(filepath, data, workspace_id=None):
             if not wid:
                 print(f"⚠️ [Security] Context Leak Prevented: save_json_file lacks workspace_id for {filepath}.")
                 wid = "default"
-            _VFS_WRITE_QUEUE.put((wid, filepath, json.dumps(data, indent=2), {}))
+            _VFS_WRITE_QUEUE.put((wid, filepath, json.dumps(data, indent=2), {"is_absolute_artifact": True}))
         except Exception:
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)

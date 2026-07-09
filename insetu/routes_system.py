@@ -60,14 +60,17 @@ def get_system_config(workspace_id):
 
     data["_available_extensions"] = sorted(available)
     return data
+
 def save_system_config(workspace_id, payload):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     if "_available_extensions" in payload:
         del payload["_available_extensions"]
     save_json_file(cfg_path, payload, workspace_id)
+
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])
-def api_system_config():
-    workspace_id = sniff_tenant_id()
+@system_bp.route('/api/<workspace_id>/system/config', methods=['GET', 'POST'])
+def api_system_config(workspace_id=None):
+    if not workspace_id: workspace_id = sniff_tenant_id()
     if request.method == 'GET':
         data = get_system_config(workspace_id)
         return jsonify(data)
@@ -113,17 +116,17 @@ def api_create_workspace():
         "extensions": ["config"],
         "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
     }
+    
     os.makedirs(starter_config["workspace_root"], exist_ok=True)
 
-    with open(config_abs_path, 'w', encoding='utf-8') as f:
-        json.dump(starter_config, f, indent=2)
+    from insetu.routes_fs import execute_vfs_save
+    execute_vfs_save("default", config_abs_path, json.dumps(starter_config, indent=2), data={"is_absolute_artifact": True})
 
     if "workspaces" not in w_data:
         w_data["workspaces"] = {}
     w_data["workspaces"][ws_id] = {"title": ws_id.title(), "config_path": config_rel_path}
 
-    with open(index_path, 'w', encoding='utf-8') as f:
-        json.dump(w_data, f, indent=2)
+    execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
 
     return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
 
@@ -146,23 +149,25 @@ def api_delete_workspace():
         return jsonify({"error": "Target workspace not found."}), 404
 
     del w_data["workspaces"][ws_id]
+    
     if w_data.get("active_workspace") == ws_id:
         w_data["active_workspace"] = "default"
 
     local_insetu_dir = Path(utils_core._cwd).joinpath(".insetu").as_posix()
     ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
     if os.path.exists(ws_dir.as_posix()):
-        import shutil
-        shutil.rmtree(ws_dir.as_posix(), ignore_errors=True)
+        from insetu.routes_fs import execute_vfs_delete
+        execute_vfs_delete("default", ws_dir.as_posix())
 
-    with open(index_path, 'w', encoding='utf-8') as f:
-        json.dump(w_data, f, indent=2)
+    from insetu.routes_fs import execute_vfs_save
+    execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
 
     return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+
 @system_bp.route('/api/system/jobs/<job_id>', methods=['GET'])
 def api_job_status(job_id):
     workspace_id = sniff_tenant_id()
-    from insetu.db  import get_connection
+    from insetu.db import get_connection
     try:
         conn = get_connection("workers", workspace_id=workspace_id)
         job = conn.execute("SELECT status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
@@ -218,7 +223,7 @@ def api_list_local_host_dirs():
         for item in sorted(os.listdir(target)):
             if item.startswith('.') and item != '.insetu':
                 continue
-            if os.path.isdir(os.path.join(target, item)):
+            if os.path.isdir(Path(target).joinpath(item).as_posix()):
                 dirs.append(item)
         return jsonify({"current": target, "dirs": dirs})
     except Exception as e:

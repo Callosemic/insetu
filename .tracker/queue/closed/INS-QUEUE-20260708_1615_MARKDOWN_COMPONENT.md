@@ -7,7 +7,6 @@ title: "Ecosystem Generalization: Abstract CodeMirror into <insetu-markdown-edit
 created_at: 2026-07-08T16:15:00
 closed_at: 2026-07-09T09:56:43
 sub_bucket: "None"
-delivery_date: "2026-08-23"
 ---
 
 ## Description

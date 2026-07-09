@@ -392,10 +392,11 @@ export class InSetuWorkspaceEditor extends LitElement {
         activeWorkspace: { type: String },
         _showHostBrowser: { type: Boolean },
         _hostCurrentPath: { type: String },
-        _hostDirs: { type: Array }
+        _hostDirs: { type: Array },
+        _newWsId: { type: String },
+        _newWsRoot: { type: String }
     };
     static styles = [sharedStyles];
-
     constructor() {
         super();
         this.open = false;
@@ -404,6 +405,8 @@ export class InSetuWorkspaceEditor extends LitElement {
         this._showHostBrowser = false;
         this._hostCurrentPath = '';
         this._hostDirs = [];
+        this._newWsId = '';
+        this._newWsRoot = '';
     }
 
     async _openHostBrowser() {
@@ -438,10 +441,10 @@ export class InSetuWorkspaceEditor extends LitElement {
         const nextPath = this._hostCurrentPath.startsWith('/') ? '/' + parts.join('/') : parts.join('/');
         this._loadHostDirs(nextPath || '/');
     }
-
     _confirmHostDir() {
-        this.shadowRoot.querySelector('#new-ws-root').value = this._hostCurrentPath;
+        this._newWsRoot = this._hostCurrentPath;
         this._showHostBrowser = false;
+        this.requestUpdate();
     }
 
     updated(changedProperties) {
@@ -465,11 +468,8 @@ export class InSetuWorkspaceEditor extends LitElement {
     }
     async _handleCreateWorkspace(e) {
         e.preventDefault();
-        const idInput = this.shadowRoot.querySelector('#new-ws-id');
-        const rootInput = this.shadowRoot.querySelector('#new-ws-root');
-
-        const wsId = idInput.value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
-        const wsRoot = rootInput.value.trim();
+        const wsId = this._newWsId.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+        const wsRoot = this._newWsRoot.trim();
         if (!wsId) return;
 
         try {
@@ -479,8 +479,9 @@ export class InSetuWorkspaceEditor extends LitElement {
                 body: JSON.stringify({ id: wsId, workspace_root: wsRoot })
             });
             if (res.ok) {
-                idInput.value = '';
-                rootInput.value = '';
+                this._newWsId = '';
+                this._newWsRoot = '';
+                this.requestUpdate();
                 await this._loadWorkspacesManifest();
                 if (window.loadWorkspaces) window.loadWorkspaces();
             } else {
@@ -525,12 +526,12 @@ export class InSetuWorkspaceEditor extends LitElement {
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Unique Name / ID</label>
-                            <input type="text" id="new-ws-id" placeholder="e.g. guitar_academy" required style="width: 100%; margin: 0;">
+                            <input type="text" id="new-ws-id" placeholder="e.g. guitar_academy" .value=${this._newWsId} @input=${e => this._newWsId = e.target.value} required style="width: 100%; margin: 0;">
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Root Directory Path</label>
                             <div style="display: flex; gap: 8px;">
-                                <input type="text" id="new-ws-root" placeholder="e.g. ~/Documents/GuitarRepertoire" required style="flex: 1; margin: 0;">
+                                <input type="text" id="new-ws-root" placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @input=${e => this._newWsRoot = e.target.value} required style="flex: 1; margin: 0;">
                                 <button type="button" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" @click=${this._openHostBrowser}>...</button>
                             </div>
                         </div>

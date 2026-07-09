@@ -123,6 +123,84 @@ export let mdeInstance = {
         this.codemirror.setValue(text);
     }
 };
+import { LitElement } from 'lit';
+
+export class InSetuMarkdownEditor extends LitElement {
+    static properties = {
+        value: { type: String },
+        readOnly: { type: Boolean }
+    };
+
+    createRenderRoot() {
+        return this; // Render in Light DOM so CM6 injects its native styling seamlessly
+    }
+
+    constructor() {
+        super();
+        this.value = '';
+        this.readOnly = false;
+        this._view = null;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        // Defer mounting slightly to ensure the container is fully rendered in the DOM
+        setTimeout(() => this._initEditor(), 0);
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._view) {
+            this._view.destroy();
+            this._view = null;
+        }
+    }
+
+    updated(changedProperties) {
+        if (this._view && changedProperties.has('value')) {
+            const currentDoc = this._view.state.doc.toString();
+            if (currentDoc !== this.value) {
+                this._view.dispatch({
+                    changes: { from: 0, to: currentDoc.length, insert: this.value || '' }
+                });
+            }
+        }
+    }
+
+    _initEditor() {
+        if (this._view) return;
+        this.style.display = 'flex';
+        this.style.flexDirection = 'column';
+        this.style.flex = '1';
+        this.style.minHeight = '0';
+        this.style.height = '100%';
+
+        this._view = new EditorView({
+            state: EditorState.create({
+                doc: this.value || '',
+                extensions: [
+                    basicSetup,
+                    markdown(),
+                    oneDark,
+                    EditorView.lineWrapping,
+                    EditorView.updateListener.of((update) => {
+                        if (update.docChanged) {
+                            const newVal = update.state.doc.toString();
+                            this.value = newVal;
+                            this.dispatchEvent(new CustomEvent('content-changed', {
+                                detail: { value: newVal },
+                                bubbles: true,
+                                composed: true
+                            }));
+                        }
+                    })
+                ]
+            }),
+            parent: this
+        });
+    }
+}
+customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 window.addEventListener('keydown', (e) => {
@@ -261,11 +339,12 @@ window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
     el.selectionStart = el.selectionEnd = start + 4;
     el.dispatchEvent(new Event('input'));
 });
-// Auto-resize generic textareas (prompts, descriptions) as the user types
+// Auto-resize generic textareas (prompts, descriptions) as the user types, piercing Shadow DOM boundaries
 document.addEventListener('input', (e) => {
-    if (e.target.tagName.toLowerCase() === 'textarea' && e.target.id !== 'payload' && !e.target.closest('.EasyMDEContainer')) {
-        e.target.style.height = 'auto';
-        e.target.style.height = Math.min(e.target.scrollHeight + 2, 500) + 'px';
+    const target = e.composedPath()[0];
+    if (target && target.tagName.toLowerCase() === 'textarea' && target.id !== 'payload' && !target.closest('.EasyMDEContainer')) {
+        target.style.height = 'auto';
+        target.style.height = Math.min(target.scrollHeight + 2, 500) + 'px';
     }
 });
 // Map Cmd/Ctrl + S contextually depending on which modal is currently visible
@@ -615,11 +694,81 @@ export function normalizeAccentText(str) {
     if (!str) return '';
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
-
 export function generateSafeSlug(str) {
     if (!str) return '';
     return normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
+export function fuzzyFilterObjects(items, query, getSearchString = (item) => String(item)) {
+    if (!query.trim()) return items;
+
+    const norm = window.normalizeAccentText || (str => str.toLowerCase());
+    const queryWords = norm(query).trim().split(/\s+/).filter(t => t);
+
+    const scoredItems = [];
+
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const targetStr = norm(getSearchString(item));
+        let totalScore = 0;
+        let isMatch = true;
+
+        for (let w = 0; w < queryWords.length; w++) {
+            const qWord = queryWords[w];
+            let wordScore = 0;
+
+            // 1. Exact Substring Match (Highest Priority)
+            if (targetStr.includes(qWord)) {
+                wordScore = qWord.length * 50;
+
+                // Bonus if it matches at a boundary
+                if (targetStr.startsWith(qWord) || new RegExp(`[\\/\\s\\-_]${qWord}`).test(targetStr)) {
+                    wordScore += 50;
+                }
+            } else {
+                // 2. Subsequence Match with Gap Penalties
+                let qIdx = 0;
+                let tIdx = 0;
+                let prevTIdx = -1;
+
+                while (qIdx < qWord.length && tIdx < targetStr.length) {
+                    if (qWord[qIdx] === targetStr[tIdx]) {
+                        // Base points
+                        if (tIdx === 0 || /[\/\s\-_]/.test(targetStr[tIdx - 1])) {
+                            wordScore += 10; // Boundary bonus
+                        } else {
+                            wordScore += 1;
+                        }
+
+                        // Gap penalty (characters spread too far apart)
+                        if (prevTIdx !== -1) {
+                            const gap = tIdx - prevTIdx - 1;
+                            wordScore -= (gap * 1.5); 
+                        }
+
+                        prevTIdx = tIdx;
+                        qIdx++;
+                    }
+                    tIdx++;
+                }
+
+                // If the score drops below zero due to massive gaps, reject the match
+                if (qIdx !== qWord.length || wordScore <= 0) {
+                    isMatch = false; 
+                    break;
+                }
+            }
+            totalScore += wordScore;
+        }
+
+        if (isMatch) {
+            scoredItems.push({ item, score: totalScore });
+        }
+    }
+
+    // Sort by score descending to float the strongest matches to the top
+    return scoredItems.sort((a, b) => b.score - a.score).map(res => res.item);
+}
+window.fuzzyFilterObjects = fuzzyFilterObjects;
 
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
@@ -841,7 +990,7 @@ async function performSoftRefresh() {
                 const extName = tabEl.dataset.ext;
                 const tabId = tabEl.dataset.id || tabEl.id.replace('st-', '');
                 const isActive = 
-['bridge', 'gather', 'config'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
+['bridge', 'gather', 'config', 'files'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
 
                 tabEl.style.display = isActive ? '' : 'none';
 

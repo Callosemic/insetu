@@ -133,6 +133,9 @@ export class InSetuCard extends LitElement {
         }
         .action-overlay.active {
             opacity: 1;
+            pointer-events: none;
+        }
+        .action-overlay.active ::slotted(*), .action-overlay.active > * {
             pointer-events: auto;
         }
         .action-overlay.exclude-title {
@@ -241,18 +244,13 @@ if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false;
         const nodes = e.target.assignedNodes({ flatten: true });
         this._hasActions = nodes.some(n => n.nodeType === Node.ELEMENT_NODE);
     }
-
     _handleMainClick(e) {
-        if (this._overlayActive) {
-            this._overlayActive = false;
-            e.stopPropagation();
-        } else {
-            this.dispatchEvent(new CustomEvent('card-clicked', {
-                detail: { filename: this.filename, isSource: true }, 
-                bubbles: true,
-                composed: true
-            }));
-        }
+        this._overlayActive = false;
+        this.dispatchEvent(new CustomEvent('card-clicked', {
+            detail: { filename: this.filename, isSource: true }, 
+            bubbles: true,
+            composed: true
+        }));
     }
 }
 export class InSetuCategorySection extends LitElement {

@@ -14,14 +14,9 @@ def get_connection(db_name, workspace_id=None):
     """
     if not hasattr(_local, 'connections'):
         _local.connections = {}
-
     if not workspace_id:
-        try:
-            from flask import request
-            if request:
-                workspace_id = request.headers.get('X-Workspace-ID')
-        except RuntimeError:
-            pass
+        from insetu.utils_core import sniff_tenant_id
+        workspace_id = sniff_tenant_id()
     workspace_id = workspace_id or "default"
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()

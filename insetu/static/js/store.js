@@ -63,8 +63,8 @@ window.inSetu.extensions.Registry = {
     utils: {
         _timers: {},
         debounce: function(key, callback, delay = 300) {
-            window.clearTimeout(this._timers[key]);
-            this._timers[key] = setTimeout(callback, delay);
+            if (this._timers[key]) window.clearTimeout(this._timers[key]);
+this._timers[key] = setTimeout(callback, delay);
         },
         debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
             this.debounce(`verify_${filepath}`, async () => {
@@ -108,6 +108,17 @@ window.inSetu.extensions.Registry = {
                     this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
                 } else if (slotDef.slot === 'slots:sub-navigation-actions') {
                     this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
+                } else if (slotDef.slot === 'slots:global') {
+                    let container = document.getElementById('global-extensions-container');
+                    if (!container) {
+                        container = document.createElement('div');
+                        container.id = 'global-extensions-container';
+                        container.style.display = 'contents';
+                        document.body.appendChild(container);
+                    }
+                    if (!container.querySelector(slotDef.component)) {
+                        container.appendChild(document.createElement(slotDef.component));
+                    }
                 }
             });
         }

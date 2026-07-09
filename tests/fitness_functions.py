@@ -169,6 +169,8 @@ def check_javascript_files():
     create_modal_pattern = re.compile(r'\.createModal\s*\(')
     slug_dry_pattern = re.compile(r'\.normalize\([\'"]NFD[\'"]\)')
     context_scraping_pattern = re.compile(r'\.active\b.*\.sub-tab|\.sub-tab.*\.active\b')
+    form_data_pattern = re.compile(r'new\s+FormData\b')
+    local_fetch_wrapper_pattern = re.compile(r'(const|let|var)\s+apiFetch\s*=')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -240,10 +242,17 @@ def check_javascript_files():
                     # 10. Slug Normalization DRY Violation
                     if is_extension and slug_dry_pattern.search(line):
                         report_violation("SLUG_DRY_VIOLATION", filepath, line_num, "Duplicate slug generation regex detected. Use the centralized generateSafeSlug() utility instead.")
-
                     # 11. Context Scraping Ban
                     if is_extension and context_scraping_pattern.search(line):
                         report_violation("CONTEXT_SCRAPING_BAN", filepath, line_num, "DOM class context scraping detected. Actions must rely on localized dataset properties instead.")
+
+                    # 13. UDF FormData Bypass
+                    if is_lit_component and form_data_pattern.search(line):
+                        report_violation("UDF_FORM_DATA_BAN", filepath, line_num, "new FormData() detected in LitElement. Bind inputs to reactive properties via @input instead.")
+
+                    # 14. Global Fetch Interceptor Bypass
+                    if is_extension and local_fetch_wrapper_pattern.search(line):
+                        report_violation("GLOBAL_UTILITY_BYPASS", filepath, line_num, "Localized API fetch wrapper detected. Utilize the centralized window.inSetu.fetch utility to ensure global interceptor compliance.")
 
 if __name__ == "__main__":
     print("============================================================")

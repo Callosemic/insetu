@@ -53,9 +53,30 @@ export const sharedStyles = css`
     .sub-tabs { display: flex; gap: 8px; margin: 0; padding: 0; overflow-x: auto; align-items: center; height: 100%; scrollbar-width: none; }
     .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; }
     .sub-tab:hover { color: var(--text); }
-    .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn); }
+.sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
+}
+.sticky-header { position: sticky; top: -20px; margin: -20px -20px 10px -20px; padding: 6px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
+@media (max-width: 1024px), (max-aspect-ratio: 1/1) {
+    .sticky-header { top: -15px; margin: -15px -5px 10px -5px; padding: 6px 5px; }
+}
 
-    /* Utilities */
+input[type="text"].fuzzy-search-input {
+    width: 100%;
+    padding: 4px 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
+    font-size: 0.95rem;
+    outline: none;
+    box-shadow: none !important;
+    color: var(--text);
+}
+.fuzzy-search-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.6;
+}
+
+/* Utilities */
     .spinner {
         display: none;
         margin-top: 20px;

@@ -20,13 +20,8 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}",
     jitter_ms=0, workspace_id=None):
     """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
     if not workspace_id:
-        try:
-            from flask import request
-            if request:
-                workspace_id = request.headers.get('X-Workspace-ID')
-        except RuntimeError:
-
-            pass
+        from insetu.utils_core import sniff_tenant_id
+        workspace_id = sniff_tenant_id()
     workspace_id = workspace_id or "default"
     _init_worker_schema(workspace_id)
     conn = get_connection("workers", workspace_id=workspace_id)
@@ -47,13 +42,8 @@ INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, sta
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
     if not workspace_id:
-        try:
-            from flask import request
-
-            if request:
-                workspace_id = request.headers.get('X-Workspace-ID')
-        except RuntimeError:
-            pass
+        from insetu.utils_core import sniff_tenant_id
+        workspace_id = sniff_tenant_id()
     workspace_id = workspace_id or "default"
     _init_worker_schema(workspace_id)
     conn = get_connection("workers", workspace_id=workspace_id)

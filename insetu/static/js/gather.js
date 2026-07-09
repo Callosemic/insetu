@@ -57,39 +57,46 @@ constructor() {
         const categories = {};
         const { categoryOrder, manifest } = AppStore.getState();
 
-        this.manifestFiles.forEach(file => {
-            if (typeof HIDDEN_OUTPUTS !== 'undefined' && HIDDEN_OUTPUTS.includes(file)) return;
-            const manifestObj = manifest[file] || {};
-            const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
+        // 1. Enrich data with metadata for searching
+        const enrichedFiles = this.manifestFiles.map(file => {
+                if (typeof HIDDEN_OUTPUTS !== 'undefined' && HIDDEN_OUTPUTS.includes(file)) return null;
+                const manifestObj = manifest[file] || {};
+                const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
 
-            let finalCat = meta.domain;
-            let finalDesc = meta.desc;
-            let finalTitle = meta.title;
-            let sizeStr = "";
-            if (meta.size_bytes !== undefined) {
-                const kb = Math.round(meta.size_bytes / 1024);
-                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-            }
-
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
-                if (extMeta) {
-                    finalCat = extMeta.cat;
-                    finalDesc = extMeta.desc;
-                    finalTitle = extMeta.displayName;
+                let finalCat = meta.domain;
+                let finalDesc = meta.desc;
+                let finalTitle = meta.title;
+                let sizeStr = "";
+                if (meta.size_bytes !== undefined) {
+                        const kb = Math.round(meta.size_bytes / 1024);
+                        sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
                 }
-            }
 
-            if (this.searchQuery && !finalTitle.toLowerCase().includes(this.searchQuery)) return;
+                if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                        const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
+                        if (extMeta) {
+                                finalCat = extMeta.cat;
+                                finalDesc = extMeta.desc;
+                                finalTitle = extMeta.displayName;
+                        }
+                }
+                return { filename: file, finalCat, finalDesc, finalTitle, sizeStr };
+        }).filter(f => f !== null);
 
-            if (!categories[finalCat]) categories[finalCat] = [];
-            categories[finalCat].push({
-                filename: file,
-                displayName: finalTitle,
-                description: finalDesc,
-                sizeStr: sizeStr,
-                isFS: false
-            });
+        // 2. Apply Fuzzy Search
+        const filteredFiles = this.searchQuery 
+                ? window.fuzzyFilterObjects(enrichedFiles, this.searchQuery, f => `${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
+                : enrichedFiles;
+
+        filteredFiles.forEach(f => {
+                if (!categories[f.finalCat]) categories[f.finalCat] = [];
+                categories[f.finalCat].push({
+                        filename: f.filename,
+                        displayName: f.finalTitle,
+                        description: f.finalDesc,
+                        sizeStr: f.sizeStr,
+                        isFS: false
+                });
         });
 
         const sortedCats = Object.keys(categories).sort((a, b) => {
@@ -101,11 +108,9 @@ constructor() {
             return a.localeCompare(b);
         });
         return html`
-            <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-                <span id="refresh-time" style="font-size: 0.9rem; color: var(--text-muted); font-style: italic;"></span>
-            </div>
-            <div style="margin-bottom: 15px;">
-                <input type="text" placeholder="Filter contexts..." @keyup=${(e) => this.searchQuery = e.target.value}>
+            <div class="sticky-header" style="display: flex; align-items: center; gap: 10px;">
+                <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value} style="flex: 1;">
+                <span id="refresh-time" style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; white-space: nowrap;"></span>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block;">${this.loadingMessage}</div>` : ''}
 

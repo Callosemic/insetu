@@ -7,7 +7,6 @@ title: "Final UI Component Graduation to LitElement"
 created_at: 2026-07-08T15:50:00
 closed_at: 2026-07-09T09:56:43
 sub_bucket: "None"
-delivery_date: "2026-07-26"
 tags: ["Frontend", "LitElement", "Refactor"]
 ---
 ## Description

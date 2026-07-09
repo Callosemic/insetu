@@ -83,7 +83,7 @@ export class InSetuExtBridge extends LitElement {
             :host { display: flex; flex-direction: column; height: 100%; flex: 1; }
             .checkbox-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
             .file-label { font-family: monospace; font-weight: bold; cursor: pointer; flex: 1; word-break: break-all; }
-            #target-files { max-height: 200px; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; flex-shrink: 0; }
+            #target-files { background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; flex-shrink: 0; }
             #target-files:empty { display: none; }
         `
     ];
