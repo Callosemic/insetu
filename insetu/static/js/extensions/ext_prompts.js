@@ -24,10 +24,14 @@ connectedCallback() {
     this._unsub = AppStore.subscribe((state) => state.activeWorkspace, () => {
         this.fetchPrompts();
     });
+    this._unsubRefresh = AppStore.subscribe((state) => state.promptsForceRefreshTick, (tick) => {
+        if (tick) this.fetchPrompts();
+    });
 }
 disconnectedCallback() {
     super.disconnectedCallback();
     if (this._unsub) this._unsub();
+    if (this._unsubRefresh) this._unsubRefresh();
 }
 
 async fetchPrompts() {
@@ -68,8 +72,11 @@ static openPromptEmbedModal() {
 render() {
     const filteredPrompts = this.searchQuery ? window.fuzzyFilterObjects(this.prompts, this.searchQuery) : this.prompts;
     return html`
-        <div class="sticky-header">
-            <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search prompts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+        <div class="sticky-header" style="display: flex; align-items: center; gap: 10px;">
+            <div class="fuzzy-search-wrapper" style="margin-bottom: 0; flex: 1;">
+                <input type="text" placeholder="🔍 Fuzzy search prompts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+            </div>
         </div>
         ${this.loading ?
 html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts...</div>` : html`
@@ -138,10 +145,7 @@ html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts.
 }
 customElements.define('insetu-ext-prompts', InSetuExtPrompts);
 export class InSetuExtPromptsActions extends LitElement {
-    static styles = css`
-        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button:hover { background: var(--input-bg); }
-    `;
+    static styles = [sharedStyles];
 
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
@@ -169,9 +173,8 @@ export class InSetuExtPromptsActions extends LitElement {
             ]
         });
     }
-
     render() {
-        return html`<button @click=${this._openMenu}>☰</button>`;
+        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
     }
 }
 customElements.define('insetu-ext-prompts-actions', InSetuExtPromptsActions);
@@ -212,9 +215,9 @@ window.ExtensionRegistry.registerExtension('prompts', {
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'context' && data.subId === 'prompts') {
-                const container = document.getElementById('sub-prompts');
-                const litEl = container?.querySelector('insetu-ext-prompts');
-                if (litEl && data.forceRefresh) litEl.fetchPrompts();
+                if (data.forceRefresh) {
+                    window.inSetu.stores.App.setState({ promptsForceRefreshTick: Date.now() });
+                }
             }
         },
         'zone:modal-ext-menu': (data) => {

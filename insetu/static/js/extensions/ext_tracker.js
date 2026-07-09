@@ -323,6 +323,8 @@ const kState = KanbanStore.getState();
                     ${t.tags && t.tags.length > 0 ? t.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
                 </div>
 
+                <insetu-file-actions slot="actions" .filepath=${t.filepath} .repoDir=${t.repo} .isFS=${true}></insetu-file-actions>
+
                 ${(t.status === 'open' && !t.isQueue) ? html`
                     <button slot="actions" class="btn-sm" style="background: var(--intent-warning);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'active'); }}>▶️ Start</button>
                 ` : ''}
@@ -557,14 +559,16 @@ this.pinnedRepos.size > 1;
         this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
         this.pinnedBuckets.forEach(b => { if (b !== 'ALL') activeFilters.push(b); });
         this.pinnedTags.forEach(t => { if (t !== 'ALL') activeFilters.push('#' + t); });
-
         const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
 
         return html`
             ${this._renderNewTaskModal()}
             <div class="sticky-header">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search tickets..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value} style="flex: 1;">
+                    <div class="fuzzy-search-wrapper" style="margin-bottom: 0; flex: 1;">
+                        <input type="text" placeholder="🔍 Fuzzy search tickets..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                        ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                    </div>
                     <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
                         ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
                     </button>
@@ -991,24 +995,8 @@ if (window.executeSystemCompile) window.executeSystemCompile();
     }
 }
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
-
 export class InSetuExtTrackerActions extends LitElement {
-    static styles = css`
-        button {
-            background: transparent;
-            border: 1px solid var(--border);
-            color: var(--text);
-            margin: 0;
-            padding: 4px 12px;
-            font-size: 1.1rem;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover {
-            background: var(--input-bg);
-        }
-    `;
+    static styles = [sharedStyles];
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
         const activeSubTab = this.dataset.subId || 'todos';
@@ -1027,9 +1015,8 @@ export class InSetuExtTrackerActions extends LitElement {
             items: items
         });
     }
-
     render() {
-        return html`<button @click=${this._openMenu}>☰</button>`;
+        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
     }
 }
 customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);

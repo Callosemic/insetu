@@ -258,10 +258,12 @@ export class InSetuExtGitDiffs extends LitElement {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-
         return html`
-            <div class="sticky-header" style="display: flex; flex-direction: column;">
-                <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} @input=${e => this.searchQuery = e.target.value}>
+            <div class="sticky-header">
+                <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
+                    <input type="text" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} @input=${e => this.searchQuery = e.target.value}>
+                    ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                </div>
             </div>
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
@@ -375,13 +377,9 @@ export class InSetuExtGitDiffs extends LitElement {
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
-
 export class InSetuExtGitActions extends LitElement {
     static properties = { hasChanges: { type: Boolean } };
-    static styles = css`
-        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button:hover { background: var(--input-bg); }
-    `;
+    static styles = [sharedStyles];
     constructor() { super(); this.hasChanges = false; }
     connectedCallback() {
         super.connectedCallback();
@@ -401,7 +399,7 @@ export class InSetuExtGitActions extends LitElement {
         }
         window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items });
     }
-    render() { return html`<button @click=${this._openMenu}>☰</button>`; }
+    render() { return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`; }
 }
 customElements.define('insetu-ext-git-actions', InSetuExtGitActions);
 
@@ -591,13 +589,13 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {
         if (data.filepath && data.filepath.endsWith('_diffs.txt')) {
-            const pushBtn = document.createElement('button');
-            pushBtn.className = 'btn-sm';
-            pushBtn.style.background = 'var(--intent-highlight)';
-            pushBtn.innerText = '🚀 Push';
-            pushBtn.onclick = () => window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
-            data.actionsContainer.appendChild(pushBtn);
+            return html`
+                <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0 5px 0 0;" @click=${(e) => {
+                    e.stopPropagation();
+                    window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
+                }}>🚀 Push</button>
+            `;
         }
-        return false; 
+        return null; 
     });
 }

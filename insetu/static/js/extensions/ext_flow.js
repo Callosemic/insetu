@@ -104,8 +104,8 @@ export class InSetuExtFlow extends LitElement {
                 body: JSON.stringify({ id: this._editingBatch.id })
             });
             if (res.ok) {
+                this.batches = this.batches.filter(b => b.id !== this._editingBatch.id);
                 this._editingBatch = null;
-                this.fetchBatches();
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -136,8 +136,13 @@ export class InSetuExtFlow extends LitElement {
                 body: JSON.stringify(payload)
             });
             if (res.ok) {
+                const isExisting = this.batches.some(b => b.id === payload.id);
+                if (isExisting) {
+                    this.batches = this.batches.map(b => b.id === payload.id ? payload : b);
+                } else {
+                    this.batches = [...this.batches, payload];
+                }
                 this._editingBatch = null;
-                this.fetchBatches();
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -197,8 +202,11 @@ export class InSetuExtFlow extends LitElement {
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
-                                    <div class="sticky-header" style="display: flex; flex-direction: column;">
-                                        <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                                    <div class="sticky-header">
+                                        <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
+                                            <input type="text" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                                            ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                                        </div>
                                     </div>
 
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
@@ -351,12 +359,8 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
     }
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
-
 export class InSetuExtFlowActions extends LitElement {
-    static styles = css`
-        button { background: transparent; border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 12px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
-        button:hover { background: var(--input-bg); }
-    `;
+    static styles = [sharedStyles];
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
         const flowEl = document.querySelector('insetu-ext-flow');
@@ -368,7 +372,7 @@ export class InSetuExtFlowActions extends LitElement {
         });
     }
     render() {
-        return html`<button @click=${this._openMenu}>☰</button>`;
+        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
     }
 }
 customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);

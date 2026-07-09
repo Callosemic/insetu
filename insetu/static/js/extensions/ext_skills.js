@@ -126,7 +126,6 @@ export class InSetuExtSkills extends LitElement {
         _editGroup: { type: String }
     };
     static styles = [sharedStyles];
-
     constructor() {
         super();
         this.playlist = [];
@@ -144,6 +143,8 @@ export class InSetuExtSkills extends LitElement {
         this._configText = '';
         this._rawSystemConfig = null;
         this._newSkillDomain = '';
+        this._newSkillForm = {};
+        this._newSkillMetrics = {};
         this._editName = '';
         this._editTags = '';
         this._editGroup = '';
@@ -205,27 +206,26 @@ export class InSetuExtSkills extends LitElement {
     }
     async _handleCreateSkill(e) {
         e.preventDefault();
-        const fd = new FormData(e.currentTarget);
-        const domain = fd.get('domain') || this._newSkillDomain || Object.keys(this.domainConfig)[0];
+        const domain = this._newSkillForm.domain || this._newSkillDomain || Object.keys(this.domainConfig)[0];
 
         const metrics = {};
         const domainMeta = this.domainConfig[domain];
         if (domainMeta && domainMeta.metrics) {
             Object.keys(domainMeta.metrics).forEach(key => {
-                const val = fd.get(`metric_${key}`);
-                if (val !== null && val !== '') {
+                const val = this._newSkillMetrics[key];
+                if (val !== undefined && val !== null && val !== '') {
                     metrics[key] = domainMeta.metrics[key].type === 'integer' ? parseInt(val, 10) : parseFloat(val);
                 }
             });
         }
         const payload = {
-            name: fd.get('name'),
+            name: this._newSkillForm.name || '',
             domain: domain,
-            tags: fd.get('tags'),
-            group: fd.get('group'),
-            status: fd.get('status'),
-            parts: fd.get('parts'),
-            custom_steps: fd.get('custom_steps'),
+            tags: this._newSkillForm.tags || '',
+            group: this._newSkillForm.group || '',
+            status: this._newSkillForm.status || 'untouched',
+            parts: this._newSkillForm.parts || '',
+            custom_steps: this._newSkillForm.custom_steps || '',
             metrics: metrics
         };
         try {
@@ -483,6 +483,7 @@ export class InSetuExtSkills extends LitElement {
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
+                                            <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
                                             <div slot="actions" style="display: flex; gap: 6px;">
                                                 <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
                                                 <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
@@ -530,6 +531,7 @@ export class InSetuExtSkills extends LitElement {
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
+                                            <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
                                             <div slot="actions" style="display: flex; gap: 6px;">
                                                 <button class="btn-sm" style="background: var(--intent-highlight);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
                                                 <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
@@ -560,6 +562,7 @@ export class InSetuExtSkills extends LitElement {
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
+                                            <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
                                             <div slot="actions" style="display: flex; gap: 6px;">
                                                 <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
                                                 <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
@@ -665,18 +668,20 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Item Name / Track Title</label>
-                            <input type="text" name="name" placeholder="e.g. Stairway to Heaven" required style="width: 100%;">
+                            <input type="text" placeholder="e.g. Stairway to Heaven" required style="width: 100%;"
+                                .value=${this._newSkillForm.name || ''} @input=${e => this._newSkillForm.name = e.target.value}>
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Collection Group</label>
-                            <input type="text" name="group" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%;">
+                            <input type="text" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%;"
+                                .value=${this._newSkillForm.group || ''} @input=${e => this._newSkillForm.group = e.target.value}>
                             <datalist id="new-group-list">
                                 ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
                             </datalist>
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Target Domain Framework</label>
-                            <select name="domain" .value=${activeNewDomain} @change=${(e) => { this._newSkillDomain = e.target.value; this.requestUpdate(); }}>
+                            <select .value=${activeNewDomain} @change=${(e) => { this._newSkillDomain = e.target.value; this._newSkillForm.domain = e.target.value; this.requestUpdate(); }}>
                                 ${Object.keys(this.domainConfig).map(k => html`
                                     <option value="${k}">${this.domainConfig[k].label || k}</option>
                                 `)}
@@ -686,13 +691,14 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
 
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Tags</label>
-                        <input type="text" name="tags" placeholder="e.g. Piano, Acoustic, Classical" style="width: 100%;">
+                        <input type="text" placeholder="e.g. Piano, Acoustic, Classical" style="width: 100%;"
+                            .value=${this._newSkillForm.tags || ''} @input=${e => this._newSkillForm.tags = e.target.value}>
                     </div>
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Initial Starting Status Stage</label>
-                            <select name="status">
+                            <select .value=${this._newSkillForm.status || 'untouched'} @change=${e => this._newSkillForm.status = e.target.value}>
                                 ${(() => {
                                     const cfg = this.domainConfig[activeNewDomain];
                                     const options = (cfg && cfg.step_labels) ? (Array.isArray(cfg.step_labels) ? cfg.step_labels : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }))) : [{ key: 'untouched', label: 'Untouched' }];
@@ -702,12 +708,14 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
                         </div>
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Sections / Parts Matrix Checklist</label>
-                            <input type="text" name="parts" placeholder="e.g. Intro, Verse, Solo" style="width: 100%;">
+                            <input type="text" placeholder="e.g. Intro, Verse, Solo" style="width: 100%;"
+                                .value=${this._newSkillForm.parts || ''} @input=${e => this._newSkillForm.parts = e.target.value}>
                         </div>
                     </div>
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Optional Path Custom Steps (Comma Separated Overrides)</label>
-                        <input type="text" name="custom_steps" placeholder="e.g. Intro, Solo, Chorus, Mastered" style="width: 100%;">
+                        <input type="text" placeholder="e.g. Intro, Solo, Chorus, Mastered" style="width: 100%;"
+                            .value=${this._newSkillForm.custom_steps || ''} @input=${e => this._newSkillForm.custom_steps = e.target.value}>
                     </div>
                     ${(() => {
                         const activeConfig = this.domainConfig[activeNewDomain];
@@ -728,7 +736,7 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
                                         return html`
                                             <div>
                                                 <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">${m.label}</label>
-                                                <select name="metric_${key}">
+                                                <select .value=${this._newSkillMetrics[key] || min} @change=${e => this._newSkillMetrics[key] = e.target.value}>
                                                     ${options.map(opt => html`<option value="${opt}">${opt}</option>`)}
                                                 </select>
                                             </div>
@@ -738,7 +746,8 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
                                     return html`
                                         <div>
                                             <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">${m.label} ${m.unit ? `(${m.unit})` : ''}</label>
-                                            <input type="number" name="metric_${key}" placeholder="${m.unit ? m.unit : 'Value'}">
+                                            <input type="number" placeholder="${m.unit ? m.unit : 'Value'}"
+                                                .value=${this._newSkillMetrics[key] || ''} @input=${e => this._newSkillMetrics[key] = e.target.value}>
                                         </div>
                                     `;
                                 })}

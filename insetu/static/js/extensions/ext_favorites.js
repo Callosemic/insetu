@@ -91,9 +91,10 @@ export class InSetuExtFavorites extends LitElement {
                         .filename=${item.path}
                         .titleText=${item.name}
                         .descriptionText=${item.path}
-                        .icon=${item.type === 'folder' ? '📁' : '📄'}
+                        icon=${item.type === 'folder' ? '📁' : '📄'}
                         intentColor="var(--intent-highlight)"
                         @card-clicked=${() => this._navigateToFavorite(item)}>
+                        <insetu-file-actions slot="actions" .filepath=${item.path} .isFS=${true}></insetu-file-actions>
                         <button slot="actions" class="btn-sm" style="background: var(--intent-danger);" @click=${(e) => this._removeFavorite(e, item.id)}>❌ Unpin</button>
                     </insetu-card>
                 `)}
@@ -124,32 +125,30 @@ window.ExtensionRegistry.registerExtension('favorites', {
             }
         },
         'zone:file-card-actions': (data) => {
-            // Automatically inject quick-pin buttons into all system VFS file cards
+            // Declaratively inject quick-pin buttons into all system VFS file cards
             if (data.filepath) {
-                const pinBtn = document.createElement('button');
-                pinBtn.className = 'btn-sm';
-                pinBtn.style.background = 'var(--intent-warning)';
-                pinBtn.innerText = '⭐ Pin';
-                pinBtn.onclick = async (e) => {
-                    e.stopPropagation();
-                    const isFolder = data.filepath.endsWith('/') || !data.filepath.includes('.');
-                    try {
-                        const res = await fetch('/api/favorites/add', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                path: data.filepath,
-                                type: isFolder ? 'folder' : 'file',
-                                name: data.filepath.split('/').pop() || data.filepath
-                            })
-                        });
-                        if (res.ok) alert("Node pinned securely into Favorites matrix!");
-                    } catch (err) {
-                        console.error(err);
-                    }
-                };
-                data.actionsContainer.appendChild(pinBtn);
+                return html`
+                    <button slot="actions" class="btn-sm" style="background: var(--intent-warning); margin: 0 5px 0 0;" @click=${async (e) => {
+                        e.stopPropagation();
+                        const isFolder = data.filepath.endsWith('/') || !data.filepath.includes('.');
+                        try {
+                            const res = await fetch('/api/favorites/add', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    path: data.filepath,
+                                    type: isFolder ? 'folder' : 'file',
+                                    name: data.filepath.split('/').pop() || data.filepath
+                                })
+                            });
+                            if (res.ok) alert("Node pinned securely into Favorites matrix!");
+                        } catch (err) {
+                            console.error(err);
+                        }
+                    }}>⭐ Pin</button>
+                `;
             }
+            return null;
         },
         'zone:fs-dropdown-menu': (data) => {
             if (data.currentPath && !data.isPrompts) {

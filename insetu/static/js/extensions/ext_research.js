@@ -499,13 +499,14 @@ export class InSetuExtResearch extends LitElement {
     }
 }
 customElements.define('insetu-ext-research', InSetuExtResearch);
-
 export class InSetuExtResearchActions extends LitElement {
     static properties = { selectedJobId: { type: String } };
-    static styles = css`
-        button { background: var(--intent-neutral); color: white; border: none; padding: 4px 12px; font-size: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; }
-        button:hover { filter: brightness(1.2); }
-    `;
+    static styles = [sharedStyles, css`
+        .research-back-btn { 
+            background: var(--intent-neutral); color: white; border: none; padding: 0 12px; font-size: 14px; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; height: 34px; display: flex; align-items: center; 
+        }
+        .research-back-btn:hover { filter: brightness(1.2); }
+    `];
     constructor() { super(); this.selectedJobId = null; }
     connectedCallback() {
         super.connectedCallback();
@@ -515,7 +516,7 @@ export class InSetuExtResearchActions extends LitElement {
     disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
     render() {
         if (!this.selectedJobId) return html``;
-        return html`<button @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null })}>🔙 Back to Jobs</button>`;
+        return html`<button class="research-back-btn" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null })}>🔙 Back to Jobs</button>`;
     }
 }
 customElements.define('insetu-ext-research-actions', InSetuExtResearchActions);

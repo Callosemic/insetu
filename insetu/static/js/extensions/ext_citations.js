@@ -428,7 +428,6 @@ export class InSetuExtCitations extends LitElement {
             </div>
         `;
     }
-
     _renderMain() {
         const pinnedSet = this.localLibrary.filter(c => {
             const atts = c._attachments || [];
@@ -450,7 +449,10 @@ export class InSetuExtCitations extends LitElement {
 
         return html`
             <div class="sticky-header">
-                <input type="text" class="fuzzy-search-input" placeholder="🔍 Fuzzy search personal library..." .value=${this.mainSearchQuery} @input=${e => this.mainSearchQuery = e.target.value} style="margin-bottom: 10px;">
+                <div class="fuzzy-search-wrapper" style="margin-bottom: 10px;">
+                    <input type="text" placeholder="🔍 Fuzzy search personal library..." .value=${this.mainSearchQuery} @input=${e => this.mainSearchQuery = e.target.value}>
+                    ${this.mainSearchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.mainSearchQuery = ''}>Clear</button>` : ''}
+                </div>
                 <insetu-repo-filter
                     label="📌 Repos:"
                     .repos=${this.allRepos}
