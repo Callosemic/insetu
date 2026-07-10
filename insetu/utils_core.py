@@ -457,9 +457,44 @@ def resolve_workspace_path(path, workspace_id=None):
                 return path_stripped.as_posix()
 
             return path_stripped.as_posix()
-
     # Mathematically resolve against dynamic root
     return ws_root_path.joinpath(norm_path).resolve().as_posix()
+
+
+def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
+    """
+    A domain-agnostic template expander.
+    - pattern: compiled regex capturing the target path.
+    - read_callback: function(target_path) -> string
+    """
+    import re
+    if depth > 5:
+        return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
+
+    def replacer(match):
+        include_path = match.group(1).strip()
+
+        # Path resolution logic stays in core
+        if include_path.startswith('./') or include_path.startswith('../'):
+            parts = current_filepath.split('/')[:-1]
+            for p in include_path.split('/'):
+                if p == '.': continue
+                elif p == '..': 
+                    if parts: parts.pop()
+                else: parts.append(p)
+            target_path = '/'.join(parts)
+        else:
+            target_path = include_path.lstrip('/')
+
+        # Extension provides the data via callback
+        inc_content = read_callback(target_path)
+
+        if inc_content is not None:
+            return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
+        else:
+            return f"[!] MACRO TARGET NOT FOUND: {include_path}"
+
+    return re.sub(pattern, replacer, text)
 
 
 def search_workspace_files(workspace_id, query):

@@ -7,7 +7,7 @@ title: "UI DRY Violations: Abstract Global Component Primitives"
 created_at: "2026-07-09T11:20:00"
 closed_at: null
 sub_bucket: "None"
-delivery_date: null
+delivery_date: "2026-08-09"
 tags: ["Frontend", "DRY", "UI Factory", "Refactor"]
 ---
 

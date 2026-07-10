@@ -74,6 +74,7 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: monospace; background: #0f172a; color: #38bdf8; padding: 20px; line-height: 1.6; }
         .banner { background: #dc2626; color: white; padding: 15px; font-weight: bold; border-radius: 4px; margin-bottom: 20px; text-align: center; }
+        .panic-trace { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 4px; text-align: left; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; overflow-x: auto; margin-top: 15px; color: #f8fafc; border: 1px solid #991b1b; }
         textarea { width: 100%; height: 300px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 10px; margin-bottom: 10px; font-family: monospace; box-sizing: border-box; }
         button { background: #10b981; color: white; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; border-radius: 4px; }
         .fs-container { background: #1e293b; padding: 15px; border: 1px solid #334155; border-radius: 4px; margin-top: 10px; max-height: 400px; overflow-y: auto; }
@@ -82,7 +83,13 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-    <div class="banner">⚠️ KERNEL PANIC: INSETU RECOVERY OS (LIFEBOAT FS) ⚠️<br><br>The primary Developer OS failed to boot due to a Syntax or Import error. You are running on the zero-dependency fallback bridge.</div>
+    <div class="banner">
+        ⚠️ KERNEL PANIC: INSETU RECOVERY OS (LIFEBOAT FS) ⚠️<br><br>
+        The primary Developer OS failed to boot. You are running on the zero-dependency fallback bridge.
+        {% if panic_details %}
+        <div class="panic-trace">{{ panic_details }}</div>
+        {% endif %}
+    </div>
     
     <h3>1. Emergency Sync Bridge</h3>
     <p>Paste your patch sandwich below to fix the corrupted core file. A successful patch will require you to manually restart the daemon.</p>
@@ -238,7 +245,8 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    details = os.environ.get("INSETU_PANIC_DETAILS", "")
+    return render_template_string(HTML_TEMPLATE, panic_details=details)
 
 @app.route('/api/bridge/sync', methods=['POST'])
 def bridge_sync():

@@ -1,4 +1,5 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
+import { InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
 import {
     viewSourceFile,
@@ -63,9 +64,8 @@ export const BridgeStore = createStore(
         { name: 'BridgeStore' }
     )
 );
-
 window.inSetu.stores.Bridge = BridgeStore;
-export class InSetuExtBridge extends LitElement {
+export class InSetuExtBridge extends InSetuElement {
     static properties = {
         payloadText: { type: String },
         detectedFiles: { type: Array },
@@ -100,10 +100,9 @@ export class InSetuExtBridge extends LitElement {
         this._fileVerificationCache = {};
         this._globalBypassSandwich = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this._unsubBridge = BridgeStore.subscribe((state) => {
+        this.subscribe(BridgeStore, (state) => {
             this.payloadText = state.payloadText;
             this.detectedFiles = state.detectedFiles || [];
             this.activeFiles = state.activeFiles;
@@ -111,7 +110,7 @@ export class InSetuExtBridge extends LitElement {
             this.viewMode = state.viewMode;
             this._verifyFiles(this.detectedFiles);
         });
-        this._unsubApp = AppStore.subscribe((state) => {
+        this.subscribe(AppStore, (state) => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         });
@@ -134,12 +133,6 @@ export class InSetuExtBridge extends LitElement {
         if (window.inSetu?.extensions?.Registry?.registerTick) {
             window.inSetu.extensions.Registry.registerTick('bridge', 250, this._pollStatus.bind(this));
         }
-    }
-
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsubBridge) this._unsubBridge();
-        if (this._unsubApp) this._unsubApp();
     }
 
     _verifyFiles(files) {
@@ -179,23 +172,20 @@ export class InSetuExtBridge extends LitElement {
             });
             return;
         }
-
         const activeFiles = Array.from(BridgeStore.getState().activeFiles);
         BridgeStore.setState({ consoleOutput: "Dispatching transaction to the Bridge..." });
 
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        fetch(`/api/${activeWs}/bridge/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text: textVal,
-                active_files: activeFiles,
-                dry_run: dryRunActive,
-                pinned_repos: Array.from(AppStore.getState().pinnedRepos)
-            })
+        this.api.post('sync', {
+            text: textVal,
+            active_files: activeFiles,
+            dry_run: dryRunActive,
+            pinned_repos: Array.from(AppStore.getState().pinnedRepos)
         })
         .then(async res => {
-            if (!res.ok) throw new Error(await res.text());
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || await res.text());
+            }
             return res.json();
         })
         .then(data => {
@@ -204,14 +194,18 @@ export class InSetuExtBridge extends LitElement {
             BridgeStore.setState({ consoleOutput: `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>` });
         });
     }
-
     async _pollStatus() {
         const { activeBridgeJobId } = BridgeStore.getState();
         if (!activeBridgeJobId) return;
 
         try {
-            const res = await fetch(`/api/system/jobs/${activeBridgeJobId}`);
-            if (!res.ok) return;
+            const res = await window.inSetu.api.system(`jobs/${activeBridgeJobId}`);
+            if (!res.ok) {
+                if (res.status === 404) {
+                    BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `<span style="color: var(--intent-danger); font-weight: bold;">[!] Job not found (404). Polling terminated.</span>` });
+                }
+                return;
+            }
             const statusData = await res.json();
 
             if (statusData.status === 'processing' || statusData.status === 'pending') {
@@ -340,7 +334,7 @@ export class InSetuExtBridge extends LitElement {
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
-export class InSetuExtBridgeActions extends LitElement {
+export class InSetuExtBridgeActions extends InSetuElement {
     static properties = { viewMode: { type: String } };
     static styles = [sharedStyles, css`
         .bridge-action-btn { background: var(--btn); color: white; border: none; padding: 0 12px; font-size: 0.85rem; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; height: 34px; display: flex; align-items: center; }
@@ -350,10 +344,9 @@ export class InSetuExtBridgeActions extends LitElement {
     constructor() { super(); this.viewMode = 'input'; }
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = BridgeStore.subscribe(state => { this.viewMode = state.viewMode; });
+        this.subscribe(BridgeStore, state => { this.viewMode = state.viewMode; });
         this.viewMode = BridgeStore.getState().viewMode;
     }
-    disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
     _paste() {
         navigator.clipboard.readText().then(t => {
             BridgeStore.getState().setPayloadText(t);

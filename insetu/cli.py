@@ -116,9 +116,12 @@ def main():
             from insetu.app import run_app
             run_app()
         except Exception as e:
+            import traceback
+            err_details = traceback.format_exc()
             print(f"\n[!] KERNEL PANIC: {type(e).__name__} detected during boot.")
-            print(f"[!] Details: {str(e)}")
+            print(f"[!] Details:\n{err_details}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
+            os.environ["INSETU_PANIC_DETAILS"] = err_details
             from insetu.fallback_bridge import run_recovery_app
             run_recovery_app()
     elif command == "service":

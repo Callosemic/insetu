@@ -1,10 +1,11 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { AppStore } from './store.js';
 import { setGlobalStatus, executeSystemCompile } from './app.js';
+import { InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
 
 
-export class InSetuExtGather extends LitElement {
+export class InSetuExtGather extends InSetuElement {
     static properties = {
         loading: { type: Boolean },
         loadingMessage: { type: String },
@@ -22,18 +23,13 @@ constructor() {
     }
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = AppStore.subscribe(state => state.manifest, (m) => {
+        this.subscribe(AppStore, state => state.manifest, (m) => {
             this.manifestFiles = Object.keys(m || {});
         });
-        this._unsubRefresh = AppStore.subscribe(state => state.gatherForceRefreshTick, (tick) => {
+        this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext();
         });
         this.manifestFiles = Object.keys(AppStore.getState().manifest || {});
-    }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-        if (this._unsubRefresh) this._unsubRefresh();
     }
     async loadContext() {
         this.loading = true;

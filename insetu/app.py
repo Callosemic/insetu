@@ -11,20 +11,33 @@ import random
 import datetime
 from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
+from werkzeug.middleware.proxy_fix import ProxyFix
 from insetu.utils_core import resolve_workspace_path, get_sister_repos
 from insetu.engine_bridge import parse_blocks, apply_block_in_memory
 import insetu.engine_gather as engine_gather
 import insetu.workers # Initializes the metronome listeners
 import insetu.cartographer # Registers Event Bus hooks
 app = Flask(__name__)
+
+class ForceHTTPSProxyFix(object):
+    """WSGI Middleware to force HTTPS scheme when accessed via Tailscale tunnels."""
+    def __init__(self, app):
+        self.app = app
+    def __call__(self, environ, start_response):
+        if environ.get('HTTP_X_FORWARDED_PROTO') == 'https' or environ.get('HTTP_HOST', '').endswith('.ts.net'):
+            environ['wsgi.url_scheme'] = 'https'
+        return self.app(environ, start_response)
+
+app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
+
 from insetu.routes_fs import fs_bp
 from insetu.routes_bridge import bridge_bp
 from insetu.routes_system import system_bp
 from insetu.engine_gather import gather_bp
 app.register_blueprint(fs_bp)
-app.register_blueprint(bridge_bp)
+app.register_blueprint(bridge_bp.bp if hasattr(bridge_bp, 'bp') else bridge_bp)
 app.register_blueprint(system_bp)
-app.register_blueprint(gather_bp)
+app.register_blueprint(gather_bp.bp if hasattr(gather_bp, 'bp') else gather_bp)
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
     from insetu.utils_core import load_config, _cwd

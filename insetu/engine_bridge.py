@@ -177,20 +177,34 @@ def apply_block_in_memory(content, block, silent=False):
 
             match_idx, actual_span, matched_baseline_f_idx, matched_last_content_f_idx = i, span, b_f_idx, match_meta["last_content_f_idx"]
             break
-
     if match_idx == -1:
         r_stripped = [l.strip() for l in replace_lines if l.strip()]
         s_stripped = [l.strip() for l in search_lines if l.strip()]
         f_stripped = [l.strip() for l in file_lines if l.strip()]
-        if r_stripped:
-            n = len(r_stripped)
-            # To prevent false positives on deletions, only trust idempotency if the REPLACE block has >= 3 lines,
-            # OR if it's strictly larger than the SEARCH block (a pure addition).
-            if n >= 3 or n > len(s_stripped):
-                for i in range(len(f_stripped) - n + 1):
-                    if f_stripped[i:i+n] == r_stripped:
-                        if not silent: print("  └─ ℹ️  Idempotency: REPLACE block already present in target. Skipping chunk.")
-                        return True, content
+
+        added_lines = [l for l in r_stripped if l not in s_stripped]
+        deleted_lines = [l for l in s_stripped if l not in r_stripped]
+
+        is_pure_deletion = len(deleted_lines) > 0 and len(added_lines) == 0
+        is_pure_addition = len(added_lines) > 0 and len(deleted_lines) == 0
+
+        is_idempotent = False
+
+        if is_pure_deletion:
+            if not any(dl in f_stripped for dl in deleted_lines):
+                is_idempotent = True
+        elif is_pure_addition:
+            if any(r_stripped == f_stripped[i:i+len(r_stripped)] for i in range(len(f_stripped) - len(r_stripped) + 1)):
+                is_idempotent = True
+        else:
+            if r_stripped and any(r_stripped == f_stripped[i:i+len(r_stripped)] for i in range(len(f_stripped) - len(r_stripped) + 1)):
+                if not any(dl in f_stripped for dl in deleted_lines):
+                    is_idempotent = True
+
+        if is_idempotent:
+            if not silent: print("  └─ ℹ️  Idempotency: Patch state already matches target. Skipping chunk.")
+            return True, content
+
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
             import re
@@ -309,8 +323,12 @@ def execute_bridge_sync(workspace_id, data):
     out = io.StringIO()
     sister_repos = get_sister_repos(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
+    from insetu.context import VFSTransaction
 
     with redirect_stdout(out):
+        # Initialize transaction bounds outside the try-block to avoid re-indenting the massive loop
+        vfs = VFSTransaction(workspace_id)
+        vfs.__enter__()
         try:
             raw_text = data.get("text", "")
             active_files = data.get("active_files", [])
@@ -499,14 +517,21 @@ def execute_bridge_sync(workspace_id, data):
                         print(f"  [!] SYNTAX ERROR: Validation failed for {target_file}. Details: {str(e)}")
                         file_success = False
                 if file_success and working_content != original_content and not dry_run:
-                    from insetu.routes_fs import execute_vfs_save
-                    execute_vfs_save(workspace_id, target_file, working_content)
-                    print(f"  [✓] Transaction complete: In-memory composition queued for atomic VFS commit for {target_file}.")
+                    vfs.save(target_file, working_content)
+                    print(f"  [✓] In-memory composition successful for {target_file}. Staged in transaction buffer.")
                 elif file_success and dry_run:
                     print(f"  [✓] [DRY RUN] Verified perfectly for {target_file}.")
+                elif not file_success and not dry_run:
+                    # Halt the execution loop instantly. The rollback clears the buffer.
+                    raise RuntimeError(f"Syntax or patching validation failed on {target_file}. Rolling back entire transaction.")
                 print("." * 30)
+
+            vfs.__exit__(None, None, None)
+            if not dry_run:
+                print(f"  [🚀] ALL FILES VALIDATED. Atomic VFS commit executed.")
             print(f"=== PULSE {pid} COMPLETE ===\n")
         except Exception as e: 
+            vfs.__exit__(type(e), e, e.__traceback__)
             print(f"  [!] System processing fault: {str(e)}")
 
     return out.getvalue()

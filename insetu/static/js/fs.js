@@ -3,7 +3,6 @@ import { sharedStyles } from './shared_styles.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import {
-    mdeInstance,
     executeWorkspaceMutation,
     setContextManifest,
     executeSystemCompile,
@@ -55,11 +54,12 @@ window.loadFullModalText = function() {
     const shouldBeReadOnly = !(currentModalIsFS || currentModalForceEdit);
 
     const textArea = document.getElementById('modal-text');
+    const litEditor = document.getElementById('global-os-editor');
 
-    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
-        mdeInstance.value(currentModalFullText);
-        mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
-    } else {
+    if (isSupportedEditor && litEditor) {
+        litEditor.value = currentModalFullText;
+        litEditor.readOnly = shouldBeReadOnly;
+    } else if (textArea) {
         textArea.value = currentModalFullText;
         textArea.readOnly = shouldBeReadOnly;
     }
@@ -70,6 +70,7 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
     currentModalFullText = text;
     const banner = document.getElementById('modal-truncation-banner');
     const textArea = document.getElementById('modal-text');
+    const litEditor = document.getElementById('global-os-editor');
     const shouldBeReadOnly = !(isFS || forceAllowEdit);
 
     if (text.length > TRUNCATE_LIMIT) {
@@ -79,10 +80,10 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
         document.getElementById('modal-truncation-msg').innerHTML = `⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.`;
         if (banner) banner.style.display = 'flex';
 
-        if (isSupportedEditor && mdeInstance && mdeInstance.view) {
-            mdeInstance.value(textToRender);
-            mdeInstance.codemirror.setOption("readOnly", "nocursor"); // Lock while truncated to prevent accidental overwrites
-        } else {
+        if (isSupportedEditor && litEditor) {
+            litEditor.value = textToRender;
+            litEditor.readOnly = true; // Lock while truncated
+        } else if (textArea) {
             textArea.value = textToRender;
             textArea.readOnly = true;
         }
@@ -90,15 +91,15 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
     } else {
         isModalTruncated = false;
         if (banner) banner.style.display = 'none';
-        if (isSupportedEditor && mdeInstance && mdeInstance.view) {
-            mdeInstance.value(text);
-            mdeInstance.codemirror.setOption("readOnly", shouldBeReadOnly ? "nocursor" : false);
-        } else {
+        if (isSupportedEditor && litEditor) {
+            litEditor.value = text;
+            litEditor.readOnly = shouldBeReadOnly;
+        } else if (textArea) {
             textArea.value = text;
             textArea.readOnly = shouldBeReadOnly;
-            }
-            currentModalOriginalText = text;
-}
+        }
+        currentModalOriginalText = text;
+    }
 }
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
     if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
@@ -133,13 +134,14 @@ export async function viewAndCopy(filename) {
     currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filename;
     const textArea = document.getElementById('modal-text');
-
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
-    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
-        mdeInstance.value("Loading...");
-        mdeInstance.codemirror.setOption("mode", codeMode);
-        mdeInstance.codemirror.setOption("readOnly", "nocursor");
-    } else {
+    const litEditor = document.getElementById('global-os-editor');
+
+    if (isSupportedEditor && litEditor) {
+        litEditor.value = "Loading...";
+        litEditor.language = codeMode;
+        litEditor.readOnly = true;
+    } else if (textArea) {
         textArea.value = "Loading...";
         textArea.readOnly = true;
     }
@@ -165,8 +167,9 @@ export async function viewAndCopy(filename) {
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
     } catch (e) {
         const errText = "Error loading file content.";
-if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
-        else textArea.value = errText;
+        const litEditor = document.getElementById('global-os-editor');
+        if (isSupportedEditor && litEditor) litEditor.value = errText;
+        else if (textArea) textArea.value = errText;
         currentModalOriginalText = "";
     }
 }
@@ -223,11 +226,19 @@ function updateManifestState(oldPath, newPath = null) {
         }
     }
 }
-
 async function saveModalFile(autoSave = false) {
     if (autoSave !== true) autoSave = false; // Event object trap defense
 
-    let content = document.getElementById('modal-text').value;
+    const litEditor = document.getElementById('global-os-editor');
+    const textArea = document.getElementById('modal-text');
+
+    let content = '';
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    if (cm6Wrap && cm6Wrap.style.display !== 'none' && litEditor) {
+        content = litEditor.value;
+    } else if (textArea) {
+        content = textArea.value;
+    }
 
     // Auto-sanitize non-breaking spaces that crash JSON and Python parsers
     content = content.replace(/\u00A0/g, ' ');
@@ -331,12 +342,14 @@ function cleanModalFile() {
     if (!confirm("Clean LLM cite and span tags from this file?")) return;
 
     const { isSupported: isSupportedEditor } = resolveEditorMode(currentModalFile);
+    const litEditor = document.getElementById('global-os-editor');
+    const textArea = document.getElementById('modal-text');
 
-    let text = (isSupportedEditor && mdeInstance && mdeInstance.view) 
-        ? mdeInstance.value() 
-        : document.getElementById('modal-text').value;
+    let text = (isSupportedEditor && litEditor) 
+        ? litEditor.value 
+        : (textArea ? textArea.value : '');
 
-    // Clean Citations: [cite], [cite: 1], [cite: 1, 2]
+    // Clean Citations
     text = text.replace(/\[cite(?:[^\]]*)\]/gi, '');
 
     // Clean Combined Spans: [span_X](start_span) or [span_X](end_span)
@@ -344,12 +357,13 @@ function cleanModalFile() {
     // Clean Orphaned Spans
     text = text.replace(/\((?:start_span|end_span)\)/gi, '');
     text = text.replace(/\[span_\d+\]/gi, '');
-    if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) {
-        mdeInstance.value(text);
-} else {
-        document.getElementById('modal-text').value = text;
-        document.getElementById('modal-text').dispatchEvent(new Event('input'));
-}
+
+    if (isSupportedEditor && litEditor) {
+        litEditor.value = text;
+    } else if (textArea) {
+        textArea.value = text;
+        textArea.dispatchEvent(new Event('input'));
+    }
 
     // Persist changes to disk automatically
     if (currentModalIsFS && window.saveModalFile) {
@@ -365,13 +379,14 @@ async function downloadFromModal() {
         if (currentModalIsMemoryOnly) {
             let text = '';
             const cm6Wrap = document.getElementById('modal-cm6-container');
-            if (cm6Wrap && cm6Wrap.style.display !== 'none' && mdeInstance && mdeInstance.view) {
-                text = mdeInstance.value();
+            const litEditor = document.getElementById('global-os-editor');
+            if (cm6Wrap && cm6Wrap.style.display !== 'none' && litEditor) {
+                text = litEditor.value;
             } else {
                 text = document.getElementById('modal-text').value;
             }
 
-            // If the UI is currently truncating the text for performance, 
+            // If the UI is currently truncating the text for performance,  
             // ensure we download the full underlying string instead.
             if (isModalTruncated) {
                 text = currentModalFullText;
@@ -561,7 +576,7 @@ export class InSetuVFSExplorer extends LitElement {
                             .currentPath=${this.globalBrowsePath}
                             .actions=${[{ id: 'download', label: '⬇️ DL', style: 'primary' }]}
                             @path-changed="${this._handlePathChange}"
-                            @action-download="${(e) => { if(window.fetchAndDownloadState) window.fetchAndDownloadState(e.detail.filepath, e.detail.event.target); }}">
+                            @action-download="${(e) => fetchAndDownloadState(e.detail.filepath, e.detail.event.target)}">
                         </insetu-file-tree>
                     </div>
                 `;
@@ -587,7 +602,7 @@ export class InSetuVFSExplorer extends LitElement {
                                         <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
                                             @click=${(e) => {
                                                 e.stopPropagation();
-                                                if (window.fetchAndDownloadState) window.fetchAndDownloadState(filepath, e.currentTarget);
+                                                fetchAndDownloadState(filepath, e.currentTarget);
                                             }}>⬇️ DL</button>
                                     </insetu-card>
                                 `;
@@ -821,10 +836,11 @@ async function saveNewFolder() {
 export function insertTextAtCursor(textToInsert) {
     const textArea = document.getElementById('modal-text');
     const cm6Wrap = document.getElementById('modal-cm6-container');
-    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && mdeInstance && mdeInstance.view);
+    const litEditor = document.getElementById('global-os-editor');
+    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor && litEditor._view);
 
     if (isCM6) {
-        const view = mdeInstance.view;
+        const view = litEditor._view;
         view.dispatch(view.state.update({
             changes: view.state.selection.ranges.map(r => ({ from: r.from, to: r.to, insert: textToInsert })),
             scrollIntoView: true
@@ -853,13 +869,14 @@ export async function viewSourceFile(filepath, isFS = false) {
     currentModalIsMemoryOnly = false;
     document.getElementById('modal-title').innerText = filepath;
     const textArea = document.getElementById('modal-text');
-
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
-    if (isSupportedEditor && mdeInstance && mdeInstance.view) {
-        mdeInstance.value("Loading...");
-        mdeInstance.codemirror.setOption("mode", codeMode);
-        mdeInstance.codemirror.setOption("readOnly", isFS ? false : "nocursor");
-    } else {
+    const litEditor = document.getElementById('global-os-editor');
+
+    if (isSupportedEditor && litEditor) {
+        litEditor.value = "Loading...";
+        litEditor.language = codeMode;
+        litEditor.readOnly = !isFS;
+    } else if (textArea) {
         textArea.value = "Loading...";
         textArea.readOnly = !isFS;
     }
@@ -947,8 +964,9 @@ export async function viewSourceFile(filepath, isFS = false) {
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
         const errText = "Error loading file content.";
-if (isSupportedEditor && typeof mdeInstance !== 'undefined' && mdeInstance) mdeInstance.value(errText);
-        else textArea.value = errText;
+        const litEditor = document.getElementById('global-os-editor');
+        if (isSupportedEditor && litEditor) litEditor.value = errText;
+        else if (textArea) textArea.value = errText;
     }
 }
 function closeBrowseModal() {
@@ -1047,8 +1065,9 @@ export function openBrowseModal(contextFilename) {
 export function closeFileModal() {
     const textArea = document.getElementById('modal-text');
     const cm6Wrap = document.getElementById('modal-cm6-container');
-    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && mdeInstance && mdeInstance.view);
-    const currentVal = isCM6 ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
+    const litEditor = document.getElementById('global-os-editor');
+    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor);
+    const currentVal = isCM6 ? litEditor.value : (textArea ? textArea.value : '');
 
     if (currentModalIsFS && currentVal !== currentModalOriginalText) {
         if (!confirm("You have unsaved changes. Are you sure you want to close this file?")) {
@@ -1057,11 +1076,10 @@ export function closeFileModal() {
     }
 
     document.getElementById('file-modal').style.display = 'none';
-
     // Reset state
     currentModalOriginalText = '';
     if (textArea) textArea.value = '';
-    if (isCM6) mdeInstance.value('');
+    if (isCM6 && litEditor) litEditor.value = '';
     const saveBtn = document.getElementById('modal-save-btn');
     if (saveBtn) saveBtn.style.display = 'none';
 }
@@ -1074,8 +1092,9 @@ export function openVirtualFile(filename, content) {
     currentModalIsMemoryOnly = true;
     document.getElementById('modal-title').innerText = filename;
     const textArea = document.getElementById('modal-text');
-    if (mdeInstance) {
-        mdeInstance.codemirror.setOption("mode", "markdown");
+    const litEditor = document.getElementById('global-os-editor');
+    if (litEditor) {
+        litEditor.language = "markdown";
     }
 
     currentModalForceEdit = true;

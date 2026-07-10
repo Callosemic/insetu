@@ -87,6 +87,10 @@ box-sizing: border-box; border-radius: 0; box-shadow: none; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
 textarea { height: 250px; margin-top: 10px; }
 pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; letter-spacing: 0.3px; }
+/* CodeMirror 6 Base Overrides */
+.cm-editor { height: 100%; flex: 1; display: flex; flex-direction: column; }
+.cm-scroller { overflow: auto; flex: 1; font-family: var(--font-mono); }
+
 /* CodeMirror Search Dialog Theming */
 .CodeMirror-dialog {
     background: var(--input-bg) !important;

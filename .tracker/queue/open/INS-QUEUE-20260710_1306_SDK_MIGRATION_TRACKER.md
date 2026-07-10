@@ -1,0 +1,22 @@
+---
+repo: "insetu"
+type: "queue"
+status: "open"
+id: INS-QUEUE-20260710_1306_SDK_MIGRATION_TRACKER
+title: "SDK V2 Migration: Kanban Tracker Extension"
+created_at: 2026-07-10T13:06:00
+closed_at: null
+sub_bucket: "None"
+delivery_date: "2026-07-26"
+tags: ["Architecture", "SDK", "Refactor"]
+---
+
+## Description
+Migrate the Project Kanban Tracker module to the SDK V2 architecture to ensure strict UDF compliance and tenant isolation.
+
+### Action Items
+- [ ] **Backend (`engine_tracker.py`)**: Replace the raw Flask Blueprint with `InSetuExtension`. Pass `schema=...` to automatically handle SQLite migrations. Update route decorators to use the `ctx` context object. Replace raw VFS logic with `ctx.vfs`.
+- [ ] **Frontend (`ext_tracker.js`)**: Refactor the component to extend `InSetuElement`. Replace manual Zustand store listeners with `this.subscribe()`.
+- [ ] **API Client**: Ensure all network calls utilize the encapsulated `this.api.post()` and `this.api.get()` methods instead of raw global fetches.
+
+## Notes / Execution Log

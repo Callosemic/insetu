@@ -368,9 +368,11 @@ constructor() {
         });
         return html`
             ${this.enableSearch ? html`
-                <div class="fuzzy-search-wrapper" style="margin-bottom: 15px;">
-                    <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} @input=${(e) => this._searchQuery = e.target.value}>
-                    ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
+                <div class="sticky-header">
+                    <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
+                        <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} @input=${(e) => this._searchQuery = e.target.value}>
+                        ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
+                    </div>
                 </div>
             ` : ''}
             ${this.currentPath.length > 0 ?

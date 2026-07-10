@@ -81,7 +81,6 @@ window.addEventListener('beforeunload', (e) => {
 });
 import { EditorState, Compartment } from 'https://esm.sh/@codemirror/state';
 import { EditorView, basicSetup } from 'https://esm.sh/codemirror';
-import { oneDark } from 'https://esm.sh/@codemirror/theme-one-dark';
 import { markdown } from 'https://esm.sh/@codemirror/lang-markdown';
 import { python } from 'https://esm.sh/@codemirror/lang-python';
 import { javascript } from 'https://esm.sh/@codemirror/lang-javascript';
@@ -89,147 +88,32 @@ import { javascript } from 'https://esm.sh/@codemirror/lang-javascript';
 const languageConf = new Compartment();
 const readOnlyConf = new Compartment();
 
-export let mdeInstance = {
-    view: null,
-    get codemirror() {
-        return {
-            getValue: () => this.view ? this.view.state.doc.toString() : '',
-            setValue: (text) => {
-                if (this.view) {
-                    this.view.dispatch({
-                        changes: { from: 0, to: this.view.state.doc.length, insert: text }
-                    });
-                }
-            },
-            setOption: (option, value) => {
-                if (!this.view) return;
-                if (option === "readOnly") {
-                    this.view.dispatch({
-                        effects: readOnlyConf.reconfigure(EditorView.editable.of(value === false))
-                    });
-                } else if (option === "mode") {
-                    let ext = [];
-                    if (value === 'markdown') ext = markdown();
-                    if (value === 'python') ext = python();
-                    if (value === 'javascript') ext = javascript();
-                    this.view.dispatch({
-                        effects: languageConf.reconfigure(ext)
-                    });
-                }
-            },
-            refresh: () => {}
-        };
-    },
-    value: function(text) {
-        if (text === undefined) return this.codemirror.getValue();
-        this.codemirror.setValue(text);
-    }
-};
-import { LitElement } from 'lit';
-export function createExtensionStore(name, initialState) {
-    return createStore(
-        devtools(
-            subscribeWithSelector((set, get) => ({
-                ...initialState,
-                resetState: () => set(initialState)
-            })),
-            { name: `${name}Store` }
-        )
-    );
-}
-
-export class InSetuElement extends LitElement {
-    static properties = {
-        workspaceId: { type: String }
-    };
-
-    constructor() {
-        super();
-        this.workspaceId = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
-        this._storeUnsubs = [];
-    }
-
-    // Automatically derive the extension routing domain from the Web Component tag name
-    get extName() {
-        return this.tagName.toLowerCase().replace('insetu-ext-', '');
-    }
-
-    // Context-aware API Client that routes natively to this extension's backend blueprint
-    get api() {
-        return {
-            get: (path, options = {}) => {
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'GET' });
-            },
-            post: (path, payload, options = {}) => {
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, {
-                    ...options,
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-                    body: JSON.stringify(payload)
-                });
-            },
-            delete: (path, options = {}) => {
-                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'DELETE' });
-            }
-        };
-    }
-
-    // Safe subscription manager that guarantees teardown on component unmount
-    subscribe(store, selectorOrListener, listener = undefined) {
-        const unsub = listener ? store.subscribe(selectorOrListener, listener) : store.subscribe(selectorOrListener);
-        this._storeUnsubs.push(unsub);
-        return unsub;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        const appStore = window.inSetu?.stores?.App;
-        if (appStore) {
-            this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
-                if (this.workspaceId !== ws) {
-                    this.workspaceId = ws;
-                    this.onWorkspaceChanged(ws);
-                }
-            });
-        }
-    }
-
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        this._storeUnsubs.forEach(unsub => unsub());
-        this._storeUnsubs = [];
-    }
-
-    // Optional lifecycle hook for subclasses to react safely to tenant hot-swaps
-    onWorkspaceChanged(newWorkspaceId) {}
-}
-
-window.inSetu.extensions.InSetuElement = InSetuElement;
-window.inSetu.extensions.createExtensionStore = createExtensionStore;
+import { LitElement, css } from 'lit';
+import { createExtensionStore, InSetuElement } from './sdk.js';
 
 export class InSetuMarkdownEditor extends LitElement {
     static properties = {
         value: { type: String },
-        readOnly: { type: Boolean }
+        readOnly: { type: Boolean },
+        language: { type: String }
     };
 
-    createRenderRoot() {
-        return this; // Render in Light DOM so CM6 injects its native styling seamlessly
-    }
+    static styles = css`
+        :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
+        .cm-editor { height: 100%; flex: 1; display: flex; flex-direction: column; }
+        .cm-scroller { overflow: auto; flex: 1; font-family: var(--font-mono, monospace); }
+    `;
 
     constructor() {
         super();
         this.value = '';
         this.readOnly = false;
+        this.language = 'markdown';
         this._view = null;
     }
 
     connectedCallback() {
         super.connectedCallback();
-        // Defer mounting slightly to ensure the container is fully rendered in the DOM
         setTimeout(() => this._initEditor(), 0);
     }
 
@@ -242,11 +126,27 @@ export class InSetuMarkdownEditor extends LitElement {
     }
 
     updated(changedProperties) {
-        if (this._view && changedProperties.has('value')) {
-            const currentDoc = this._view.state.doc.toString();
-            if (currentDoc !== this.value) {
+        if (this._view) {
+            if (changedProperties.has('value')) {
+                const currentDoc = this._view.state.doc.toString();
+                if (currentDoc !== this.value) {
+                    this._view.dispatch({
+                        changes: { from: 0, to: currentDoc.length, insert: this.value || '' }
+                    });
+                }
+            }
+            if (changedProperties.has('readOnly')) {
                 this._view.dispatch({
-                    changes: { from: 0, to: currentDoc.length, insert: this.value || '' }
+                    effects: readOnlyConf.reconfigure(EditorView.editable.of(!this.readOnly))
+                });
+            }
+            if (changedProperties.has('language')) {
+                let ext = [];
+                if (this.language === 'python') ext = python();
+                else if (this.language === 'javascript') ext = javascript();
+                else ext = markdown();
+                this._view.dispatch({
+                    effects: languageConf.reconfigure(ext)
                 });
             }
         }
@@ -254,19 +154,26 @@ export class InSetuMarkdownEditor extends LitElement {
 
     _initEditor() {
         if (this._view) return;
-        this.style.display = 'flex';
-        this.style.flexDirection = 'column';
-        this.style.flex = '1';
-        this.style.minHeight = '0';
-        this.style.height = '100%';
+
+        let langExt = [];
+        if (this.language === 'python') langExt = python();
+        else if (this.language === 'javascript') langExt = javascript();
+        else langExt = markdown();
 
         this._view = new EditorView({
             state: EditorState.create({
                 doc: this.value || '',
                 extensions: [
                     basicSetup,
-                    markdown(),
-                    oneDark,
+                    languageConf.of(langExt),
+                    readOnlyConf.of(EditorView.editable.of(!this.readOnly)),
+                    EditorView.theme({
+                        "&": { backgroundColor: "transparent", color: "var(--text)" },
+                        ".cm-gutters": { backgroundColor: "var(--pane-bg)", color: "var(--text-muted)", borderRight: "1px solid var(--border)" },
+                        ".cm-content": { fontFamily: "var(--font-mono, monospace)", fontSize: "13px" },
+                        "&.cm-focused .cm-cursor": { borderLeftColor: "var(--text)" },
+                        "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "rgba(59, 130, 246, 0.3)" }
+                    }),
                     EditorView.lineWrapping,
                     EditorView.updateListener.of((update) => {
                         if (update.docChanged) {
@@ -277,13 +184,19 @@ export class InSetuMarkdownEditor extends LitElement {
                                 bubbles: true,
                                 composed: true
                             }));
+                            this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                         }
                     })
                 ]
             }),
-            parent: this
+            parent: this.renderRoot,
+            root: this.renderRoot
         });
     }
+
+    getCursor() { return this._view ? this._view.state.selection.main.head : 0; }
+    setCursor(pos) { if(this._view) this._view.dispatch({selection: {anchor: pos}}); }
+    focus() { if(this._view) this._view.focus(); }
 }
 customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
 
@@ -512,26 +425,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     await bootExtensions();
     const container = document.getElementById('modal-cm6-container');
     const textArea = document.getElementById('modal-text');
-    if (container) {
-        mdeInstance.view = new EditorView({
-            state: EditorState.create({
-                doc: textArea.value || '',
-                extensions: [
-                    basicSetup,
-                    oneDark,
-                    EditorView.lineWrapping,
-                    languageConf.of([]),
-                    readOnlyConf.of(EditorView.editable.of(true)),
-                    EditorView.updateListener.of((update) => {
-                        if (update.docChanged) {
-                            textArea.value = update.state.doc.toString();
-                            textArea.dispatchEvent(new Event('input'));
-                        }
-                    })
-                ]
-            }),
-            parent: container
-        });
+    if (container && !container.querySelector('insetu-markdown-editor')) {
+        const litEditor = document.createElement('insetu-markdown-editor');
+        litEditor.id = 'global-os-editor';
+        litEditor.value = textArea ? textArea.value : '';
+        container.appendChild(litEditor);
     }
     const ws = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';

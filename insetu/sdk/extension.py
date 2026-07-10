@@ -2,52 +2,8 @@ import functools
 from flask import Blueprint, request
 import os
 from insetu.db import get_connection, register_schema
-from insetu.routes_fs import execute_vfs_save
 from insetu.utils_core import extension_auth, get_gather_paths, load_config, resolve_workspace_path
-
-class VFSTransaction:
-    """Provides atomic-style batching and async queue dispatch for file mutations."""
-    def __init__(self, workspace_id):
-        self.workspace_id = workspace_id
-        self._buffer = []
-        self._in_transaction = False
-    def save(self, filepath, content, data=None):
-        if self._in_transaction:
-            self._buffer.append((filepath, content, data or {}))
-        else:
-            execute_vfs_save(self.workspace_id, filepath, content, data)
-
-    def read(self, filepath):
-        """Safely resolves and reads a file's contents, returning None if missing."""
-        resolved = resolve_workspace_path(filepath, self.workspace_id)
-        if not os.path.exists(resolved):
-            return None
-        with open(resolved, 'r', encoding='utf-8') as f:
-            return f.read()
-
-    def __enter__(self):
-        self._in_transaction = True
-        self._buffer = []
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self._in_transaction = False
-        if exc_type is None and self._buffer:
-            for filepath, content, data in self._buffer:
-                execute_vfs_save(self.workspace_id, filepath, content, data)
-        self._buffer = []
-
-    def walk(self, directory_path, exts=None):
-        """Safely sweeps a directory within the workspace bounds, yielding files that match the extension array."""
-        resolved_dir = resolve_workspace_path(directory_path, self.workspace_id)
-        if not os.path.exists(resolved_dir):
-            return
-
-        for root, _, files in os.walk(resolved_dir):
-            for f in files:
-                if exts and not any(f.endswith(ext) for ext in exts):
-                    continue
-                yield os.path.relpath(os.path.join(root, f), resolved_dir)
+from insetu.context import VFSTransaction
 
 class ExtensionContext:
     """Pre-scoped context object injected into all SDK routes."""
@@ -74,34 +30,60 @@ class ExtensionContext:
     def resolve_path(self, filepath):
         """Safely anchors a relative path to the physical workspace bounds."""
         return resolve_workspace_path(filepath, self.workspace_id)
-
 class InSetuExtension:
     """
     Blueprint wrapper that strictly enforces ADR 0002 and ADR 0016 API contracts,
     abstracting away tenant tracking, authorization, and SQLite schema migrations.
     """
-    def __init__(self, name, module_name, schema=None):
+    def __init__(self, name, module_name, schema=None, virtual_contexts=None, target_repos=None, core=False):
         self.name = name
         self.bp = Blueprint(name, module_name)
         self.schema = schema or {}
-        
+        self.virtual_contexts = virtual_contexts or []
+        self.target_repos = target_repos or []
+        self.core = core
+
         if self.schema:
             register_schema(self.name, self.schema)
 
+        if self.virtual_contexts or self.target_repos:
+            from insetu.hooks import hooks
+            @hooks.on('mutate_workspace_config')
+            def _inject_declarative_config(cfg, workspace_id=None, **kwargs):
+                if self.name not in cfg.get("extensions", []): return
+
+                if self.target_repos:
+                    targets = cfg.get("target_repos", [])
+                    for tr in self.target_repos:
+                        if not any(r.get("repo_dir") == tr.get("repo_dir") for r in targets):
+                            targets.append(tr)
+                    cfg["target_repos"] = targets
+
+                if self.virtual_contexts:
+                    if "virtual_contexts" not in cfg:
+                        cfg["virtual_contexts"] = []
+                    for vc in self.virtual_contexts:
+                        if not any(v.get("out_file") == vc.get("out_file") for v in cfg["virtual_contexts"]):
+                            cfg["virtual_contexts"].append(vc)
     def route(self, rule, **options):
+        # SDK Guardrail: Ban empty routes to prevent 308 Mixed Content redirect traps behind reverse proxies
+        if rule in ['', '/']:
+            raise ValueError(f"SDK Exception in '{self.name}': Empty root routes ('' or '/') are banned. Please use an explicit endpoint name like 'list' or 'index'.")
+
         # Auto-Routing: Enforce strict stateless multi-tenant boundaries natively
         clean_rule = rule.lstrip('/')
         full_rule = f'/api/<workspace_id>/{self.name}/{clean_rule}'
 
         def decorator(f):
             @functools.wraps(f)
-            @extension_auth(self.name)
             def wrapper(workspace_id, *args, **kwargs):
                 ctx = ExtensionContext(self.name, workspace_id)
-                # Inject the pre-scoped context object in place of the raw workspace_id parameter
                 return f(ctx, *args, **kwargs)
-            
-            # Register with the underlying Flask Blueprint
+
+            # Use getattr to safely bypass the auth gate for core OS engines
+            if not getattr(self, 'core', False):
+                wrapper = extension_auth(self.name)(wrapper)
+
             self.bp.route(full_rule, **options)(wrapper)
             return wrapper
         return decorator
