@@ -83,12 +83,11 @@ export class InSetuExtResearch extends LitElement {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
     }
-
     async fetchState() {
         try {
             const [jRes, iRes] = await Promise.all([
-                fetch('/api/research/jobs'),
-                fetch('/api/research/inbox?status=pending,duplicate,in_library')
+                window.inSetu.api.workspace('research/jobs'),
+                window.inSetu.api.workspace('research/inbox?status=pending,duplicate,in_library')
             ]);
             if (jRes.ok && iRes.ok) {
                 const jData = await jRes.json();
@@ -122,12 +121,11 @@ export class InSetuExtResearch extends LitElement {
         btn.innerText = "⏳ Starting...";
         try {
             const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
-            const res = await fetch('/api/research/start', {
+            const res = await window.inSetu.api.workspace('research/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange })
             });
-
             if (res.ok) {
                 ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' } }));
                 await this.fetchState();
@@ -139,16 +137,13 @@ export class InSetuExtResearch extends LitElement {
             btn.innerText = "🚀 Start Scraping";
         }
     }
-
     async handleJobAction(jobId, action) {
         if (action === 'delete' && !confirm("Are you sure you want to permanently delete this research job and all its scraped items? This cannot be undone.")) return;
-
-        await fetch(`/api/research/${jobId}/action`, {
+        await window.inSetu.api.workspace(`research/${jobId}/action`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action })
         });
-
         if (action === 'delete') {
             ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
         }
@@ -172,17 +167,15 @@ export class InSetuExtResearch extends LitElement {
                 }
                 return item.raw_markdown;
             })();
-
-            const success = await executeWorkspaceMutation('/api/fs/save', { filepath, content: contentToSave }, { silent: true });
+            const success = await executeWorkspaceMutation('fs/save', { filepath, content: contentToSave }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
 
-        await fetch(`/api/research/inbox/${inboxId}/disposition`, {
+        await window.inSetu.api.workspace(`research/inbox/${inboxId}/disposition`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status })
         });
-
         if (this.selectedItemId === inboxId) {
             ResearchStore.setState({ selectedItemId: null });
         }
@@ -196,12 +189,11 @@ export class InSetuExtResearch extends LitElement {
             ResearchStore.setState({ inbox: updatedInbox });
         }
     }
-
     async generateContext(jobId, e) {
         const btn = e.target;
         btn.innerText = "⏳ Packing...";
         try {
-            const res = await fetch(`/api/research/${jobId}/export_context`);
+            const res = await window.inSetu.api.workspace(`research/${jobId}/export_context`);
             if (!res.ok) throw new Error("Failed to export context");
             const data = await res.json();
             const chunks = data.chunks || [];

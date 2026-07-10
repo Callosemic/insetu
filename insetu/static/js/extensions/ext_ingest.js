@@ -54,15 +54,13 @@ export class InSetuExtIngestModals extends LitElement {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
     }
-
     async _executeImportUrl() {
         const url = this.ingestUrl.trim();
         if (!url) return alert("Please enter a valid URL.");
 
         IngestStore.setState({ ingestStatus: 'Fetching and converting...', ingestError: null });
-
         try {
-            const res = await fetch('/api/ingest/url', {
+            const res = await window.inSetu.api.workspace('ingest/url', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url, method: this.ingestMethod })
@@ -73,10 +71,9 @@ export class InSetuExtIngestModals extends LitElement {
                 const fsState = window.inSetu.stores.Fs.getState();
                 const currentContent = fsState.modals.newFile?.content || '';
 
-                let shouldOverwrite = false;
-                if (currentContent.trim() !== '') {
-                    shouldOverwrite = confirm("Overwrite existing content with imported markdown?");
-                }
+                const shouldOverwrite = currentContent.trim() !== '' 
+                    ? confirm("Overwrite existing content with imported markdown?") 
+                    : false;
 
                 const newContent = (shouldOverwrite || currentContent.trim() === '') 
                     ? data.markdown 

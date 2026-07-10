@@ -26,19 +26,17 @@ def init_favorites_db():
             )
         """)
         conn.commit()
-
-@favorites_bp.route('/api/favorites', methods=['GET'])
-def list_favorites():
+@favorites_bp.route('/api/<workspace_id>/favorites', methods=['GET'])
+def list_favorites(workspace_id):
     try:
-        conn = get_connection("favorites")
+        conn = get_connection("favorites", workspace_id=workspace_id)
         cursor = conn.execute("SELECT * FROM favorites ORDER BY created_at DESC")
         items = [dict(row) for row in cursor.fetchall()]
         return jsonify({"favorites": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@favorites_bp.route('/api/favorites/add', methods=['POST'])
-def add_favorite():
+@favorites_bp.route('/api/<workspace_id>/favorites/add', methods=['POST'])
+def add_favorite(workspace_id):
     data = request.json or {}
     path = data.get('path', '').strip()
     fav_type = data.get('type', 'file').strip()
@@ -48,7 +46,7 @@ def add_favorite():
         return jsonify({"error": "Path is required"}), 400
 
     try:
-        conn = get_connection("favorites")
+        conn = get_connection("favorites", workspace_id=workspace_id)
         # Prevent duplication entries
         exists = conn.execute("SELECT id FROM favorites WHERE path = ?", (path,)).fetchone()
         if exists:
@@ -64,11 +62,10 @@ def add_favorite():
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@favorites_bp.route('/api/favorites/<fav_id>', methods=['DELETE'])
-def delete_favorite(fav_id):
+@favorites_bp.route('/api/<workspace_id>/favorites/<fav_id>', methods=['DELETE'])
+def delete_favorite(workspace_id, fav_id):
     try:
-        conn = get_connection("favorites")
+        conn = get_connection("favorites", workspace_id=workspace_id)
         conn.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
         conn.commit()
         return jsonify({"status": "success"})

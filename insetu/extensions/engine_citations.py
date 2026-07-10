@@ -124,14 +124,13 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
 
     except Exception as e:
         print(f"Extension Hook Error (citations compile): {e}")
+_METADATA_CACHE = {}
+_METADATA_INITIALIZED = set()
 
-_METADATA_CACHE = {"publications": [], "authors": []}
-_METADATA_INITIALIZED = False
-
-def _rebuild_metadata_cache():
+def _rebuild_metadata_cache(workspace_id):
     global _METADATA_CACHE, _METADATA_INITIALIZED
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         cursor = conn.execute("SELECT raw_json FROM citations")
         pubs = set()
         authors = set()
@@ -144,17 +143,17 @@ def _rebuild_metadata_cache():
                     authors.add(f"{a['family']}, {a['given']}")
                 elif a.get('family'):
                     authors.add(a['family'])
-
-        _METADATA_CACHE = {
+        _METADATA_CACHE[workspace_id] = {
             "publications": sorted(list(pubs)), 
             "authors": sorted(list(authors))
         }
-        _METADATA_INITIALIZED = True
+        _METADATA_INITIALIZED.add(workspace_id)
     except Exception:
         pass
-def get_db():
+
+def get_db(workspace_id=None):
     from insetu.db import get_connection
-    conn = get_connection("citations")
+    conn = get_connection("citations", workspace_id=workspace_id)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS citations (
             id TEXT PRIMARY KEY,
@@ -171,19 +170,19 @@ def get_db():
     conn.commit()
     return conn
 from insetu.utils_core import extension_auth
-
-@citations_bp.route('/api/citations/index', methods=['GET'])
+@citations_bp.route('/api/<workspace_id>/citations/index', methods=['GET'])
 @extension_auth('citations')
-def get_metadata_index():
+def get_metadata_index(workspace_id):
     global _METADATA_CACHE, _METADATA_INITIALIZED
-    if not _METADATA_INITIALIZED:
-        _rebuild_metadata_cache()
-    return jsonify(_METADATA_CACHE)
-@citations_bp.route('/api/citations', methods=['GET'])
+    if workspace_id not in _METADATA_INITIALIZED:
+        _rebuild_metadata_cache(workspace_id)
+    return jsonify(_METADATA_CACHE.get(workspace_id, {"publications": [], "authors": []}))
+
+@citations_bp.route('/api/<workspace_id>/citations', methods=['GET'])
 @extension_auth('citations')
-def get_citations():
+def get_citations(workspace_id):
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
         items = []
         for row in cursor.fetchall():
@@ -193,20 +192,19 @@ def get_citations():
         return jsonify({"citations": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@citations_bp.route('/api/citations/<path:csl_id>/attach', methods=['POST'])
-def attach_citation(csl_id):
+@citations_bp.route('/api/<workspace_id>/citations/<path:csl_id>/attach', methods=['POST'])
+def attach_citation(workspace_id, csl_id):
     data = request.json
     attachments = data.get("attachments", [])
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         conn.execute("UPDATE citations SET attachments = ? WHERE id = ?", (json.dumps(attachments), csl_id))
         conn.commit()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('/api/citations/search', methods=['GET'])
-def search_global_citations():
+@citations_bp.route('/api/<workspace_id>/citations/search', methods=['GET'])
+def search_global_citations(workspace_id):
     query = request.args.get('q', '').strip()
     source = request.args.get('source', 'openalex').strip()
     field = request.args.get('field', 'all').strip()
@@ -299,21 +297,20 @@ def search_global_citations():
         return jsonify({"citations": csl_items})
     except Exception as e:
         return jsonify({"error": f"Catalog Search Failed ({source}): {str(e)}"}), 500
-
-@citations_bp.route('/api/citations/import', methods=['POST'])
-def import_citations():
+@citations_bp.route('/api/<workspace_id>/citations/import', methods=['POST'])
+def import_citations(workspace_id):
     data = request.json
     if not data:
         return jsonify({"error": "Missing JSON payload"}), 400
-        
+
     strategy = data.get("strategy", "overwrite") # overwrite, skip, or manual
     items = data.get("citations", []) if isinstance(data, dict) and "citations" in data else data
 
     if not isinstance(items, list):
-        return jsonify({"error": "Invalid format. Expecting array of CSL-JSON objects."}), 400
+        return jsonify({"error": "Invalid format.\nExpecting array of CSL-JSON objects."}), 400
 
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         count = 0
         conflicts = []
         
@@ -342,7 +339,7 @@ def import_citations():
             count += 1
         conn.commit()
 
-        _rebuild_metadata_cache()
+        _rebuild_metadata_cache(workspace_id)
 
         return jsonify({
             "status": "success",  
@@ -352,17 +349,16 @@ def import_citations():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@citations_bp.route('/api/citations/<path:csl_id>', methods=['DELETE'])
-def delete_citation(csl_id):
+@citations_bp.route('/api/<workspace_id>/citations/<path:csl_id>', methods=['DELETE'])
+def delete_citation(workspace_id, csl_id):
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
         if cursor.rowcount == 0:
             return jsonify({"error": "Citation not found"}), 404
         conn.commit()
 
-        _rebuild_metadata_cache()
+        _rebuild_metadata_cache(workspace_id)
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -376,7 +372,7 @@ def inject_citation_middleware(text, workspace_id=None, **kwargs):
 
     csl_items = []
     try:
-        conn = get_db()
+        conn = get_db(workspace_id)
         placeholders = ','.join(['?'] * len(true_ids))
         cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
         for row in cursor.fetchall():

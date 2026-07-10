@@ -12,10 +12,12 @@ from insetu.routes_fs import execute_vfs_save
 
 skills_bp = Blueprint('skills', __name__)
 __depends__ = []
-
-def _get_user_skills_dir():
-    """Resolves and commands the global system user space directory structure."""
-    base_dir = os.path.expanduser('~/.insetu/skills')
+def _get_user_skills_dir(workspace_id=None):
+    """Resolves and commands the localized workspace skills directory structure."""
+    from insetu.utils_core import get_workspace_physics
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    # Store skills inside the isolated data directory of the active workspace profile
+    base_dir = Path(cfg_path).parent.joinpath("data", "skills").as_posix()
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 
@@ -41,7 +43,6 @@ def init_skills_db():
             )
         """)
         conn.commit()
-
         # Safe Schema Migration Check: Inject columns if table predates updates
         try:
             cursor = conn.execute("PRAGMA table_info(skills_ledger)")
@@ -56,7 +57,7 @@ def init_skills_db():
             print(f"Skills migration safety bypassed: {migration_err}")
 
         # Sync filesystem entries to database cache on system spin-up
-        skills_dir = _get_user_skills_dir()
+        skills_dir = _get_user_skills_dir(workspace_id=ws_id)
         for filename in os.listdir(skills_dir):
             if filename.endswith(".md"):
                 abs_path = Path(skills_dir).joinpath(filename).as_posix()
@@ -111,8 +112,6 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
         conn.commit()
     except Exception as e:
         print(f"Error parsing global skill file {filename}: {e}")
-
-@skills_bp.route('/api/skills/playlist', methods=['GET'])
 @skills_bp.route('/api/<workspace_id>/skills/playlist', methods=['GET'])
 def get_practice_playlist(workspace_id=None):
     """Compiles a unified practice batch across all domains sorted globally."""
@@ -132,8 +131,6 @@ def get_practice_playlist(workspace_id=None):
         return jsonify({"playlist": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@skills_bp.route('/api/skills/log', methods=['POST'])
 @skills_bp.route('/api/<workspace_id>/skills/log', methods=['POST'])
 def log_skill_practice(workspace_id=None):
     """Logs a practice run against the user's global profile tracking framework."""
@@ -150,7 +147,6 @@ def log_skill_practice(workspace_id=None):
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
-
         current_interval = row['interval_days'] or 1
         if score >= 3:
             if current_interval == 1: next_interval = 3
@@ -162,7 +158,7 @@ def log_skill_practice(workspace_id=None):
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
 
-        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
+        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -190,15 +186,14 @@ def log_skill_practice(workspace_id=None):
             if isinstance(v, str): new_yaml.append(f'{k}: "{v}"')
             else: new_yaml.append(f'{k}: {v}')
         new_yaml.append("---\n")
-
         # Rename physical file if track title is systematically edited
         final_content = "\n".join(new_yaml) + "\n" + body_content
         final_filename = filename
-        
+
         if name.lower() != row['name'].lower():
             from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir()).joinpath(new_filename).as_posix()
+            new_abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
                 from insetu.routes_fs import execute_vfs_delete
                 execute_vfs_delete(workspace_id, abs_path)
@@ -214,8 +209,6 @@ def log_skill_practice(workspace_id=None):
         return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@skills_bp.route('/api/skills/update', methods=['POST'])
 @skills_bp.route('/api/<workspace_id>/skills/update', methods=['POST'])
 def update_skill_structure(workspace_id=None):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
@@ -223,14 +216,13 @@ def update_skill_structure(workspace_id=None):
     filename = data.get('filepath')
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
-
     try:
         conn = get_connection("skills", workspace_id=workspace_id)
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
 
-        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
+        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
         with open(abs_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
@@ -263,14 +255,13 @@ def update_skill_structure(workspace_id=None):
                 if isinstance(v, str): new_yaml.append(f'{k}: "{v}"')
                 else: new_yaml.append(f'{k}: {v}')
         new_yaml.append("---\n")
-
         final_content = "\n".join(new_yaml) + "\n" + body_content
         final_filename = filename
-        
+
         if name.lower() != row['name'].lower():
             from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir()).joinpath(new_filename).as_posix()
+            new_abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
                 from insetu.routes_fs import execute_vfs_delete
                 execute_vfs_delete(workspace_id, abs_path)
@@ -286,8 +277,6 @@ def update_skill_structure(workspace_id=None):
         return jsonify({"status": "success", "filepath": final_filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@skills_bp.route('/api/skills/delete', methods=['POST'])
 @skills_bp.route('/api/<workspace_id>/skills/delete', methods=['POST'])
 def delete_skill_item(workspace_id=None):
     """Permanently purges a skill markdown asset from user space disk and index ledger."""
@@ -295,10 +284,9 @@ def delete_skill_item(workspace_id=None):
     filename = data.get('filepath')
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
-
     try:
         conn = get_connection("skills", workspace_id=workspace_id)
-        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
+        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
 
         if os.path.exists(abs_path):
             from insetu.routes_fs import execute_vfs_delete
@@ -309,8 +297,6 @@ def delete_skill_item(workspace_id=None):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@skills_bp.route('/api/skills/list', methods=['GET'])
 @skills_bp.route('/api/<workspace_id>/skills/list', methods=['GET'])
 def get_all_skills(workspace_id=None):
     """Returns every tracking item registered across the user profile layout."""
@@ -325,8 +311,6 @@ def get_all_skills(workspace_id=None):
         return jsonify({"skills": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@skills_bp.route('/api/skills/create', methods=['POST'])
 @skills_bp.route('/api/<workspace_id>/skills/create', methods=['POST'])
 def create_new_skill(workspace_id=None):
     """Generates a physical markdown file structure inside global user space."""
@@ -339,13 +323,12 @@ def create_new_skill(workspace_id=None):
     custom_steps = data.get('custom_steps', '').strip()
     parts = data.get('parts', '').strip()
     initial_metrics = data.get('metrics', {})
-
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
         from insetu.utils_core import slugify
         filename = f"{slugify(name)}.md"
-        abs_path = Path(_get_user_skills_dir()).joinpath(filename).as_posix()
+        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
         new_yaml = [
             "---",

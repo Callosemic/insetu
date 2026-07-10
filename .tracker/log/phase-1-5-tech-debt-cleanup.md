@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "closed"
+status: "logged"
 id: phase-1-5-tech-debt-cleanup
 title: "Phase 1.5: V1 Tech Debt & Standards Compliance"
 created_at: 2026-07-02T09:18:30

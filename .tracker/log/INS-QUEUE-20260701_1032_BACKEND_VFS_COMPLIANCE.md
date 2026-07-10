@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260701_1032_BACKEND_VFS_COMPLIANCE
 title: "Enforce execute_vfs_save across Tracker and Research Extensions"
 created_at: 2026-07-01T10:32:00

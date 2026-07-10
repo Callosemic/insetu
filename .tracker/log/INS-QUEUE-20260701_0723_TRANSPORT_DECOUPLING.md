@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260701_0723_TRANSPORT_DECOUPLING
 title: "Ecosystem Blueprint: Complete Separation of Transport and Logic Layers"
 created_at: 2026-07-01T07:23:00

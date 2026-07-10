@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260701_1033_TRANSPORT_SHELL_DECOUPLING
 title: "Decouple REST Routes into Shallow HTTP Transport Shells"
 created_at: 2026-07-01T10:33:00

@@ -13,10 +13,8 @@ export async function generateDiffs(force = false) {
     if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
         return;
     }
-
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/diffs/generate`, { 
+        const res = await window.inSetu.api.workspace('diffs/generate', { 
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_repos: targetRepos })
@@ -125,9 +123,8 @@ export class InSetuExtGitDiffs extends LitElement {
         this.gitPushMessage = '';
         this.pushChangelogs = [];
         this.pushModalOpen = true;
-
         try {
-            const res = await fetch('/api/git/changelogs?repo=' + encodeURIComponent(repo || '') + '&t=' + Date.now());
+            const res = await window.inSetu.api.workspace(`git/changelogs?repo=${encodeURIComponent(repo || '')}&t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.changelogs && data.changelogs.length > 0) {
@@ -144,9 +141,8 @@ export class InSetuExtGitDiffs extends LitElement {
         const msg = this.gitPushMessage.trim();
         if (!msg) return alert("Please enter a commit message.");
         if (!this.currentPushRepo) return alert("Repository context missing.");
-
         try {
-            const res = await fetch('/api/git/push', {
+            const res = await window.inSetu.api.workspace('git/push', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -172,9 +168,8 @@ export class InSetuExtGitDiffs extends LitElement {
         this.sweepLoading = true;
         this.sweepFiles = {};
         this.selectedSweepFiles = {};
-
         try {
-            const res = await fetch('/api/git/sweep/status');
+            const res = await window.inSetu.api.workspace('git/sweep/status');
             if (!res.ok) throw new Error("Failed to fetch status");
             const data = await res.json();
             this.sweepFiles = data.repos || {};
@@ -195,16 +190,14 @@ export class InSetuExtGitDiffs extends LitElement {
                 selections[repo] = this.selectedSweepFiles[repo];
             }
         });
-
         if (Object.keys(selections).length === 0) return alert("No files selected.");
 
         try {
-            const res = await fetch('/api/git/sweep/push', {
+            const res = await window.inSetu.api.workspace('git/sweep/push', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ selections, message: msg })
             });
-
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.error || "Sweep request failed.");
@@ -281,29 +274,10 @@ export class InSetuExtGitDiffs extends LitElement {
                             intentColor="var(--intent-highlight)"
                             @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
                             <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${async (e) => {
+                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => {
                                 e.stopPropagation();
-                                const dlUrl = '/download/' + f.filename;
-                                const orig = e.target.innerText;
-                                e.target.innerText = '⏳...';
-                                try {
-                                    const res = await fetch(dlUrl);
-                                    if (!res.ok) throw new Error("Failed to fetch");
-                                    const text = await res.text();
-                                    const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-                                    const url = window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.style.display = 'none';
-                                    a.href = url;
-                                    a.download = f.filename;
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    window.URL.revokeObjectURL(url);
-                                    a.remove();
-                                } catch (err) {
-                                    alert("Error downloading file.");
-                                } finally {
-                                    e.target.innerText = orig;
+                                if (window.fetchAndDownloadState) {
+                                    window.fetchAndDownloadState(f.filename, e.target);
                                 }
                             }}>⬇️ Download</button>
                         </insetu-card>
@@ -428,11 +402,10 @@ window.ExtensionRegistry.registerExtension('git', {
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
     window.inSetu.extensions.Registry.registerTick('git', 1000, async () => {
         const { activeSweepJobId, activePushJobId, activeDiffJobId } = AppStore.getState();
-
         // Sweep Job Polling
         if (activeSweepJobId) {
             try {
-                const statusRes = await fetch(`/api/system/jobs/${activeSweepJobId}`);
+                const statusRes = await window.inSetu.api.system(`jobs/${activeSweepJobId}`);
                 if (statusRes.ok) {
                     const statusData = await statusRes.json();
                     const spinner = document.getElementById('sweep-push-spinner');
@@ -474,7 +447,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         // Push Job Polling
         if (activePushJobId) {
             try {
-                const statusRes = await fetch(`/api/system/jobs/${activePushJobId}`);
+                const statusRes = await window.inSetu.api.system(`jobs/${activePushJobId}`);
                 if (statusRes.ok) {
                     const statusData = await statusRes.json();
                     const spinner = document.getElementById('push-spinner');
@@ -511,7 +484,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         // Diff Generation Polling
         if (activeDiffJobId) {
                 try {
-                        const statusRes = await fetch(`/api/system/jobs/${activeDiffJobId}`);
+                        const statusRes = await window.inSetu.api.system(`jobs/${activeDiffJobId}`);
                         if (statusRes.ok) {
                                 const statusData = await statusRes.json();
                                 AppStore.setState({ diffJobMessage: statusData.message });

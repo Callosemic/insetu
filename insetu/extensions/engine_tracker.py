@@ -628,9 +628,8 @@ def archive_stale_tickets(workspace_id=None):
                         archived_count += 1
 
     return archived_count
-@tracker_bp.route('/api/tracker/new', methods=['POST'])
-def api_tracker_new():
-    workspace_id = sniff_tenant_id()
+@tracker_bp.route('/api/<workspace_id>/tracker/new', methods=['POST'])
+def api_tracker_new(workspace_id):
     data = request.json
     try:
         new_path = create_ticket(
@@ -647,9 +646,8 @@ def api_tracker_new():
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@tracker_bp.route('/api/tracker/files', methods=['GET'])
-def api_tracker_files():
-    workspace_id = sniff_tenant_id()
+@tracker_bp.route('/api/<workspace_id>/tracker/files', methods=['GET'])
+def api_tracker_files(workspace_id):
     try:
         conn = get_connection('tracker', workspace_id=workspace_id)
 
@@ -679,9 +677,8 @@ def api_tracker_files():
         return jsonify({"tasks": tasks})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@tracker_bp.route('/api/tracker/transition', methods=['POST'])
-def api_tracker_transition():
-    workspace_id = sniff_tenant_id()
+@tracker_bp.route('/api/<workspace_id>/tracker/transition', methods=['POST'])
+def api_tracker_transition(workspace_id):
     data = request.json
     try:
         new_path = transition_ticket(

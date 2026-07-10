@@ -118,9 +118,9 @@ def extract_markdown_from_url(target_url, method="jina"):
         "published_time": published_time,
         "clean_markdown": final_markdown
     }
-@ingest_bp.route('/api/ingest/url', methods=['POST'])
+@ingest_bp.route('/api/<workspace_id>/ingest/url', methods=['POST'])
 @extension_auth('ingest')
-def api_ingest_url():
+def api_ingest_url(workspace_id):
     data = request.json
     target_url = data.get("url", "").strip()
     method = data.get("method", "jina")

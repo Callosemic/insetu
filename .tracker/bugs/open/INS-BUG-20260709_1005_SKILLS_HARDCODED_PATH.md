@@ -1,11 +1,11 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "open"
+status: "closed"
 id: INS-BUG-20260709_1005_SKILLS_HARDCODED_PATH
 title: "Skills Engine Hardcodes Global Profile Path"
 created_at: "2026-07-09T10:03:14"
-closed_at: null
+closed_at: 2026-07-10T00:53:11
 sub_bucket: "None"
 delivery_date: null
 tags: ["Backend", "Compliance", "SSOT"]

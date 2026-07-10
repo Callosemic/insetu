@@ -151,17 +151,16 @@ export class InSetuExtCitations extends LitElement {
         if (this._unsubApp) this._unsubApp();
         document.removeEventListener('citations-load-main', this._handleLoadMain);
     }
-
     async loadMainLibrary() {
         this.mainLoading = true;
         try {
-            const idxRes = await fetch('/api/citations/index');
+            const idxRes = await window.inSetu.api.workspace('citations/index');
             if (idxRes.ok) {
                 const d = await idxRes.json();
                 if(d.publications) CitationStore.setState({ cachedPublications: d.publications });
                 if(d.authors) CitationStore.setState({ cachedAuthors: d.authors });
             }
-            const res = await fetch('/api/citations');
+            const res = await window.inSetu.api.workspace('citations');
             if (res.ok) {
                 const data = await res.json();
                 CitationStore.setState({ localLibrary: data.citations || [] });
@@ -183,10 +182,9 @@ export class InSetuExtCitations extends LitElement {
             this.exploredItems = [];
             this.currentExplorePage = 1;
         }
-
         try {
             const pageToFetch = loadMore ? this.currentExplorePage : 1;
-            const res = await fetch(`/api/citations/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(this.exploreSource)}&field=${encodeURIComponent(this.exploreField)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
+            const res = await window.inSetu.api.workspace(`citations/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(this.exploreSource)}&field=${encodeURIComponent(this.exploreField)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
             if (res.ok) {
                 const data = await res.json();
                 const citations = data.citations || [];
@@ -216,7 +214,7 @@ export class InSetuExtCitations extends LitElement {
                 const jsonPayload = JSON.parse(ev.target.result);
                 const reqBody = { citations: jsonPayload.items || jsonPayload, strategy: this.importStrategy };
                 this.importLog += `Uploading ${reqBody.citations.length} records...\n`;
-                const res = await fetch('/api/citations/import', {
+                const res = await window.inSetu.api.workspace('citations/import', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(reqBody)
@@ -240,9 +238,8 @@ export class InSetuExtCitations extends LitElement {
         newSet.add(payload.id);
         this._importingIds = newSet;
         this.requestUpdate();
-
         try {
-            await fetch('/api/citations/import', {
+            await window.inSetu.api.workspace('citations/import', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
@@ -260,8 +257,7 @@ export class InSetuExtCitations extends LitElement {
 
     async _openCitationNotes(cslId) {
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(cslId));
+            const res = await window.inSetu.api.workspace(`fs/search?q=${encodeURIComponent(cslId)}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.results && data.results.length === 1) {
@@ -284,11 +280,10 @@ export class InSetuExtCitations extends LitElement {
         CitationStore.setState({ activeAttachCitation: citation });
         CitationStore.setState(state => ({ attachForm: { ...state.attachForm, repo: this.allRepos[0] || '', bucket: 'None' } }));
     }
-
     async _saveAttachmentList(newAtts) {
         if (!this.activeAttachCitation) return;
         try {
-            const res = await fetch(`/api/citations/${encodeURIComponent(this.activeAttachCitation.id)}/attach`, {
+            const res = await window.inSetu.api.workspace(`citations/${encodeURIComponent(this.activeAttachCitation.id)}/attach`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ attachments: newAtts })
@@ -320,12 +315,11 @@ export class InSetuExtCitations extends LitElement {
             }
         }));
     }
-
     async _deleteDynamicCitation() {
         if (!this.activeEditCitation) return;
         if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return;
         try {
-            const res = await fetch('/api/citations/' + encodeURIComponent(this.activeEditCitation.id), { method: 'DELETE' });
+            const res = await window.inSetu.api.workspace(`citations/${encodeURIComponent(this.activeEditCitation.id)}`, { method: 'DELETE' });
             if (res.ok) {
                 CitationStore.setState({ activeEditCitation: null });
                 this.loadMainLibrary();
@@ -359,11 +353,9 @@ export class InSetuExtCitations extends LitElement {
         } else {
             delete payload.issued;
         }
-
         if (payload.id !== this.activeEditCitation.id) payload.id = this.activeEditCitation.id;
-
         try {
-            const res = await fetch('/api/citations/import', {
+            const res = await window.inSetu.api.workspace('citations/import', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
@@ -383,30 +375,34 @@ export class InSetuExtCitations extends LitElement {
         const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
         const isImporting = this._importingIds && this._importingIds.has(c.id);
 
-        let actionHtml;
-        if (isExplore) {
-            const alreadyExists = this.localLibrary.some(libItem => libItem.id === c.id || (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase()));
-            if (alreadyExists) {
-                actionHtml = html`
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
-                        <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;"
-                            ?disabled=${isImporting}
-                            @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : 'Force Import'}</button>
-                    </div>
-                `;
+        const actionHtml = (() => {
+            if (isExplore) {
+                const alreadyExists = this.localLibrary.some(libItem => libItem.id === c.id || (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase()));
+                if (alreadyExists) {
+                    return html`
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
+                            <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;"
+                                ?disabled=${isImporting}
+                                @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : 'Force Import'}</button>
+                        </div>
+                    `;
+                } else {
+                    return html`<button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 2px 8px;"
+                        ?disabled=${isImporting}
+                        @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : '📥 Import'}</button>`;
+                }
             } else {
-                actionHtml = html`<button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 2px 8px;"
-                    ?disabled=${isImporting}
-                    @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : '📥 Import'}</button>`;
+                return html`
+                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;"
+                        @click=${() => this._openCitationNotes(c.id)}>📝 Notes</button>
+                    <button class="btn-sm" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;"
+                        @click=${() => this._openEditModal(c)}>✏️ Edit</button>
+                    <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;"
+                        @click=${() => this._openAttachModal(c)}>📌 Pin to Repo</button>
+                `;
             }
-        } else {
-            actionHtml = html`
-                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;" @click=${() => this._openCitationNotes(c.id)}>📝 Notes</button>
-                <button class="btn-sm" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;" @click=${() => this._openEditModal(c)}>✏️ Edit</button>
-                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;" @click=${() => this._openAttachModal(c)}>📌 Pin to Repo</button>
-            `;
-        }
+        })();
 
         const attTags = !isExplore && c._attachments && c._attachments.length > 0
             ? c._attachments.map(a => html`<span class="task-tag" style="background: var(--border);">${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}</span>`)
@@ -793,7 +789,7 @@ window.ExtensionRegistry.registerExtension('citations', {
                 data.menuItems.push({ label: 'Cite', icon: '📚', onClick: async () => {
                     CitationStore.setState({ citationModalOpen: true, citationSearchQuery: '' });
                     try {
-                        const res = await fetch('/api/citations');
+                        const res = await window.inSetu.api.workspace('citations');
                         if (res.ok) {
                             const data = await res.json();
                             CitationStore.setState({ citationLibraryCache: data.citations || [] });

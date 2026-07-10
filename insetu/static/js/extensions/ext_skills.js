@@ -3,17 +3,21 @@ import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-
-// Prototype API Gateway (to be migrated globally to window.inSetu.fetch)
-const apiFetch = async (endpoint, options = {}) => {
-    const wsId = AppStore.getState().activeWorkspace || 'default';
+// Unified API Gateway mapped to ADR 0016 Explicit SDK
+const skillsReq = async (endpoint, options = {}) => {
     const isGet = !options.method || options.method === 'GET';
-    const url = `/api/${wsId}${endpoint}${isGet ? '?_t=' + Date.now() : ''}`;
-    
-    return await fetch(url, {
+    const cleanPath = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    const finalPath = `${cleanPath}${isGet ? (cleanPath.includes('?') ? '&' : '?') + '_t=' + Date.now() : ''}`;
+
+    const reqOptions = {
         ...options,
         headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
-    });
+    };
+
+    if (cleanPath.startsWith('system/')) {
+        return await window.inSetu.api.system(finalPath.substring(7), reqOptions);
+    }
+    return await window.inSetu.api.workspace(finalPath, reqOptions);
 };
 
 export const SkillsStore = createStore(
@@ -35,7 +39,7 @@ export const SkillsStore = createStore(
             fetchPlaylist: async (silent = false) => {
                 if (!silent) set({ loading: true });
                 try {
-                    const res = await apiFetch('/skills/playlist');
+                    const res = await skillsReq('/skills/playlist');
                     if (res.ok) {
                         const data = await res.json();
                         set({ playlist: data.playlist || [] });
@@ -48,7 +52,7 @@ export const SkillsStore = createStore(
             },
             fetchAllSkills: async () => {
                 try {
-                    const res = await apiFetch('/skills/list');
+                    const res = await skillsReq('/skills/list');
                     if (res.ok) {
                         const data = await res.json();
                         const skills = data.skills || [];
@@ -61,7 +65,7 @@ export const SkillsStore = createStore(
             },
             fetchDomainConfig: async () => {
                 try {
-                    const res = await apiFetch('/system/config');
+                    const res = await skillsReq('/system/config');
                     if (res.ok) {
                         const config = await res.json();
                         const skillCfg = config.extension_config?.skills_practice?.domains || {
@@ -229,7 +233,7 @@ export class InSetuExtSkills extends LitElement {
             metrics: metrics
         };
         try {
-            const res = await apiFetch('/skills/create', {
+            const res = await skillsReq('/skills/create', {
                 method: 'POST',
                 body: JSON.stringify(payload)
             });
@@ -245,7 +249,7 @@ export class InSetuExtSkills extends LitElement {
     }
     async _openConfigModal() {
         try {
-            const res = await apiFetch('/system/config');
+            const res = await skillsReq('/system/config');
             if (res.ok) {
                 this._rawSystemConfig = await res.json();
                 this._configText = JSON.stringify(this._rawSystemConfig.extension_config?.skills_practice?.domains || {}, null, 2);
@@ -315,8 +319,7 @@ export class InSetuExtSkills extends LitElement {
             if (!config.extension_config) config.extension_config = {};
             if (!config.extension_config.skills_practice) config.extension_config.skills_practice = {};
             config.extension_config.skills_practice.domains = domains;
-            
-            const res = await apiFetch('/system/config', {
+            const res = await skillsReq('/system/config', {
                 method: 'POST',
                 body: JSON.stringify(config)
             });
@@ -336,7 +339,7 @@ export class InSetuExtSkills extends LitElement {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            const res = await apiFetch('/skills/delete', {
+            const res = await skillsReq('/skills/delete', {
                 method: 'POST',
                 body: JSON.stringify({ filepath: this.selectedItem.filepath })
             });
@@ -364,7 +367,7 @@ export class InSetuExtSkills extends LitElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            const res = await apiFetch('/skills/update', {
+            const res = await skillsReq('/skills/update', {
                 method: 'POST',
                 body: JSON.stringify(payload)
             });
@@ -392,7 +395,7 @@ export class InSetuExtSkills extends LitElement {
             metrics: this.formMetrics
         };
         try {
-            const res = await apiFetch('/skills/log', {
+            const res = await skillsReq('/skills/log', {
                 method: 'POST',
                 body: JSON.stringify(payload)
             });

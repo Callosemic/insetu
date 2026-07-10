@@ -1,34 +1,28 @@
 import { AppStore } from '../store.js';
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { createExtensionStore, InSetuElement } from '../app.js';
 
-export const FavoritesStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            items: [],
-            loading: false,
-            fetchFavorites: async () => {
-                set({ loading: true });
-                try {
-                    const res = await fetch('/api/favorites');
-                    if (res.ok) {
-                        const data = await res.json();
-                        set({ items: data.favorites || [] });
-                    }
-                } catch (e) {
-                    console.error("Failed to fetch favorites", e);
-                } finally {
-                    set({ loading: false });
-                }
+export const FavoritesStore = createExtensionStore('Favorites', {
+    items: [],
+    loading: false,
+    fetchFavorites: async () => {
+        FavoritesStore.setState({ loading: true });
+        try {
+            const res = await window.inSetu.api.workspace('favorites');
+            if (res.ok) {
+                const data = await res.json();
+                FavoritesStore.setState({ items: data.favorites || [] });
             }
-        })),
-        { name: 'FavoritesStore' }
-    )
-);
+        } catch (e) {
+            console.error("Failed to fetch favorites", e);
+        } finally {
+            FavoritesStore.setState({ loading: false });
+        }
+    }
+});
 
-export class InSetuExtFavorites extends LitElement {
+export class InSetuExtFavorites extends InSetuElement {
     static properties = {
         items: { type: Array },
         loading: { type: Boolean }
@@ -40,23 +34,19 @@ export class InSetuExtFavorites extends LitElement {
         this.items = [];
         this.loading = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = FavoritesStore.subscribe(state => {
+        // InSetuElement SDK automatically tracks and destroys this subscription on unmount
+        this.subscribe(FavoritesStore, state => {
             this.items = state.items;
             this.loading = state.loading;
-        });
-        this._unsubWs = AppStore.subscribe(state => state.activeWorkspace, () => {
-            FavoritesStore.getState().fetchFavorites();
         });
         FavoritesStore.getState().fetchFavorites();
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-        if (this._unsubWs) this._unsubWs();
+    // InSetuElement SDK lifecycle hook for stateless tenant swaps
+    onWorkspaceChanged(newWorkspaceId) {
+        FavoritesStore.getState().fetchFavorites();
     }
 
     _navigateToFavorite(item) {
@@ -69,11 +59,11 @@ export class InSetuExtFavorites extends LitElement {
             if (window.switchSubTab) window.switchSubTab('files');
         }
     }
-
     async _removeFavorite(e, id) {
         e.stopPropagation();
         try {
-            const res = await fetch(`/api/favorites/${id}`, { method: 'DELETE' });
+            // InSetuElement SDK automatically routes to /api/<workspace_id>/favorites/<id>
+            const res = await this.api.delete(id);
             if (res.ok) FavoritesStore.getState().fetchFavorites();
         } catch (e) {
             alert("Failed to delete favorite token.");
@@ -125,6 +115,9 @@ window.ExtensionRegistry.registerExtension('favorites', {
             }
         },
         'zone:file-card-actions': (data) => {
+            // Prevent inception: Do not render the Pin button if we are inside the Favorites sub-tab
+            if (localStorage.getItem('insetu_subtab_edit') === 'favorites') return null;
+
             // Declaratively inject quick-pin buttons into all system VFS file cards
             if (data.filepath) {
                 return html`
@@ -132,7 +125,7 @@ window.ExtensionRegistry.registerExtension('favorites', {
                         e.stopPropagation();
                         const isFolder = data.filepath.endsWith('/') || !data.filepath.includes('.');
                         try {
-                            const res = await fetch('/api/favorites/add', {
+                            const res = await window.inSetu.api.workspace('favorites/add', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
@@ -157,7 +150,7 @@ window.ExtensionRegistry.registerExtension('favorites', {
                     icon: '⭐',
                     onClick: async () => {
                         try {
-                            const res = await fetch('/api/favorites/add', {
+                            const res = await window.inSetu.api.workspace('favorites/add', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({

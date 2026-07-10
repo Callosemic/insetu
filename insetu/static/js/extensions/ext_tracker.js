@@ -52,12 +52,12 @@ import { sharedStyles } from '../shared_styles.js';
 export async function loadTrackerBoard() {
     if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
     await executeSystemCompile();
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
-    if (mRes.ok) setContextManifest(await mRes.json());
+const activeWs = AppStore.getState().activeWorkspace || 'default';
+const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+if (mRes.ok) setContextManifest(await mRes.json());
 
-    const tRes = await fetch('/api/tracker/files?t=' + Date.now());
-    if (tRes.ok) {
+const tRes = await window.inSetu.api.workspace('tracker/files?t=' + Date.now());
+if (tRes.ok) {
         const data = await tRes.json();
         KanbanStore.setState({ tasks: data.tasks || [] });
     }
@@ -251,10 +251,9 @@ const kState = KanbanStore.getState();
             titleArea.style.height = Math.min(titleArea.scrollHeight, 150) + 'px';
         }
     }
-
     async _transitionTask(task, newStatus, newType = null) {
         try {
-            const res = await fetch('/api/tracker/transition', {
+            const res = await window.inSetu.api.workspace('tracker/transition', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -432,9 +431,8 @@ if (this.allRepos.includes(pinnedRepo)) {
             alert("Title and Description are required.");
             return;
         }
-
         try {
-            const res = await fetch('/api/tracker/new', {
+            const res = await window.inSetu.api.workspace('tracker/new', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate })
@@ -619,11 +617,9 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             ${this._renderConfigModal()}
         `;
     }
-
     async _openEditTaskModal(filepath) {
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
+            const res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filepath)}`);
             if (!res.ok) throw new Error("Failed to load task file.");
             const content = await res.text();
             const repo = filepath.split('/')[0];
@@ -733,14 +729,12 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
         const filename = filepath.split('/').pop();
         const folderType = type === 'queue' ? 'queue' : `${type}s`;
         const intendedRelPath = `${repo}/.tracker/${folderType}/${status}/${filename}`;
-
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const res = await fetch(`/api/${activeWs}/fs/save`, {
+            const res = await window.inSetu.api.workspace('fs/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    filepath: intendedRelPath, 
+                    filepath: intendedRelPath,  
                     content: newContent,
                     delete_source: filepath !== intendedRelPath ? filepath : null
                 })
@@ -912,10 +906,9 @@ this.requestUpdate(); }}
             alert("Virtual file viewer is not available.");
         }
     }
-
     async _openConfigModal() {
         try {
-            const res = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
             if (!res.ok) throw new Error("Failed to fetch config");
             const config = await res.json();
             this._rawSystemConfig = config;
@@ -939,9 +932,8 @@ this.requestUpdate(); }}
         if (!config.extension_config.tracker) config.extension_config.tracker = {};
         config.extension_config.tracker.domain_strategy = newStrat;
         config.extension_config.tracker.domain_custom_value = newVal;
-
         try {
-            const saveRes = await fetch('/api/system/config', {
+            const saveRes = await window.inSetu.api.system('config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
@@ -1102,7 +1094,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
     uiHooks: {
         'zone:file-edit-override': (filepath) => {
             if (filepath.includes('.tracker/')) {
-                document.getElementById('file-modal').style.display = 'none';
+                const fm = document.querySelector('#file-modal');
+                if (fm) fm.style.display = 'none';
                 if (window.switchTab) window.switchTab(null, 'tasks');
                 const activeSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
                 const trackerEl = document.querySelector(`#sub-${activeSub} insetu-ext-tracker`);

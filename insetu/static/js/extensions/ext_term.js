@@ -16,8 +16,7 @@ export class InSetuExtTerm extends LitElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        fetch('/api/' + activeWs + '/repos').then(r => r.json()).then(d => {
+        window.inSetu.api.workspace('repos').then(r => r.json()).then(d => {
             if (d.term_port) this.termPort = d.term_port;
         }).catch(e => console.error("Failed to fetch term port:", e));
     }

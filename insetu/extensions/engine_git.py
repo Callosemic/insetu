@@ -167,9 +167,8 @@ def api_generate_diffs(workspace_id):
     args_json = json.dumps({"target_repos": target_repos})
     submit_immediate_job(job_id, "git", "diffs_task", args_json, workspace_id)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('/api/git/sweep/status', methods=['GET'])
-def api_git_sweep_status():
-    workspace_id = sniff_tenant_id()
+@git_bp.route('/api/<workspace_id>/git/sweep/status', methods=['GET'])
+def api_git_sweep_status(workspace_id):
     cfg = load_config(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
     results = {}
@@ -233,9 +232,8 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
         update_immediate_job_status(job_id, 'failed', str(e), workspace_id=workspace_id)
 
 register_callback("git", "sweep_push_task", _background_sweep_push)
-@git_bp.route('/api/git/sweep/push', methods=['POST'])
-def api_git_sweep_push():
-    workspace_id = sniff_tenant_id()
+@git_bp.route('/api/<workspace_id>/git/sweep/push', methods=['POST'])
+def api_git_sweep_push(workspace_id):
     data = request.json
     selections = data.get('selections', {})
     message = data.get('message', 'chore: workspace sweep')
@@ -245,10 +243,9 @@ def api_git_sweep_push():
     submit_immediate_job(job_id, "git", "sweep_push_task", args_json, workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('/api/git/changelogs', methods=['GET'])
-def api_git_changelogs():
+@git_bp.route('/api/<workspace_id>/git/changelogs', methods=['GET'])
+def api_git_changelogs(workspace_id):
     """Queries the rapid SQLite tracking index to populate recent commit suggestions."""
-    workspace_id = sniff_tenant_id()
     repo = request.args.get('repo', '')
     changelogs = []
     # Abstracted horizontal cross-talk using the Event Bus
@@ -340,9 +337,8 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
             update_immediate_job_status(job_id, 'failed', err_out, workspace_id=workspace_id)
 
 register_callback("git", "push_task", _background_git_push)
-@git_bp.route('/api/git/push', methods=['POST'])
-def api_git_push():
-    workspace_id = sniff_tenant_id()
+@git_bp.route('/api/<workspace_id>/git/push', methods=['POST'])
+def api_git_push(workspace_id):
     data = request.json
     repo = data.get('repo')
     message = data.get('message')

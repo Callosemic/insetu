@@ -57,7 +57,7 @@ export class InSetuExtFormatModals extends LitElement {
                 const { activeFormatJobId } = FormatStore.getState();
                 if (!activeFormatJobId || activeFormatJobId === 'starting') return;
                 try {
-                    const statusRes = await fetch(`/api/system/jobs/${activeFormatJobId}`);
+                    const statusRes = await window.inSetu.api.system(`jobs/${activeFormatJobId}`);
                     if (statusRes.ok) {
                         const statusData = await statusRes.json();
                         FormatStore.setState({ formatJobMessage: statusData.message || "⏳ Compiling..." });
@@ -82,12 +82,10 @@ export class InSetuExtFormatModals extends LitElement {
             window.inSetu.extensions.Registry.executeUnload('format');
         }
     }
-
     async _executePublish() {
         FormatStore.setState({ activeFormatJobId: 'starting', formatJobMessage: '⏳ Compiling...', formatJobError: null });
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const res = await fetch(`/api/${activeWs}/format/compile-document`, {
+            const res = await window.inSetu.api.workspace('format/compile-document', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ filepath: this.currentFormatTarget, format: this.formatMode })

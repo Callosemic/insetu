@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: phase-3-sqlite-data-layer
 title: "Phase 3: The Data Layer Swap (SQLite)"
 created_at: 2026-07-02T09:18:30

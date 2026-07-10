@@ -7,7 +7,7 @@ title: "Cross-Platform Daemon Support: Implement macOS launchd in cli.py"
 created_at: 2026-07-03T10:45:00
 closed_at: null
 sub_bucket: "None"
-delivery_date: "2026-08-09"
+delivery_date: "2026-08-23"
 tags: ["CLI", "Infrastructure", "Maintainability"]
 ---
 

@@ -399,8 +399,8 @@ def _get_research_intervals():
     )
 
 # --- API ENDPOINTS ---
-@research_bp.route('/api/research/start', methods=['POST'])
-def start_job():
+@research_bp.route('/api/<workspace_id>/research/start', methods=['POST'])
+def start_job(workspace_id):
     data = request.json
     query = data.get('query', '').strip()
     provider_name = data.get('provider', 'duckduckgo')
@@ -423,27 +423,25 @@ def start_job():
         "target_dir": target_dir
       })
 
-      conn = get_connection("research")
+      conn = get_connection("research", workspace_id=workspace_id)
       conn.execute("INSERT INTO research_jobs (id, query, provider, status, total_links, created_at, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (job_id, query, provider_name, 'gathering', 0, now_str, meta_json))
       conn.commit()
-
       g_int, g_jit, _, _ = _get_research_intervals()
 
       # Dispatch to Metronome: Fetch a SERP page dynamically to avoid rate limits
-      submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit)
+      submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit, workspace_id=workspace_id)
 
       # Return immediately so the UI doesn't hang
       return jsonify({"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@research_bp.route('/api/research/<job_id>/action', methods=['POST'])
-def job_action(job_id):
+@research_bp.route('/api/<workspace_id>/research/<job_id>/action', methods=['POST'])
+def job_action(workspace_id, job_id):
     data = request.json
     action = data.get('action') # 'pause', 'resume', 'cancel'
 
-    conn = get_connection("research")
+    conn = get_connection("research", workspace_id=workspace_id)
     job = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
     if not job:
@@ -464,11 +462,10 @@ def job_action(job_id):
     elif action == 'resume' and current_status == 'paused':
         conn.execute("UPDATE research_jobs SET status='running' WHERE id=?", (job_id,))
         conn.commit()
-
         _, _, s_int, s_jit = _get_research_intervals()
 
         # Dispatch to the Metronome
-        submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit)
+        submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
         return jsonify({"status": "success", "message": "Job resumed"})
     elif action == 'update_meta':
         job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
@@ -478,13 +475,12 @@ def job_action(job_id):
         conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), job_id))
         conn.commit()
         return jsonify({"status": "success", "message": "Metadata updated"})
-
     elif action == 'delete':
         conn.execute("DELETE FROM research_jobs WHERE id=?", (job_id,))
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
 
-        w_conn = get_connection("workers")
+        w_conn = get_connection("workers", workspace_id=workspace_id)
         w_conn.execute("DELETE FROM jobs WHERE id IN (?, ?)", (f"research_{job_id}", f"research_gather_{job_id}"))
         w_conn.commit()
 
@@ -504,36 +500,35 @@ def job_action(job_id):
 
         conn.execute("UPDATE research_jobs SET status=?, meta_json=? WHERE id=?", (target_status, json.dumps(meta), job_id))
         conn.commit()
-
         g_int, g_jit, s_int, s_jit = _get_research_intervals()
 
         if target_status == 'gathering':
-            submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit)
+            submit_job(f"research_gather_{job_id}", "research", "gather_next_page", g_int, json.dumps({"job_id": job_id}), g_jit, workspace_id=workspace_id)
         else:
-            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit)
+            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
 
         return jsonify({"status": "success", "message": f"Job retrying in {target_status} phase"})
 
     return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
-
-@research_bp.route('/api/research/jobs', methods=['GET'])
-def list_jobs():
-    conn = get_connection("research")
+@research_bp.route('/api/<workspace_id>/research/jobs', methods=['GET'])
+def list_jobs(workspace_id):
+    conn = get_connection("research", workspace_id=workspace_id)
     cursor = conn.execute("SELECT * FROM research_jobs ORDER BY created_at DESC")
     jobs = [dict(row) for row in cursor.fetchall()]
     return jsonify({"jobs": jobs})
-@research_bp.route('/api/research/inbox', methods=['GET'])
-def list_inbox():
+
+@research_bp.route('/api/<workspace_id>/research/inbox', methods=['GET'])
+def list_inbox(workspace_id):
     status_filter = request.args.get('status', 'pending')
     statuses = tuple(status_filter.split(','))
-    conn = get_connection("research")
+    conn = get_connection("research", workspace_id=workspace_id)
     placeholders = ','.join(['?'] * len(statuses))
     cursor = conn.execute(f"SELECT * FROM research_inbox WHERE status IN ({placeholders})", statuses)
     items = [dict(row) for row in cursor.fetchall()]
     return jsonify({"items": items})
-@research_bp.route('/api/research/<job_id>/export_context', methods=['GET'])
-def export_context(job_id):
-    conn = get_connection("research")
+@research_bp.route('/api/<workspace_id>/research/<job_id>/export_context', methods=['GET'])
+def export_context(workspace_id, job_id):
+    conn = get_connection("research", workspace_id=workspace_id)
     cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (job_id,))
     items = cursor.fetchall()
 
@@ -555,15 +550,14 @@ def export_context(job_id):
         chunks.append(current_chunk)
 
     return jsonify({"chunks": chunks})
-
-@research_bp.route('/api/research/inbox/<inbox_id>/disposition', methods=['POST'])
-def inbox_disposition(inbox_id):
+@research_bp.route('/api/<workspace_id>/research/inbox/<inbox_id>/disposition', methods=['POST'])
+def inbox_disposition(workspace_id, inbox_id):
     data = request.json
     status = data.get('status')
     if status not in ('accepted', 'rejected', 'force_scrape'):
         return jsonify({"error": "Invalid status"}), 400
 
-    conn = get_connection("research")
+    conn = get_connection("research", workspace_id=workspace_id)
     if status == 'force_scrape':
         conn.execute("UPDATE research_inbox SET status='pending', scraped_at=NULL, raw_markdown=NULL WHERE id=?", (inbox_id,))
         job_data = conn.execute("SELECT job_id FROM research_inbox WHERE id=?", (inbox_id,)).fetchone()
@@ -571,10 +565,9 @@ def inbox_disposition(inbox_id):
             job_id = job_data['job_id']
             conn.execute("UPDATE research_jobs SET status='running' WHERE id=? AND status='completed'", (job_id,))
             conn.commit()
-
             from insetu.engine_research import _get_research_intervals
             _, _, s_int, s_jit = _get_research_intervals()
-            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit)
+            submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
         return jsonify({"status": "success"})
     conn.execute("UPDATE research_inbox SET status=? WHERE id=?", (status, inbox_id))
 

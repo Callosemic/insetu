@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260701_1030_DOWNLOAD_PIPELINE_UNIFICATION
 title: "Unify Extension Download Patterns via downloadFile Pipeline"
 created_at: 2026-07-01T10:30:00

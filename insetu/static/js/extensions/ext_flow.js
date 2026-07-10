@@ -39,12 +39,10 @@ export class InSetuExtFlow extends LitElement {
         super.disconnectedCallback();
         if (this._unsub) this._unsub();
     }
-
     async fetchBatches() {
         this.loading = true;
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            const res = await fetch(`/api/${activeWs}/flow/batches`);
+            const res = await window.inSetu.api.workspace('flow/batches');
             if (res.ok) {
                 const data = await res.json();
                 AppStore.setState(state => ({
@@ -87,18 +85,16 @@ export class InSetuExtFlow extends LitElement {
         if (batch.include_prompt) {
             const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
             const promptPath = profileDir + '/' + batch.include_prompt;
-            fetch(`/api/${activeWorkspace || 'default'}/prompts/resolve?file=${encodeURIComponent(promptPath)}`)
+            window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
                 .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
                 .then(text => { this._viewingBatchPromptText = text; })
                 .catch(err => { this._viewingBatchPromptText = `[Error: ${err.message}]`; });
         }
     }
-
     async deleteEditBatch() {
         if (!confirm("Delete this workflow batch?")) return;
         try {
-            const { activeWorkspace } = AppStore.getState();
-            const res = await fetch(`/api/${activeWorkspace}/flow/batches/delete`, {
+            const res = await window.inSetu.api.workspace('flow/batches/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: this._editingBatch.id })
@@ -127,10 +123,8 @@ export class InSetuExtFlow extends LitElement {
             payload.response_path = this._editForm.responsePath.trim();
             if (this._editForm.archivePath) payload.archive_path = this._editForm.archivePath.trim();
         }
-
         try {
-            const { activeWorkspace } = AppStore.getState();
-            const res = await fetch(`/api/${activeWorkspace}/flow/batches/save`, {
+            const res = await window.inSetu.api.workspace('flow/batches/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -173,7 +167,7 @@ export class InSetuExtFlow extends LitElement {
                 this._viewingBatch = null;
                 executeSystemCompile().then(res => {
                     if (res && res.status !== 'error') {
-                        fetch(`/api/${activeWorkspace || 'default'}/manifest?t=` + Date.now())
+                        window.inSetu.api.workspace('manifest?t=' + Date.now())
                             .then(mRes => mRes.ok ? mRes.json() : {})
                             .then(manifest => AppStore.setState({ manifest }));
                     }

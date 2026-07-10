@@ -1,13 +1,13 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "open"
+status: "closed"
 id: INS-QUEUE-20260708_1758_GLOBAL_FETCH_WRAPPER
 title: "Architectural Upgrade: Global API Fetch Wrapper (window.inSetu.fetch)"
 created_at: 2026-07-08T17:58:00
-closed_at: null
+closed_at: 2026-07-10T00:53:11
 sub_bucket: "None"
-delivery_date: "2026-08-09"
+delivery_date: "2026-07-26"
 tags: ["Architecture", "Frontend", "Refactor", "Security"]
 ---
 
