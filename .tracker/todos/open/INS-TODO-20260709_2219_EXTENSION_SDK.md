@@ -1,22 +1,20 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-TODO-20260709_2219_EXTENSION_SDK
 title: "Phase 7: The Extension SDK & 'Pit of Success' Architecture"
 created_at: 2026-07-09T22:19:00
-closed_at: null
+closed_at: 2026-07-10T01:00:45
 sub_bucket: "None"
 delivery_date: "2026-07-26"
 tags: ["Architecture", "DX", "SDK"]
 ---
 
 ## Description
-To radically simplify extension development by providing an SDK that natively abstracts multi-tenant routing, state teardowns, and VFS boundaries. The easiest way to write an extension must inherently be the most compliant way.
-
-### Action Items
-- [ ] Scaffold the `insetu/sdk/` directory to house these abstractions.
-- [ ] Build the `InSetuElement` Lit wrapper and `createExtensionStore` factory in `app.js`.
-- [ ] Build the `Extension` Flask wrapper and migrate one plugin (e.g., `favorites`) to test the new DX.
+**Resolution (2026-07-10):** The Extension SDK V2 has been successfully scaffolded and integrated across the frontend and backend architectures.
+* **Backend (`insetu/sdk/`):** Shipped `InSetuExtension`, `ExtensionContext`, and `VFSTransaction` to natively enforce ADR 0002 and ADR 0016. Routed `ctx.vfs`, `ctx.db`, and `ctx.resolve_path()` to abstract tenant mechanics and prevent unguarded physical I/O.
+* **Frontend (`InSetuElement`):** Shipped the LitElement wrapper inside `app.js` featuring automated Zustand store teardowns (`this._storeUnsubs`) and pre-scoped API clients (`this.api.post()`).
+* **Data Layer:** Shipped declarative SQLite auto-migrations via `apply_declarative_schema()` running securely on the `system_boot` hook.
 
 ## Notes / Execution Log

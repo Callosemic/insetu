@@ -7,7 +7,6 @@ title: "Architectural Upgrade: Global API Fetch Wrapper (window.inSetu.fetch)"
 created_at: 2026-07-08T17:58:00
 closed_at: 2026-07-10T00:53:11
 sub_bucket: "None"
-delivery_date: "2026-07-26"
 tags: ["Architecture", "Frontend", "Refactor", "Security"]
 ---
 

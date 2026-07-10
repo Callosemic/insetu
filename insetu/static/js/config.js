@@ -35,11 +35,10 @@ export class InSetuExtConfig extends LitElement {
         if (this._unsubApp) this._unsubApp();
         if (this._unsubWorkspace) this._unsubWorkspace();
     }
-
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 this.configForm = await res.json();
             }
@@ -324,9 +323,9 @@ The 'config' extension is locked.</p>
         const origText = btn.innerText;
         btn.innerText = '⏳ Saving...';
         try {
-            const activeWs = AppStore.getState().activeWorkspace ||
-'default';
-            const res = await fetch('/api/system/config', {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            // Config saves allow cross-tenant targeting via the header
+            const res = await window.inSetu.api.system('config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Workspace-ID': activeWs },
                 body: JSON.stringify(this.configForm)
@@ -338,7 +337,7 @@ The 'config' extension is locked.</p>
                 }
                 btn.innerText = '⏳ Rebooting...';
                 try {
-                    await fetch('/api/system/reboot', { method: 'POST' });
+                    await window.inSetu.api.system('reboot', { method: 'POST' });
                 } catch(err) {}
                 setTimeout(() => window.location.reload(), 2000);
             } else {
@@ -414,10 +413,9 @@ export class InSetuWorkspaceEditor extends LitElement {
         this._showHostBrowser = true;
         await this._loadHostDirs(currentVal);
     }
-
     async _loadHostDirs(path = '') {
         try {
-            const res = await fetch(`/api/system/fs/list_local?path=${encodeURIComponent(path)}`);
+            const res = await window.inSetu.api.system(`fs/list_local?path=${encodeURIComponent(path)}`);
             if (res.ok) {
                 const data = await res.json();
                 this._hostCurrentPath = data.current;
@@ -452,10 +450,9 @@ export class InSetuWorkspaceEditor extends LitElement {
             this._loadWorkspacesManifest();
         }
     }
-
     async _loadWorkspacesManifest() {
         try {
-            const res = await fetch('/api/system/workspaces?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.workspaces = data.workspaces || {};
@@ -471,9 +468,8 @@ export class InSetuWorkspaceEditor extends LitElement {
         const wsId = this._newWsId.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
         const wsRoot = this._newWsRoot.trim();
         if (!wsId) return;
-
         try {
-            const res = await fetch('/api/system/workspaces/create', {
+            const res = await window.inSetu.api.system('workspaces/create', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: wsId, workspace_root: wsRoot })
@@ -492,13 +488,11 @@ export class InSetuWorkspaceEditor extends LitElement {
             alert(`Network error: ${err.message}`);
         }
     }
-
     async _handleDeleteWorkspace(wsId) {
         if (wsId === 'default') return;
         if (!confirm(`⚠️ Are you sure you want to permanently delete workspace "${wsId}"?\nThis removes its tracking configuration metadata indexes instantly.`)) return;
-
         try {
-            const res = await fetch('/api/system/workspaces/delete', {
+            const res = await window.inSetu.api.system('workspaces/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: wsId })

@@ -92,11 +92,14 @@ def load_workspace_extensions():
     for ext in list(modules.keys()):
         if ext not in visited:
             visit(ext)
-
     # Mount Blueprints in safe DAG order
     for ext in sorted_exts:
         try:
-            blueprint = getattr(modules[ext], f"{ext}_bp")
+            ext_module = getattr(modules[ext], f"{ext}_bp")
+
+            # SDK Check: Unwrap the Blueprint if it utilizes the InSetuExtension SDK class
+            blueprint = ext_module.bp if hasattr(ext_module, 'bp') else ext_module
+
             app.register_blueprint(blueprint)
             print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
         except AttributeError as e:

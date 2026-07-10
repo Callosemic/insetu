@@ -21,13 +21,19 @@ def report_violation(rule_name, filepath, line_num, message):
     violations_found += 1
     print(f"❌ [VIOLATION: {rule_name}] {filepath}:{line_num}")
     print(f"   ↳ {message}\n")
-
 # --- PYTHON AST LINTER ---
 class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename):
         self.filepath = filepath
         self.filename = filename
     def visit_Call(self, node):
+        # SDK V2 Enforcement (Backend Extensions)
+        if self.filename.startswith("engine_"):
+            if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'os' and node.func.attr == 'walk':
+                report_violation("SDK_VFS_WALK_MANDATE", self.filepath, node.lineno, "Raw os.walk() detected in extension. Use ctx.vfs.walk() instead.")
+            if isinstance(node.func, ast.Name) and node.func.id == 'open':
+                report_violation("SDK_VFS_READ_MANDATE", self.filepath, node.lineno, "Native open() detected in extension. Use ctx.vfs.read() instead.")
+
         # 1. VFS Write-Path Ban: Prevent native open(..., 'w') outside of the VFS pipeline
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
@@ -105,13 +111,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def visit_Import(self, node):
         self._check_sqlite_import(node)
         self.generic_visit(node)
-
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
 
         # Catch from os.path import join bypass
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
+
+        if self.filename.startswith("engine_"):
+            banned_imports = {'load_config', 'resolve_workspace_path', 'get_gather_paths'}
+            imported_names = {alias.name for alias in node.names}
+            violations = banned_imports.intersection(imported_names)
+            if violations:
+                report_violation("SDK_CONTEXT_MANDATE", self.filepath, node.lineno, f"Banned SDK imports detected: {violations}. Use ctx.config, ctx.resolve_path(), or ctx.paths instead.")
 
         self.generic_visit(node)
 
@@ -172,6 +184,9 @@ def check_javascript_files():
     form_data_pattern = re.compile(r'new\s+FormData\b')
     local_fetch_wrapper_pattern = re.compile(r'(const|let|var)\s+apiFetch\s*=')
     imperative_dom_create_pattern = re.compile(r'document\.createElement\(')
+    raw_fetch_pattern = re.compile(r'\bfetch\s*\(')
+    legacy_insetu_fetch_pattern = re.compile(r'window\.inSetu\.fetch\s*\(')
+    manual_unsub_pattern = re.compile(r'this\._unsub[a-zA-Z0-9_]*\s*=')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -253,10 +268,19 @@ def check_javascript_files():
                     # 14. Global Fetch Interceptor Bypass
                     if is_extension and local_fetch_wrapper_pattern.search(line):
                         report_violation("GLOBAL_UTILITY_BYPASS", filepath, line_num, "Localized API fetch wrapper detected. Utilize the centralized window.inSetu.fetch utility to ensure global interceptor compliance.")
+                    # 15. Explicit API Client Mandate in Extensions (ADR 0016)
+                    if is_extension and raw_fetch_pattern.search(line):
+                        report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
-                    # 15. Imperative DOM Creation Ban in Extensions
+                    if is_extension and legacy_insetu_fetch_pattern.search(line):
+                        report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
+                    # 16. Imperative DOM Creation Ban in Extensions
                     if is_extension and is_lit_component and imperative_dom_create_pattern.search(line):
                         report_violation("IMPERATIVE_DOM_CREATION", filepath, line_num, "document.createElement detected in a LitElement extension. Construct templates declaratively using lit-html.")
+
+                    # 17. Manual Store Un-subscription Ban in LitElement Extensions
+                    if is_extension and is_lit_component and manual_unsub_pattern.search(line):
+                        report_violation("SDK_SUBSCRIPTION_MANDATE", filepath, line_num, "Manual store un-subscription detected. Use this.subscribe() from the InSetuElement SDK.")
 
 if __name__ == "__main__":
     print("============================================================")

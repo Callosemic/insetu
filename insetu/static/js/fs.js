@@ -100,8 +100,10 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
             currentModalOriginalText = text;
 }
 }
-
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
+    if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
+        fetchOptions.headers = window.inSetu.api._getHeaders(true);
+    }
     const res = await fetch(fetchUrl, fetchOptions);
     if (!res.ok) throw new Error('Download failed from server.');
     const blob = await res.blob();
@@ -239,8 +241,7 @@ async function saveModalFile(autoSave = false) {
             return;
         }
     }
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
+    await executeWorkspaceMutation('fs/save', {
         filepath: currentModalFile,
         content: content
     }, {
@@ -286,12 +287,11 @@ function openMoveModal() {
     // remove filename
     FsStore.getState().setModal('move', { open: true, currentFile: currentModalFile, destPath: currentModalFile, initialParts: parts });
 }
-
 async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/move`, {
+
+    await executeWorkspaceMutation('fs/move', {
         filepath: currentFile,
         dest_path: destPath
     }, {
@@ -305,9 +305,7 @@ async function executeMove() {
 }
 async function archiveModalFile() {
     if (!confirm("Are you sure you want to archive this file?\nIt will be moved to an 'archived/' subdirectory.")) return;
-
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/archive`, {
+    await executeWorkspaceMutation('fs/archive', {
         filepath: currentModalFile
     }, {
         onSuccess: () => {
@@ -319,9 +317,7 @@ async function archiveModalFile() {
 }
 async function deleteModalFile() {
     if (!confirm("Are you sure you want to delete this file?\nThis cannot be undone!")) return;
-
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/delete`, {
+    await executeWorkspaceMutation('fs/delete', {
         filepath: currentModalFile
     }, {
         onSuccess: () => {
@@ -499,7 +495,7 @@ export class InSetuVFSExplorer extends LitElement {
                 globalBrowsePath: { type: Array }
         };
         static styles = [sharedStyles, css`
-                :host { display: flex; flex-direction: column; flex: 1; overflow-y: auto; overflow-x: hidden; }
+                :host { display: flex; flex-direction: column; flex: 1; }
         `];
 
         constructor() {
@@ -588,14 +584,11 @@ export class InSetuVFSExplorer extends LitElement {
                                         intentColor="var(--intent-success)"
                                         @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
                                         <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                                        <button slot="actions" class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 4px 8px;"
+                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
                                             @click=${(e) => {
                                                 e.stopPropagation();
-                                                const items = [
-                                                    { label: 'Download', icon: '⬇️', onClick: (ev) => { ev.stopPropagation(); window.fetchAndDownloadState(filepath, e.target); } }
-                                                ];
-                                                window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items: items });
-                                            }}>⚙️</button>
+                                                if (window.fetchAndDownloadState) window.fetchAndDownloadState(filepath, e.currentTarget);
+                                            }}>⬇️ DL</button>
                                     </insetu-card>
                                 `;
                             })}
@@ -604,7 +597,7 @@ export class InSetuVFSExplorer extends LitElement {
                 }
             }
             return html`
-                <div style="display: flex; flex-direction: column; height: 100%;">
+                <div style="display: flex; flex-direction: column; flex: 1;">
                     <div class="sticky-header" style="flex-shrink: 0;">
                         <div class="fuzzy-search-wrapper">
                             <input type="text" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
@@ -719,9 +712,7 @@ async function saveNewFile() {
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         content = await window.inSetu.extensions.Registry.executeUIHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
     }
-
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
+    await executeWorkspaceMutation('fs/save', {
         filepath,
         content
     }, {
@@ -785,11 +776,9 @@ async function saveNewFolder() {
             repo_exts: mState.repoExts.trim()
         };
     }
-
     const filepath = basePath + folderName + "/.gitkeep";
 
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    await executeWorkspaceMutation(`/api/${activeWs}/fs/save`, {
+    await executeWorkspaceMutation('fs/save', {
         filepath,
         content: "",
         is_new_repo: isNewRepo,
@@ -799,7 +788,7 @@ async function saveNewFolder() {
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
-                const rRes = await fetch(`/api/${activeWs}/repos?t=` + Date.now());
+                const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
@@ -1130,8 +1119,7 @@ window.viewAndCopy = viewAndCopy;
 export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
     setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/gather/quick-pack`, {
+        const res = await window.inSetu.api.workspace('gather/quick-pack', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1145,9 +1133,8 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
 
         // Open the physical file that was just written to disk natively
         viewAndCopy(data.filename);
-
         // Silently re-hydrate the manifest state to reactively update the UI without hitting the heavy `/submit` compiler
-        const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+        const mRes = await window.inSetu.api.workspace(`manifest?t=${Date.now()}`);
         if (mRes.ok) {
             AppStore.setState({ manifest: await mRes.json() });
         }
@@ -1230,13 +1217,10 @@ export async function clearQuickPacks() {
     if (!confirm("Clear all Quick-Pack clipboard items?")) return;
     setGlobalStatus("⏳ Clearing Clipboard...", null);
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/gather/quick-pack/clear`, {
-            method: 'POST'
-        });
+        const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
         if (!res.ok) throw new Error("Failed to clear quick-packs.");
 
-        const mRes = await fetch(`/api/${activeWs}/manifest?t=${Date.now()}`);
+        const mRes = await window.inSetu.api.workspace(`manifest?t=${Date.now()}`);
         if (mRes.ok) {
             AppStore.setState({ manifest: await mRes.json() });
         }
@@ -1280,7 +1264,6 @@ export function onLinkSearchInput(val) {
         executeLinkSearch(val);
     }, 300);
 }
-
 export async function executeDeepLinkSearch(overrideQuery = null) {
     const query = (overrideQuery || FsStore.getState().modals.linkInsert.searchQuery).toLowerCase().trim();
     if (!query) {
@@ -1289,10 +1272,8 @@ export async function executeDeepLinkSearch(overrideQuery = null) {
     }
 
     FsStore.getState().setModal('linkInsert', { deepSearchLoading: true, searchResults: [] });
-
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/fs/search?q=` + encodeURIComponent(query));
+        const res = await window.inSetu.api.workspace('fs/search?q=' + encodeURIComponent(query));
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
         FsStore.getState().setModal('linkInsert', { searchResults: data.results || [] });
@@ -1509,8 +1490,7 @@ export class InSetuVFSModals extends LitElement {
                     </div>
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} @modal-closed=${window.closeBrowseModal}>
+<insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} maxWidth="100vw" @modal-closed=${window.closeBrowseModal}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
                     ${this.browserConfig?.mode !== 'folder' ? html`
                         <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">

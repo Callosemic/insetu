@@ -63,8 +63,8 @@ window.inSetu.extensions.Registry = {
     utils: {
         _timers: {},
         debounce: function(key, callback, delay = 300) {
-            if (this._timers[key]) window.clearTimeout(this._timers[key]);
-this._timers[key] = setTimeout(callback, delay);
+            if (this._timers[key]) window.clearTimeout(this._timers[key]); // utils.debounce whitelist
+            this._timers[key] = setTimeout(callback, delay);
         },
         debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
             this.debounce(`verify_${filepath}`, async () => {

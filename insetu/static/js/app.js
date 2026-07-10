@@ -8,6 +8,8 @@ import {
 } from './fs.js';
 import { BridgeStore } from './bridge.js';
 import { AppStore } from './store.js';
+import { createStore } from 'https://esm.sh/zustand/vanilla';
+import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import './ui.js';
 import './components/ui_file_tree.js';
 import './components/ui_folder_browser.js';
@@ -124,6 +126,89 @@ export let mdeInstance = {
     }
 };
 import { LitElement } from 'lit';
+export function createExtensionStore(name, initialState) {
+    return createStore(
+        devtools(
+            subscribeWithSelector((set, get) => ({
+                ...initialState,
+                resetState: () => set(initialState)
+            })),
+            { name: `${name}Store` }
+        )
+    );
+}
+
+export class InSetuElement extends LitElement {
+    static properties = {
+        workspaceId: { type: String }
+    };
+
+    constructor() {
+        super();
+        this.workspaceId = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+        this._storeUnsubs = [];
+    }
+
+    // Automatically derive the extension routing domain from the Web Component tag name
+    get extName() {
+        return this.tagName.toLowerCase().replace('insetu-ext-', '');
+    }
+
+    // Context-aware API Client that routes natively to this extension's backend blueprint
+    get api() {
+        return {
+            get: (path, options = {}) => {
+                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'GET' });
+            },
+            post: (path, payload, options = {}) => {
+                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, {
+                    ...options,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+                    body: JSON.stringify(payload)
+                });
+            },
+            delete: (path, options = {}) => {
+                const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'DELETE' });
+            }
+        };
+    }
+
+    // Safe subscription manager that guarantees teardown on component unmount
+    subscribe(store, selectorOrListener, listener = undefined) {
+        const unsub = listener ? store.subscribe(selectorOrListener, listener) : store.subscribe(selectorOrListener);
+        this._storeUnsubs.push(unsub);
+        return unsub;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        const appStore = window.inSetu?.stores?.App;
+        if (appStore) {
+            this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
+                if (this.workspaceId !== ws) {
+                    this.workspaceId = ws;
+                    this.onWorkspaceChanged(ws);
+                }
+            });
+        }
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        this._storeUnsubs.forEach(unsub => unsub());
+        this._storeUnsubs = [];
+    }
+
+    // Optional lifecycle hook for subclasses to react safely to tenant hot-swaps
+    onWorkspaceChanged(newWorkspaceId) {}
+}
+
+window.inSetu.extensions.InSetuElement = InSetuElement;
+window.inSetu.extensions.createExtensionStore = createExtensionStore;
 
 export class InSetuMarkdownEditor extends LitElement {
     static properties = {
@@ -386,20 +471,7 @@ setInterval(() => {
         });
     });
 }, 100);
-// --- STATELESS TENANT ROUTING (Fetch Interceptor) ---
-const originalFetch = window.fetch;
-window.fetch = async (resource, options = {}) => {
-    // Only intercept local API requests; leave external URLs (Google/OpenAlex) alone
-    const isLocal = typeof resource === 'string' && (resource.startsWith('/') || resource.startsWith(window.location.origin));
-    if (isLocal) {
-        const headers = new Headers(options.headers || {});
-        // UDF Tab Isolation: Rely on in-memory store or tab-scoped sessionStorage first to prevent cross-tab bleeding
-        const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
-        if (!headers.has('X-Workspace-ID')) headers.append('X-Workspace-ID', activeWs);
-        options.headers = headers;
-    }
-    return originalFetch(resource, options);
-};
+import './api.js'; // Mount explicit API client and network interceptors
 // Global listener to track active tab routing per-tenant
 document.addEventListener('click', (e) => {
     const tab = e.target.closest('.tab');
@@ -423,7 +495,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (panicBtn) panicBtn.style.display = 'none';
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
-        const cRes = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
@@ -503,7 +575,7 @@ if (settingsToggle && settingsMenu) {
 async function loadWorkspaces() {
     try {
         // Prevent aggressive browser caching (e.g., Safari on tablets) from hiding new workspaces
-        const res = await fetch('/api/system/workspaces?t=' + Date.now(), { cache: 'no-store' });
+        const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
@@ -535,7 +607,7 @@ async function loadWorkspaces() {
                             await Promise.all(keys.map(k => caches.delete(k)));
                         } catch(e) {}
                     }
-                    await fetch('/api/system/workspaces', {
+                    await window.inSetu.api.system('workspaces', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ active_workspace: key })
@@ -814,8 +886,7 @@ window.alert = function(msg) {
         setTimeout(() => toast.remove(), 300);
     }, 6000);
 };
-
-export async function executeWorkspaceMutation(url, payload, options = {}) {
+export async function executeWorkspaceMutation(path, payload, options = {}) {
     const {
         btnId,
         loadingText = "Processing...",
@@ -831,11 +902,16 @@ export async function executeWorkspaceMutation(url, payload, options = {}) {
     }
 
     try {
-        const res = await fetch(url, {
+        // Strip legacy prefixes if extensions haven't been updated yet
+        let cleanPath = path;
+        if (cleanPath.startsWith('/api/')) {
+            const parts = cleanPath.split('/');
+            cleanPath = parts.slice(3).join('/'); // strips /api/<ws>/
+        }
+
+        const res = await window.inSetu.api.workspace(cleanPath, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (res.ok) {
@@ -875,9 +951,12 @@ export const executeSystemCompile = (onProgress = null) => {
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
         try {
+            const headers = window.inSetu.api._getHeaders(true);
+            headers.append('Content-Type', 'application/json');
+
             const response = await fetch('/submit', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: headers,
                 body: JSON.stringify({})
             });
 
@@ -909,10 +988,9 @@ export const executeSystemCompile = (onProgress = null) => {
                     }
                 }
             }
-
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
             }
 
@@ -935,7 +1013,7 @@ async function simulatePanic() {
     const btn = document.getElementById('simulate-panic-btn');
     if (btn) btn.innerText = "⏳ Crashing...";
     try {
-        await fetch('/api/system/panic', { method: 'POST' });
+        await window.inSetu.api.system('panic', { method: 'POST' });
         setTimeout(() => window.location.reload(), 3000);
     } catch (e) {
         alert("Error triggering panic.");
@@ -953,10 +1031,9 @@ async function performSoftRefresh() {
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         window.inSetu.extensions.Registry.executeUIHook('zone:soft-refresh', currentWs);
     }
-
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await fetch(`/api/${currentWs}/repos?t=` + Date.now());
+        const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
             AppStore.setState({
@@ -970,7 +1047,7 @@ async function performSoftRefresh() {
             });
         }
         // 2. JIT Mount any missing JS extension payloads
-        const cRes = await fetch('/api/system/config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
@@ -1072,15 +1149,16 @@ export async function fetchAndCopy(filePath, btnElement) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        let fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
-
+        let res;
         if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-            if (override) fetchUrl = override;
+            const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+            if (overrideUrl) res = await fetch(overrideUrl);
         }
 
-        const res = await fetch(fetchUrl);
+        if (!res) {
+            res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filePath)}`);
+        }
+
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
         await navigator.clipboard.writeText(text);
@@ -1124,7 +1202,7 @@ export async function fetchAndDownloadState(filePath, btnElement) {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
 
         // Lazy Hydration: Attempt to fetch existing manifest first to prevent N+1 compiler thrashing
-        let mRes = await fetch(`/api/${activeWs}/manifest?t=` + Date.now());
+        let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
         // Only compile context if the manifest is genuinely empty (e.g., first daemon boot)
         if (Object.keys(manifestData).length === 0) {

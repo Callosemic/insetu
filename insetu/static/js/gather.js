@@ -142,13 +142,15 @@ ${AppStore.getState().manifest[f.filename] ? html`
                 @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
 ` : ''}
 <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-        @click=${async (e) => {
+@click=${async (e) => {
                 e.stopPropagation();
-                const dlUrl = f.filename.includes('/prompts/') ? `/api/${AppStore.getState().activeWorkspace || 'default'}/prompts/resolve?file=${encodeURIComponent(f.filename)}` : `/download/${f.filename}`;
+                const isPrompt = f.filename.includes('/prompts/');
                 const orig = e.target.innerText;
                 e.target.innerText = '⏳...';
                 try {
-                        const res = await fetch(dlUrl);
+                        const res = isPrompt 
+                            ? await window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(f.filename)}`)
+                            : await fetch(`/download/${f.filename}`); // Native download route bypasses API client
                         if (!res.ok) throw new Error("Failed to fetch");
                         const text = await res.text();
                         const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });

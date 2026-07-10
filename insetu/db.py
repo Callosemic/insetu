@@ -3,9 +3,44 @@ import os
 import sqlite3
 import threading
 from insetu.utils_core import get_workspace_physics
+from insetu.hooks import hooks
 
 # Thread-local storage guarantees safe connection pooling across the ASGI / Worker matrix
 _local = threading.local()
+
+_REGISTERED_SCHEMAS = {}
+
+def register_schema(ext_name, schema_dict):
+    """Registers a declarative SQLite schema for automatic workspace migration."""
+    _REGISTERED_SCHEMAS[ext_name] = schema_dict
+
+def apply_declarative_schema(db_name, schema_dict, workspace_id=None):
+    """Generates CREATE TABLE and executes ALTER TABLE ADD COLUMN migrations via diffing."""
+    conn = get_connection(db_name, workspace_id)
+    for table_name, columns in schema_dict.items():
+        # 1. Generate CREATE TABLE
+        col_defs = ", ".join([f"{col} {dtype}" for col, dtype in columns.items()])
+        conn.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ({col_defs})")
+
+        # 2. Diff columns and ALTER TABLE
+        cursor = conn.execute(f"PRAGMA table_info({table_name})")
+        existing_cols = {row['name'] for row in cursor.fetchall()}
+
+        for col, dtype in columns.items():
+            if col not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col} {dtype}")
+                except Exception as e:
+                    print(f"⚠️ Auto-migration failed for {table_name}.{col}: {e}")
+    conn.commit()
+
+@hooks.on('system_boot')
+def init_declarative_schemas():
+    """Automatically provisions and migrates SQLite schemas for all tenants on boot."""
+    from insetu.utils_core import get_all_workspace_ids
+    for ws_id in get_all_workspace_ids():
+        for ext_name, schema in _REGISTERED_SCHEMAS.items():
+            apply_declarative_schema(ext_name, schema, ws_id)
 def get_connection(db_name, workspace_id=None):
     """
     Returns a thread-local SQLite connection.

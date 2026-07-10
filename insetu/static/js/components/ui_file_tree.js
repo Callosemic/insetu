@@ -295,9 +295,12 @@ export class InSetuFileTree extends LitElement {
         stripPrefix: { type: String },
         basePath: { type: String },
         actions: { type: Array },
-        hideFiles: { type: Boolean }
+        hideFiles: { type: Boolean },
+        enableSearch: { type: Boolean },
+        searchPlaceholder: { type: String },
+        _searchQuery: { type: String }
     };
-    static styles = [sharedStyles];
+static styles = [sharedStyles];
 
 constructor() {
         super();
@@ -307,10 +310,16 @@ constructor() {
         this.actions = [];
         this.currentPath = [];
         this.hideFiles = false;
-    }
+        this.enableSearch = false;
+        this.searchPlaceholder = 'Search...';
+        this._searchQuery = '';
+}
 
     _buildTree() {
-        const mappedFiles = this.files.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
+        const filteredFiles = (this.enableSearch && this._searchQuery)
+            ? window.fuzzyFilterObjects(this.files, this._searchQuery)
+            : this.files;
+        const mappedFiles = filteredFiles.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
         return buildFileTree(mappedFiles);
     }
     
@@ -357,9 +366,15 @@ constructor() {
             if (!aIsDir && bIsDir) return 1;
             return a.localeCompare(b);
         });
-
         return html`
-            ${this.currentPath.length > 0 ? html`
+            ${this.enableSearch ? html`
+                <div class="fuzzy-search-wrapper" style="margin-bottom: 15px;">
+                    <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} @input=${(e) => this._searchQuery = e.target.value}>
+                    ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
+                </div>
+            ` : ''}
+            ${this.currentPath.length > 0 ?
+html`
                 <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center;">
                     <button class="btn-sm" style="background: var(--intent-neutral);" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
                     <span style="font-family: monospace; color: var(--text); opacity: 0.7;">/${this.currentPath.join('/')}</span>
@@ -391,12 +406,17 @@ constructor() {
                             icon="📄">
 
                             <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                            ${this.actions.map(act => html`
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer;" 
-                                    @click=${(e) => this._handleAction(e, act.id, filepath, key)}>
-                                    ${act.label}
-                                </button>
-                            `)}
+                            ${this.actions.map(act => {
+                                if (act.asyncAction) {
+                                    return html`<insetu-async-btn slot="actions" .label=${act.label} .intent=${act.style || 'primary'} .onClick=${(e) => act.asyncAction(filepath, key, e)}></insetu-async-btn>`;
+                                }
+                                return html`
+                                    <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer;" 
+                                        @click=${(e) => this._handleAction(e, act.id, filepath, key)}>
+                                        ${act.label}
+                                    </button>
+                                `;
+                            })}
                         </insetu-card>
                     `;
                 })}
@@ -419,7 +439,52 @@ export class InSetuFileActions extends LitElement {
         return templates;
     }
 }
+export class InSetuAsyncBtn extends LitElement {
+    static properties = {
+        label: { type: String },
+        loadingLabel: { type: String },
+        successLabel: { type: String },
+        errorLabel: { type: String },
+        intent: { type: String },
+        onClick: { type: Object },
+        _status: { type: String }
+    };
+    static styles = [sharedStyles, css`
+        button { margin: 0; white-space: nowrap; }
+    `];
+    constructor() {
+        super();
+        this.label = 'Submit';
+        this.loadingLabel = '⏳...';
+        this.successLabel = '✅';
+        this.errorLabel = '❌';
+        this.intent = 'primary';
+        this._status = 'idle';
+    }
+    async _handleClick(e) {
+        e.stopPropagation();
+        if (this._status === 'loading' || !this.onClick) return;
+        this._status = 'loading';
+        try {
+            await this.onClick(e);
+            this._status = 'success';
+        } catch (err) {
+            console.error(err);
+            this._status = 'error';
+        } finally {
+            setTimeout(() => { if (this._status !== 'loading') this._status = 'idle'; }, 2000);
+        }
+    }
+    render() {
+        let text = this.label;
+        if (this._status === 'loading') text = this.loadingLabel;
+        if (this._status === 'success') text = this.successLabel;
+        if (this._status === 'error') text = this.errorLabel;
+        return html`<button class="btn-sm" style="background: var(--intent-${this.intent});" @click=${this._handleClick}>${text}</button>`;
+    }
+}
 
+customElements.define('insetu-async-btn', InSetuAsyncBtn);
 customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-category-section', InSetuCategorySection);
 customElements.define('insetu-file-tree', InSetuFileTree);

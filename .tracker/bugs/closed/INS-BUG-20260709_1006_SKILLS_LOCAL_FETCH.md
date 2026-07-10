@@ -4,10 +4,9 @@ type: "bug"
 status: "closed"
 id: INS-BUG-20260709_1006_SKILLS_LOCAL_FETCH
 title: "Skills Extension Uses Localized API Fetch Wrapper"
-created_at: "2026-07-09T10:03:14"
+created_at: 2026-07-09T10:03:14
 closed_at: 2026-07-10T00:53:11
 sub_bucket: "None"
-delivery_date: null
 tags: ["Frontend", "Compliance", "DRY"]
 ---
 
