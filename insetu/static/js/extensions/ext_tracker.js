@@ -89,93 +89,23 @@ css`
     .column h3 { margin-top: 0; font-size: 1.1rem; }
     .filter-container { display: flex;
     flex-direction: column; gap: 10px; margin-bottom: 15px; }
-    /* Fullscreen EasyMDE/CodeMirror Parity Overrides */
-    .EasyMDEContainer {
-        border: none !important;
-        box-shadow: none !important;
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-        position: relative;
-    }
-    .EasyMDEContainer .CodeMirror {
-        background: var(--bg) !important;
-        color: var(--text) !important;
-        border: none !important;
-        padding: 16px 24px !important;
-        font-family: var(--font-mono) !important;
-        font-size: 14px;
-        line-height: 1.6;
-        flex: 1;
-        min-height: 0 !important;
-        position: relative;
-        overflow: hidden;
-        box-sizing: content-box;
-    }
 
-    /* CodeMirror Structural Coordinate Layout Fixes */
-    .EasyMDEContainer .CodeMirror-scroll {
-        min-height: 0 !important;
-        overflow: scroll !important;
-        margin-bottom: -30px; margin-right: -30px;
-        padding-bottom: 30px;
-        height: 100%;
-        position: relative;
-        outline: none;
-        box-sizing: content-box;
-    }
-    .EasyMDEContainer .CodeMirror-sizer {
-        position: relative;
-        border-right: 30px solid transparent;
-        box-sizing: content-box;
-    }
-    .EasyMDEContainer .CodeMirror-lines {
-        cursor: text;
-        min-height: 1px;
-        padding: 4px 0;
-    }
-    .EasyMDEContainer .CodeMirror-code {
-        outline: none;
-    }
-    .EasyMDEContainer .CodeMirror pre.CodeMirror-line {
-        word-break: break-word !important;
-        white-space: pre-wrap !important;
-        background: transparent;
-        margin: 0;
-        padding: 0;
-        position: relative;
-        overflow: visible;
-        color: inherit;
-        z-index: 2;
-    }
-    .EasyMDEContainer .CodeMirror-cursor {
-        position: absolute;
-        pointer-events: none;
-        border-left: 2px solid var(--text) !important;
-        width: 0;
-        z-index: 3;
-        visibility: visible !important;
-    }
     insetu-modal {
         position: fixed;
         z-index: 2100 !important;
     }
-    .cm-editor {
+    .editor-wrapper {
         flex: 1;
-        height: 100%;
         min-height: 0;
-        background: var(--bg) !important;
-        color: var(--text) !important;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        overflow: hidden;
     }
-    .cm-scroller {
-        overflow: auto !important;
-        height: 100%;
-    }
-    .cm-gutters {
-        background-color: var(--input-bg) !important;
-        border-right: 1px solid var(--border) !important;
-        color: var(--text-muted) !important;
+    .editor-wrapper insetu-markdown-editor {
+        flex: 1;
+        background: var(--bg);
     }
 
     /* Metadata Input Hardening */
@@ -839,7 +769,7 @@ this.requestUpdate(); }}
                             </div>
                         ` : ''}
                     </div>
-                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; background: var(--bg); height: 100%;">
+                    <div class="editor-wrapper">
                         <insetu-markdown-editor 
                             .value=${editTaskForm.desc || ''}
                             @content-changed=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, desc: e.detail.value } }))}>

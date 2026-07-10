@@ -7,7 +7,6 @@ title: "Phase 7: The Extension SDK & 'Pit of Success' Architecture"
 created_at: 2026-07-09T22:19:00
 closed_at: 2026-07-10T01:00:45
 sub_bucket: "None"
-delivery_date: "2026-07-26"
 tags: ["Architecture", "DX", "SDK"]
 ---
 

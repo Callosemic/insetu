@@ -1,10 +1,34 @@
 import urllib.request
 import urllib.parse
-from flask import Blueprint, request, jsonify
-from insetu.utils_core import extension_auth
+import uuid
+import json
+from flask import jsonify
+from insetu.sdk import InSetuExtension
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
-ingest_bp = Blueprint('ingest', __name__)
+ingest_bp = InSetuExtension('ingest', __name__)
 __depends__ = []
+
+def _background_ingest(job_id, workspace_id, url, method):
+    try:
+        update_immediate_job_status(job_id, 'processing', 'Fetching and converting URL content...', workspace_id=workspace_id)
+        extracted = extract_markdown_from_url(url, method)
+        safe_title = extracted["title"].replace('"', "'")
+        update_immediate_job_status(
+            job_id, 
+            'completed', 
+            'Ingestion successful.', 
+            artifact={
+                "markdown": extracted["clean_markdown"],
+                "title": safe_title,
+                "resolved_url": extracted["resolved_url"]
+            }, 
+            workspace_id=workspace_id
+        )
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Ingestion failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("ingest", "ingest_task", _background_ingest)
 
 def extract_markdown_from_url(target_url, method="jina"):
     # Intercept and unwrap Google search redirect links
@@ -111,32 +135,21 @@ def extract_markdown_from_url(target_url, method="jina"):
         f"---\n\n"
     )
     final_markdown = yaml_frontmatter + clean_markdown
-
     return {
         "title": extracted_title,
         "resolved_url": extracted_url,
         "published_time": published_time,
         "clean_markdown": final_markdown
     }
-@ingest_bp.route('/api/<workspace_id>/ingest/url', methods=['POST'])
-@extension_auth('ingest')
-def api_ingest_url(workspace_id):
-    data = request.json
+@ingest_bp.route('url', methods=['POST'])
+def api_ingest_url(ctx):
+    data = ctx.req.json or {}
     target_url = data.get("url", "").strip()
     method = data.get("method", "jina")
     if not target_url: return jsonify({"error": "URL is required"}), 400
 
-    try:
-        extracted = extract_markdown_from_url(target_url, method)
-        safe_title = extracted["title"].replace('"', "'")
+    job_id = f"ing_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({"url": target_url, "method": method})
+    submit_immediate_job(job_id, "ingest", "ingest_task", args_json, ctx.workspace_id)
 
-        return jsonify({
-            "status": "success", 
-            "markdown": extracted["clean_markdown"],
-            "title": safe_title,
-            "resolved_url": extracted["resolved_url"]
-        })
-    except Exception as e:
-        if "Missing optional dependencies" in str(e):
-            return jsonify({"error": str(e)}), 500
-        return jsonify({"error": f"Failed to fetch and convert URL: {str(e)}"}), 500
+    return jsonify({"status": "accepted", "job_id": job_id}), 202

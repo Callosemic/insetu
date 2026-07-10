@@ -1,7 +1,7 @@
 import { AppStore } from '../store.js';
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { createExtensionStore, InSetuElement } from '../app.js';
+import { createExtensionStore, InSetuElement } from '../sdk.js';
 
 export const FavoritesStore = createExtensionStore('Favorites', {
     items: [],
@@ -9,7 +9,7 @@ export const FavoritesStore = createExtensionStore('Favorites', {
     fetchFavorites: async () => {
         FavoritesStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('favorites');
+            const res = await window.inSetu.api.workspace('favorites/list');
             if (res.ok) {
                 const data = await res.json();
                 FavoritesStore.setState({ items: data.favorites || [] });
@@ -21,6 +21,54 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         }
     }
 });
+export class InSetuFavBtn extends InSetuElement {
+    static properties = { filepath: { type: String }, _isPinned: { type: Boolean }, _favId: { type: String } };
+    static styles = [sharedStyles];
+
+    constructor() { super(); this._isPinned = false; this._favId = null; }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(FavoritesStore, state => {
+            const fav = state.items.find(i => i.path === this.filepath);
+            this._isPinned = !!fav;
+            this._favId = fav ? fav.id : null;
+        });
+    }
+
+    async _toggle(e) {
+        e.stopPropagation();
+        if (this._isPinned && this._favId) {
+            FavoritesStore.setState(state => ({ items: state.items.filter(item => item.id !== this._favId) }));
+            const res = await this.api.delete(this._favId);
+            if (!res.ok) FavoritesStore.getState().fetchFavorites();
+        } else {
+            const isFolder = this.filepath.endsWith('/') || !this.filepath.includes('.');
+            const tempId = 'temp_' + Date.now();
+            const newItem = { id: tempId, path: this.filepath, type: isFolder ? 'folder' : 'file', name: this.filepath.split('/').pop() || this.filepath };
+            FavoritesStore.setState(state => ({ items: [...state.items, newItem] }));
+
+            const res = await this.api.post('add', newItem);
+            if (res.ok) {
+                FavoritesStore.getState().fetchFavorites();
+            } else {
+                FavoritesStore.setState(state => ({ items: state.items.filter(item => item.id !== tempId) }));
+            }
+        }
+    }
+
+    render() {
+        return html`
+            <button class="btn-sm" 
+                style="background: transparent; border: none; font-size: 1.2rem; padding: 0 4px; margin: 0 5px 0 0; box-shadow: none; color: ${this._isPinned ? 'var(--intent-warning)' : 'var(--text-muted)'};"
+                title="${this._isPinned ? 'Unpin' : 'Pin'}"
+                @click=${this._toggle}>
+                ${this._isPinned ? '⭐' : '☆'}
+            </button>
+        `;
+    }
+}
+customElements.define('insetu-fav-btn', InSetuFavBtn);
 
 export class InSetuExtFavorites extends InSetuElement {
     static properties = {
@@ -61,12 +109,18 @@ export class InSetuExtFavorites extends InSetuElement {
     }
     async _removeFavorite(e, id) {
         e.stopPropagation();
-        try {
-            // InSetuElement SDK automatically routes to /api/<workspace_id>/favorites/<id>
-            const res = await this.api.delete(id);
-            if (res.ok) FavoritesStore.getState().fetchFavorites();
-        } catch (e) {
-            alert("Failed to delete favorite token.");
+
+        // Eagerly splice the element out of the local store for an immediate O(1) visual transition
+        FavoritesStore.setState(state => ({
+            items: state.items.filter(item => item.id !== id)
+        }));
+
+        // Fire transaction off to backend asynchronously
+        const res = await this.api.delete(id);
+        if (!res.ok) {
+            // Re-fetch from DB cache to natively heal state tree if transaction bounds crash
+            FavoritesStore.getState().fetchFavorites();
+            console.error("Failed to safely delete favorite token on disk.");
         }
     }
 
@@ -85,7 +139,12 @@ export class InSetuExtFavorites extends InSetuElement {
                         intentColor="var(--intent-highlight)"
                         @card-clicked=${() => this._navigateToFavorite(item)}>
                         <insetu-file-actions slot="actions" .filepath=${item.path} .isFS=${true}></insetu-file-actions>
-                        <button slot="actions" class="btn-sm" style="background: var(--intent-danger);" @click=${(e) => this._removeFavorite(e, item.id)}>❌ Unpin</button>
+                        <insetu-async-btn 
+                            slot="actions" 
+                            label="❌ Unpin" 
+                            intent="danger" 
+                            .onClick=${(e) => this._removeFavorite(e, item.id)}>
+                        </insetu-async-btn>
                     </insetu-card>
                 `)}
             </div>
@@ -116,30 +175,11 @@ window.ExtensionRegistry.registerExtension('favorites', {
         },
         'zone:file-card-actions': (data) => {
             // Prevent inception: Do not render the Pin button if we are inside the Favorites sub-tab
-            if (localStorage.getItem('insetu_subtab_edit') === 'favorites') return null;
+            const appState = window.inSetu?.stores?.App?.getState();
+            if (appState?.activeSubTabs?.edit === 'favorites') return null;
 
-            // Declaratively inject quick-pin buttons into all system VFS file cards
             if (data.filepath) {
-                return html`
-                    <button slot="actions" class="btn-sm" style="background: var(--intent-warning); margin: 0 5px 0 0;" @click=${async (e) => {
-                        e.stopPropagation();
-                        const isFolder = data.filepath.endsWith('/') || !data.filepath.includes('.');
-                        try {
-                            const res = await window.inSetu.api.workspace('favorites/add', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    path: data.filepath,
-                                    type: isFolder ? 'folder' : 'file',
-                                    name: data.filepath.split('/').pop() || data.filepath
-                                })
-                            });
-                            if (res.ok) alert("Node pinned securely into Favorites matrix!");
-                        } catch (err) {
-                            console.error(err);
-                        }
-                    }}>⭐ Pin</button>
-                `;
+                return html`<insetu-fav-btn slot="actions" .filepath=${data.filepath}></insetu-fav-btn>`;
             }
             return null;
         },
@@ -149,23 +189,17 @@ window.ExtensionRegistry.registerExtension('favorites', {
                     label: 'Pin Current Directory',
                     icon: '⭐',
                     onClick: async () => {
-                        try {
-                            const res = await window.inSetu.api.workspace('favorites/add', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    path: data.currentPath,
-                                    type: 'folder',
-                                    name: data.currentPath.split('/').pop() || data.currentPath
-                                })
-                            });
-                            if (res.ok) {
-                                alert("Directory pinned securely into Favorites matrix!");
-                                FavoritesStore.getState().fetchFavorites();
-                            }
-                        } catch (err) {
-                            console.error(err);
-                        }
+                        const res = await window.inSetu.api.workspace('favorites/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                path: data.currentPath,
+                                type: 'folder',
+                                name: data.currentPath.split('/').pop() || data.currentPath
+                            })
+                        });
+                        if (!res.ok) throw new Error("Failed to pin");
+                        FavoritesStore.getState().fetchFavorites();
                     }
                 });
             }

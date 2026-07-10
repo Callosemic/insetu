@@ -1,32 +1,27 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import { AppStore } from '../store.js';
 import { generateSafeSlug } from '../app.js';
-
-export const IngestStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            ingestModalOpen: false,
-            ingestUrl: '',
-            ingestMethod: 'jina',
-            ingestStatus: null,
-            ingestError: null
-        })),
-        { name: 'IngestStore' }
-    )
-);
+import { createExtensionStore, InSetuElement } from '../sdk.js';
+export const IngestStore = createExtensionStore('Ingest', {
+    ingestModalOpen: false,
+    ingestUrl: '',
+    ingestMethod: 'jina',
+    ingestStatus: null,
+    ingestError: null,
+    activeIngestJobId: null
+});
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Ingest = IngestStore;
 
-export class InSetuExtIngestModals extends LitElement {
+export class InSetuExtIngestModals extends InSetuElement {
     static properties = {
         ingestModalOpen: { type: Boolean },
         ingestUrl: { type: String },
         ingestMethod: { type: String },
         ingestStatus: { type: String },
-        ingestError: { type: String }
+        ingestError: { type: String },
+        activeIngestJobId: { type: String }
     };
     static styles = [sharedStyles];
 
@@ -37,77 +32,86 @@ export class InSetuExtIngestModals extends LitElement {
         this.ingestMethod = 'jina';
         this.ingestStatus = null;
         this.ingestError = null;
+        this.activeIngestJobId = null;
     }
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = IngestStore.subscribe(state => {
+        this.subscribe(IngestStore, state => {
             this.ingestModalOpen = state.ingestModalOpen;
             this.ingestUrl = state.ingestUrl;
             this.ingestMethod = state.ingestMethod;
             this.ingestStatus = state.ingestStatus;
             this.ingestError = state.ingestError;
+            this.activeIngestJobId = state.activeIngestJobId;
         });
+
+        if (window.ExtensionRegistry && window.ExtensionRegistry.registerTick) {
+            window.ExtensionRegistry.registerTick('ingest', 1000, async () => {
+                const { activeIngestJobId } = IngestStore.getState();
+                if (!activeIngestJobId || activeIngestJobId === 'starting') return;
+                try {
+                    const statusRes = await window.inSetu.api.system(`jobs/${activeIngestJobId}`);
+                    if (statusRes.ok) {
+                        const statusData = await statusRes.json();
+                        IngestStore.setState({ ingestStatus: statusData.message || "⏳ Fetching & Converting..." });
+
+                        if (statusData.status === 'completed') {
+                                const fsState = window.inSetu.stores.Fs.getState();
+                                const currentContent = fsState.modals.newFile?.content || '';
+                                const shouldOverwrite = currentContent.trim() !== '' ? confirm("Overwrite existing content with imported markdown?") : false;
+                                const newContent = (shouldOverwrite || currentContent.trim() === '') ? statusData.artifact.markdown : currentContent + '\n\n' + statusData.artifact.markdown;
+                                fsState.setModal('newFile', { content: newContent });
+
+                                if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                                    window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', statusData.artifact);
+                                }
+
+                                const currentFileName = fsState.modals.newFile?.fileName || '';
+                                if (currentFileName.trim() === '') {
+                                    const slug = (() => {
+                                        const titleBase = (statusData.artifact.title && statusData.artifact.title !== 'Imported Content') ? generateSafeSlug(statusData.artifact.title) : '';
+                                        const urlBase = (() => {
+                                            if (titleBase) return titleBase;
+                                            try {
+                                                const urlObj = new URL(statusData.artifact.resolved_url || this.ingestUrl.trim());
+                                                return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+                                            } catch(e) { return ''; }
+                                        })();
+                                        return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
+                                    })();
+                                    fsState.setModal('newFile', { fileName: slug + '.md' });
+                                }
+
+                                IngestStore.setState({ activeIngestJobId: null, ingestStatus: '✅ Success' });
+                                setTimeout(() => IngestStore.setState({ ingestModalOpen: false, ingestStatus: null, ingestUrl: '' }), 1000);
+                        } else if (statusData.status === 'failed') {
+                                IngestStore.setState({ activeIngestJobId: null, ingestStatus: null, ingestError: statusData.message });
+                        }
+                    }
+                } catch (e) {
+                    console.error("Ingest polling error:", e);
+                }
+            });
+        }
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-    }
     async _executeImportUrl() {
         const url = this.ingestUrl.trim();
         if (!url) return alert("Please enter a valid URL.");
 
-        IngestStore.setState({ ingestStatus: 'Fetching and converting...', ingestError: null });
+        IngestStore.setState({ activeIngestJobId: 'starting', ingestStatus: 'Fetching and converting...', ingestError: null });
         try {
-            const res = await window.inSetu.api.workspace('ingest/url', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, method: this.ingestMethod })
-            });
-            const data = await res.json();
-
+            const res = await this.api.post('url', { url, method: this.ingestMethod });
             if (res.ok) {
-                const fsState = window.inSetu.stores.Fs.getState();
-                const currentContent = fsState.modals.newFile?.content || '';
-
-                const shouldOverwrite = currentContent.trim() !== '' 
-                    ? confirm("Overwrite existing content with imported markdown?") 
-                    : false;
-
-                const newContent = (shouldOverwrite || currentContent.trim() === '') 
-                    ? data.markdown 
-                    : currentContent + '\n\n' + data.markdown;
-
-                fsState.setModal('newFile', { content: newContent });
-
-                if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                    window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', data);
-                }
-
-                const currentFileName = fsState.modals.newFile?.fileName || '';
-                if (currentFileName.trim() === '') {
-                    const slug = (() => {
-                        const titleBase = (data.title && data.title !== 'Imported Content') ? generateSafeSlug(data.title) : '';
-                        const urlBase = (() => {
-                            if (titleBase) return titleBase;
-                            try {
-                                const urlObj = new URL(data.resolved_url || url);
-                                return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-                            } catch(e) { return ''; }
-                        })();
-                        return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
-                    })();
-                    fsState.setModal('newFile', { fileName: slug + '.md' });
-                }
-
-                IngestStore.setState({ ingestStatus: '✅ Success' });
-                setTimeout(() => IngestStore.setState({ ingestModalOpen: false, ingestStatus: null, ingestUrl: '' }), 1000);
+                const data = await res.json();
+                IngestStore.setState({ activeIngestJobId: data.job_id });
             } else {
-                IngestStore.setState({ ingestStatus: null, ingestError: data.error || "Failed to import URL." });
+                const err = await res.json();
+                throw new Error(err.error || "Ingestion request failed.");
             }
         } catch (e) {
-            IngestStore.setState({ ingestStatus: null, ingestError: "Network error: " + e.message });
+            IngestStore.setState({ activeIngestJobId: null, ingestError: e.message });
         }
     }
 

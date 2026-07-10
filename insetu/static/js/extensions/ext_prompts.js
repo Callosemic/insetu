@@ -1,7 +1,7 @@
 // ext_prompts.js - Prompt Library Extension
 import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
-import { mdeInstance, InSetuElement } from '../app.js';
+import { InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 export class InSetuExtPrompts extends InSetuElement {
     static properties = {

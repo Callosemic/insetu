@@ -1,4 +1,3 @@
-import { mdeInstance } from '../app.js';
 import { currentModalIsFS } from '../fs.js';
 import { openSelectorModal } from '../ui.js';
 import { AppStore } from '../store.js';
@@ -721,17 +720,17 @@ export class InSetuExtCitationsModals extends LitElement {
             </insetu-modal>
         `;
     }
-
     _insertCitationToEditor(citation) {
         const author = citation.author && citation.author[0] ? citation.author[0].family : 'unknown';
         const year = citation.issued && citation.issued['date-parts'] ? citation.issued['date-parts'][0][0] : 'nd';
         const norm = window.normalizeAccentText || (str => str.toLowerCase());
         const normalizedAuthor = norm(author).replace(/[^a-z0-9]/g, '');
         const baseId = `${normalizedAuthor}${year}`;
-        const mdeWrap = document.querySelector('.EasyMDEContainer');
-        const isMDE = (mdeWrap && mdeWrap.style.display !== 'none' && typeof mdeInstance !== 'undefined');
+        const mdeWrap = document.getElementById('modal-cm6-container');
+        const litEditor = document.getElementById('global-os-editor');
+        const isCM6 = (mdeWrap && window.getComputedStyle(mdeWrap).display !== 'none' && litEditor);
         const textArea = document.getElementById('modal-text');
-        const text = isMDE ? mdeInstance.codemirror.getValue() : (textArea ? textArea.value : '');
+        const text = isCM6 ? litEditor.value : (textArea ? textArea.value : '');
         const backmatterRegex = /\n+---\n+citations:\n([\s\S]*?)\n---$/;
         const match = text.match(backmatterRegex);
 
@@ -758,11 +757,10 @@ export class InSetuExtCitationsModals extends LitElement {
         const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
         const linkText = `[@${finalPrettyId}]`;
 
-        if (isMDE) {
-            const cm = mdeInstance.codemirror;
-            const cursor = cm.getCursor();
-            cm.setValue(updatedText);
-            cm.setCursor(cursor);
+        if (isCM6) {
+            const cursor = litEditor.getCursor();
+            litEditor.value = updatedText;
+            litEditor.setCursor(cursor);
         } else if (textArea) {
             textArea.value = updatedText;
         }

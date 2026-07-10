@@ -1,14 +1,13 @@
 // ext_term.js - Terminal Extension
 import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
-
 export class InSetuExtTerm extends LitElement {
     static properties = {
         termPort: { type: Number }
     };
     static styles = css`
-        :host { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; overflow: hidden; background: var(--console-bg); }
-        iframe { flex: 1; width: 100%; height: 100%; border: none; outline: none; background: var(--console-bg); border-radius: 4px; }
+        :host { display: flex; flex-direction: column; height: 100%; padding: 0; box-sizing: border-box; overflow: hidden; background: #0f172a; }
+        iframe { flex: 1; width: 100%; height: 100%; border: none; outline: none; background: #0f172a; border-radius: 0; }
     `;
     constructor() {
         super();
@@ -26,16 +25,22 @@ export class InSetuExtTerm extends LitElement {
     }
 }
 customElements.define('insetu-ext-term', InSetuExtTerm);
-
 window.ExtensionRegistry.registerExtension('term', {
     name: "Terminal Interface",
     version: "2.0.0",
     layoutSlots: [
         {
             slot: "slots:primary-navigation",
+            id: "ctrl",
+            label: "Ctrl",
+            order: 6
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "ctrl",
             id: "term",
-            label: "Term",
-            order: 6,
+            label: "Terminal",
+            order: 1,
             component: "insetu-ext-term"
         }
     ],
