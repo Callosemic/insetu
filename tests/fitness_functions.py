@@ -187,6 +187,7 @@ def check_javascript_files():
     raw_fetch_pattern = re.compile(r'\bfetch\s*\(')
     legacy_insetu_fetch_pattern = re.compile(r'window\.inSetu\.fetch\s*\(')
     manual_unsub_pattern = re.compile(r'this\._unsub[a-zA-Z0-9_]*\s*=')
+    zustand_create_store_pattern = re.compile(r'\bcreateStore\s*\(')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -277,10 +278,13 @@ def check_javascript_files():
                     # 16. Imperative DOM Creation Ban in Extensions
                     if is_extension and is_lit_component and imperative_dom_create_pattern.search(line):
                         report_violation("IMPERATIVE_DOM_CREATION", filepath, line_num, "document.createElement detected in a LitElement extension. Construct templates declaratively using lit-html.")
-
                     # 17. Manual Store Un-subscription Ban in LitElement Extensions
                     if is_extension and is_lit_component and manual_unsub_pattern.search(line):
                         report_violation("SDK_SUBSCRIPTION_MANDATE", filepath, line_num, "Manual store un-subscription detected. Use this.subscribe() from the InSetuElement SDK.")
+
+                    # 18. Zustand createStore Ban in Extensions
+                    if is_extension and zustand_create_store_pattern.search(line):
+                        report_violation("SDK_STORE_MANDATE", filepath, line_num, "Standard Zustand createStore detected. Use createExtensionStore() from the OS SDK instead.")
 
 if __name__ == "__main__":
     print("============================================================")
