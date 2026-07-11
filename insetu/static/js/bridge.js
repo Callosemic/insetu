@@ -160,9 +160,9 @@ export class InSetuExtBridge extends InSetuElement {
         }
         return false;
     }
-
     _sync(dryRunActive, bypassSandwich = false) {
         if (bypassSandwich) this._globalBypassSandwich = true;
+        this._lastDryRun = dryRunActive;
         const textVal = BridgeStore.getState().payloadText;
         BridgeStore.setState({ viewMode: 'console' });
 
@@ -259,7 +259,7 @@ export class InSetuExtBridge extends InSetuElement {
             const currentVal = BridgeStore.getState().payloadText;
             const updatedVal = currentVal.split("<<<<<<< FILE: " + oldPath).join("<<<<<<< FILE: " + newPath);
             BridgeStore.getState().setPayloadText(updatedVal);
-            this._sync(false, this._globalBypassSandwich);
+            this._sync(this._lastDryRun || false, this._globalBypassSandwich);
         } else if (action === 'view-diff') {
             if (window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob(btn.dataset.b64));
         } else if (action === 'copy-diff') {

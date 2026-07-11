@@ -858,34 +858,33 @@ export const executeSystemCompile = (onProgress = null) => {
                 body: JSON.stringify({})
             });
 
-            const contentType = response.headers.get('Content-Type');
-            if (contentType && contentType.includes('application/json')) {
-                return await response.json();
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-
+            const data = await response.json();
             let result = null;
-            let buffer = '';
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true });
 
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); 
-                for (const line of lines) {
-                    if (!line.trim()) continue;
-                    const data = JSON.parse(line);
-                    if (data.status === 'progress') {
-                        setGlobalStatus(`⏳ ${data.message}`, null);
-                        if (onProgress) onProgress(data.message);
-                    } else {
-                        result = data;
+            if (response.status === 202) {
+                const jobId = data.job_id;
+                while (true) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                    if (!pollRes.ok) throw new Error("Compilation job failed");
+                    const pollData = await pollRes.json();
+                    
+                    if (pollData.status === 'processing' || pollData.status === 'pending') {
+                        const msg = pollData.message || "Compiling...";
+                        setGlobalStatus(`⏳ ${msg}`, null);
+                        if (onProgress) onProgress(msg);
+                    } else if (pollData.status === 'completed') {
+                        result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
+                        break;
+                    } else if (pollData.status === 'failed') {
+                        result = { status: 'error', message: pollData.message, files: [] };
+                        break;
                     }
                 }
+            } else {
+                result = data;
             }
+
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
                 const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
@@ -1070,7 +1069,7 @@ export async function fetchAndCopy(filePath, btnElement) {
 }
 export async function fetchAndDownloadState(filePath, btnElement) {
     const originalText = btnElement.innerText;
-    btnElement.innerText = "Fetching...";
+    btnElement.innerText = "Downloading...";
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
         let fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
@@ -1137,3 +1136,15 @@ window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
 window.simulatePanic = simulatePanic;
 window.resolveEditorMode = resolveEditorMode;
+
+window.openSettingsModal = function() {
+    const menu = document.getElementById('settings-menu');
+    const modal = document.getElementById('settings-modal');
+    if (menu) menu.style.display = 'none';
+    if (modal) modal.style.display = 'block';
+};
+
+window.closeSettingsModal = function() {
+    const modal = document.getElementById('settings-modal');
+    if (modal) modal.style.display = 'none';
+};

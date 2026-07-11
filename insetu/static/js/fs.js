@@ -173,17 +173,21 @@ export async function viewAndCopy(filename) {
         currentModalOriginalText = "";
     }
 }
-
-document.getElementById('modal-text').addEventListener('input', (e) => {
-    if (currentModalIsFS) {
-        const saveBtn = document.getElementById('modal-save-btn');
-        if (e.target.value !== currentModalOriginalText) {
-            saveBtn.style.display = 'block';
-        } else {
-            saveBtn.style.display = 'none';
+document.addEventListener('input', (e) => {
+    if (e.target && (e.target.id === 'modal-text' || e.target.id === 'global-os-editor')) {
+        if (currentModalIsFS) {
+            const saveBtn = document.getElementById('modal-save-btn');
+            if (saveBtn) {
+                if (e.target.value !== currentModalOriginalText) {
+                    saveBtn.style.display = 'block';
+                } else {
+                    saveBtn.style.display = 'none';
+                }
+            }
         }
     }
 });
+
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
 
@@ -374,7 +378,7 @@ async function downloadFromModal() {
     const btn = document.getElementById('modal-dl-btn');
     if (!btn) return;
     const origText = btn.innerText;
-    btn.innerText = '⏳...';
+    btn.innerText = 'Downloading...';
     try {
         if (currentModalIsMemoryOnly) {
             let text = '';
@@ -438,26 +442,18 @@ export function createFileCard(fileInfo, container) {
         browseBtn.className = 'btn-sm';
         browseBtn.style.background = 'var(--intent-neutral)';
         browseBtn.style.margin = '0 5px 0 0';
+        browseBtn.style.order = '99';
         browseBtn.innerText = '📁 Browse';
         browseBtn.slot = 'actions';
         browseBtn.onclick = (e) => { e.stopPropagation(); openBrowseModal(fileInfo.filename); };
         card.appendChild(browseBtn);
     }
-
-    const hookContainer = document.createElement('div');
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        window.inSetu.extensions.Registry.executeUIHook('zone:file-card-actions', {
-            filepath: fileInfo.filename,
-            repoDir: fileInfo.repoDir,
-            isFS: fileInfo.isFS,
-            actionsContainer: hookContainer
-        });
-        Array.from(hookContainer.children).forEach(child => {
-            child.slot = 'actions';
-            child.style.margin = '0 5px 0 0';
-            card.appendChild(child);
-        });
-    }
+    const actionsNode = document.createElement('insetu-file-actions');
+    actionsNode.slot = 'actions';
+    actionsNode.filepath = fileInfo.filename;
+    actionsNode.repoDir = fileInfo.repoDir;
+    actionsNode.isFS = fileInfo.isFS;
+    card.appendChild(actionsNode);
 
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     let dlFetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
@@ -466,17 +462,17 @@ export function createFileCard(fileInfo, container) {
         if (overrideUrl) dlFetchUrl = overrideUrl;
     }
     const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
-
     const dlBtn = document.createElement('button');
     dlBtn.className = 'btn-sm';
     dlBtn.style.background = 'var(--intent-primary)';
     dlBtn.style.margin = '0';
+    dlBtn.style.order = '100';
     dlBtn.innerText = '⬇️ Download';
     dlBtn.slot = 'actions';
     dlBtn.onclick = async (e) => {
         e.stopPropagation();
         const orig = dlBtn.innerText;
-        dlBtn.innerText = '⏳...';
+        dlBtn.innerText = 'Downloading...';
         try {
             const res = await fetch(dlFetchUrl);
             if (!res.ok) throw new Error("Failed to fetch");
@@ -574,7 +570,8 @@ export class InSetuVFSExplorer extends LitElement {
                             basePath=""
                             .files=${this.manifestFiles}
                             .currentPath=${this.globalBrowsePath}
-                            .actions=${[{ id: 'download', label: '⬇️ DL', style: 'primary' }]}
+                            .hidePath=${true}
+                            .actions=${[{ id: 'download', label: '⬇️ Download', style: 'primary', order: 100 }]}
                             @path-changed="${this._handlePathChange}"
                             @action-download="${(e) => fetchAndDownloadState(e.detail.filepath, e.detail.event.target)}">
                         </insetu-file-tree>
@@ -599,11 +596,11 @@ export class InSetuVFSExplorer extends LitElement {
                                         intentColor="var(--intent-success)"
                                         @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
                                         <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
+                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer; order: 100;"
                                             @click=${(e) => {
                                                 e.stopPropagation();
                                                 fetchAndDownloadState(filepath, e.currentTarget);
-                                            }}>⬇️ DL</button>
+                                            }}>⬇️ Download</button>
                                     </insetu-card>
                                 `;
                             })}
@@ -613,9 +610,10 @@ export class InSetuVFSExplorer extends LitElement {
             }
             return html`
                 <div style="display: flex; flex-direction: column; flex: 1;">
-                    <div class="sticky-header" style="flex-shrink: 0;">
-                        <div class="fuzzy-search-wrapper">
+                    <div class="sticky-header" style="flex-shrink: 0; padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${this.globalBrowsePath.length > 0 ? '1px solid var(--border)' : 'none'};">
                             <input type="text" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
+                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
                                 @input=${(e) => {
                                     const val = e.target.value;
                                     window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
@@ -624,8 +622,16 @@ export class InSetuVFSExplorer extends LitElement {
                                 }}>
                             ${q ? html`<button class="fuzzy-search-clear" @click=${() => window.inSetu.stores.Fs.getState().setSearchQuery('')}>Clear</button>` : ''}
                         </div>
+                        ${this.globalBrowsePath.length > 0 ? html`
+                            <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
+                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ globalBrowsePath: this.globalBrowsePath.slice(0, -1) })}>⬆️ Up</button>
+                                <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.globalBrowsePath.join('/')}</span>
+                            </div>
+                        ` : ''}
                     </div>
-                    ${contentUI}
+                    <div style="padding-top: 15px;">
+                        ${contentUI}
+                    </div>
                 </div>
             `;
         }
@@ -1148,10 +1154,30 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
             })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to generate context.");
+        if (!res.ok) throw new Error(data.error || "Failed to queue quick-pack.");
+
+        let filename = data.filename;
+        if (res.status === 202) {
+            const jobId = data.job_id;
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                if (!pollRes.ok) throw new Error("Quick-Pack job failed");
+                const pollData = await pollRes.json();
+
+                if (pollData.status === 'processing' || pollData.status === 'pending') {
+                    setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
+                } else if (pollData.status === 'completed') {
+                    filename = pollData.artifact?.filename;
+                    break;
+                } else if (pollData.status === 'failed') {
+                    throw new Error(pollData.message);
+                }
+            }
+        }
 
         // Open the physical file that was just written to disk natively
-        viewAndCopy(data.filename);
+        viewAndCopy(filename);
         // Silently re-hydrate the manifest state to reactively update the UI without hitting the heavy `/submit` compiler
         const mRes = await window.inSetu.api.workspace(`manifest?t=${Date.now()}`);
         if (mRes.ok) {
@@ -1511,14 +1537,23 @@ export class InSetuVFSModals extends LitElement {
             </insetu-modal>
 <insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} maxWidth="100vw" @modal-closed=${window.closeBrowseModal}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
-                    ${this.browserConfig?.mode !== 'folder' ? html`
-                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
-                            <input type="text" placeholder="Fuzzy find files..." style="flex: 1; min-width: 0; padding: 6px 10px;"
-                                .value=${m.browser?.searchQuery || ''}
-                                @input=${e => FsStore.getState().setModal('browser', { searchQuery: e.target.value })}>
-                        </div>
-                    ` : ''}
-                    <div style="display: flex; flex-direction: column; flex: 1; overflow-y: auto;">
+                    <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                        ${this.browserConfig?.mode !== 'folder' ? html`
+                            <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${this.currentBrowsePath?.length > 0 ? '1px solid var(--border)' : 'none'};">
+                                <input type="text" placeholder="Fuzzy find files..." style="flex: 1; min-width: 0; border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                                    .value=${m.browser?.searchQuery || ''}
+                                    @input=${e => FsStore.getState().setModal('browser', { searchQuery: e.target.value })}>
+                                ${m.browser?.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => FsStore.getState().setModal('browser', { searchQuery: '' })}>Clear</button>` : ''}
+                            </div>
+                        ` : ''}
+                        ${this.currentBrowsePath?.length > 0 ? html`
+                            <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
+                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ currentBrowsePath: this.currentBrowsePath.slice(0, -1) })}>⬆️ Up</button>
+                                <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentBrowsePath.join('/')}</span>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding-top: 15px;">
                         ${m.browser?.searchQuery ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px;">
                                 ${fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).slice(0, 50).map(filepath => {
@@ -1541,6 +1576,7 @@ export class InSetuVFSModals extends LitElement {
                                 basePath=""
                                 .files=${m.browser?.manifest || []}
                                 .currentPath=${this.currentBrowsePath || []}
+                                .hidePath=${true}
                                 .hideFiles=${this.browserConfig?.mode === 'folder'}
                                 @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
                                 @card-clicked=${e => window._handleBrowserCardClick(e.detail)}>

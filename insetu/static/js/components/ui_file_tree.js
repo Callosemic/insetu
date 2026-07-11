@@ -296,6 +296,7 @@ export class InSetuFileTree extends LitElement {
         basePath: { type: String },
         actions: { type: Array },
         hideFiles: { type: Boolean },
+        hidePath: { type: Boolean },
         enableSearch: { type: Boolean },
         searchPlaceholder: { type: String },
         _searchQuery: { type: String }
@@ -310,6 +311,7 @@ constructor() {
         this.actions = [];
         this.currentPath = [];
         this.hideFiles = false;
+        this.hidePath = false;
         this.enableSearch = false;
         this.searchPlaceholder = 'Search...';
         this._searchQuery = '';
@@ -367,19 +369,22 @@ constructor() {
             return a.localeCompare(b);
         });
         return html`
-            ${this.enableSearch ? html`
-                <div class="sticky-header">
-                    <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
-                        <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} @input=${(e) => this._searchQuery = e.target.value}>
-                        ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
-                    </div>
-                </div>
-            ` : ''}
-            ${this.currentPath.length > 0 ?
-html`
-                <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center;">
-                    <button class="btn-sm" style="background: var(--intent-neutral);" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
-                    <span style="font-family: monospace; color: var(--text); opacity: 0.7;">/${this.currentPath.join('/')}</span>
+            ${(this.enableSearch || (this.currentPath.length > 0 && !this.hidePath)) ? html`
+                <div class="sticky-header" style="padding: 0; margin-bottom: 15px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                    ${this.enableSearch ? html`
+                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${(this.currentPath.length > 0 && !this.hidePath) ? '1px solid var(--border)' : 'none'};">
+                            <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} 
+                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                                @input=${(e) => this._searchQuery = e.target.value}>
+                            ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
+                        </div>
+                    ` : ''}
+                    ${(this.currentPath.length > 0 && !this.hidePath) ? html`
+                        <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
+                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
+                            <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
+                        </div>
+                    ` : ''}
                 </div>
             ` : ''}
             <div style="display: flex; flex-direction: column;">
@@ -410,10 +415,10 @@ html`
                             <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
                             ${this.actions.map(act => {
                                 if (act.asyncAction) {
-                                    return html`<insetu-async-btn slot="actions" .label=${act.label} .intent=${act.style || 'primary'} .onClick=${(e) => act.asyncAction(filepath, key, e)}></insetu-async-btn>`;
+                                    return html`<insetu-async-btn slot="actions" style="order: ${act.order || 0};" .label=${act.label} .intent=${act.style || 'primary'} .onClick=${(e) => act.asyncAction(filepath, key, e)}></insetu-async-btn>`;
                                 }
                                 return html`
-                                    <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer;" 
+                                    <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 0};" 
                                         @click=${(e) => this._handleAction(e, act.id, filepath, key)}>
                                         ${act.label}
                                     </button>
@@ -429,6 +434,11 @@ html`
 export class InSetuFileActions extends LitElement {
     static properties = { filepath: { type: String }, repoDir: { type: String }, isFS: { type: Boolean } };
     createRenderRoot() { return this; } // Render in light DOM so slots naturally project into the parent asset card
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.style.display = 'contents';
+    }
 
     render() {
         const templates = [];

@@ -1,5 +1,4 @@
 import { css } from 'lit';
-
 export const sharedStyles = css`
     /* Global Reset for Components */
     * { box-sizing: border-box; }

@@ -24,9 +24,23 @@ export class InSetuElement extends LitElement {
         this.workspaceId = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
         this._storeUnsubs = [];
     }
-
     get extName() {
-        return this.tagName.toLowerCase().replace('insetu-ext-', '');
+        // 1. Explicit static class definition (Strict OOP)
+        if (this.constructor.extensionName) return this.constructor.extensionName;
+
+        // 2. Contextual DOM Inheritance (Inherit from parent extension view)
+        const parentExt = this.closest('[data-ext]');
+        if (parentExt && parentExt.dataset.ext) return parentExt.dataset.ext;
+
+        // 3. Fallback to tag name inference (Legacy support)
+        const inferred = this.tagName.toLowerCase().replace('insetu-ext-', '');
+
+        // Throw a warning so the developer knows to fix their component
+        if (inferred && !this.tagName.toLowerCase().startsWith('insetu-ext-')) {
+            console.warn(`[SDK Warning] Component <${this.tagName.toLowerCase()}> is relying on implicit tag-name routing and may fail. Please define 'static extensionName = "${inferred}";' on the class.`);
+        }
+
+        return inferred;
     }
 
     get api() {

@@ -165,7 +165,7 @@ font-size: 1.05rem; word-break: break-all; flex: 1; min-width: 0; }
 .file-card:hover .cit-card-actions, .file-card.show-actions .cit-card-actions {
     opacity: 1; pointer-events: auto; transform: translateX(0);
 }
-.folder-label { font-weight: bold; font-family: monospace; color: #facc15; font-size: 1.1rem; }
+.folder-label { font-weight: bold; font-family: monospace; color: var(--intent-warning); font-size: 1.1rem; }
 .task-bug { color: #ef4444 !important; font-size: 0.95rem; }
 .task-todo { color: #10b981 !important; font-size: 0.95rem; }
 .task-queue { color: #a855f7 !important; font-size: 0.95rem; }
@@ -174,9 +174,26 @@ font-size: 1.05rem; word-break: break-all; flex: 1; min-width: 0; }
 .category-heading { margin-top: 25px; margin-bottom: 15px; font-size: 1.2rem; font-weight: bold; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 5px;
 }
 .btn-sm { margin-top: 0; padding: 8px 14px; font-size: 14px; }
+/* 1. Automatically kill the background body scrollbar when any modal/editor is open */
+body:has(.fullscreen-modal[style*="display: block"]),
+body:has(.fullscreen-modal[style*="display: flex"]),
+body:has(#file-modal[style*="display: block"]) { 
+    overflow: hidden; 
+}
+
 /* iOS Modal Fixes */
 .fullscreen-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100dvh; background: rgba(0,0,0,0.85);
 padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); box-sizing: border-box; z-index: 1000; }
+
+/* Force ALL other modals to act as native edge-to-edge parallel views */
+.fullscreen-modal { background: var(--bg) !important; padding: 0 !important; }
+.fullscreen-modal .modal-content, .fullscreen-modal .modal-panel, #file-modal > div { border: none !important; border-radius: 0 !important; max-width: 100vw !important; max-height: 100dvh !important; height: 100dvh !important; box-shadow: none !important; background: var(--bg) !important; }
+.fullscreen-modal .modal-header, .fullscreen-modal .modal-footer { background: var(--input-bg) !important; }
+
+/* Force CodeMirror 6 to have no borders and fit full-screen */
+#file-modal .cm-editor { border: none !important; height: 100%; background: var(--bg) !important; color: var(--text) !important; }
+#file-modal .cm-scroller { overflow: auto !important; }
+#file-modal .cm-gutters { background-color: var(--input-bg) !important; border-right: 1px solid var(--border) !important; color: var(--text-muted) !important; }
 /* Dynamic UI Factory & Legacy Modals */
 .dynamic-modal { display: flex !important; align-items: center; justify-content: center; flex-direction: column; }
 .modal-panel, .modal-content { background: var(--pane-bg); border: 1px solid var(--border); border-radius: 8px; width: 100%; max-width: 800px; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 0; margin: 0 auto; box-sizing: border-box; }
@@ -219,10 +236,10 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 /* Kanban Board Layout Classes */
 .board-columns { display: flex; gap: 15px; }
 /* Force Active columns to render before Open columns via Flexbox ordering */
-.board-columns > div:has(#todos-active-list), .board-columns > div:has(#bugs-active-list) { order: 1; }
-.board-columns > div:has(#todos-open-list), .board-columns > div:has(#bugs-open-list), .board-columns > div:has(#queue-open-list) { order: 2; }
-.board-columns > div:has(#todos-closed-list), .board-columns > div:has(#bugs-closed-list), .board-columns > div:has(#queue-closed-list) { order: 3; }
-.board-columns > div:has(#log-list) { order: 4; }
+.board-columns > div:has([id*="active"]) { order: -1; }
+.board-columns > div:has([id*="open"]), .board-columns > div:has([id*="queue"]) { order: 0; }
+.board-columns > div:has([id*="closed"]) { order: 1; }
+.board-columns > div:has([id*="log"]) { order: 2; }
 .tasks-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
 .tasks-controls { display: flex; gap: 10px; }
 @media (max-width: 1024px), (max-aspect-ratio: 1/1) {

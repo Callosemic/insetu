@@ -235,9 +235,10 @@ def index():
     extensions = cfg.get("extensions", [])
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
 import threading
-import queue
 import json
 from flask import Response
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
+
 _COMPILER_LOCKS = {}
 _COMPILER_GLOBAL_LOCK = threading.Lock()
 
@@ -246,6 +247,49 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.Lock()
         return _COMPILER_LOCKS[wid]
+
+def _background_compile(job_id, workspace_id, **kwargs):
+    ws_lock = get_compiler_lock(workspace_id)
+    try:
+        update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
+        try:
+            from insetu.hooks import hooks
+            hooks.emit('pre_compile', workspace_id=workspace_id)
+        except Exception as e:
+            print(f"Warning: Pre-compile hooks failed: {str(e)}")
+
+        update_immediate_job_status(job_id, 'processing', "Mapping repositories (Cartographer)...", workspace_id=workspace_id)
+        try:
+            from insetu.cartographer import map_repositories
+            map_repositories(workspace_id)
+        except Exception as e:
+            print(f"Warning: Cartographer failed: {str(e)}")
+
+        update_immediate_job_status(job_id, 'processing', "Compiling context payloads...", workspace_id=workspace_id)
+        import insetu.engine_gather as engine_gather
+        engine_gather.generate_context_file(workspace_id)
+        
+        from insetu.utils_core import get_gather_paths, load_json_file
+        from pathlib import Path
+        import os
+        paths = get_gather_paths(workspace_id)
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        manifest_data = load_json_file(manifest_path, {})
+        manifest_keys = list(manifest_data.keys())
+
+        if not manifest_keys and os.path.exists(paths["contexts_dir"]):
+            manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
+
+        update_immediate_job_status(job_id, 'completed', "Context successfully compiled!", artifact_json=json.dumps({"files": sorted(manifest_keys)}), workspace_id=workspace_id)
+    except Exception as e:
+        import traceback
+        print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
+        update_immediate_job_status(job_id, 'failed', f"Compilation Error: {str(e)}", workspace_id=workspace_id)
+    finally:
+        ws_lock.release()
+
+register_callback("gather", "compile_contexts", _background_compile)
+
 @app.route('/submit', methods=['POST'])
 def submit():
     from insetu.utils_core import sniff_tenant_id
@@ -257,53 +301,12 @@ def submit():
     if not ws_lock.acquire(blocking=False):
         existing_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')] if os.path.exists(paths["contexts_dir"]) else []
         return jsonify({"status": "success", "message": "Compilation locked. Serving cached context.", "files": sorted(existing_files)})
-    def generate():
-        q = queue.Queue()
-
-        def compile_worker(wid):
-            try:
-                q.put({"status": "progress", "message": "Running pre-compile hooks..."})
-                try:
-                    from insetu.hooks import hooks
-                    hooks.emit('pre_compile', workspace_id=wid)
-                except Exception as e:
-                    print(f"Warning: Pre-compile hooks failed: {str(e)}")
-
-                q.put({"status": "progress", "message": "Mapping repositories (Cartographer)..."})
-
-                try:
-                    from insetu.cartographer import map_repositories
-                    map_repositories(wid)
-                except Exception as e:
-                    print(f"Warning: Cartographer failed: {str(e)}")
-                q.put({"status": "progress", "message": "Compiling context payloads..."})
-                engine_gather.generate_context_file(wid)
-                manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-
-                from insetu.utils_core import load_json_file
-                manifest_data = load_json_file(manifest_path, {})
-                manifest_keys = list(manifest_data.keys())
-
-                if not manifest_keys and os.path.exists(paths["contexts_dir"]):
-                    manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
-
-                q.put({"status": "success", "message": "Context successfully compiled!", "files": sorted(manifest_keys)})
-            except Exception as e:
-                import traceback
-                print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
-                q.put({"status": "error", "message": f"Compilation Error: {str(e)}", "files": []})
-            finally:
-                q.put(None) # End of stream
-                ws_lock.release()
-        threading.Thread(target=compile_worker, args=(workspace_id,), daemon=True).start()
-
-        while True:
-            msg = q.get()
-            if msg is None:
-                break
-            yield json.dumps(msg) + "\n"
-
-    return Response(generate(), mimetype='application/x-ndjson')
+    
+    import uuid
+    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "gather", "compile_contexts", "{}", workspace_id=workspace_id)
+    
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @app.route('/api/<workspace_id>/manifest', methods=['GET'])
 def api_manifest(workspace_id):
     from insetu.utils_core import get_gather_paths

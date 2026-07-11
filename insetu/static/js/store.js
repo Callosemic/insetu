@@ -117,7 +117,9 @@ window.inSetu.extensions.Registry = {
                         document.body.appendChild(container);
                     }
                     if (!container.querySelector(slotDef.component)) {
-                        container.appendChild(document.createElement(slotDef.component));
+                        const el = document.createElement(slotDef.component);
+                        el.dataset.ext = extName;
+                        container.appendChild(el);
                     }
                 }
             });
@@ -214,6 +216,7 @@ window.inSetu.extensions.Registry = {
             content = document.createElement('div');
             content.id = 'tab-' + id;
             content.className = 'tab-content';
+            if (extName) content.dataset.ext = extName;
             content.innerHTML = `
                 <div class="sub-tabs-bar">
                     <div class="sub-tabs"></div>
@@ -257,13 +260,15 @@ window.inSetu.extensions.Registry = {
 
         const screen = parentTab.querySelector('.screen');
         if (!screen) return null;
-        
         let subContent = document.getElementById('sub-' + id);
         if (!subContent) {
             subContent = document.createElement('div');
             subContent.id = 'sub-' + id;
             subContent.className = 'sub-tab-content';
+            if (extName) subContent.dataset.ext = extName;
             screen.appendChild(subContent);
+        } else if (extName && !subContent.dataset.ext) {
+            subContent.dataset.ext = extName;
         }
         if (componentTag && !subContent.querySelector(componentTag)) {
             subContent.innerHTML = `<${componentTag}></${componentTag}>`;

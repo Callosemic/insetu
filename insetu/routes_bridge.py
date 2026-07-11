@@ -29,12 +29,9 @@ def bridge_sync(ctx):
     submit_immediate_job(job_id, "bridge", "sync_task", args_json, ctx.workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-
 @bridge_bp.route('fetch', methods=['GET'])
 def bridge_fetch(ctx):
-    resolved_path = ctx.resolve_path(ctx.req.args.get('file', ''))
-    if resolved_path and os.path.exists(resolved_path):
-        with open(resolved_path, 'r', encoding='utf-8') as f: 
-            return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    content = ctx.vfs.read(ctx.req.args.get('file', ''))
+    if content is not None:
+        return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404

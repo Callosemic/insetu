@@ -46,10 +46,6 @@ constructor() {
             alert("❌ Network or syntax error compiling files. Check console for details.");
         } finally {
             this.loading = false;
-            if (window.updateRefreshText) {
-                window.lastRefreshed = new Date();
-                window.updateRefreshText();
-            }
         }
     }
 
@@ -108,14 +104,15 @@ constructor() {
             return a.localeCompare(b);
         });
         return html`
-            <div class="sticky-header" style="display: flex; align-items: center; gap: 10px;">
-                <div class="fuzzy-search-wrapper" style="margin-bottom: 0; flex: 1;">
-                    <input type="text" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
+                    <input type="text" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} 
+                        style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                        @input=${(e) => this.searchQuery = e.target.value}>
                     ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
                 </div>
-                <span id="refresh-time" style="font-size: 0.8rem; color: var(--text-muted); font-style: italic; white-space: nowrap;"></span>
             </div>
-            ${this.loading ? html`<div class="spinner" style="display:block;">${this.loadingMessage}</div>` : ''}
+            ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px;">${this.loadingMessage}</div>` : ''}
 
             <div style="display: ${this.loading ? 'none' : 'block'};">
                 ${sortedCats.map(catName => html`

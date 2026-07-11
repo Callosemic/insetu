@@ -367,13 +367,14 @@ def generate_context_file(workspace_id=None):
     w_conn.commit()
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
     from insetu.context import VFSTransaction
+    from insetu.utils_core import resolve_workspace_path
     vfs = VFSTransaction(workspace_id)
-
-    for f in vfs.walk(paths["contexts_dir"]):
-        f_path = Path(paths["contexts_dir"]).joinpath(f).as_posix()
+    for ws_rel_path in vfs.walk(paths["contexts_dir"]):
+        f_path = resolve_workspace_path(ws_rel_path, workspace_id)
         if f_path not in active_ephemerals:
             try:
-                os.remove(f_path)
+                from insetu.routes_fs import execute_vfs_delete
+                execute_vfs_delete(workspace_id, ws_rel_path)
             except Exception:
                 pass
 
@@ -413,104 +414,131 @@ def generate_context_file(workspace_id=None):
 
     # Block until the manifest and workflows are flushed so the UI can fetch them instantly
     _VFS_WRITE_QUEUE.join()
+from insetu.workers import update_immediate_job_status, register_callback, submit_immediate_job
+
+def _background_quick_pack(job_id, workspace_id, **kwargs):
+    try:
+        target_dir = kwargs.get('target_dir', '').strip()
+        recursive = kwargs.get('recursive', False)
+        specific_files = kwargs.get('specific_files', None)
+
+        update_immediate_job_status(job_id, 'processing', "Sweeping files for Quick-Pack...", workspace_id=workspace_id)
+
+        from insetu.utils_core import get_omniscient_workspace_files, get_workspace_physics
+        from insetu.context import VFSTransaction
+        repo = target_dir.split('/')[0]
+
+        all_files = get_omniscient_workspace_files(workspace_id, [repo])
+        matched_files = []
+        target_prefix = target_dir + '/' if target_dir else ''
+
+        for filename, rel_path in all_files:
+            if not rel_path.startswith(target_prefix) and target_dir != repo: 
+                continue
+            if specific_files is not None:
+                if rel_path in specific_files:
+                    matched_files.append(rel_path)
+                continue
+            if not recursive:
+                target_depth = target_dir.count('/')
+                file_depth = rel_path.count('/')
+                if file_depth > target_depth + (1 if target_dir else 0):
+                    continue
+            matched_files.append(rel_path)
+
+        if not matched_files:
+            update_immediate_job_status(job_id, 'failed', "No valid tracked files found in the specified path.", workspace_id=workspace_id)
+            return
+
+        update_immediate_job_status(job_id, 'processing', f"Packing {len(matched_files)} files...", workspace_id=workspace_id)
+
+        _, ws_root, _ = get_workspace_physics(workspace_id)
+        out_lines = []
+        out_lines.append("="*60)
+        out_lines.append(f"INSETU AD-HOC CONTEXT PAYLOAD ({target_dir})")
+        out_lines.append("="*60)
+        out_lines.append("")
+        out_lines.append(generate_ascii_tree(matched_files))
+        out_lines.append("\n")
+
+        with VFSTransaction(workspace_id) as vfs:
+            for rel_path in sorted(matched_files):
+                try:
+                    content = vfs.read(rel_path)
+                    if content is not None:
+                        out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n{content}\n\n")
+                    else:
+                        out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: Not found]\n\n")
+                except Exception as e:
+                    out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
+
+            import time
+            from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
+            safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
+            filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
+            paths = get_gather_paths(workspace_id)
+            out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
+
+            vfs.save(out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
+
+        from insetu.routes_fs import _VFS_WRITE_QUEUE
+        _VFS_WRITE_QUEUE.join()
+
+        from insetu.workers import register_ephemeral_artifact
+        register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
+
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        manifest = load_json_file(manifest_path, {})
+        size_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+        manifest[filename] = {
+            "files": [f"data/contexts/{filename}"],
+            "meta": {"title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)", "size_bytes": size_bytes}
+        }
+        save_json_file(manifest_path, manifest, workspace_id)
+
+        update_immediate_job_status(job_id, 'completed', "Quick-Pack generated successfully.", artifact_json=json.dumps({"filename": filename}), workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Error generating Quick-Pack: {str(e)}", workspace_id=workspace_id)
+
+register_callback("gather", "quick_pack_task", _background_quick_pack)
+
 @gather_bp.route('quick-pack', methods=['POST'])
 def api_gather_quick_pack(ctx):
     """Stateless generator for ephemeral, ad-hoc context payloads without disk pollution."""
     data = ctx.req.json or {}
     target_dir = data.get('target_dir', '').strip()
-    recursive = data.get('recursive', False)
-    specific_files = data.get('specific_files', None)
 
     if not target_dir:
         return jsonify({"error": "Target directory required."}), 400
 
-    from insetu.utils_core import get_omniscient_workspace_files, get_workspace_physics
-    repo = target_dir.split('/')[0]
+    import uuid
+    job_id = f"qp_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "gather", "quick_pack_task", json.dumps(data), workspace_id=ctx.workspace_id)
 
-    # SSOT Cartography: Pull exclusively from allowed files, protecting .git and node_modules
-    all_files = get_omniscient_workspace_files(ctx.workspace_id, [repo])
-
-    matched_files = []
-    target_prefix = target_dir + '/' if target_dir else ''
-
-    for filename, rel_path in all_files:
-        if not rel_path.startswith(target_prefix) and target_dir != repo: 
-            continue
-
-        if specific_files is not None:
-            if rel_path in specific_files:
-                matched_files.append(rel_path)
-            continue
-
-        if not recursive:
-            # Enforce 1-level depth by counting spatial slashes relative to the target
-            target_depth = target_dir.count('/')
-            file_depth = rel_path.count('/')
-            if file_depth > target_depth + (1 if target_dir else 0):
-                continue
-
-        matched_files.append(rel_path)
-    if not matched_files:
-        return jsonify({"error": "No valid tracked files found in the specified path."}), 404
-
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
-    out_lines = []
-    out_lines.append("="*60)
-    out_lines.append(f"INSETU AD-HOC CONTEXT PAYLOAD ({target_dir})")
-    out_lines.append("="*60)
-    out_lines.append("")
-
-    out_lines.append(generate_ascii_tree(matched_files))
-    out_lines.append("\n")
-    for rel_path in sorted(matched_files):
-        abs_path = Path(ws_root).joinpath(rel_path).as_posix()
-        try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n{content}\n\n")
-        except Exception as e:
-            out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
-    import time
-    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
-    safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
-    filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
-    paths = get_gather_paths(ctx.workspace_id)
-    out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
-
-    from insetu.routes_fs import execute_vfs_save
-    execute_vfs_save(ctx.workspace_id, out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
-
-    # Register with the Ephemeral Ledger (24h TTL)
-    from insetu.workers import register_ephemeral_artifact
-    register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
-    # Eagerly inject into the manifest using SSOT caching functions
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest = load_json_file(manifest_path, {})
-    size_bytes = len("\n".join(out_lines).encode('utf-8'))
-    manifest[filename] = {
-        "files": [f"data/contexts/{filename}"],
-        "meta": {"title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)", "size_bytes": size_bytes}
-    }
-    save_json_file(manifest_path, manifest, ctx.workspace_id)
-
-    return jsonify({"status": "success", "filename": filename})
-
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @gather_bp.route('quick-pack/clear', methods=['POST'])
 def api_gather_quick_pack_clear(ctx):
     import os
     from insetu.db import get_connection
-    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
+    from insetu.utils_core import load_json_file, save_json_file
 
     conn = get_connection("workers", workspace_id=ctx.workspace_id)
     cursor = conn.execute("SELECT id, filepath FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
 
     count = 0
     ephemeral_basenames = []
+    from insetu.routes_fs import execute_vfs_delete
+    from insetu.utils_core import get_workspace_physics
+    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
 
     for row in cursor.fetchall():
         try:
             if os.path.exists(row['filepath']):
-                os.remove(row['filepath'])
+                try:
+                    rel_path = os.path.relpath(row['filepath'], ws_root).replace('\\', '/')
+                except ValueError:
+                    rel_path = row['filepath']
+                execute_vfs_delete(ctx.workspace_id, rel_path)
             ephemeral_basenames.append(os.path.basename(row['filepath']))
             conn.execute("DELETE FROM ephemeral_artifacts WHERE id=?", (row['id'],))
             count += 1
@@ -518,8 +546,7 @@ def api_gather_quick_pack_clear(ctx):
             pass
     conn.commit()
 
-    paths = get_gather_paths(ctx.workspace_id)
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+    manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest = load_json_file(manifest_path, {})
     keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
     if keys_to_remove:
