@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { InSetuElement } from './sdk.js';
+import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
 import {
     viewSourceFile,
@@ -7,63 +7,49 @@ import {
     fetchAndDownloadState
 } from './app.js';
 import { AppStore } from './store.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
-export const BridgeStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            payloadText: '',
-            detectedFiles: [],
-            activeFiles: new Set(),
-            activeBridgeJobId: null,
-            viewMode: 'input',
-            consoleOutput: 'Ready...',
+export const BridgeStore = createExtensionStore('Bridge', {
+    payloadText: '',
+    detectedFiles: [],
+    activeFiles: new Set(),
+    activeBridgeJobId: null,
+    viewMode: 'input',
+    consoleOutput: 'Ready...',
 
-            setPayloadText: (text) => {
-                const val = text.replace(/\u00A0/g, ' ');
-                const regex = /^<<<<<<< FILE:\s*(.+)$/gm;
-                let match;
-                const files = new Set();
-                while ((match = regex.exec(val)) !== null) {
-                    files.add(match[1].trim());
-                }
-                const fileArray = Array.from(files);
-                set({ 
-                    payloadText: val, 
-                    detectedFiles: fileArray,
-                    activeFiles: new Set(fileArray)
-                });
-            },
-            toggleFileSelection: (file) => set((state) => {
-                const updated = new Set(state.activeFiles);
-                if (updated.has(file)) updated.delete(file);
-                else updated.add(file);
-                return { activeFiles: updated };
-            }),
-            clearPayload: () => set({ 
-                payloadText: '', 
-                detectedFiles: [], 
-                activeFiles: new Set(), 
-                activeBridgeJobId: null
-            }),
-            resetState: () => set({
-                payloadText: '', 
-                detectedFiles: [], 
-                activeFiles: new Set(), 
-                activeBridgeJobId: null,
-                viewMode: 'input',
-                consoleOutput: 'Ready...'
-            }),
-            setViewMode: (mode) => set({ viewMode: mode }),
-            setConsoleOutput: (out) => set({ consoleOutput: out })
-        })),
-        { name: 'BridgeStore' }
-    )
-);
+    setPayloadText: (text) => {
+        const val = text.replace(/\u00A0/g, ' ');
+        const regex = /^<<<<<<< FILE:\s*(.+)$/gm;
+        let match;
+        const files = new Set();
+        while ((match = regex.exec(val)) !== null) {
+            files.add(match[1].trim());
+        }
+        const fileArray = Array.from(files);
+        BridgeStore.setState({ 
+            payloadText: val, 
+            detectedFiles: fileArray,
+            activeFiles: new Set(fileArray)
+        });
+    },
+    toggleFileSelection: (file) => {
+        const state = BridgeStore.getState();
+        const updated = new Set(state.activeFiles);
+        if (updated.has(file)) updated.delete(file);
+        else updated.add(file);
+        BridgeStore.setState({ activeFiles: updated });
+    },
+    clearPayload: () => BridgeStore.setState({ 
+        payloadText: '', 
+        detectedFiles: [], 
+        activeFiles: new Set(), 
+        activeBridgeJobId: null
+    }),
+    setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
+    setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out })
+});
 window.inSetu.stores.Bridge = BridgeStore;
 export class InSetuExtBridge extends InSetuElement {
     static properties = {
@@ -87,7 +73,6 @@ export class InSetuExtBridge extends InSetuElement {
             #target-files:empty { display: none; }
         `
     ];
-
     constructor() {
         super();
         this.payloadText = '';
@@ -100,6 +85,14 @@ export class InSetuExtBridge extends InSetuElement {
         this._fileVerificationCache = {};
         this._globalBypassSandwich = false;
     }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        this._fileVerificationCache = {};
+        if (this.detectedFiles && this.detectedFiles.length > 0) {
+            this._verifyFiles(this.detectedFiles);
+        }
+    }
+
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(BridgeStore, (state) => {
@@ -128,11 +121,6 @@ export class InSetuExtBridge extends InSetuElement {
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
 
         this._verifyFiles(this.detectedFiles);
-
-        // Bind internal metronome polling loop
-        if (window.inSetu?.extensions?.Registry?.registerTick) {
-            window.inSetu.extensions.Registry.registerTick('bridge', 250, this._pollStatus.bind(this));
-        }
     }
 
     _verifyFiles(files) {
@@ -160,7 +148,7 @@ export class InSetuExtBridge extends InSetuElement {
         }
         return false;
     }
-    _sync(dryRunActive, bypassSandwich = false) {
+    async _sync(dryRunActive, bypassSandwich = false) {
         if (bypassSandwich) this._globalBypassSandwich = true;
         this._lastDryRun = dryRunActive;
         const textVal = BridgeStore.getState().payloadText;
@@ -175,76 +163,64 @@ export class InSetuExtBridge extends InSetuElement {
         const activeFiles = Array.from(BridgeStore.getState().activeFiles);
         BridgeStore.setState({ consoleOutput: "Dispatching transaction to the Bridge..." });
 
-        this.api.post('sync', {
-            text: textVal,
-            active_files: activeFiles,
-            dry_run: dryRunActive,
-            pinned_repos: Array.from(AppStore.getState().pinnedRepos)
-        })
-        .then(async res => {
+        try {
+            const res = await this.api.post('sync', {
+                text: textVal,
+                active_files: activeFiles,
+                dry_run: dryRunActive,
+                pinned_repos: Array.from(AppStore.getState().pinnedRepos)
+            });
+
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.error || await res.text());
             }
-            return res.json();
-        })
-        .then(data => {
+            const data = await res.json();
             BridgeStore.setState({ activeBridgeJobId: data.job_id, consoleOutput: "Transaction accepted. Processing matrix off-thread..." });
-        }).catch(err => {
-            BridgeStore.setState({ consoleOutput: `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>` });
-        });
-    }
-    async _pollStatus() {
-        const { activeBridgeJobId } = BridgeStore.getState();
-        if (!activeBridgeJobId) return;
 
-        try {
-            const res = await window.inSetu.api.system(`jobs/${activeBridgeJobId}`);
-            if (!res.ok) {
-                if (res.status === 404) {
-                    BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `<span style="color: var(--intent-danger); font-weight: bold;">[!] Job not found (404). Polling terminated.</span>` });
-                }
-                return;
-            }
-            const statusData = await res.json();
+            this.api.pollJob(data.job_id, {
+                interval: 250,
+                onProgress: (msg) => BridgeStore.setState({ consoleOutput: msg }),
+                onComplete: (statusData) => {
+                    BridgeStore.setState({ activeBridgeJobId: null });
+                    const rawData = statusData.message || "";
+                    let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-            if (statusData.status === 'processing' || statusData.status === 'pending') {
-                BridgeStore.setState({ consoleOutput: statusData.message || "Processing..." });
-            } else if (statusData.status === 'completed' || statusData.status === 'failed') {
-                BridgeStore.setState({ activeBridgeJobId: null });
-                const rawData = statusData.message || "";
-                let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
+                        const safeP1 = p1.trim().replace(/\\/g, '\\\\');
+                        const safeP2 = p2.trim().replace(/\\/g, '\\\\');
+                        if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
+                        return `<br><button type="button" data-action="update-path" data-old="${safeP1}" data-new="${safeP2}" class="btn-sm" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
+                    });
 
-                safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
-                    const safeP1 = p1.trim().replace(/\\/g, '\\\\');
-                    const safeP2 = p2.trim().replace(/\\/g, '\\\\');
-                    if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
-                    return `<br><button type="button" data-action="update-path" data-old="${safeP1}" data-new="${safeP2}" class="btn-sm" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
-                });
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
+                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
+                            <button type="button" data-action="view-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
+                            <button type="button" data-action="copy-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
+                        </div>`;
+                    });
 
-                safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
-                    return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                        <button type="button" data-action="view-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
-                        <button type="button" data-action="copy-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
+                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
+                        const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
+                        <button type="button" data-action="copy-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
+                        <button type="button" data-action="download-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
                     </div>`;
-                });
+                    });
 
-                safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
-                    const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                    return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                    <button type="button" data-action="copy-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
-                    <button type="button" data-action="download-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
-                </div>`;
-                });
+                    BridgeStore.setState({ consoleOutput: safeData });
 
-                BridgeStore.setState({ consoleOutput: safeData });
-
-                if (statusData.status === 'completed' && !rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
-                    BridgeStore.getState().clearPayload();
+                    if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
+                        BridgeStore.getState().clearPayload();
+                    }
+                },
+                onError: (err) => {
+                    BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `<span style="color: var(--intent-danger); font-weight: bold;">[!] ${err.message}</span>` });
                 }
-            }
-        } catch(e) {
-            console.error("Bridge polling error:", e);
+            });
+
+        } catch (err) {
+            BridgeStore.setState({ consoleOutput: `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>` });
         }
     }
 
@@ -289,8 +265,8 @@ export class InSetuExtBridge extends InSetuElement {
                         @input=${(e) => { BridgeStore.getState().setConsoleOutput('Ready...');
                         BridgeStore.getState().setPayloadText(e.target.value); }}></textarea>
                     <div style="display: flex; gap: 10px; margin-bottom: 15px; justify-content: flex-end;">
-                        <button @click=${() => this._sync(true)} class="btn-sm" style="background: #d97706;">🧪 Dry Run</button>
-                        <button @click=${() => this._sync(false)} class="btn-sm" style="background: #10b981;">⚡ Execute Patch</button>
+                        <insetu-async-btn label="🧪 Dry Run" intent="warning" .onClick=${() => this._sync(true)}></insetu-async-btn>
+                        <insetu-async-btn label="⚡ Execute Patch" intent="success" .onClick=${() => this._sync(false)}></insetu-async-btn>
                     </div>
 
                     <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 15px; flex-wrap: wrap;">

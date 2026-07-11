@@ -5,7 +5,7 @@ import datetime
 import subprocess
 import shutil
 from flask import jsonify
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, get_gather_paths
+from insetu.utils_core import get_valid_workspace_files, get_workspace_physics
 from insetu.sdk import InSetuExtension
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 gather_bp = InSetuExtension('gather', __name__, core=True)
@@ -17,14 +17,16 @@ from insetu.hooks import hooks
 def _surgically_update_manifest(workspace_id=None, files=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files: return
-    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file, load_config, get_safe_repo_id, get_valid_workspace_files, resolve_workspace_path
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id, get_valid_workspace_files
     from pathlib import Path
     import os
 
-    paths = get_gather_paths(workspace_id)
+    ctx = ExtensionContext('gather', workspace_id)
+    paths = ctx.paths
+    cfg = ctx.config
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest = load_json_file(manifest_path, {})
-    cfg = load_config(workspace_id)
 
     affected_repos = set()
     for f in files:
@@ -43,7 +45,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, **kwargs):
         if physical_path:
             repo_path = os.path.abspath(os.path.expanduser(physical_path))
         else:
-            repo_path = resolve_workspace_path(repo_dir, workspace_id)
+            repo_path = ctx.resolve_path(repo_dir)
 
         if not os.path.exists(repo_path): continue
 
@@ -194,23 +196,23 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
                 content_lines.append(f"\n\n{'='*60}\n>>>NEW FILE :: {repo_dir}/{filepath} | {display_domain}\n{'='*60}\n\n{content}")
         except Exception as e: print(f"Skipping {filepath}: {e}")
     vfs.save(output_path, "".join(content_lines), data={"is_absolute_artifact": True})
-
 def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buckets=None):
-    from insetu.utils_core import get_valid_workspace_files, get_safe_repo_id, resolve_workspace_path
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_valid_workspace_files, get_safe_repo_id
 
+    ctx = ExtensionContext('gather', workspace_id)
     safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
     physical_path = config.get("physical_path")
 
     if physical_path:
         repo_path = os.path.abspath(os.path.expanduser(physical_path))
     else:
-        repo_path = resolve_workspace_path(config["repo_dir"], workspace_id)
+        repo_path = ctx.resolve_path(config["repo_dir"])
 
     if not os.path.exists(repo_path): return False
 
     final_list = get_valid_workspace_files(repo_path, config, workspace_id)
     if not final_list: return False
-
     archive_type = config.get("archive_type", "repo")
     if archive_type == "media-vault":
         if touched_buckets is None or f"{config['repo_dir']}_vault.json" in touched_buckets:
@@ -219,8 +221,6 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                 "files": [f"{config['repo_dir']}/{f}" for f in final_list],
                 "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets.")}
             }
-        return True
-    elif archive_type == "prompt-library":
         return True
 
     dirty = False
@@ -348,10 +348,10 @@ def _surgically_update_manifest(workspace_id=None, files=None, **kwargs):
                 manifest[f_name]["meta"]["size_bytes"] = os.path.getsize(f_path)
 
         save_json_file(manifest_path, manifest, workspace_id)
-
 def generate_context_file(workspace_id=None):
-    from insetu.utils_core import load_config, get_gather_paths
-    paths = get_gather_paths(workspace_id)
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('gather', workspace_id)
+    paths = ctx.paths
     # Pre-flight purge: destroy all stale contexts to prevent ghost files (excluding active ephemerals)
     from insetu.db import get_connection
     w_conn = get_connection("workers", workspace_id=workspace_id)
@@ -367,18 +367,16 @@ def generate_context_file(workspace_id=None):
     w_conn.commit()
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
     from insetu.context import VFSTransaction
-    from insetu.utils_core import resolve_workspace_path
     vfs = VFSTransaction(workspace_id)
     for ws_rel_path in vfs.walk(paths["contexts_dir"]):
-        f_path = resolve_workspace_path(ws_rel_path, workspace_id)
+        f_path = ctx.resolve_path(ws_rel_path)
         if f_path not in active_ephemerals:
             try:
                 from insetu.routes_fs import execute_vfs_delete
                 execute_vfs_delete(workspace_id, ws_rel_path)
             except Exception:
                 pass
-
-    live_cfg = load_config(workspace_id)
+    live_cfg = ctx.config
     manifest = {}
 
     for config in live_cfg.get("target_repos", []):
@@ -471,12 +469,13 @@ def _background_quick_pack(job_id, workspace_id, **kwargs):
                         out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: Not found]\n\n")
                 except Exception as e:
                     out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
-
             import time
-            from insetu.utils_core import get_gather_paths, load_json_file, save_json_file
+            from insetu.sdk import ExtensionContext
+            from insetu.utils_core import load_json_file, save_json_file
+            ctx = ExtensionContext('gather', workspace_id)
             safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
             filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
-            paths = get_gather_paths(workspace_id)
+            paths = ctx.paths
             out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
 
             vfs.save(out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
@@ -486,7 +485,6 @@ def _background_quick_pack(job_id, workspace_id, **kwargs):
 
         from insetu.workers import register_ephemeral_artifact
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
-
         manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         manifest = load_json_file(manifest_path, {})
         size_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
@@ -496,12 +494,11 @@ def _background_quick_pack(job_id, workspace_id, **kwargs):
         }
         save_json_file(manifest_path, manifest, workspace_id)
 
-        update_immediate_job_status(job_id, 'completed', "Quick-Pack generated successfully.", artifact_json=json.dumps({"filename": filename}), workspace_id=workspace_id)
+        update_immediate_job_status(job_id, 'completed', "Quick-Pack generated successfully.", artifact={"filename": filename}, workspace_id=workspace_id)
     except Exception as e:
         update_immediate_job_status(job_id, 'failed', f"Error generating Quick-Pack: {str(e)}", workspace_id=workspace_id)
 
 register_callback("gather", "quick_pack_task", _background_quick_pack)
-
 @gather_bp.route('quick-pack', methods=['POST'])
 def api_gather_quick_pack(ctx):
     """Stateless generator for ephemeral, ad-hoc context payloads without disk pollution."""
@@ -511,10 +508,7 @@ def api_gather_quick_pack(ctx):
     if not target_dir:
         return jsonify({"error": "Target directory required."}), 400
 
-    import uuid
-    job_id = f"qp_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "gather", "quick_pack_task", json.dumps(data), workspace_id=ctx.workspace_id)
-
+    job_id = ctx.jobs.submit("quick_pack_task", **data)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @gather_bp.route('quick-pack/clear', methods=['POST'])
 def api_gather_quick_pack_clear(ctx):

@@ -367,11 +367,15 @@ async function bootExtensions() {
 }
 // --- THE CENTRALIZED FRONTEND METRONOME ---
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-
 // Evaluate ticks every 100ms to allow sub-second, high-resolution polling for critical extensions
 setInterval(() => {
     const now = Date.now();
     window.ExtensionRegistry._ticks.forEach((tasks, extName) => {
+        // Guardrail: Short-circuit background updates instantly if the extension is disabled or tearing down
+        const isCore = ['bridge', 'gather', 'config', 'files', 'core_refresh'].includes(extName);
+        if (!isCore && (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes(extName))) {
+            return;
+        }
         tasks.forEach(task => {
             if (now - task.lastRun >= task.interval) {
                 task.lastRun = now;
@@ -408,7 +412,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (panicBtn) panicBtn.style.display = 'none';
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
-        const cRes = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
@@ -514,6 +518,23 @@ async function loadWorkspaces() {
                     // so the fetch interceptor attaches the correct header exclusively for this tab.
                     sessionStorage.setItem('insetu_workspace', key);
                     localStorage.setItem('insetu_workspace', key); // Only for newly opened tabs to inherit
+
+                    // Clear active extensions list immediately to block eager background requests during hydration
+                    window.ACTIVE_EXTENSIONS = [];
+
+                    // Rigorous System Eviction: Unmount non-core components from the DOM before state change notifies listeners
+                    document.querySelectorAll('[data-ext]').forEach(el => {
+                        const extName = el.dataset.ext;
+                        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
+                        if (!isCore) el.remove();
+                    });
+
+                    // Flush global store memory states immediately to break any active microtask cycles
+                    Object.values(window.inSetu.stores).forEach(store => {
+                        if (store.getState().clearPayload) store.getState().clearPayload();
+                        if (store.getState().resetState) store.getState().resetState();
+                    });
+
                     AppStore.setState({ activeWorkspace: key });
 
                     // The Stateless Soft-Swap
@@ -668,77 +689,6 @@ export function generateSafeSlug(str) {
     if (!str) return '';
     return normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
-export function fuzzyFilterObjects(items, query, getSearchString = (item) => String(item)) {
-    if (!query.trim()) return items;
-
-    const norm = window.normalizeAccentText || (str => str.toLowerCase());
-    const queryWords = norm(query).trim().split(/\s+/).filter(t => t);
-
-    const scoredItems = [];
-
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const targetStr = norm(getSearchString(item));
-        let totalScore = 0;
-        let isMatch = true;
-
-        for (let w = 0; w < queryWords.length; w++) {
-            const qWord = queryWords[w];
-            let wordScore = 0;
-
-            // 1. Exact Substring Match (Highest Priority)
-            if (targetStr.includes(qWord)) {
-                wordScore = qWord.length * 50;
-
-                // Bonus if it matches at a boundary
-                if (targetStr.startsWith(qWord) || new RegExp(`[\\/\\s\\-_]${qWord}`).test(targetStr)) {
-                    wordScore += 50;
-                }
-            } else {
-                // 2. Subsequence Match with Gap Penalties
-                let qIdx = 0;
-                let tIdx = 0;
-                let prevTIdx = -1;
-
-                while (qIdx < qWord.length && tIdx < targetStr.length) {
-                    if (qWord[qIdx] === targetStr[tIdx]) {
-                        // Base points
-                        if (tIdx === 0 || /[\/\s\-_]/.test(targetStr[tIdx - 1])) {
-                            wordScore += 10; // Boundary bonus
-                        } else {
-                            wordScore += 1;
-                        }
-
-                        // Gap penalty (characters spread too far apart)
-                        if (prevTIdx !== -1) {
-                            const gap = tIdx - prevTIdx - 1;
-                            wordScore -= (gap * 1.5); 
-                        }
-
-                        prevTIdx = tIdx;
-                        qIdx++;
-                    }
-                    tIdx++;
-                }
-
-                // If the score drops below zero due to massive gaps, reject the match
-                if (qIdx !== qWord.length || wordScore <= 0) {
-                    isMatch = false; 
-                    break;
-                }
-            }
-            totalScore += wordScore;
-        }
-
-        if (isMatch) {
-            scoredItems.push({ item, score: totalScore });
-        }
-    }
-
-    // Sort by score descending to float the strongest matches to the top
-    return scoredItems.sort((a, b) => b.score - a.score).map(res => res.item);
-}
-window.fuzzyFilterObjects = fuzzyFilterObjects;
 
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
@@ -841,10 +791,14 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
 }
 let compilePromise = null;
 let compilePromiseWs = null;
-
 export const executeSystemCompile = (onProgress = null) => {
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
+
+    // Guardrail: Short-circuit the compilation pipeline instantly if the workspace has no repositories tracked
+    if (!AppStore.getState().targetConfigs || AppStore.getState().targetConfigs.length === 0) {
+        return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
+    }
 
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
@@ -919,6 +873,13 @@ async function simulatePanic() {
 async function performSoftRefresh() {
     const currentWs = AppStore.getState().activeWorkspace || 'default';
 
+    // Pre-emptively unmount all optional extension DOM components to silence their lifecycles before network fetches
+    document.querySelectorAll('[data-ext]').forEach(el => {
+        const extName = el.dataset.ext;
+        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
+        if (!isCore) el.remove();
+    });
+
     // Dynamically iterate over all mounted global stores to trigger resets
     Object.values(window.inSetu.stores).forEach(store => {
         if (store.getState().clearPayload) store.getState().clearPayload();
@@ -943,13 +904,12 @@ async function performSoftRefresh() {
                 hiddenOutputs: d.hidden_outputs || []
             });
         }
-        // 2. JIT Mount any missing JS extension payloads
-        const cRes = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
+        // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
+        const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
-
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
             const toggleBtn = document.getElementById('settings-toggle');
             if (toggleBtn) {
@@ -959,27 +919,61 @@ async function performSoftRefresh() {
             if (statusBar) {
                 statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
             }
-            // Hide extension tabs that are disabled in the new workspace & execute unloads
-            document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext]').forEach(tabEl => {
+            // Clear out dynamic sub-tab navigation tracks and extension views to prepare for a clean redraw
+            document.querySelectorAll('.sub-tabs').forEach(track => track.replaceChildren());
+            document.querySelectorAll('insetu-ext-favorites, insetu-ext-citations, insetu-ext-research, insetu-vfs-explorer, insetu-ext-bridge').forEach(el => el.remove());
+
+            // Unmount extension-contributed top-level tabs completely so the layout manager can rebuild them fresh
+            document.querySelectorAll('.tab[data-ext]').forEach(el => el.remove());
+
+            // Flush old memory states only for deactivated extensions to protect core layout definitions
+            if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+                window.ExtensionRegistry._manifests.forEach((ext, extName) => {
+                    if (!window.ACTIVE_EXTENSIONS.includes(extName) && !['bridge', 'gather', 'config', 'files'].includes(extName)) {
+                        if (window.ExtensionRegistry.executeUnload) {
+                            window.ExtensionRegistry.executeUnload(extName);
+                        }
+                    }
+                });
+            }
+            // Toggle visibility parameters across core structural tab headers
+            document.querySelectorAll('.tab').forEach(tabEl => {
                 const extName = tabEl.dataset.ext;
-                const tabId = tabEl.dataset.id || tabEl.id.replace('st-', '');
-                const isActive = 
-['bridge', 'gather', 'config', 'files'].includes(extName) || window.ACTIVE_EXTENSIONS.includes(extName);
-
+                const isCore = !extName || ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
+                const isActive = isCore || window.ACTIVE_EXTENSIONS.includes(extName);
                 tabEl.style.display = isActive ? '' : 'none';
-
-                const subTabEl = document.getElementById(`st-${tabId}`);
-                if (subTabEl) subTabEl.style.display = isActive ? '' : 'none';
-
-                // If the extension is active in the environment we are leaving but disabled in the new one, evict it!
-                if (!isActive && window.ExtensionRegistry.executeUnload) {
-                    window.ExtensionRegistry.executeUnload(extName);
-                }
             });
+
+            // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
+            if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+                window.ExtensionRegistry.compileLayout();
+            }
+
+            // Re-render subtab navigation lists natively from scratch using the fresh registry state
+            const activeTab = document.querySelector('.tab-content.active');
+            if (activeTab && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
+                const tabId = activeTab.id.replace('tab-', '');
+                window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
+            }
         }
-        // 3. Compile context & physical file trees for the new tenant
-        await executeSystemCompile();
+        // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = AppStore.getState().activeWorkspace || 'default';
+        AppStore.setState({ manifest: {} });
+
+        let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+        let manifestData = mRes.ok ? await mRes.json() : {};
+
+        const hasActiveRepos = AppStore.getState().targetConfigs.length > 0;
+
+        if (Object.keys(manifestData).length === 0 && hasActiveRepos) {
+            // Force a blocking build only if no cached topology exists and there are active repos to map
+            await executeSystemCompile();
+        } else {
+            // Instant soft switch using cached state or a clean empty baseline
+            AppStore.setState({ manifest: manifestData });
+            // Background non-blocking compile only if there are actually repositories to check
+            if (hasActiveRepos) executeSystemCompile();
+        }
 
         // 4. Hydrate active DOM views using native routing
 let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
@@ -1130,7 +1124,6 @@ export async function fetchAndDownloadState(filePath, btnElement) {
             survive the transition to <script type="module">
             ========================================================================== */
 window.normalizeAccentText = normalizeAccentText;
-window.generateSafeSlug = generateSafeSlug;
 window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;

@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from insetu.routes_fs import execute_vfs_save
 from insetu.utils_core import resolve_workspace_path
 
@@ -13,6 +14,7 @@ class VFSTransaction:
         if self._in_transaction:
             self._buffer.append((filepath, content, data or {}))
         else:
+            from insetu.routes_fs import execute_vfs_save
             execute_vfs_save(self.workspace_id, filepath, content, data)
 
     def read(self, filepath):
@@ -30,6 +32,7 @@ class VFSTransaction:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._in_transaction = False
         if exc_type is None and self._buffer:
+            from insetu.routes_fs import execute_vfs_save
             for filepath, content, data in self._buffer:
                 execute_vfs_save(self.workspace_id, filepath, content, data)
 
@@ -59,11 +62,10 @@ class VFSTransaction:
         for root, dirs, files in os.walk(resolved_dir):
             # Prune directories in-place to prevent os.walk from descending into them
             dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.git')]
-
             for f in files:
                 if exts and not any(f.endswith(ext) for ext in exts):
                     continue
 
-                abs_path = os.path.join(root, f)
+                abs_path = Path(root).joinpath(f).as_posix()
                 # Pit of Success: Calculate relative to the true workspace root natively
                 yield os.path.relpath(abs_path, ws_root).replace('\\', '/')

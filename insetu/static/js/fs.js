@@ -9,8 +9,7 @@ import {
     fetchAndCopy,
     fetchAndDownloadState,
     normalizeAccentText,
-    resolveEditorMode,
-    fuzzyFilterObjects
+    resolveEditorMode
 } from './app.js';
 import { AppStore } from './store.js';
 
@@ -578,7 +577,7 @@ export class InSetuVFSExplorer extends LitElement {
                     </div>
                 `;
             } else {
-                const matches = window.fuzzyFilterObjects(availableFiles, q, f => f.substring(currentPrefix.length));
+                const matches = window.inSetu.utils.fuzzyFilterObjects(availableFiles, q, f => f.substring(currentPrefix.length));
 
                 if (matches.length === 0) {
                     contentUI = html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
@@ -1335,7 +1334,7 @@ function executeLinkSearch(query) {
         return;
     }
     const mdFiles = getGlobalManifest().filter(f => f.toLowerCase().endsWith('.md'));
-    const results = fuzzyFilterObjects(mdFiles, q).slice(0, 50).map(path => ({ path }));
+    const results = window.inSetu.utils.fuzzyFilterObjects(mdFiles, q).slice(0, 50).map(path => ({ path }));
     FsStore.getState().setModal('linkInsert', { searchResults: results });
 }
 

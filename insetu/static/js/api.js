@@ -33,12 +33,11 @@ window.inSetu.api = {
         // Future Architectural Seam: Offline Typewriter IndexedDB queue will intercept POST requests here
         return originalFetch(fullUrl, { ...options, headers });
     },
-
     system: async function(path, options = {}) {
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
         const fullUrl = `/api/system/${cleanPath}`;
-
-        const headers = this._getHeaders(false);
+        // System routes like config and jobs are vaulted per-tenant, so they require the scope token
+        const headers = this._getHeaders(true);
         if (options.headers) {
             new Headers(options.headers).forEach((value, key) => headers.append(key, value));
         }

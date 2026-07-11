@@ -1,9 +1,18 @@
 import { html, css } from 'lit';
 import { AppStore } from './store.js';
 import { setGlobalStatus, executeSystemCompile } from './app.js';
-import { InSetuElement } from './sdk.js';
+import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
 
+export const GatherStore = createExtensionStore('Gather', {
+    loading: false,
+    loadingMessage: "Compiling ecosystem contexts... please wait.",
+    searchQuery: '',
+    setSearchQuery: (q) => GatherStore.setState({ searchQuery: q })
+});
+
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+window.inSetu.stores.Gather = GatherStore;
 
 export class InSetuExtGather extends InSetuElement {
     static properties = {
@@ -14,29 +23,47 @@ export class InSetuExtGather extends InSetuElement {
     };
     static styles = [sharedStyles];
 
-constructor() {
+    constructor() {
         super();
         this.loading = false;
         this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         this.manifestFiles = [];
         this.searchQuery = '';
     }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        this.loadContext();
+    }
+
     connectedCallback() {
         super.connectedCallback();
+
+        this.subscribe(GatherStore, state => {
+            this.loading = state.loading;
+            this.loadingMessage = state.loadingMessage;
+            this.searchQuery = state.searchQuery;
+        });
+
         this.subscribe(AppStore, state => state.manifest, (m) => {
             this.manifestFiles = Object.keys(m || {});
         });
+
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext();
         });
+
         this.manifestFiles = Object.keys(AppStore.getState().manifest || {});
+
+        const gState = GatherStore.getState();
+        this.loading = gState.loading;
+        this.loadingMessage = gState.loadingMessage;
+        this.searchQuery = gState.searchQuery;
     }
     async loadContext() {
-        this.loading = true;
-        this.loadingMessage = "Compiling ecosystem contexts... please wait.";
+        GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
             const result = await executeSystemCompile((msg) => {
-                this.loadingMessage = msg;
+                GatherStore.setState({ loadingMessage: msg });
             });
             if (result && result.status === 'error') {
                 alert("❌ " + result.message);
@@ -45,7 +72,7 @@ constructor() {
             console.error("Compilation error:", error);
             alert("❌ Network or syntax error compiling files. Check console for details.");
         } finally {
-            this.loading = false;
+            GatherStore.setState({ loading: false });
         }
     }
 
@@ -78,10 +105,9 @@ constructor() {
                 }
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr };
         }).filter(f => f !== null);
-
         // 2. Apply Fuzzy Search
         const filteredFiles = this.searchQuery 
-                ? window.fuzzyFilterObjects(enrichedFiles, this.searchQuery, f => `${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
+                ? window.inSetu.utils.fuzzyFilterObjects(enrichedFiles, this.searchQuery, f => `${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
                 : enrichedFiles;
 
         filteredFiles.forEach(f => {
@@ -108,8 +134,8 @@ constructor() {
                 <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
                     <input type="text" placeholder="🔍 Fuzzy search contexts..." .value=${this.searchQuery} 
                         style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                        @input=${(e) => this.searchQuery = e.target.value}>
-                    ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                        @input=${(e) => GatherStore.getState().setSearchQuery(e.target.value)}>
+                    ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => GatherStore.getState().setSearchQuery('')}>Clear</button>` : ''}
                 </div>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px;">${this.loadingMessage}</div>` : ''}
@@ -118,7 +144,7 @@ constructor() {
                 ${sortedCats.map(catName => html`
                     <insetu-category-section titleText=${catName}>
                         ${catName === "Quick-Pack Clipboard" ? html`
-                            <button slot="header-actions" class="btn-sm" style="background: var(--intent-danger);" @click=${() => { if(window.clearQuickPacks) window.clearQuickPacks(); }}>🗑️ Clear</button>
+                            <insetu-async-btn slot="header-actions" label="🗑️ Clear" intent="danger" .onClick=${async () => { if(window.clearQuickPacks) await window.clearQuickPacks(); }}></insetu-async-btn>
                         ` : ''}
                         ${categories[catName].map(f => html`
                             <insetu-card
@@ -134,34 +160,25 @@ ${AppStore.getState().manifest[f.filename] ? html`
         <button slot="actions" class="btn-sm" style="background: var(--intent-neutral); margin: 0 5px 0 0;"
                 @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
 ` : ''}
-<button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-@click=${async (e) => {
+<insetu-async-btn slot="actions" label="⬇️ Download" intent="primary" .onClick=${async (e) => {
                 e.stopPropagation();
                 const isPrompt = f.filename.includes('/prompts/');
-                const orig = e.target.innerText;
-                e.target.innerText = '⏳...';
-                try {
-                        const res = isPrompt 
-                            ? await window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(f.filename)}`)
-                            : await fetch(`/download/${f.filename}`); // Native download route bypasses API client
-                        if (!res.ok) throw new Error("Failed to fetch");
-                        const text = await res.text();
-                        const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.style.display = 'none';
-                        a.href = url;
-                        a.download = f.filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        window.URL.revokeObjectURL(url);
-                        a.remove();
-                } catch (err) {
-                        alert("Error downloading file.");
-                } finally {
-                        e.target.innerText = orig;
-                }
-        }}>⬇️ Download</button>
+                const res = isPrompt 
+                    ? await window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(f.filename)}`)
+                    : await fetch(`/download/${f.filename}`); // Native download route bypasses API client
+                if (!res.ok) throw new Error("Failed to fetch");
+                const text = await res.text();
+                const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = f.filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+        }}></insetu-async-btn>
                                 </insetu-card>
                         `)}
                     </insetu-category-section>

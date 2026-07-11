@@ -10,7 +10,7 @@ import subprocess
 import base64
 import difflib
 from contextlib import redirect_stdout
-from insetu.utils_core import resolve_workspace_path, get_sister_repos, get_workspace_physics, load_config, get_omniscient_workspace_files
+from insetu.utils_core import get_sister_repos, get_workspace_physics, get_omniscient_workspace_files
 
 __depends__ = []
 
@@ -333,6 +333,8 @@ def apply_block_in_memory(content, block, silent=False):
     return True, "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:])
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     """Core transaction loop extracted to reduce cyclomatic complexity and deep nesting."""
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('bridge', workspace_id)
     raw_text = data.get("text", "")
     active_files = data.get("active_files", [])
     dry_run = data.get("dry_run", False)
@@ -359,11 +361,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             print(f"  [!] TRANSACTION ABORTED: Target repository '{explicit_repo}' is not pinned. Skipping {target_file}.")
             print("." * 30)
             continue
-
-        resolved_path = resolve_workspace_path(target_file, workspace_id)
+        resolved_path = ctx.resolve_path(target_file)
         is_genesis = all(not b["search"].strip() for b in blocks)
         if is_genesis and explicit_repo not in sister_repos:
-            all_known = [r.get("repo_dir") for r in load_config(workspace_id).get("target_repos", []) if r.get("repo_dir")]
+            all_known = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
             if explicit_repo in all_known:
                 pass
             elif explicit_repo and os.path.isdir(Path(ws_root).joinpath(explicit_repo).as_posix()):
@@ -372,7 +373,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 target_file = f"{allowed_repos[0]}/{norm_target}"
                 norm_target = target_file
                 explicit_repo = allowed_repos[0]
-                resolved_path = resolve_workspace_path(target_file, workspace_id)
+                resolved_path = ctx.resolve_path(target_file)
                 print(f"  [⚡] Auto-Resolved: Genesis patch missing repo anchor. Defaulting to '{explicit_repo}'.")
             else:
                 bad_anchor = explicit_repo or target_file
@@ -423,7 +424,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     if len(allowed_repos) == 1:
                         print(f"  [⚡] Auto-Resolved: Only 1 repo pinned.\nSeamlessly routing '{target_file}' to '{best_alt}'.")
                         target_file = best_alt
-                        resolved_path = resolve_workspace_path(target_file, workspace_id)
+                        resolved_path = ctx.resolve_path(target_file)
                     else:
                         print(f"  [?] Smart Resolution: Anchors failed or file missing for '{target_file}'.")
                         print(f"  [✓] Confirmed Match: Found '{best_alt}' which perfectly matches your SEARCH anchors.")

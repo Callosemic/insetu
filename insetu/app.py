@@ -276,11 +276,10 @@ def _background_compile(job_id, workspace_id, **kwargs):
         manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         manifest_data = load_json_file(manifest_path, {})
         manifest_keys = list(manifest_data.keys())
-
         if not manifest_keys and os.path.exists(paths["contexts_dir"]):
             manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
 
-        update_immediate_job_status(job_id, 'completed', "Context successfully compiled!", artifact_json=json.dumps({"files": sorted(manifest_keys)}), workspace_id=workspace_id)
+        update_immediate_job_status(job_id, 'completed', "Context successfully compiled!", artifact={"files": sorted(manifest_keys)}, workspace_id=workspace_id)
     except Exception as e:
         import traceback
         print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")

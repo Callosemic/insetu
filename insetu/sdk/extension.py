@@ -4,6 +4,42 @@ import os
 from insetu.db import get_connection, register_schema
 from insetu.utils_core import extension_auth, get_gather_paths, load_config, resolve_workspace_path
 from insetu.context import VFSTransaction
+class JobManager:
+    def __init__(self, ext_name, workspace_id):
+        self.ext_name = ext_name
+        self.workspace_id = workspace_id
+
+    def submit(self, task_name, **kwargs):
+        import uuid, json
+        from insetu.workers import submit_immediate_job
+        job_prefix = self.ext_name[:3].lower()
+        job_id = f"{job_prefix}_{uuid.uuid4().hex[:8]}"
+        args_json = json.dumps(kwargs)
+        submit_immediate_job(job_id, self.ext_name, task_name, args_json, self.workspace_id)
+        return job_id
+
+class StoreManager:
+    def __init__(self, workspace_id):
+        self.workspace_id = workspace_id
+
+    def get(self, filename, key, default=None):
+        from insetu.utils_core import load_json_file, get_workspace_physics
+        import os
+        from pathlib import Path
+        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
+        filepath = Path(os.path.dirname(cfg_path)).joinpath(filename).as_posix()
+        data = load_json_file(filepath, {})
+        return data.get(key, default)
+
+    def set(self, filename, key, value):
+        from insetu.utils_core import load_json_file, save_json_file, get_workspace_physics
+        import os
+        from pathlib import Path
+        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
+        filepath = Path(os.path.dirname(cfg_path)).joinpath(filename).as_posix()
+        data = load_json_file(filepath, {})
+        data[key] = value
+        save_json_file(filepath, data, self.workspace_id)
 
 class ExtensionContext:
     """Pre-scoped context object injected into all SDK routes."""
@@ -12,6 +48,8 @@ class ExtensionContext:
         self.workspace_id = workspace_id
         self.vfs = VFSTransaction(workspace_id)
         self.req = request
+        self.jobs = JobManager(ext_name, workspace_id)
+        self.store = StoreManager(workspace_id)
     @property
     def db(self):
         """Returns an SQLite connection automatically keyed to the active tenant workspace."""

@@ -38,7 +38,7 @@ export class InSetuExtConfig extends LitElement {
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 this.configForm = await res.json();
             }
@@ -209,7 +209,7 @@ export class InSetuExtConfig extends LitElement {
                         <select style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => { repo.archive_type = e.target.value; this.requestUpdate(); }}>
                             <option value="repo" ?selected=${repo.archive_type === 'repo' || !repo.archive_type}>Standard Repo</option>
                             <option value="media-vault" ?selected=${repo.archive_type === 'media-vault'}>Media Vault</option>
-                            <option value="prompt-library" ?selected=${repo.archive_type === 'prompt-library'}>Prompt Library</option>
+                            ${(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault') ? html`<option value="${repo.archive_type}" selected>${repo.archive_type}</option>` : ''}
                         </select>
                     </div>
                 </div>
@@ -323,11 +323,10 @@ The 'config' extension is locked.</p>
         const origText = btn.innerText;
         btn.innerText = '⏳ Saving...';
         try {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            // Config saves allow cross-tenant targeting via the header
-            const res = await window.inSetu.api.system('config', {
+            // Config saves utilize explicit multi-tenant URL path boundaries
+            const res = await window.inSetu.api.workspace('system/config', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Workspace-ID': activeWs },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(this.configForm)
             });
             if (res.ok) {

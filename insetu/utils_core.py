@@ -271,6 +271,37 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
             valid_files.add(forced_file)
 
     return sorted(list(valid_files))
+def parse_frontmatter(content):
+    """Extracts YAML frontmatter and body from a markdown string."""
+    import re
+    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+    yaml_data = {}
+    body = content
+    if yaml_match:
+        for line in yaml_match.group(1).split('\n'):
+            if ':' in line:
+                k, v = line.split(':', 1)
+                yaml_data[k.strip()] = v.strip().strip('\'"')
+        body = content[yaml_match.end():].strip()
+    return yaml_data, body, yaml_match
+
+def update_frontmatter(content, new_data):
+    """Updates or injects YAML frontmatter in a markdown string."""
+    yaml_data, body, yaml_match = parse_frontmatter(content)
+    yaml_data.update(new_data)
+
+    new_yaml = ["---"]
+    for k, v in yaml_data.items():
+        if v is None or str(v).lower() == 'null':
+            new_yaml.append(f"{k}: null")
+        elif isinstance(v, (int, float, bool)) or (isinstance(v, str) and (v.startswith('[') or v.startswith('{'))):
+            new_yaml.append(f"{k}: {v}")
+        else:
+            new_yaml.append(f'{k}: "{v}"')
+    new_yaml.append("---")
+
+    return "\n".join(new_yaml) + "\n\n" + body
+
 def generate_text_chunks(blocks, chunk_limit=400000):
     """Pure generator that yields concatenated text strings safely under a byte/char limit."""
     current_chunk = []

@@ -316,10 +316,9 @@ constructor() {
         this.searchPlaceholder = 'Search...';
         this._searchQuery = '';
 }
-
     _buildTree() {
         const filteredFiles = (this.enableSearch && this._searchQuery)
-            ? window.fuzzyFilterObjects(this.files, this._searchQuery)
+            ? window.inSetu.utils.fuzzyFilterObjects(this.files, this._searchQuery)
             : this.files;
         const mappedFiles = filteredFiles.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
         return buildFileTree(mappedFiles);
