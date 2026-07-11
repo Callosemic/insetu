@@ -7,12 +7,20 @@ export const FavoritesStore = createExtensionStore('Favorites', {
     items: [],
     loading: false,
     fetchFavorites: async () => {
+        // Guardrail: Short-circuit the fetch if the extension is not enabled for the active tenant workspace
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('favorites')) {
+            FavoritesStore.setState({ items: [], loading: false });
+            return;
+        }
         FavoritesStore.setState({ loading: true });
         try {
             const res = await window.inSetu.api.workspace('favorites/list');
             if (res.ok) {
                 const data = await res.json();
                 FavoritesStore.setState({ items: data.favorites || [] });
+            } else if (res.status === 403) {
+                // Gracefully ignore 403s during tenant hot-swaps before unmount
+                FavoritesStore.setState({ items: [] });
             }
         } catch (e) {
             console.error("Failed to fetch favorites", e);

@@ -4,105 +4,67 @@ import json
 import uuid
 import datetime
 from pathlib import Path
-from flask import Blueprint, request, jsonify
-from insetu.db import get_connection
+from flask import request, jsonify
+from insetu.sdk import InSetuExtension
 from insetu.hooks import hooks
-from insetu.utils_core import resolve_workspace_path, load_config
-from insetu.routes_fs import execute_vfs_save
 
-skills_bp = Blueprint('skills', __name__)
+SKILLS_SCHEMA = {
+    "skills_ledger": {
+        "id": "TEXT PRIMARY KEY",
+        "domain": "TEXT NOT NULL",
+        "tags": "TEXT DEFAULT ''",
+        "group_name": "TEXT DEFAULT ''",
+        "name": "TEXT NOT NULL",
+        "status": "TEXT NOT NULL",
+        "last_practiced": "TEXT",
+        "interval_days": "INTEGER DEFAULT 1",
+        "next_review": "TEXT",
+        "filepath": "TEXT NOT NULL",
+        "metrics_json": "TEXT DEFAULT '{}'"
+    }
+}
+
+skills_bp = InSetuExtension('skills', __name__, schema=SKILLS_SCHEMA)
 __depends__ = []
+
 def _get_user_skills_dir(workspace_id=None):
     """Resolves and commands the localized workspace skills directory structure."""
     from insetu.utils_core import get_workspace_physics
     cfg_path, _, _ = get_workspace_physics(workspace_id)
-    # Store skills inside the isolated data directory of the active workspace profile
     base_dir = Path(cfg_path).parent.joinpath("data", "skills").as_posix()
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
-
-@hooks.on('system_boot')
-def init_skills_db():
-    """Initializes a unified global user-level SQLite cache schema for cross-workspace tracking."""
-    from insetu.utils_core import get_all_workspace_ids
-    for ws_id in get_all_workspace_ids():
-        conn = get_connection("skills", workspace_id=ws_id)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS skills_ledger (
-                id TEXT PRIMARY KEY,
-                domain TEXT NOT NULL,
-                tags TEXT DEFAULT '',
-                group_name TEXT DEFAULT '',
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                last_practiced TEXT,
-                interval_days INTEGER DEFAULT 1,
-                next_review TEXT,
-                filepath TEXT NOT NULL,
-                metrics_json TEXT DEFAULT '{}'
-            )
-        """)
-        conn.commit()
-        # Safe Schema Migration Check: Inject columns if table predates updates
-        try:
-            cursor = conn.execute("PRAGMA table_info(skills_ledger)")
-            columns = [row[1] for row in cursor.fetchall()]
-            if 'tags' not in columns:
-                conn.execute("ALTER TABLE skills_ledger ADD COLUMN tags TEXT DEFAULT ''")
-                conn.commit()
-            if 'group_name' not in columns:
-                conn.execute("ALTER TABLE skills_ledger ADD COLUMN group_name TEXT DEFAULT ''")
-                conn.commit()
-        except Exception as migration_err:
-            print(f"Skills migration safety bypassed: {migration_err}")
-
-        # Sync filesystem entries to database cache on system spin-up
-        skills_dir = _get_user_skills_dir(workspace_id=ws_id)
-        for filename in os.listdir(skills_dir):
-            if filename.endswith(".md"):
-                abs_path = Path(skills_dir).joinpath(filename).as_posix()
-                _parse_and_upsert_skill(abs_path, filename, workspace_id=ws_id)
-
 def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
     try:
-        with open(abs_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-        s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
-        domain = "general"
-        tags = ""
-        group_name = ""
-        name = filename.replace(".md", "")
-        status = "untouched"
-        last_practiced = None
-        interval_days = 1
-        next_review = datetime.date.today().isoformat()
-        metrics = {}
+        from insetu.utils_core import parse_frontmatter
+        from insetu.sdk import ExtensionContext
+        ctx = ExtensionContext('skills', workspace_id)
+        content = ctx.vfs.read(abs_path) or ""
+        yaml_data, _, _ = parse_frontmatter(content)
 
-        if yaml_match:
-            lines = yaml_match.group(1).split('\n')
-            for line in lines:
-                if ':' in line:
-                    k, v = line.split(':', 1)
-                    k = k.strip()
-                    v = v.strip().strip('\'"')
-                    if k == 'id': s_id = v
-                    elif k == 'domain': domain = v
-                    elif k == 'tags': tags = v
-                    elif k == 'group': group_name = v
-                    elif k == 'name': name = v
-                    elif k == 'status': status = v
-                    elif k == 'last_practiced': last_practiced = v if v.lower() != 'null' else None
-                    elif k == 'interval_days': interval_days = int(v)
-                    elif k == 'next_review': next_review = v if v.lower() != 'null' else next_review
-                    else:
-                        try:
-                            metrics[k] = int(v)
-                        except ValueError:
-                            try:
-                                metrics[k] = float(v)
-                            except ValueError:
-                                metrics[k] = v
+        s_id = yaml_data.get('id', "SKL-" + uuid.uuid4().hex[:8].upper())
+        domain = yaml_data.get('domain', "general")
+        tags = yaml_data.get('tags', "")
+        group_name = yaml_data.get('group', "")
+        name = yaml_data.get('name', filename.replace(".md", ""))
+        status = yaml_data.get('status', "untouched")
+        last_practiced = yaml_data.get('last_practiced') if str(yaml_data.get('last_practiced')).lower() != 'null' else None
+        interval_days = int(yaml_data.get('interval_days', 1))
+        next_review = yaml_data.get('next_review', datetime.date.today().isoformat())
+        if str(next_review).lower() == 'null': next_review = datetime.date.today().isoformat()
+
+        metrics = {}
+        for k, v in yaml_data.items():
+            if k not in ['id', 'domain', 'tags', 'group', 'name', 'status', 'last_practiced', 'interval_days', 'next_review']:
+                try:
+                    metrics[k] = int(v)
+                except (ValueError, TypeError):
+                    try:
+                        metrics[k] = float(v)
+                    except (ValueError, TypeError):
+                        metrics[k] = v
+
+        from insetu.db import get_connection
         conn = get_connection("skills", workspace_id=workspace_id)
         conn.execute("""
             INSERT OR REPLACE INTO skills_ledger  
@@ -112,11 +74,11 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
         conn.commit()
     except Exception as e:
         print(f"Error parsing global skill file {filename}: {e}")
-@skills_bp.route('/api/<workspace_id>/skills/playlist', methods=['GET'])
-def get_practice_playlist(workspace_id=None):
+@skills_bp.route('playlist', methods=['GET'])
+def get_practice_playlist(ctx):
     """Compiles a unified practice batch across all domains sorted globally."""
     try:
-        conn = get_connection("skills", workspace_id=workspace_id)
+        conn = ctx.db
         today_str = datetime.date.today().isoformat()
         cursor = conn.execute("""
             SELECT * FROM skills_ledger 
@@ -131,10 +93,10 @@ def get_practice_playlist(workspace_id=None):
         return jsonify({"playlist": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('/api/<workspace_id>/skills/log', methods=['POST'])
-def log_skill_practice(workspace_id=None):
+@skills_bp.route('log', methods=['POST'])
+def log_skill_practice(ctx):
     """Logs a practice run against the user's global profile tracking framework."""
-    data = request.json or {}
+    data = ctx.req.json or {}
     filename = data.get('filepath')  # Maps strictly to user space base filename
     score = int(data.get('score', 3))
     updates = data.get('metrics', {})
@@ -143,7 +105,7 @@ def log_skill_practice(workspace_id=None):
         return jsonify({"error": "Filename tracking reference required"}), 400
 
     try:
-        conn = get_connection("skills", workspace_id=workspace_id)
+        conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
@@ -157,79 +119,67 @@ def log_skill_practice(workspace_id=None):
 
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
-
-        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
-        with open(abs_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-        body_content = content.replace(yaml_match.group(0), '').strip() if yaml_match else content
+        from insetu.utils_core import update_frontmatter, slugify
+        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
+        content = ctx.vfs.read(abs_path) or ""
 
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
         existing_metrics.update(updates)
         name = data.get('name', row['name']).strip()
         tags = data.get('tags', row['tags'] if 'tags' in row.keys() else '').strip()
         group_name = data.get('group', row['group_name'] if 'group_name' in row.keys() else '').strip()
-        new_yaml = [
-            "---",
-            f'id: "{row["id"]}"',
-            f'domain: "{row["domain"]}"',
-            f'tags: "{tags}"',
-            f'group: "{group_name}"',
-            f'name: "{name}"',
-            f'status: "{data.get("status", row["status"])}"',
-            f'last_practiced: "{today.isoformat()}"',
-            f'interval_days: {next_interval}',
-            f'next_review: "{next_review_date.isoformat()}"'
-        ]
-        for k, v in existing_metrics.items():
-            if isinstance(v, str): new_yaml.append(f'{k}: "{v}"')
-            else: new_yaml.append(f'{k}: {v}')
-        new_yaml.append("---\n")
-        # Rename physical file if track title is systematically edited
-        final_content = "\n".join(new_yaml) + "\n" + body_content
+
+        yaml_data = {
+            "id": row["id"],
+            "domain": row["domain"],
+            "tags": tags,
+            "group": group_name,
+            "name": name,
+            "status": data.get("status", row["status"]),
+            "last_practiced": today.isoformat(),
+            "interval_days": next_interval,
+            "next_review": next_review_date.isoformat(),
+            **existing_metrics
+        }
+
+        final_content = update_frontmatter(content, yaml_data)
         final_filename = filename
 
         if name.lower() != row['name'].lower():
-            from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(new_filename).as_posix()
+            new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
                 from insetu.routes_fs import execute_vfs_delete
-                execute_vfs_delete(workspace_id, abs_path)
+                execute_vfs_delete(ctx.workspace_id, abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
-            
+
         from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
-        
-        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=workspace_id)
+        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+
+        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('/api/<workspace_id>/skills/update', methods=['POST'])
-def update_skill_structure(workspace_id=None):
+@skills_bp.route('update', methods=['POST'])
+def update_skill_structure(ctx):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
-    data = request.json or {}
+    data = ctx.req.json or {}
     filename = data.get('filepath')
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
-        conn = get_connection("skills", workspace_id=workspace_id)
+        conn = ctx.db
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
+        from insetu.utils_core import update_frontmatter, slugify
+        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
+        content = ctx.vfs.read(abs_path) or ""
 
-        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
-        with open(abs_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-        body_content = content.replace(yaml_match.group(0), '').strip() if yaml_match else content
         existing_metrics = json.loads(row['metrics_json']) if row['metrics_json'] else {}
-
         name = data.get('name', row['name']).strip()
         tags = data.get('tags', row['tags'] if 'tags' in row.keys() else '').strip()
         group_name = data.get('group', row['group_name'] if 'group_name' in row.keys() else '').strip()
@@ -237,71 +187,65 @@ def update_skill_structure(workspace_id=None):
         if 'parts' in data: existing_metrics['parts'] = data['parts'].strip()
         if 'custom_steps' in data: existing_metrics['custom_steps'] = data['custom_steps'].strip()
 
-        new_yaml = [
-            "---",
-            f'id: "{row["id"]}"',
-            f'domain: "{row["domain"]}"',
-            f'tags: "{tags}"',
-            f'group: "{group_name}"',
-            f'name: "{name}"',
-            f'status: "{status}"',
-            f'last_practiced: "{row["last_practiced"] or "null"}"',
-            f'interval_days: {row["interval_days"] or 1}',
-            f'next_review: "{row["next_review"] or datetime.date.today().isoformat()}"'
-        ]
+        yaml_data = {
+            "id": row["id"],
+            "domain": row["domain"],
+            "tags": tags,
+            "group": group_name,
+            "name": name,
+            "status": status,
+            "last_practiced": row["last_practiced"] or "null",
+            "interval_days": row["interval_days"] or 1,
+            "next_review": row["next_review"] or datetime.date.today().isoformat(),
+            **existing_metrics
+        }
 
-        for k, v in existing_metrics.items():
-            if k not in ['id', 'domain', 'tags', 'group', 'name', 'status', 'last_practiced', 'interval_days', 'next_review']:
-                if isinstance(v, str): new_yaml.append(f'{k}: "{v}"')
-                else: new_yaml.append(f'{k}: {v}')
-        new_yaml.append("---\n")
-        final_content = "\n".join(new_yaml) + "\n" + body_content
+        final_content = update_frontmatter(content, yaml_data)
         final_filename = filename
 
         if name.lower() != row['name'].lower():
-            from insetu.utils_core import slugify
             new_filename = f"{slugify(name)}.md"
-            new_abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(new_filename).as_posix()
+            new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
                 from insetu.routes_fs import execute_vfs_delete
-                execute_vfs_delete(workspace_id, abs_path)
+                execute_vfs_delete(ctx.workspace_id, abs_path)
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
-            
+
         from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
-        
-        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=workspace_id)
+        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+
+        _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "filepath": final_filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('/api/<workspace_id>/skills/delete', methods=['POST'])
-def delete_skill_item(workspace_id=None):
+@skills_bp.route('delete', methods=['POST'])
+def delete_skill_item(ctx):
     """Permanently purges a skill markdown asset from user space disk and index ledger."""
-    data = request.json or {}
+    data = ctx.req.json or {}
     filename = data.get('filepath')
     if not filename:
         return jsonify({"error": "Filename tracking reference required"}), 400
     try:
-        conn = get_connection("skills", workspace_id=workspace_id)
-        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
+        conn = ctx.db
+        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
 
         if os.path.exists(abs_path):
             from insetu.routes_fs import execute_vfs_delete
-            execute_vfs_delete(workspace_id, abs_path)
+            execute_vfs_delete(ctx.workspace_id, abs_path)
 
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
         conn.commit()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('/api/<workspace_id>/skills/list', methods=['GET'])
-def get_all_skills(workspace_id=None):
+@skills_bp.route('list', methods=['GET'])
+def get_all_skills(ctx):
     """Returns every tracking item registered across the user profile layout."""
     try:
-        conn = get_connection("skills", workspace_id=workspace_id)
+        conn = ctx.db
         cursor = conn.execute("SELECT * FROM skills_ledger ORDER BY name ASC")
         items = []
         for row in cursor.fetchall():
@@ -311,10 +255,10 @@ def get_all_skills(workspace_id=None):
         return jsonify({"skills": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('/api/<workspace_id>/skills/create', methods=['POST'])
-def create_new_skill(workspace_id=None):
+@skills_bp.route('create', methods=['POST'])
+def create_new_skill(ctx):
     """Generates a physical markdown file structure inside global user space."""
-    data = request.json or {}
+    data = ctx.req.json or {}
     name = data.get('name', '').strip()
     domain = data.get('domain', 'musical_repertoire').strip()
     tags = data.get('tags', '').strip()
@@ -326,38 +270,35 @@ def create_new_skill(workspace_id=None):
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
-        from insetu.utils_core import slugify
+        from insetu.utils_core import slugify, update_frontmatter
         filename = f"{slugify(name)}.md"
-        abs_path = Path(_get_user_skills_dir(workspace_id)).joinpath(filename).as_posix()
+        abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
-        new_yaml = [
-            "---",
-            f'id: "{s_id}"',
-            f'domain: "{domain}"',
-            f'tags: "{tags}"',
-            f'group: "{group_name}"',
-            f'name: "{name}"',
-            f'status: "{status}"',
-            f'last_practiced: "null"',
-            f'interval_days: 1',
-            f'next_review: "{datetime.date.today().isoformat()}"'
-        ]
-        if custom_steps: new_yaml.append(f'custom_steps: "{custom_steps}"')
+
+        yaml_data = {
+            "id": s_id,
+            "domain": domain,
+            "tags": tags,
+            "group": group_name,
+            "name": name,
+            "status": status,
+            "last_practiced": "null",
+            "interval_days": 1,
+            "next_review": datetime.date.today().isoformat(),
+            **initial_metrics
+        }
+        if custom_steps: yaml_data["custom_steps"] = custom_steps
         if parts:
-            new_yaml.append(f'parts: "{parts}"')
-            new_yaml.append('completed_parts: ""')
+            yaml_data["parts"] = parts
+            yaml_data["completed_parts"] = ""
 
-        for k, v in initial_metrics.items():
-            if isinstance(v, str): new_yaml.append(f'{k}: "{v}"')
-            else: new_yaml.append(f'{k}: {v}')
+        raw_content = f"## Practice Logs: {name}\n"
+        final_content = update_frontmatter(raw_content, yaml_data)
 
-        new_yaml.append("---\n")
-        new_yaml.append(f"## Practice Logs: {name}\n")
-        
         from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(workspace_id, abs_path, "\n".join(new_yaml), data={"is_absolute_artifact": True})
+        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
 
-        _parse_and_upsert_skill(abs_path, filename, workspace_id=workspace_id)
+        _parse_and_upsert_skill(abs_path, filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "filepath": filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

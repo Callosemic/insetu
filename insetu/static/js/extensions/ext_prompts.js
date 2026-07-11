@@ -3,6 +3,7 @@ import { LitElement, html, css } from 'lit';
 import { AppStore } from '../store.js';
 import { InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
+import { downloadFile } from '../fs.js';
 
 export class InSetuExtPrompts extends InSetuElement {
     static properties = {
@@ -33,12 +34,12 @@ export class InSetuExtPrompts extends InSetuElement {
     onWorkspaceChanged(newWorkspaceId) {
         this.fetchPrompts();
     }
-
     async fetchPrompts() {
         this.loading = true;
         try {
             await syncPromptsState();
-            const rawPrompts = AppStore.getState().gatherOptions.prompts || [];
+            const gatherOptions = AppStore.getState().gatherOptions || {};
+            const rawPrompts = gatherOptions.prompts || [];
             // UDF & Spatial Boundary Enforcer: Strip absolute host paths leaking from backend VFS sweeps
             this.prompts = rawPrompts.map(p => {
                 const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
@@ -50,10 +51,9 @@ export class InSetuExtPrompts extends InSetuElement {
             this.loading = false;
         }
     }
-
     static openPromptEmbedModal() {
         if (window.openWorkspaceBrowser) {
-            const { gatherOptions } = AppStore.getState();
+            const gatherOptions = AppStore.getState().gatherOptions || {};
             const rawPrompts = gatherOptions.prompts || [];
             if (rawPrompts.length === 0) {
                 alert("No prompts available to embed. Compile contexts first.");
@@ -106,19 +106,8 @@ export class InSetuExtPrompts extends InSetuElement {
                             { 
                                 label: '⬇️ Download', style: 'primary',
                                 asyncAction: async (filepath, filename) => {
-                                    const res = await this.api.get(`resolve?file=${encodeURIComponent(filepath)}`);
-                                    if (!res.ok) throw new Error("Failed to fetch");
-                                    const text = await res.text();
-                                    const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-                                    const url = window.URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.style.display = 'none';
-                                    a.href = url;
-                                    a.download = filename || filepath.split('/').pop();
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    window.URL.revokeObjectURL(url);
-                                    a.remove();
+                                    const activeWs = window.inSetu.stores.App.getState().activeWorkspace || 'default';
+                                    await downloadFile(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(filepath)}`, filename || filepath.split('/').pop());
                                 }
                             }
                         ]}
@@ -241,7 +230,7 @@ async function syncPromptsState() {
             const data = await res.json();
             AppStore.setState(state => ({
                 gatherOptions: {
-                    ...state.gatherOptions,
+                    ...(state.gatherOptions || {}),
                     prompts: data.prompts || [],
                     profileDir: data.profile_dir || ".insetu/profiles/default"
                 }

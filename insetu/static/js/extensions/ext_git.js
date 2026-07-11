@@ -14,9 +14,10 @@ export async function generateDiffs(force = false) {
         return;
     }
     try {
-        const res = await window.inSetu.api.workspace('diffs/generate', { 
+        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const res = await window.inSetu.api.workspace(`git/diffs/generate?_t=${Date.now()}`, { 
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Workspace-ID': activeWs },
             body: JSON.stringify({ target_repos: targetRepos })
         });
         if (!res.ok) {
@@ -25,15 +26,52 @@ export async function generateDiffs(force = false) {
         }
         const data = await res.json();
         AppStore.setState({ activeDiffJobId: data.job_id, diffJobError: null });
+
+        window.inSetu.utils.pollJob(data.job_id, {
+            onProgress: (msg) => AppStore.setState({ diffJobMessage: msg }),
+            onComplete: (statusData) => {
+                const newFiles = statusData.artifact.files || [];
+                const targetReposRes = statusData.artifact.target_repos;
+                const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
+                const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
+
+                const updatedCachedFiles = (() => {
+                        if (!targetReposRes) {
+                                updatedDirtyRepos.clear();
+                                return newFiles;
+                        } else {
+                                targetReposRes.forEach(r => updatedDirtyRepos.delete(r));
+                                const filtered = prevCachedFiles.filter(f => {
+                                        const repo = typeof f === 'object' ? f.repo : null;
+                                        return !repo || !targetReposRes.includes(repo);
+                                });
+                                return filtered.concat(newFiles);
+                        }
+                })();
+
+                AppStore.setState({  
+                        activeDiffJobId: null, 
+                        cachedDiffFiles: updatedCachedFiles,
+                        dirtyDiffRepos: updatedDirtyRepos,
+                        diffJobMessage: null,
+                        diffJobError: null
+                    });
+            },
+            onError: (err) => {
+                AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
+            }
+        });
+
     } catch (error) {
         AppStore.setState({ diffJobError: error.message });
     }
 }
 window.generateDiffs = generateDiffs;
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
+import { InSetuElement } from '../sdk.js';
 
-export class InSetuExtGitDiffs extends LitElement {
+export class InSetuExtGitDiffs extends InSetuElement {
     static properties = {
         cachedDiffFiles: { type: Array },
         activeDiffJobId: { type: String },
@@ -82,7 +120,7 @@ export class InSetuExtGitDiffs extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = AppStore.subscribe((state) => {
+        this.subscribe(AppStore, (state) => {
             this.cachedDiffFiles = state.cachedDiffFiles || [];
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobMessage = state.diffJobMessage;
@@ -108,10 +146,8 @@ export class InSetuExtGitDiffs extends LitElement {
         window.addEventListener('open-push-modal', this._boundHandleOpenPush);
         window.addEventListener('open-sweep-modal', this._boundHandleOpenSweep);
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
         window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
         window.removeEventListener('open-sweep-modal', this._boundHandleOpenSweep);
     }
@@ -136,20 +172,15 @@ export class InSetuExtGitDiffs extends LitElement {
             console.error("Failed to load changelogs.");
         }
     }
-
     async _executePush() {
         const msg = this.gitPushMessage.trim();
         if (!msg) return alert("Please enter a commit message.");
         if (!this.currentPushRepo) return alert("Repository context missing.");
         try {
-            const res = await window.inSetu.api.workspace('git/push', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    repo: this.currentPushRepo,
-                    message: msg,
-                    diff_file: this.currentPushDiffFile
-                })
+            const res = await this.api.post('push', {
+                repo: this.currentPushRepo,
+                message: msg,
+                diff_file: this.currentPushDiffFile
             });
             if (!res.ok) {
                 const err = await res.json();
@@ -158,6 +189,38 @@ export class InSetuExtGitDiffs extends LitElement {
             const data = await res.json();
             AppStore.setState({ activePushJobId: data.job_id });
             this.pushModalOpen = false;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (progressMsg) => {
+                    const spinner = document.getElementById('push-spinner');
+                    if (spinner) spinner.innerText = progressMsg || "Pushing to remote... please wait.";
+                },
+                onComplete: async (statusData) => {
+                    const { currentPushRepo, dirtyDiffRepos } = AppStore.getState();
+                    const newDirty = new Set(dirtyDiffRepos);
+                    newDirty.add(currentPushRepo);
+                    AppStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
+
+                    alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
+                    window.inSetu.ui.Factory.closeModal('push-modal');
+                    try {
+                        if(window.executeSystemCompile) await window.executeSystemCompile();
+                    } catch (refreshErr) {
+                        console.warn("Background refresh failed:", refreshErr);
+                    } finally {
+                        window.generateDiffs(true);
+                    }
+                },
+                onError: (err) => {
+                    AppStore.setState({ activePushJobId: null });
+                    alert(`❌ Push failed:\n\n${err.message}`);
+                    const btn = document.getElementById('execute-push-btn');
+                    const spinner = document.getElementById('push-spinner');
+                    if (btn) btn.style.display = 'block';
+                    if (spinner) spinner.style.display = 'none';
+                }
+            });
+
         } catch (err) {
             alert("Network error executing push: " + err.message);
         }
@@ -193,11 +256,7 @@ export class InSetuExtGitDiffs extends LitElement {
         if (Object.keys(selections).length === 0) return alert("No files selected.");
 
         try {
-            const res = await window.inSetu.api.workspace('git/sweep/push', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selections, message: msg })
-            });
+            const res = await this.api.post('sweep/push', { selections, message: msg });
             if (!res.ok) {
                 const err = await res.json();
                 throw new Error(err.error || "Sweep request failed.");
@@ -205,15 +264,58 @@ export class InSetuExtGitDiffs extends LitElement {
             const data = await res.json();
             AppStore.setState({ activeSweepJobId: data.job_id });
             this.sweepModalOpen = false;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (progressMsg) => {
+                    const spinner = document.getElementById('sweep-push-spinner');
+                    if (spinner) spinner.innerText = progressMsg || "Committing and pushing...";
+                },
+                onComplete: async (statusData) => {
+                    const sweepMsgEl = document.getElementById('sweep-message');
+                    if (sweepMsgEl) sweepMsgEl.value = '';
+                    AppStore.setState({ gitSweepMessage: '' });
+
+                    const { dirtyDiffRepos } = AppStore.getState();
+                    const newDirty = new Set(dirtyDiffRepos);
+                    newDirty.add("ALL");
+                    AppStore.setState({ activeSweepJobId: null, dirtyDiffRepos: newDirty });
+
+                    if (window.loadSweepFiles) await window.loadSweepFiles(); 
+                    if (window.executeSystemCompile) {
+                        window.executeSystemCompile().then(() => window.generateDiffs());
+                    } else {
+                        window.generateDiffs();
+                    }
+                    alert(`✅ Sweep successful:\n\n${statusData.message}`);
+                    const btn = document.getElementById('execute-sweep-btn');
+                    const spinner = document.getElementById('sweep-push-spinner');
+                    if (btn) btn.style.display = 'block';
+                    if (spinner) {
+                        spinner.style.display = 'none';
+                        spinner.innerText = "Committing and pushing...";
+                    }
+                },
+                onError: (err) => {
+                    AppStore.setState({ activeSweepJobId: null });
+                    alert(`❌ Sweep failed:\n\n${err.message}`);
+                    const btn = document.getElementById('execute-sweep-btn');
+                    const spinner = document.getElementById('sweep-push-spinner');
+                    if (btn) btn.style.display = 'block';
+                    if (spinner) {
+                        spinner.style.display = 'none';
+                        spinner.innerText = "Committing and pushing...";
+                    }
+                }
+            });
+
         } catch (e) {
             alert("Network error executing sweep: " + e.message);
         }
     }
-
     render() {
         const categories = {};
         const sq = this.searchQuery;
-        const filteredFiles = sq ? window.fuzzyFilterObjects(this.cachedDiffFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : this.cachedDiffFiles;
+        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(this.cachedDiffFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : this.cachedDiffFiles;
 
         filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
@@ -353,18 +455,18 @@ export class InSetuExtGitDiffs extends LitElement {
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
-export class InSetuExtGitActions extends LitElement {
+export class InSetuExtGitActions extends InSetuElement {
+    get extName() { return 'git'; }
     static properties = { hasChanges: { type: Boolean } };
     static styles = [sharedStyles];
     constructor() { super(); this.hasChanges = false; }
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = AppStore.subscribe(state => {
+        this.subscribe(AppStore, state => {
             this.hasChanges = !!(state.cachedDiffFiles && state.cachedDiffFiles.length > 0);
         });
         this.hasChanges = !!(AppStore.getState().cachedDiffFiles && AppStore.getState().cachedDiffFiles.length > 0);
     }
-    disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
         const items = [];
@@ -400,139 +502,6 @@ window.ExtensionRegistry.registerExtension('git', {
         }
     ]
 });
-
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
-    window.inSetu.extensions.Registry.registerTick('git', 1000, async () => {
-        const { activeSweepJobId, activePushJobId, activeDiffJobId } = AppStore.getState();
-        // Sweep Job Polling
-        if (activeSweepJobId) {
-            try {
-                const statusRes = await window.inSetu.api.system(`jobs/${activeSweepJobId}`);
-                if (statusRes.ok) {
-                    const statusData = await statusRes.json();
-                    const spinner = document.getElementById('sweep-push-spinner');
-                    const btn = document.getElementById('execute-sweep-btn');
-
-                    if (spinner) spinner.innerText = statusData.message || "Committing and pushing...";
-                    if (statusData.status === 'completed') {
-                        const sweepMsgEl = document.getElementById('sweep-message');
-                        if (sweepMsgEl) sweepMsgEl.value = '';
-                        AppStore.setState({ gitSweepMessage: '' });
-
-                        const { dirtyDiffRepos } = AppStore.getState();
-                        const newDirty = new Set(dirtyDiffRepos);
-                        newDirty.add("ALL");
-                        AppStore.setState({ activeSweepJobId: null, dirtyDiffRepos: newDirty });
-
-                        await loadSweepFiles(); 
-                        executeSystemCompile().then(() => generateDiffs());
-                        alert(`✅ Sweep successful:\n\n${statusData.message}`);
-                        if (btn) btn.style.display = 'block';
-                        if (spinner) {
-                            spinner.style.display = 'none';
-                            spinner.innerText = "Committing and pushing...";
-                        }
-                    } else if (statusData.status === 'failed') {
-                        AppStore.setState({ activeSweepJobId: null });
-                        alert(`❌ Sweep failed:\n\n${statusData.message}`);
-                        if (btn) btn.style.display = 'block';
-                        if (spinner) {
-                            spinner.style.display = 'none';
-                            spinner.innerText = "Committing and pushing...";
-                        }
-                    }
-                }
-            } catch (e) {
-                console.error("Sweep polling error:", e);
-            }
-        }
-        // Push Job Polling
-        if (activePushJobId) {
-            try {
-                const statusRes = await window.inSetu.api.system(`jobs/${activePushJobId}`);
-                if (statusRes.ok) {
-                    const statusData = await statusRes.json();
-                    const spinner = document.getElementById('push-spinner');
-                    const btn = document.getElementById('execute-push-btn');
-
-                    if (spinner) spinner.innerText = statusData.message || "Pushing to remote... please wait.";
-                    if (statusData.status === 'completed') {
-                        const { currentPushRepo, dirtyDiffRepos } = AppStore.getState();
-
-                        const newDirty = new Set(dirtyDiffRepos);
-                        newDirty.add(currentPushRepo);
-                        AppStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
-
-                        alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
-                        window.inSetu.ui.Factory.closeModal('push-modal');
-                        try {
-                            await executeSystemCompile();
-                        } catch (refreshErr) {
-                            console.warn("Background refresh failed:", refreshErr);
-                        } finally {
-                            generateDiffs(true);
-                        }
-                    } else if (statusData.status === 'failed') {
-                        window._activePushJobId = null;
-                        alert(`❌ Push failed:\n\n${statusData.message}`);
-                        if (btn) btn.style.display = 'block';
-                        if (spinner) spinner.style.display = 'none';
-                    }
-                }
-            } catch (e) {
-                console.error("Push polling error:", e);
-            }
-        }
-        // Diff Generation Polling
-        if (activeDiffJobId) {
-                try {
-                        const statusRes = await window.inSetu.api.system(`jobs/${activeDiffJobId}`);
-                        if (statusRes.ok) {
-                                const statusData = await statusRes.json();
-                                AppStore.setState({ diffJobMessage: statusData.message });
-
-                                if (statusData.status === 'completed') {
-                                        const newFiles = statusData.artifact.files || [];
-                                        const targetRepos = statusData.artifact.target_repos;
-
-                                        const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
-                                        const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
-                                        const updatedCachedFiles = (() => {
-                                                if (!targetRepos) {
-                                                        updatedDirtyRepos.clear();
-                                                        return newFiles;
-                                                } else {
-                                                        targetRepos.forEach(r => updatedDirtyRepos.delete(r));
-                                                        const filtered = prevCachedFiles.filter(f => {
-                                                                const repo = typeof f === 'object' ? f.repo : null;
-                                                                return !repo || !targetRepos.includes(repo);
-                                                        });
-                                                        return filtered.concat(newFiles);
-                                                }
-                                        })();
-
-                                        AppStore.setState({  
-                                                activeDiffJobId: null, 
-                                                cachedDiffFiles: updatedCachedFiles,
-                                                dirtyDiffRepos: updatedDirtyRepos,
-                                                diffJobMessage: null,
-                                                diffJobError: null
-                                            });
-                                } else if (statusData.status === 'failed') {
-                                        AppStore.setState({ 
-                                                activeDiffJobId: null, 
-                                                diffJobError: statusData.message,
-                                                diffJobMessage: null
-                                        });
-                                }
-                        }
-                } catch (e) {
-                        console.error("Diff polling error:", e);
-                }
-        }
-    });
-}
-
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     const markRepoDirty = (filepath) => {
         if (!filepath) return false;

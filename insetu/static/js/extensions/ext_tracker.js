@@ -10,25 +10,11 @@ import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-
-// Utility functions mapped to avoid root-level mutable declarations
-const _getActiveWs = () => AppStore.getState().activeWorkspace || 'default';
-const _safeParseLocalStorageSet = (key) => {
-    try {
-        const item = localStorage.getItem(key);
-        return new Set(item ? JSON.parse(item) : ["ALL"]);
-    } catch (e) {
-        console.warn(`[Kanban Storage Safeguard] Resetting corrupted key: ${key}`);
-        localStorage.setItem(key, JSON.stringify(["ALL"]));
-        return new Set(["ALL"]);
-    }
-};
-
 export const KanbanStore = createExtensionStore('Kanban', {
     tasks: [],
-    pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${_getActiveWs()}`),
-    pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${_getActiveWs()}`),
-    pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${_getActiveWs()}`),
+    pinnedRepos: new Set(["ALL"]),
+    pinnedBuckets: new Set(["ALL"]),
+    pinnedTags: new Set(["ALL"]),
     reposExpanded: false,
     bucketsExpanded: {},
     tagsExpanded: false,
@@ -49,7 +35,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
             KanbanStore.setState({ tasks: data.tasks || [] });
         }
     }
-});
+}, ['pinnedRepos', 'pinnedBuckets', 'pinnedTags']);
 window.inSetu.stores.Kanban = KanbanStore;
 
 // Alias for legacy external triggers until fully deprecated
@@ -184,39 +170,34 @@ this.pinnedBuckets = new Set(['ALL']);
         }
     }
     async _transitionTask(task, newStatus, newType = null) {
-        try {
-            const res = await this.api.post('transition', {
-                repo: task.repo,
-                filepath: task.filepath,
-                new_status: newStatus,
-                new_type: newType
+        const res = await this.api.post('transition', {
+            repo: task.repo,
+            filepath: task.filepath,
+            new_status: newStatus,
+            new_type: newType
+        });
+
+        if (res.ok) {
+            const data = await res.json();
+            const currentTasks = KanbanStore.getState().tasks;
+            const updatedTasks = currentTasks.map(t => {
+                if (t.id === task.id) {
+                    return {
+                        ...t,
+                        status: newStatus,
+                        filepath: data.new_filepath,
+                        ticket_type: newType || t.ticket_type,
+                        isTodo: newType ? newType === 'todo' : t.isTodo,
+                        isBug: newType ? newType === 'bug' : t.isBug,
+                        isQueue: newType ? newType === 'queue' : t.isQueue
+                    };
+                }
+                return t;
             });
-
-            if (res.ok) {
-                const data = await res.json();
-
-                // Pure UDF Mutation: Update the state store, let Lit re-render the card
-                const currentTasks = KanbanStore.getState().tasks;
-                const updatedTasks = currentTasks.map(t => {
-                    if (t.id === task.id) {
-                        return {
-                            ...t,
-                            status: newStatus,
-                            filepath: data.new_filepath,
-                            ticket_type: newType || t.ticket_type,
-                            isTodo: newType ? newType === 'todo' : t.isTodo,
-                            isBug: newType ? newType === 'bug' : t.isBug,
-                            isQueue: newType ? newType === 'queue' : t.isQueue
-                        };
-                    }
-                    return t;
-                });
-                KanbanStore.setState({ tasks: updatedTasks });
-            } else {
-                alert("Failed to transition task.");
-            }
-        } catch (e) {
-            alert("Network error processing transition.");
+            KanbanStore.setState({ tasks: updatedTasks });
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to transition task.");
         }
     }
 
@@ -251,28 +232,26 @@ this.pinnedBuckets = new Set(['ALL']);
                 </div>
 
                 <insetu-file-actions slot="actions" .filepath=${t.filepath} .repoDir=${t.repo} .isFS=${true}></insetu-file-actions>
-
                 ${(t.status === 'open' && !t.isQueue) ? html`
-                    <button slot="actions" class="btn-sm" style="background: var(--intent-warning);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'active'); }}>▶️ Start</button>
+                    <insetu-async-btn slot="actions" label="▶️ Start" intent="warning" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'active'); }}></insetu-async-btn>
                 ` : ''}
 
                 ${(t.status === 'closed') ? html`
-                    <button slot="actions" class="btn-sm" style="background: var(--intent-highlight);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'open'); }}>🔄 Re-open</button>
+                    <insetu-async-btn slot="actions" label="🔄 Re-open" intent="highlight" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open'); }}></insetu-async-btn>
                 ` : ''}
 
                 ${(t.status !== 'closed' && t.isQueue) ? html`
-                    <button slot="actions" class="btn-sm" style="background: var(--intent-success);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'open', 'todo'); }}>✅ Accept</button>
+                    <insetu-async-btn slot="actions" label="✅ Accept" intent="success" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open', 'todo'); }}></insetu-async-btn>
                 ` : ''}
 
                 ${(t.status === 'active' && !t.isQueue) ? html`
-                    <button slot="actions" class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'open'); }}>⏸️ Pause</button>
+                    <insetu-async-btn slot="actions" label="⏸️ Pause" intent="neutral" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open'); }}></insetu-async-btn>
                 ` : ''}
 
                 ${(t.status !== 'closed' && t.status !== 'archived') ? html`
-                    <button slot="actions" class="btn-sm" style="background: ${t.isQueue ? 'var(--intent-neutral)' : 'var(--intent-success)'};" 
-                        @click=${(e) => { e.stopPropagation(); this._transitionTask(t, 'closed'); }}>
-                        ✅ ${t.isQueue ? 'Resolve' : 'Close'}
-                    </button>
+                    <insetu-async-btn slot="actions" label="${t.isQueue ? '✅ Resolve' : '✅ Close'}" intent="${t.isQueue ? 'neutral' : 'success'}" 
+                        .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'closed'); }}>
+                    </insetu-async-btn>
                 ` : ''}
             </insetu-card>
         `;
@@ -309,16 +288,15 @@ this.pinnedBuckets = new Set(['ALL']);
                 </div>
             `;
         }
-
         return html`
             <div class="board-columns">
                 <div class="column">
-                    <h3>Open</h3>
-                    ${openTasks.map(t => this._renderTaskCard(t))}
-                </div>
-                <div class="column">
                     <h3>Active</h3>
                     ${activeTasks.map(t => this._renderTaskCard(t))}
+                </div>
+                <div class="column">
+                    <h3>Open</h3>
+                    ${openTasks.map(t => this._renderTaskCard(t))}
                 </div>
                 <div class="column">
                     <h3 style="color: var(--intent-success);">Closed</h3>
@@ -356,21 +334,18 @@ if (this.allRepos.includes(pinnedRepo)) {
         const sub_bucket = bucket || 'None';
 
         if (!title || !desc) {
-            alert("Title and Description are required.");
-            return;
+            throw new Error("Title and Description are required.");
         }
-        try {
-            const res = await this.api.post('new', {
-                repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
-            });
-            if (res.ok) {
-                KanbanStore.getState().setModal('new', false);
-                KanbanStore.getState().fetchTasks();
-            } else {
-                alert("Failed to create task.");
-            }
-        } catch (e) {
-            alert("Network error.");
+
+        const res = await this.api.post('new', {
+            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
+        });
+        if (res.ok) {
+            KanbanStore.getState().setModal('new', false);
+            KanbanStore.getState().fetchTasks();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to create task.");
         }
     }
     _renderNewTaskModal() {
@@ -426,9 +401,8 @@ if (this.allRepos.includes(pinnedRepo)) {
                         .value=${newTaskForm.desc}
                         @input=${(e) => KanbanStore.getState().setNewTaskField('desc', e.target.value)}></textarea>
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold;"
-                        @click=${this._saveNewTask}>💾 Create Ticket</button>
+                <div slot="footer" style="display: flex; width: 100%;">
+                    <insetu-async-btn style="flex: 1; display: block; width: 100%;" label="💾 Create Ticket" intent="primary" .onClick=${this._saveNewTask.bind(this)}></insetu-async-btn>
                 </div>
             </insetu-modal>
         `;
@@ -476,7 +450,7 @@ this.pinnedRepos.size > 1;
             return matchesRepo && matchesBucket && matchesTag;
         });
         const textFilteredTasks = this.searchQuery 
-            ? window.fuzzyFilterObjects(filteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
+            ? window.inSetu.utils.fuzzyFilterObjects(filteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
             : filteredTasks;
 
         const activeFilters = [];
@@ -509,14 +483,10 @@ this.pinnedRepos.size > 1;
                     .activeBuckets=${Array.from(this.pinnedBuckets)}
                     .getBucketsFn=${getFlattenedBuckets}
                     @repo-filter-changed=${(e) => {
-                        const newSet = new Set(e.detail.activeRepos);
-                        localStorage.setItem('insetu_task_pinned_repos_' + activeWs, JSON.stringify(Array.from(newSet)));
-                        KanbanStore.setState({ pinnedRepos: newSet });
+                        KanbanStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) });
                     }}
                     @bucket-filter-changed=${(e) => {
-                        const newSet = new Set(e.detail.activeBuckets);
-                        localStorage.setItem('insetu_task_pinned_buckets_' + activeWs, JSON.stringify(Array.from(newSet)));
-                        KanbanStore.setState({ pinnedBuckets: newSet });
+                        KanbanStore.setState({ pinnedBuckets: new Set(e.detail.activeBuckets) });
                     }}>
                 </insetu-repo-filter>
 
@@ -527,9 +497,7 @@ this.pinnedRepos.size > 1;
                         .items=${tagsArray.map(t => ({id: t, label: '#' + t}))}
                         .activeItems=${Array.from(this.pinnedTags)}
                         @filter-changed=${(e) => {
-                            const newSet = new Set(e.detail.activeItems);
-localStorage.setItem('insetu_task_pinned_tags_' + activeWs, JSON.stringify(Array.from(newSet)));
-                            KanbanStore.setState({ pinnedTags: newSet });
+                            KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
                         }}>
                     </insetu-filter-group>
                 ` : ''}
@@ -659,12 +627,10 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             alert("Network error.");
         }
     }
-
     async _saveEditTask() {
         const { filepath, title, tagsRaw, bucket, deliveryDate, createdAt, closedAt, origYaml, type, status, repo, desc } = KanbanStore.getState().editTaskForm;
         if (!title || !desc.trim()) {
-            alert("Title and Description are required.");
-            return;
+            throw new Error("Title and Description are required.");
         }
         const tagsArr = tagsRaw.split(',').map(t => t.trim()).filter(t => t);
         const tagsYaml = tagsArr.length > 0 ? `tags: [${tagsArr.join(', ')}]` : `tags: []`;
@@ -680,25 +646,24 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
         const filename = filepath.split('/').pop();
         const folderType = type === 'queue' ? 'queue' : `${type}s`;
         const intendedRelPath = `${repo}/.tracker/${folderType}/${status}/${filename}`;
-        try {
-            const res = await window.inSetu.api.workspace('fs/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    filepath: intendedRelPath,  
-                    content: newContent,
-                    delete_source: filepath !== intendedRelPath ? filepath : null
-                })
-            });
-            if (res.ok) {
-                KanbanStore.getState().setModal('edit', false);
-                this._originalTaskSnapshot = null;
-                KanbanStore.getState().fetchTasks();
-            } else {
-                alert("Failed to save changes.");
-            }
-        } catch (e) {
-            alert("Network error.");
+
+        const res = await window.inSetu.api.workspace('fs/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                filepath: intendedRelPath,  
+                content: newContent,
+                delete_source: filepath !== intendedRelPath ? filepath : null
+            })
+        });
+
+        if (res.ok) {
+            KanbanStore.getState().setModal('edit', false);
+            this._originalTaskSnapshot = null;
+            KanbanStore.getState().fetchTasks();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to save changes.");
         }
     }
     _renderEditTaskModal() {
@@ -801,8 +766,7 @@ this.requestUpdate(); }}
                     <button class="btn-sm" style="flex: 0 0 auto; padding: 15px 20px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndCopy(editTaskForm.filepath, e.target)}>📋 Copy</button>
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-neutral); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndDownloadState(editTaskForm.filepath, e.target)}>⬇️ Download</button>
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; font-size: 1.1rem; border-radius: 0; display: ${this._isDirty() ? 'block' : 'none'};"
-                        @click=${this._saveEditTask}>💾 Save & Sync Ticket</button>
+                    <insetu-async-btn style="flex: 1; display: ${this._isDirty() ? 'block' : 'none'};" label="💾 Save & Sync Ticket" intent="primary" .onClick=${this._saveEditTask.bind(this)}></insetu-async-btn>
                 </div>
             </insetu-modal>
 `;
@@ -874,7 +838,6 @@ this.requestUpdate(); }}
             alert("Failed to load configuration.");
         }
     }
-
     async _saveConfig() {
         const { domainStrat, customVal } = KanbanStore.getState().trackerConfigForm;
         const newStrat = domainStrat;
@@ -885,20 +848,18 @@ this.requestUpdate(); }}
         if (!config.extension_config.tracker) config.extension_config.tracker = {};
         config.extension_config.tracker.domain_strategy = newStrat;
         config.extension_config.tracker.domain_custom_value = newVal;
-        try {
-            const saveRes = await window.inSetu.api.system('config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            if (saveRes.ok) {
-                KanbanStore.getState().setModal('config', false);
-if (window.executeSystemCompile) window.executeSystemCompile();
-            } else {
-                alert("Failed to save.");
-            }
-        } catch (err) {
-            alert("Network error.");
+
+        const saveRes = await window.inSetu.api.system('config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+        if (saveRes.ok) {
+            KanbanStore.getState().setModal('config', false);
+            if (window.executeSystemCompile) window.executeSystemCompile();
+        } else {
+            const err = await saveRes.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to save settings.");
         }
     }
     _renderConfigModal() {
@@ -931,16 +892,16 @@ if (window.executeSystemCompile) window.executeSystemCompile();
                         ` : ''}
                     </div>
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold;"
-                        @click=${this._saveConfig}>💾 Save Settings</button>
+                <div slot="footer" style="display: flex; width: 100%;">
+                    <insetu-async-btn style="flex: 1; display: block; width: 100%;" label="💾 Save Settings" intent="primary" .onClick=${this._saveConfig.bind(this)}></insetu-async-btn>
                 </div>
             </insetu-modal>
         `;
     }
 }
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
-export class InSetuExtTrackerActions extends LitElement {
+export class InSetuExtTrackerActions extends InSetuElement {
+    get extName() { return 'tracker'; }
     static styles = [sharedStyles];
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
@@ -1069,13 +1030,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
             }
         },
         'zone:soft-refresh': (ws) => {
-            KanbanStore.setState({ 
-                tasks: [],
-                pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${ws}`),
-                pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${ws}`),
-                pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${ws}`)
-            });
-            KanbanStore.getState().fetchTasks(); // Headless sync for the new tenant
+            KanbanStore.setState({ tasks: [] });
+            KanbanStore.getState().fetchTasks();
             return false;
         }
     }

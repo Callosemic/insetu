@@ -1,28 +1,9 @@
 import { AppStore } from '../store.js';
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-// Unified API Gateway mapped to ADR 0016 Explicit SDK
-const skillsReq = async (endpoint, options = {}) => {
-    const isGet = !options.method || options.method === 'GET';
-    const cleanPath = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
-    const finalPath = `${cleanPath}${isGet ? (cleanPath.includes('?') ? '&' : '?') + '_t=' + Date.now() : ''}`;
+import { createExtensionStore, InSetuElement } from '../sdk.js';
 
-    const reqOptions = {
-        ...options,
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
-    };
-
-    if (cleanPath.startsWith('system/')) {
-        return await window.inSetu.api.system(finalPath.substring(7), reqOptions);
-    }
-    return await window.inSetu.api.workspace(finalPath, reqOptions);
-};
-
-export const SkillsStore = createStore(
-    devtools(
-        subscribeWithSelector((set, get) => ({
+export const SkillsStore = createExtensionStore('Skills', {
             playlist: [],
             allSkills: [],
             domainConfig: {},
@@ -37,27 +18,27 @@ export const SkillsStore = createStore(
 
             clearPayload: () => set({ playlist: [], allSkills: [], groupsList: [] }),
             fetchPlaylist: async (silent = false) => {
-                if (!silent) set({ loading: true });
+                if (!silent) SkillsStore.setState({ loading: true });
                 try {
-                    const res = await skillsReq('/skills/playlist');
+                    const res = await window.inSetu.api.workspace('skills/playlist');
                     if (res.ok) {
                         const data = await res.json();
-                        set({ playlist: data.playlist || [] });
+                        SkillsStore.setState({ playlist: data.playlist || [] });
                     }
                 } catch (e) {
                     console.error("Failed to load skills queue:", e);
                 } finally {
-                    if (!silent) set({ loading: false });
+                    if (!silent) SkillsStore.setState({ loading: false });
                 }
             },
             fetchAllSkills: async () => {
                 try {
-                    const res = await skillsReq('/skills/list');
+                    const res = await window.inSetu.api.workspace('skills/list');
                     if (res.ok) {
                         const data = await res.json();
                         const skills = data.skills || [];
                         const uniqueGroups = Array.from(new Set(skills.map(s => s.group_name).filter(g => g))).sort();
-                        set({ allSkills: skills, groupsList: uniqueGroups });
+                        SkillsStore.setState({ allSkills: skills, groupsList: uniqueGroups });
                     }
                 } catch (e) {
                     console.error("Failed to load repertoire listing:", e);
@@ -65,7 +46,7 @@ export const SkillsStore = createStore(
             },
             fetchDomainConfig: async () => {
                 try {
-                    const res = await skillsReq('/system/config');
+                    const res = await window.inSetu.api.system('config');
                     if (res.ok) {
                         const config = await res.json();
                         const skillCfg = config.extension_config?.skills_practice?.domains || {
@@ -84,14 +65,14 @@ export const SkillsStore = createStore(
                                 ]
                             }
                         };
-                        set({ domainConfig: skillCfg });
+                        SkillsStore.setState({ domainConfig: skillCfg });
                     }
                 } catch (e) {
                     console.warn("Failed to dynamically pull configurations matrix.", e);
                 }
             },
             selectItem: (item, mode = 'train') => {
-                set({ 
+                SkillsStore.setState({ 
                     selectedItem: item,
                     modalMode: mode,
                     formScore: 4,
@@ -100,16 +81,13 @@ export const SkillsStore = createStore(
                 });
             },
             updateMetricField: (key, val) => {
-                set(state => ({
+                SkillsStore.setState(state => ({
                     formMetrics: { ...state.formMetrics, [key]: val }
                 }));
             }
-        })),
-        { name: 'SkillsStore' }
-    )
-);
+});
 
-export class InSetuExtSkills extends LitElement {
+export class InSetuExtSkills extends InSetuElement {
     static properties = {
         playlist: { type: Array },
         allSkills: { type: Array },
@@ -169,7 +147,7 @@ export class InSetuExtSkills extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = SkillsStore.subscribe(state => {
+        this.subscribe(SkillsStore, state => {
             this.playlist = state.playlist;
             this.allSkills = state.allSkills;
             this.domainConfig = state.domainConfig;
@@ -192,16 +170,13 @@ export class InSetuExtSkills extends LitElement {
                 this._editGroup = '';
             }
         });
-        this._unsubWs = AppStore.subscribe(state => state.activeWorkspace, () => {
+        this.subscribe(AppStore, state => state.activeWorkspace, () => {
             this._reloadAll();
         });
         this._reloadAll();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-        if (this._unsubWs) this._unsubWs();
     }
     _reloadAll(silent = false) {
         SkillsStore.getState().fetchPlaylist(silent);
@@ -233,10 +208,7 @@ export class InSetuExtSkills extends LitElement {
             metrics: metrics
         };
         try {
-            const res = await skillsReq('/skills/create', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
+            const res = await this.api.post('create', payload);
             if (res.ok) {
                 SkillsStore.setState({ newSkillModalOpen: false });
             } else {
@@ -249,7 +221,7 @@ export class InSetuExtSkills extends LitElement {
     }
     async _openConfigModal() {
         try {
-            const res = await skillsReq('/system/config');
+            const res = await window.inSetu.api.system('config');
             if (res.ok) {
                 this._rawSystemConfig = await res.json();
                 this._configText = JSON.stringify(this._rawSystemConfig.extension_config?.skills_practice?.domains || {}, null, 2);
@@ -319,8 +291,9 @@ export class InSetuExtSkills extends LitElement {
             if (!config.extension_config) config.extension_config = {};
             if (!config.extension_config.skills_practice) config.extension_config.skills_practice = {};
             config.extension_config.skills_practice.domains = domains;
-            const res = await skillsReq('/system/config', {
+            const res = await window.inSetu.api.system('config', {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
             });
             if (res.ok) {
@@ -339,10 +312,7 @@ export class InSetuExtSkills extends LitElement {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            const res = await skillsReq('/skills/delete', {
-                method: 'POST',
-                body: JSON.stringify({ filepath: this.selectedItem.filepath })
-            });
+            const res = await this.api.post('delete', { filepath: this.selectedItem.filepath });
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
                 alert("Track permanently wiped from file system.");
@@ -367,10 +337,7 @@ export class InSetuExtSkills extends LitElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            const res = await skillsReq('/skills/update', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
+            const res = await this.api.post('update', payload);
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
                 alert("Structural configuration updated successfully!");
@@ -395,10 +362,7 @@ export class InSetuExtSkills extends LitElement {
             metrics: this.formMetrics
         };
         try {
-            const res = await skillsReq('/skills/log', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
+            const res = await this.api.post('log', payload);
             if (res.ok) {
                 SkillsStore.setState({ selectedItem: null });
                 alert("Practice entry committed atomically into text ledger!");

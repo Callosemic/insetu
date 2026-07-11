@@ -1,27 +1,23 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { downloadFile } from '../fs.js';
 import { AppStore } from '../store.js';
 
-export const FormatStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            formatModalOpen: false,
-            currentFormatTarget: '',
-            formatMode: 'pdf',
-            activeFormatJobId: null,
-            formatJobMessage: null,
-            formatJobError: null
-        })),
-        { name: 'FormatStore' }
-    )
-);
-window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+
+export const FormatStore = createExtensionStore('Format', {
+    formatModalOpen: false,
+    currentFormatTarget: '',
+    formatMode: 'pdf',
+    activeFormatJobId: null,
+    formatJobMessage: null,
+    formatJobError: null
+});
+
 window.inSetu.stores.Format = FormatStore;
 
-export class InSetuExtFormatModals extends LitElement {
+export class InSetuExtFormatModals extends InSetuElement {
     static properties = {
         formatModalOpen: { type: Boolean },
         currentFormatTarget: { type: String },
@@ -43,7 +39,7 @@ export class InSetuExtFormatModals extends LitElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = FormatStore.subscribe(state => {
+        this.subscribe(FormatStore, state => {
             this.formatModalOpen = state.formatModalOpen;
             this.currentFormatTarget = state.currentFormatTarget;
             this.formatMode = state.formatMode;
@@ -51,28 +47,6 @@ export class InSetuExtFormatModals extends LitElement {
             this.formatJobMessage = state.formatJobMessage;
             this.formatJobError = state.formatJobError;
         });
-
-        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
-            window.inSetu.extensions.Registry.registerTick('format', 1000, async () => {
-                const { activeFormatJobId } = FormatStore.getState();
-                if (!activeFormatJobId || activeFormatJobId === 'starting') return;
-                try {
-                    const statusRes = await window.inSetu.api.system(`jobs/${activeFormatJobId}`);
-                    if (statusRes.ok) {
-                        const statusData = await statusRes.json();
-                        FormatStore.setState({ formatJobMessage: statusData.message || "⏳ Compiling..." });
-                        if (statusData.status === 'completed') {
-                            FormatStore.setState({ activeFormatJobId: null, formatModalOpen: false });
-                            if (window.downloadFile) await window.downloadFile(statusData.artifact.download_url, statusData.artifact.filename);
-                        } else if (statusData.status === 'failed') {
-                            FormatStore.setState({ activeFormatJobId: null, formatJobError: statusData.message });
-                        }
-                    }
-                } catch (e) {
-                    console.error("Format polling error:", e);
-                }
-            });
-        }
     }
 
     disconnectedCallback() {
@@ -85,10 +59,9 @@ export class InSetuExtFormatModals extends LitElement {
     async _executePublish() {
         FormatStore.setState({ activeFormatJobId: 'starting', formatJobMessage: '⏳ Compiling...', formatJobError: null });
         try {
-            const res = await window.inSetu.api.workspace('format/compile-document', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filepath: this.currentFormatTarget, format: this.formatMode })
+            const res = await this.api.post('compile-document', { 
+                filepath: this.currentFormatTarget, 
+                format: this.formatMode 
             });
             if (!res.ok) {
                 const err = await res.json();
@@ -96,6 +69,18 @@ export class InSetuExtFormatModals extends LitElement {
             }
             const data = await res.json();
             FormatStore.setState({ activeFormatJobId: data.job_id, formatJobMessage: '⏳ Compiling...' });
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => FormatStore.setState({ formatJobMessage: msg }),
+                onComplete: async (statusData) => {
+                    FormatStore.setState({ activeFormatJobId: null, formatModalOpen: false });
+                    if (window.downloadFile) await window.downloadFile(statusData.artifact.download_url, statusData.artifact.filename);
+                },
+                onError: (err) => {
+                    FormatStore.setState({ activeFormatJobId: null, formatJobError: err.message });
+                }
+            });
+
         } catch (e) {
             FormatStore.setState({ activeFormatJobId: null, formatJobError: e.message });
         }

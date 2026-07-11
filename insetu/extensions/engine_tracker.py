@@ -186,57 +186,51 @@ def get_tracker_path(repo, ticket_type, status, workspace_id=None):
 
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
     return Path(base).joinpath(folder_type, status).as_posix()
-def create_ticket(repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, workspace_id=None):
+def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None):
     """Generates the physical Markdown file with YAML frontmatter."""
-    # Create a short prefix dynamically from the repo name
-    repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
-    if not repo_prefix: 
+    from insetu.utils_core import update_frontmatter
 
-        repo_prefix = "TKT"
+    repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
+    if not repo_prefix: repo_prefix = "TKT"
 
     now = datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M")
-
     ticket_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}"
     filename = f"{ticket_id}.md"
 
-    target_dir = get_tracker_path(repo, ticket_type, status, workspace_id=workspace_id)
+    target_dir = get_tracker_path(repo, ticket_type, status, workspace_id=ctx.workspace_id)
     os.makedirs(target_dir, exist_ok=True)
-    filepath = Path(target_dir).joinpath(filename).as_posix()
-    tags_yaml = f"\ntags: [{', '.join(f'{t.strip()}' for t in tags.split(',') if t.strip())}]" if tags else ""
-    delivery_yaml = f'\ndelivery_date: "{delivery_date}"' if delivery_date else "\ndelivery_date: null"
-    content = f"""---
-repo: "{repo}"
-type: "{ticket_type}"
-status: "{status}"
-id: {ticket_id}
-title: "{title.replace('"', "'")}"
-created_at: {now.isoformat(timespec='seconds')}
-closed_at: null
-sub_bucket: "{sub_bucket}"{tags_yaml}{delivery_yaml}
----
 
-## Description
-{description}
+    raw_content = f"## Description\n{description}\n\n## Notes / Execution Log\n"
 
-## Notes / Execution Log
-"""
-    from insetu.routes_fs import execute_vfs_save
+    tags_list = [t.strip() for t in tags.split(',') if t.strip()]
+    yaml_data = {
+        "repo": repo,
+        "type": ticket_type,
+        "status": status,
+        "id": ticket_id,
+        "title": title.replace('"', "'"),
+        "created_at": now.isoformat(timespec='seconds'),
+        "closed_at": "null",
+        "sub_bucket": sub_bucket
+    }
+    if tags_list: yaml_data["tags"] = json.dumps(tags_list)
+    if delivery_date: yaml_data["delivery_date"] = delivery_date
 
-    target_ws = workspace_id or "default"
+    content = update_frontmatter(raw_content, yaml_data)
+
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
     ticket_path = f"{repo}/.tracker/{folder_type}/{status}/{filename}"
-    # Synchronously seed the local ledger cache row to guarantee transactional accuracy on immediate CQRS query sweeps
-    conn = get_connection('tracker', workspace_id=target_ws)
+
+    conn = ctx.db
     conn.execute("""
         INSERT OR REPLACE INTO tracker_tickets 
         (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, delivery_date, filepath)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-    """, (ticket_id, repo, ticket_type, status, title, description, json.dumps([t.strip() for t in tags.split(',') if t.strip()]), sub_bucket, now.isoformat(), None, delivery_date, ticket_path))
+    """, (ticket_id, repo, ticket_type, status, title, description, json.dumps(tags_list), sub_bucket, now.isoformat(), None, delivery_date, ticket_path))
     conn.commit()
 
-    execute_vfs_save(target_ws, ticket_path, content)
+    ctx.vfs.save(ticket_path, content)
     return ticket_path
 def _extract_closed_date(content):
     """Helper to consistently extract and parse closed_at timestamps from raw ticket YAML."""
@@ -248,31 +242,29 @@ def _extract_closed_date(content):
         except (ValueError, TypeError):
             return None
     return None
-def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspace_id=None):
+def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    abs_current = Path(ws_root).joinpath(current_rel_path).as_posix()
+    from insetu.utils_core import update_frontmatter, parse_frontmatter
+
+    abs_current = ctx.resolve_path(current_rel_path)
     if not os.path.exists(abs_current):
         raise FileNotFoundError(f"Ticket not found: {abs_current}")
 
-    # Infer type from the current path
     ticket_type = "bug" if "/bugs/" in current_rel_path else "queue" if "/queue/" in current_rel_path else "todo"
     if new_type: ticket_type = new_type
 
     filename = os.path.basename(current_rel_path)
+    content = ctx.vfs.read(current_rel_path)
+    yaml_data, body, _ = parse_frontmatter(content)
 
-    with open(abs_current, "r", encoding="utf-8") as f:
-        content = f.read()
-    # Calculate updated frontmatter safely in memory
-    if new_status in ["closed", "logged", "archived"] and "closed_at: null" in content:
-        now_iso = datetime.now().isoformat(timespec='seconds')
-        content = re.sub(r"closed_at:\s*null", f"closed_at: {now_iso}", content)
+    if new_status in ["closed", "logged", "archived"] and (yaml_data.get("closed_at") in ["null", None, ""]):
+        yaml_data["closed_at"] = datetime.now().isoformat(timespec='seconds')
 
-    # Update declarative YAML fields
-    content = re.sub(r"status:\s*\"?[a-zA-Z]+\"?", f'status: "{new_status}"', content)
-    if new_type:
-        content = re.sub(r"type:\s*\"?[a-zA-Z]+\"?", f'type: "{new_type}"', content)
-    # Re-calculate correct relative tracking track targets
+    yaml_data["status"] = new_status
+    if new_type: yaml_data["type"] = new_type
+
+    content = update_frontmatter(content, yaml_data)
+
     if new_status == "archived":
         new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
     elif new_status == "logged":
@@ -281,12 +273,9 @@ def transition_ticket(repo, current_rel_path, new_status, new_type=None, workspa
         folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
         new_rel_path = f"{repo}/.tracker/{folder_type}/{new_status}/{filename}"
 
-    from insetu.routes_fs import execute_vfs_save
-    # Process modifications asynchronously through our off-thread VFS queue pipeline
-    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": current_rel_path if current_rel_path != new_rel_path else None})
+    ctx.vfs.save(new_rel_path, content, data={"delete_source": current_rel_path if current_rel_path != new_rel_path else None})
 
-    # Synchronously project state transitions inside the SQLite index cache for instant read synchronization
-    conn = get_connection('tracker', workspace_id=workspace_id)
+    conn = ctx.db
     conn.execute("""
         UPDATE tracker_tickets 
         SET status = ?, filepath = ?, ticket_type = ?, closed_at = ?
@@ -596,6 +585,7 @@ def api_tracker_new(ctx):
     data = ctx.req.json
     try:
         new_path = create_ticket(
+            ctx=ctx,
             repo=data['repo'], 
             ticket_type=data['type'], 
             status=data['status'], 
@@ -603,8 +593,7 @@ def api_tracker_new(ctx):
             description=data['description'],
             tags=data.get('tags', ''),
             sub_bucket=data.get('sub_bucket', 'None'),
-            delivery_date=data.get('delivery_date'),
-            workspace_id=ctx.workspace_id
+            delivery_date=data.get('delivery_date')
         )
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
@@ -646,11 +635,11 @@ def api_tracker_transition(ctx):
     data = ctx.req.json
     try:
         new_path = transition_ticket(
+            ctx=ctx,
             repo=data['repo'], 
             current_rel_path=data['filepath'], 
             new_status=data['new_status'],
-            new_type=data.get('new_type'),
-            workspace_id=ctx.workspace_id
+            new_type=data.get('new_type')
         )
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:

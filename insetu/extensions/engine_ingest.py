@@ -145,11 +145,7 @@ def extract_markdown_from_url(target_url, method="jina"):
 def api_ingest_url(ctx):
     data = ctx.req.json or {}
     target_url = data.get("url", "").strip()
-    method = data.get("method", "jina")
     if not target_url: return jsonify({"error": "URL is required"}), 400
 
-    job_id = f"ing_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"url": target_url, "method": method})
-    submit_immediate_job(job_id, "ingest", "ingest_task", args_json, ctx.workspace_id)
-
+    job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method", "jina"))
     return jsonify({"status": "accepted", "job_id": job_id}), 202

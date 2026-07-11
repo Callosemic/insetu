@@ -3,12 +3,13 @@ import os
 import subprocess
 import uuid
 import json
-from flask import Blueprint, request, jsonify
-from insetu.utils_core import load_config, get_workspace_physics, sniff_tenant_id
+from flask import jsonify
+from insetu.sdk import InSetuExtension
+from insetu.utils_core import get_workspace_physics
 from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
-git_bp = Blueprint('git', __name__)
+git_bp = InSetuExtension('git', __name__)
 __depends__ = []
 
 @hooks.on('pre_compile')
@@ -18,12 +19,15 @@ def on_pre_compile_generate_diffs(workspace_id=None):
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 def generate_diff_context(workspace_id=None, target_repos=None):
-    from insetu.utils_core import load_config, get_gather_paths, get_workspace_physics, get_safe_repo_id
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_safe_repo_id
     from insetu.engine_gather import resolve_file_bucket
-    paths = get_gather_paths(workspace_id)
-    _, ws_root, _ = get_workspace_physics(workspace_id)
 
-    live_cfg = load_config(workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+    paths = ctx.paths
+    _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
+
+    live_cfg = ctx.config
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
 
@@ -125,7 +129,9 @@ def generate_diff_context(workspace_id=None, target_repos=None):
                         out_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{filepath} | CURRENT CONTENTS")
                         out_lines.append(f"============================================================")
                         try:
-                            with open(abs_filepath, 'r', encoding='utf-8') as cf: out_lines.append(cf.read())
+                            content = ctx.vfs.read(abs_filepath.as_posix())
+                            if content: out_lines.append(content)
+                            else: out_lines.append("[Binary or unreadable file]")
                         except Exception:
                             out_lines.append("[Binary or unreadable file]")
 
@@ -157,20 +163,15 @@ def _background_generate_diffs(job_id, workspace_id, target_repos=None):
         update_immediate_job_status(job_id, 'failed', f"Diff generation failed: {str(e)}", workspace_id=workspace_id)
 
 register_callback("git", "diffs_task", _background_generate_diffs)
-
-@git_bp.route('/api/<workspace_id>/diffs/generate', methods=['POST'])
-def api_generate_diffs(workspace_id):
-    data = request.json or {}
-    target_repos = data.get("target_repos", None)
-
-    job_id = f"dif_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"target_repos": target_repos})
-    submit_immediate_job(job_id, "git", "diffs_task", args_json, workspace_id)
+@git_bp.route('diffs/generate', methods=['POST'])
+def api_generate_diffs(ctx):
+    data = ctx.req.json or {}
+    job_id = ctx.jobs.submit("diffs_task", target_repos=data.get("target_repos"))
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('/api/<workspace_id>/git/sweep/status', methods=['GET'])
-def api_git_sweep_status(workspace_id):
-    cfg = load_config(workspace_id)
-    _, ws_root, _ = get_workspace_physics(workspace_id)
+@git_bp.route('sweep/status', methods=['GET'])
+def api_git_sweep_status(ctx):
+    cfg = ctx.config
+    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
@@ -197,8 +198,10 @@ def api_git_sweep_status(workspace_id):
 def _background_sweep_push(job_id, workspace_id, selections, message):
     import os
     import subprocess
-    from insetu.utils_core import load_config, get_workspace_physics
-    cfg = load_config(workspace_id)
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_workspace_physics
+    ctx = ExtensionContext('git', workspace_id)
+    cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(workspace_id)
     output_log = ""
 
@@ -232,26 +235,24 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
         update_immediate_job_status(job_id, 'failed', str(e), workspace_id=workspace_id)
 
 register_callback("git", "sweep_push_task", _background_sweep_push)
-@git_bp.route('/api/<workspace_id>/git/sweep/push', methods=['POST'])
-def api_git_sweep_push(workspace_id):
-    data = request.json
-    selections = data.get('selections', {})
-    message = data.get('message', 'chore: workspace sweep')
-
-    job_id = f"swp_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"selections": selections, "message": message})
-    submit_immediate_job(job_id, "git", "sweep_push_task", args_json, workspace_id)
-
+@git_bp.route('sweep/push', methods=['POST'])
+def api_git_sweep_push(ctx):
+    data = ctx.req.json
+    job_id = ctx.jobs.submit(
+        "sweep_push_task", 
+        selections=data.get('selections', {}), 
+        message=data.get('message', 'chore: workspace sweep')
+    )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('/api/<workspace_id>/git/changelogs', methods=['GET'])
-def api_git_changelogs(workspace_id):
+@git_bp.route('changelogs', methods=['GET'])
+def api_git_changelogs(ctx):
     """Queries the rapid SQLite tracking index to populate recent commit suggestions."""
-    repo = request.args.get('repo', '')
+    repo = ctx.req.args.get('repo', '')
     changelogs = []
     # Abstracted horizontal cross-talk using the Event Bus
     from insetu.hooks import hooks
     try:
-        results = hooks.emit('request_changelog_suggestions', repo=repo, workspace_id=workspace_id)
+        results = hooks.emit('request_changelog_suggestions', repo=repo, workspace_id=ctx.workspace_id)
         for res in results:
             if res:
                 changelogs.extend(res)
@@ -262,11 +263,13 @@ def api_git_changelogs(workspace_id):
 def _background_git_push(job_id, workspace_id, repo, message, diff_file):
     import os
     import subprocess
-    from insetu.utils_core import load_config, get_workspace_physics
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_workspace_physics
 
     update_immediate_job_status(job_id, 'processing', f"Preparing to push {repo}...", workspace_id=workspace_id)
 
-    cfg = load_config(workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+    cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(workspace_id)
     repo_path = Path(ws_root).joinpath(repo).as_posix()
     for c in cfg.get("target_repos", []):
@@ -280,12 +283,9 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
 
     files_to_stage = set()
     if diff_file:
-        from insetu.utils_core import get_gather_paths
-        paths = get_gather_paths(workspace_id)
-        diff_path = Path(paths["diffs_dir"]).joinpath(diff_file).as_posix()
+        diff_path = Path(ctx.paths["diffs_dir"]).joinpath(diff_file).as_posix()
         if os.path.exists(diff_path):
-            with open(diff_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            content = ctx.vfs.read(diff_path) or ""
             summary_section = content.split('\n\n')[0]
             for line in summary_section.splitlines():
                 if line.startswith('[') and '] ' in line:
@@ -337,29 +337,31 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
             update_immediate_job_status(job_id, 'failed', err_out, workspace_id=workspace_id)
 
 register_callback("git", "push_task", _background_git_push)
-@git_bp.route('/api/<workspace_id>/git/push', methods=['POST'])
-def api_git_push(workspace_id):
-    data = request.json
+@git_bp.route('push', methods=['POST'])
+def api_git_push(ctx):
+    data = ctx.req.json
     repo = data.get('repo')
     message = data.get('message')
-    diff_file = data.get('diff_file')
 
     if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
 
-    job_id = f"psh_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"repo": repo, "message": message, "diff_file": diff_file})
-
-    submit_immediate_job(job_id, "git", "push_task", args_json, workspace_id)
-
+    job_id = ctx.jobs.submit(
+        "push_task", 
+        repo=repo, 
+        message=message, 
+        diff_file=data.get('diff_file')
+    )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @hooks.on('request_available_diffs')
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
-    from insetu.utils_core import load_config, get_gather_paths, get_safe_repo_id
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_safe_repo_id
     import os
-    cfg = load_config(workspace_id)
-    paths = get_gather_paths(workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+    cfg = ctx.config
+    paths = ctx.paths
     expected_diffs = set()
 
     for c in cfg.get("target_repos", []):

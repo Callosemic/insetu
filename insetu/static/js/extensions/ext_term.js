@@ -1,13 +1,15 @@
 // ext_term.js - Terminal Extension
-import { LitElement, html, css } from 'lit';
-import { AppStore } from '../store.js';
-export class InSetuExtTerm extends LitElement {
+import { html, css } from 'lit';
+import { InSetuElement } from '../sdk.js';
+
+export class InSetuExtTerm extends InSetuElement {
+    get extName() { return 'term'; }
     static properties = {
         termPort: { type: Number }
     };
     static styles = css`
-        :host { display: flex; flex-direction: column; height: 100%; padding: 0; box-sizing: border-box; overflow: hidden; background: #0f172a; }
-        iframe { flex: 1; width: 100%; height: 100%; border: none; outline: none; background: #0f172a; border-radius: 0; }
+        :host { display: flex; flex-direction: column; height: 100%; padding: 0; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
+        iframe { flex: 1; width: 100%; height: 100%; border: none; outline: none; background: transparent; border-radius: 0; }
     `;
     constructor() {
         super();

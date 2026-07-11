@@ -5,51 +5,37 @@ from datetime import datetime
 import urllib.request
 import urllib.parse
 import json
-from flask import Blueprint, request, jsonify
+from flask import jsonify
+from insetu.sdk import InSetuExtension
 from insetu.extensions.engine_ingest import extract_markdown_from_url
 from insetu.db import get_connection
 from insetu.workers import submit_job, register_callback
 from insetu.hooks import hooks
 
-research_bp = Blueprint('research', __name__)
-__depends__ = ['ingest']
-@hooks.on('system_boot')
-def init_research_db():
-    """Executes SQLite schemas securely on boot per the V2 Contract."""
-    from insetu.utils_core import get_all_workspace_ids
+RESEARCH_SCHEMA = {
+    "research_jobs": {
+        "id": "TEXT PRIMARY KEY",
+        "query": "TEXT",
+        "provider": "TEXT",
+        "status": "TEXT",
+        "total_links": "INTEGER DEFAULT 0",
+        "processed_links": "INTEGER DEFAULT 0",
+        "created_at": "TEXT",
+        "meta_json": "TEXT DEFAULT '{}'"
+    },
+    "research_inbox": {
+        "id": "TEXT PRIMARY KEY",
+        "job_id": "TEXT",
+        "url": "TEXT",
+        "title": "TEXT",
+        "raw_markdown": "TEXT",
+        "status": "TEXT",
+        "scraped_at": "TEXT"
+    }
+}
 
-    for ws_id in get_all_workspace_ids():
-        conn = get_connection("research", workspace_id=ws_id)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS research_jobs (
-                id TEXT PRIMARY KEY,
-            query TEXT,
-            provider TEXT,
-            status TEXT,
-            total_links INTEGER DEFAULT 0,
-            processed_links INTEGER DEFAULT 0,
-            created_at TEXT,
-            meta_json TEXT DEFAULT '{}'
-        )
-    """)
-    try:
-        conn.execute("ALTER TABLE research_jobs ADD COLUMN meta_json TEXT DEFAULT '{}'")
-        conn.commit()
-    except Exception:
-        pass
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS research_inbox (
-            id TEXT PRIMARY KEY,
-            job_id TEXT,
-            url TEXT,
-            title TEXT,
-            raw_markdown TEXT,
-            status TEXT,
-            scraped_at TEXT,
-            FOREIGN KEY(job_id) REFERENCES research_jobs(id)
-        )
-    """)
-    conn.commit()
+research_bp = InSetuExtension('research', __name__, schema=RESEARCH_SCHEMA)
+__depends__ = ['ingest']
 
 # --- SEARCH STRATEGY PATTERN ---
 class SearchProvider:
@@ -198,8 +184,7 @@ class GooglePlaywrightProvider(SearchProvider):
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    with open(dump_path.as_posix(), "w", encoding="utf-8") as f:
-                        f.write(page.content())
+                    Path(dump_path).write_text(page.content(), encoding="utf-8")
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
                     pass
@@ -207,13 +192,13 @@ class GooglePlaywrightProvider(SearchProvider):
             finally:
                 browser.close()
         return results
-
 class SerperDevProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
-        from insetu.utils_core import load_config
+        from insetu.sdk import ExtensionContext
         import urllib.error
+        ctx = ExtensionContext('research', 'default')
 
-        cfg = load_config()
+        cfg = ctx.config
         # Look for the key globally or nested inside the research extension config
         api_key = cfg.get("serper_api_key") or cfg.get("extension_config", {}).get("research", {}).get("serper_api_key")
 
@@ -385,11 +370,11 @@ def scrape_next_link(job_id, workspace_id=None):
 # Register the callback tightly with the central ledger
 register_callback("research", "scrape_next_link", scrape_next_link)
 register_callback("research", "gather_next_page", gather_next_page)
-
 def _get_research_intervals():
     """Reads dynamic pacing configurations from the workspace config."""
-    from insetu.utils_core import load_config
-    cfg = load_config()
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('research', 'default')
+    cfg = ctx.config
     r_cfg = cfg.get("extension_config", {}).get("research", {})
     return (
         r_cfg.get("gather_interval_ms", 4000),
@@ -399,9 +384,10 @@ def _get_research_intervals():
     )
 
 # --- API ENDPOINTS ---
-@research_bp.route('/api/<workspace_id>/research/start', methods=['POST'])
-def start_job(workspace_id):
-    data = request.json
+@research_bp.route('start', methods=['POST'])
+def start_job(ctx):
+    workspace_id = ctx.workspace_id
+    data = ctx.req.json
     query = data.get('query', '').strip()
     provider_name = data.get('provider', 'duckduckgo')
     max_results = int(data.get('max_results', 10))
@@ -436,9 +422,10 @@ def start_job(workspace_id):
       return jsonify({"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@research_bp.route('/api/<workspace_id>/research/<job_id>/action', methods=['POST'])
-def job_action(workspace_id, job_id):
-    data = request.json
+@research_bp.route('<job_id>/action', methods=['POST'])
+def job_action(ctx, job_id):
+    workspace_id = ctx.workspace_id
+    data = ctx.req.json
     action = data.get('action') # 'pause', 'resume', 'cancel'
 
     conn = get_connection("research", workspace_id=workspace_id)
@@ -510,25 +497,24 @@ def job_action(workspace_id, job_id):
         return jsonify({"status": "success", "message": f"Job retrying in {target_status} phase"})
 
     return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
-@research_bp.route('/api/<workspace_id>/research/jobs', methods=['GET'])
-def list_jobs(workspace_id):
-    conn = get_connection("research", workspace_id=workspace_id)
+@research_bp.route('jobs', methods=['GET'])
+def list_jobs(ctx):
+    conn = ctx.db
     cursor = conn.execute("SELECT * FROM research_jobs ORDER BY created_at DESC")
     jobs = [dict(row) for row in cursor.fetchall()]
     return jsonify({"jobs": jobs})
-
-@research_bp.route('/api/<workspace_id>/research/inbox', methods=['GET'])
-def list_inbox(workspace_id):
-    status_filter = request.args.get('status', 'pending')
+@research_bp.route('inbox', methods=['GET'])
+def list_inbox(ctx):
+    status_filter = ctx.req.args.get('status', 'pending')
     statuses = tuple(status_filter.split(','))
-    conn = get_connection("research", workspace_id=workspace_id)
+    conn = ctx.db
     placeholders = ','.join(['?'] * len(statuses))
     cursor = conn.execute(f"SELECT * FROM research_inbox WHERE status IN ({placeholders})", statuses)
     items = [dict(row) for row in cursor.fetchall()]
     return jsonify({"items": items})
-@research_bp.route('/api/<workspace_id>/research/<job_id>/export_context', methods=['GET'])
-def export_context(workspace_id, job_id):
-    conn = get_connection("research", workspace_id=workspace_id)
+@research_bp.route('<job_id>/export_context', methods=['GET'])
+def export_context(ctx, job_id):
+    conn = ctx.db
     cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (job_id,))
     items = cursor.fetchall()
 
@@ -550,14 +536,15 @@ def export_context(workspace_id, job_id):
         chunks.append(current_chunk)
 
     return jsonify({"chunks": chunks})
-@research_bp.route('/api/<workspace_id>/research/inbox/<inbox_id>/disposition', methods=['POST'])
-def inbox_disposition(workspace_id, inbox_id):
-    data = request.json
+@research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'])
+def inbox_disposition(ctx, inbox_id):
+    workspace_id = ctx.workspace_id
+    data = ctx.req.json
     status = data.get('status')
     if status not in ('accepted', 'rejected', 'force_scrape'):
         return jsonify({"error": "Invalid status"}), 400
 
-    conn = get_connection("research", workspace_id=workspace_id)
+    conn = ctx.db
     if status == 'force_scrape':
         conn.execute("UPDATE research_inbox SET status='pending', scraped_at=NULL, raw_markdown=NULL WHERE id=?", (inbox_id,))
         job_data = conn.execute("SELECT job_id FROM research_inbox WHERE id=?", (inbox_id,)).fetchone()

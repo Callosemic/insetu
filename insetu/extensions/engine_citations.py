@@ -3,11 +3,21 @@ import os
 import json
 import urllib.request
 import urllib.parse
-from flask import Blueprint, request, jsonify
-from insetu.utils_core import get_gather_paths
+from flask import request, jsonify
+from insetu.sdk import InSetuExtension
 from insetu.hooks import hooks
 
-citations_bp = Blueprint('citations', __name__)
+CITATIONS_SCHEMA = {
+    "citations": {
+        "id": "TEXT PRIMARY KEY",
+        "type": "TEXT",
+        "title": "TEXT",
+        "raw_json": "TEXT",
+        "attachments": "TEXT DEFAULT '[]'"
+    }
+}
+
+citations_bp = InSetuExtension('citations', __name__, schema=CITATIONS_SCHEMA)
 __depends__ = []
 
 @hooks.on('mutate_workspace_config')
@@ -68,9 +78,10 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
 @hooks.on('compile_contexts')
 def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
     try:
-        from insetu.utils_core import get_gather_paths
+        from insetu.sdk import ExtensionContext
         from insetu.db import get_connection
-        paths = get_gather_paths(workspace_id)
+        ctx = ExtensionContext('citations', workspace_id)
+        paths = ctx.paths
 
         conn = get_connection("citations", workspace_id=workspace_id)
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
@@ -150,39 +161,20 @@ def _rebuild_metadata_cache(workspace_id):
         _METADATA_INITIALIZED.add(workspace_id)
     except Exception:
         pass
-
 def get_db(workspace_id=None):
     from insetu.db import get_connection
-    conn = get_connection("citations", workspace_id=workspace_id)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS citations (
-            id TEXT PRIMARY KEY,
-            type TEXT,
-            title TEXT,
-            raw_json TEXT,
-            attachments TEXT DEFAULT '[]'
-        )
-    """)
-    try:
-        conn.execute("ALTER TABLE citations ADD COLUMN attachments TEXT DEFAULT '[]'")
-    except Exception:
-        pass
-    conn.commit()
-    return conn
-from insetu.utils_core import extension_auth
-@citations_bp.route('/api/<workspace_id>/citations/index', methods=['GET'])
-@extension_auth('citations')
-def get_metadata_index(workspace_id):
-    global _METADATA_CACHE, _METADATA_INITIALIZED
-    if workspace_id not in _METADATA_INITIALIZED:
-        _rebuild_metadata_cache(workspace_id)
-    return jsonify(_METADATA_CACHE.get(workspace_id, {"publications": [], "authors": []}))
+    return get_connection("citations", workspace_id=workspace_id)
 
-@citations_bp.route('/api/<workspace_id>/citations', methods=['GET'])
-@extension_auth('citations')
-def get_citations(workspace_id):
+@citations_bp.route('index', methods=['GET'])
+def get_metadata_index(ctx):
+    global _METADATA_CACHE, _METADATA_INITIALIZED
+    if ctx.workspace_id not in _METADATA_INITIALIZED:
+        _rebuild_metadata_cache(ctx.workspace_id)
+    return jsonify(_METADATA_CACHE.get(ctx.workspace_id, {"publications": [], "authors": []}))
+@citations_bp.route('list', methods=['GET'])
+def get_citations(ctx):
     try:
-        conn = get_db(workspace_id)
+        conn = ctx.db
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
         items = []
         for row in cursor.fetchall():
@@ -192,26 +184,26 @@ def get_citations(workspace_id):
         return jsonify({"citations": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('/api/<workspace_id>/citations/<path:csl_id>/attach', methods=['POST'])
-def attach_citation(workspace_id, csl_id):
-    data = request.json
+@citations_bp.route('<path:csl_id>/attach', methods=['POST'])
+def attach_citation(ctx, csl_id):
+    data = ctx.req.json
     attachments = data.get("attachments", [])
     try:
-        conn = get_db(workspace_id)
+        conn = ctx.db
         conn.execute("UPDATE citations SET attachments = ? WHERE id = ?", (json.dumps(attachments), csl_id))
         conn.commit()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('/api/<workspace_id>/citations/search', methods=['GET'])
-def search_global_citations(workspace_id):
-    query = request.args.get('q', '').strip()
-    source = request.args.get('source', 'openalex').strip()
-    field = request.args.get('field', 'all').strip()
-    category = request.args.get('category', '').strip()
+@citations_bp.route('search', methods=['GET'])
+def search_global_citations(ctx):
+    query = ctx.req.args.get('q', '').strip()
+    source = ctx.req.args.get('source', 'openalex').strip()
+    field = ctx.req.args.get('field', 'all').strip()
+    category = ctx.req.args.get('category', '').strip()
 
     try:
-        page = int(request.args.get('page', 1))
+        page = int(ctx.req.args.get('page', 1))
     except ValueError:
         page = 1
 
@@ -297,9 +289,9 @@ def search_global_citations(workspace_id):
         return jsonify({"citations": csl_items})
     except Exception as e:
         return jsonify({"error": f"Catalog Search Failed ({source}): {str(e)}"}), 500
-@citations_bp.route('/api/<workspace_id>/citations/import', methods=['POST'])
-def import_citations(workspace_id):
-    data = request.json
+@citations_bp.route('import', methods=['POST'])
+def import_citations(ctx):
+    data = ctx.req.json
     if not data:
         return jsonify({"error": "Missing JSON payload"}), 400
 
@@ -308,9 +300,8 @@ def import_citations(workspace_id):
 
     if not isinstance(items, list):
         return jsonify({"error": "Invalid format.\nExpecting array of CSL-JSON objects."}), 400
-
     try:
-        conn = get_db(workspace_id)
+        conn = ctx.db
         count = 0
         conflicts = []
         
@@ -338,8 +329,7 @@ def import_citations(workspace_id):
             )
             count += 1
         conn.commit()
-
-        _rebuild_metadata_cache(workspace_id)
+        _rebuild_metadata_cache(ctx.workspace_id)
 
         return jsonify({
             "status": "success",  
@@ -349,16 +339,16 @@ def import_citations(workspace_id):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('/api/<workspace_id>/citations/<path:csl_id>', methods=['DELETE'])
-def delete_citation(workspace_id, csl_id):
+@citations_bp.route('<path:csl_id>', methods=['DELETE'])
+def delete_citation(ctx, csl_id):
     try:
-        conn = get_db(workspace_id)
+        conn = ctx.db
         cursor = conn.execute("DELETE FROM citations WHERE id = ?", (csl_id,))
         if cursor.rowcount == 0:
             return jsonify({"error": "Citation not found"}), 404
         conn.commit()
 
-        _rebuild_metadata_cache(workspace_id)
+        _rebuild_metadata_cache(ctx.workspace_id)
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

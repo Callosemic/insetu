@@ -3,26 +3,24 @@ import os
 import sys
 import json
 import uuid
-from flask import Blueprint, request, jsonify, send_file
-from insetu.utils_core import extension_auth
+from flask import jsonify, send_file
+from insetu.sdk import InSetuExtension
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
 
-format_bp = Blueprint('format', __name__)
+format_bp = InSetuExtension('format', __name__)
 __depends__ = []
-
 def _background_compile(job_id, workspace_id, filepath, target_format):
     import os
-    from insetu.utils_core import get_gather_paths
+    from insetu.sdk import ExtensionContext
     try:
         update_immediate_job_status(job_id, 'processing', f"Compiling document to {target_format.upper()}...", workspace_id=workspace_id)
         mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
 
-        paths = get_gather_paths(workspace_id)
+        ctx = ExtensionContext('format', workspace_id)
+        paths = ctx.paths
         safe_name = f"{job_id}_{download_name}"
         out_path = Path(paths["artifacts_base"]).joinpath(safe_name).as_posix()
-
-        with open(out_path, "wb") as f:
-            f.write(mem_file.read())
+        Path(out_path).write_bytes(mem_file.read())
 
         register_ephemeral_artifact(out_path, "format", 3600, workspace_id=workspace_id)
 
@@ -31,34 +29,27 @@ def _background_compile(job_id, workspace_id, filepath, target_format):
         update_immediate_job_status(job_id, 'failed', f"Compilation failed: {str(e)}", workspace_id=workspace_id)
 
 register_callback("format", "compile_task", _background_compile)
-
-@format_bp.route('/api/<workspace_id>/format/compile-document', methods=['POST'])
-@extension_auth('format')
-def api_format_compile_document(workspace_id):
-    data = request.json
+@format_bp.route('compile-document', methods=['POST'])
+def api_format_compile_document(ctx):
+    data = ctx.req.json
     filepath = data.get('filepath')
-    target_format = data.get('format', 'pdf')
 
     if not filepath: return jsonify({"error": "Filepath required"}), 400
 
-    import json
-    job_id = f"fmt_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"filepath": filepath, "target_format": target_format})
-    submit_immediate_job(job_id, "format", "compile_task", args_json, workspace_id)
-
+    job_id = ctx.jobs.submit("compile_task", filepath=filepath, target_format=data.get('format', 'pdf'))
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, shutil, io
-    from insetu.utils_core import get_gather_paths, resolve_workspace_path
+    from insetu.sdk import ExtensionContext
 
-    resolved_path = resolve_workspace_path(filepath, workspace_id)
+    ctx = ExtensionContext('format', workspace_id)
+    resolved_path = ctx.resolve_path(filepath)
     if not os.path.exists(resolved_path): 
         raise FileNotFoundError("File not found")
 
-    with open(resolved_path, 'r', encoding='utf-8') as f:
-        content = f.read()
+    content = ctx.vfs.read(filepath) or ""
 
-    paths = get_gather_paths(workspace_id)
+    paths = ctx.paths
     backmatter_match = re.search(r'\n+---\n+citations:\n([\s\S]*?)\n---$', content)
 
     true_ids = []
@@ -86,8 +77,7 @@ def compile_document_payload(workspace_id, filepath, target_format):
     try:
         # Write injected middleware temp files to disk
         for filename, file_content in temp_files.items():
-            with open(Path(temp_dir).joinpath(filename).as_posix(), 'w', encoding='utf-8') as f:
-                f.write(file_content)
+            Path(temp_dir).joinpath(filename).write_text(file_content, encoding='utf-8')
 
         out_filename = f"compiled_output.{target_format}"
         out_path = Path(temp_dir).joinpath(out_filename).as_posix()
@@ -105,9 +95,7 @@ def compile_document_payload(workspace_id, filepath, target_format):
             if "pdflatex not found" in err_msg.lower():
                 err_msg += " (Please install a LaTeX engine like MacTeX, MiKTeX, or TeX Live to generate PDFs)."
             raise RuntimeError(f"Pandoc failed: {err_msg}")
-
-        with open(out_path, 'rb') as f:
-            file_data = f.read()
+        file_data = Path(out_path).read_bytes()
 
         mem_file = io.BytesIO(file_data)
         mem_file.seek(0)
@@ -148,11 +136,10 @@ def run_formatter():
         sys.exit(1)
 
     print("🧹 Booting native Python JS Formatter (Context-Bound)...")
-    
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-    except json.JSONDecodeError:
+        manifest_text = Path(manifest_path).read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+    except Exception:
         print("❌ Error: Failed to parse manifest.json.")
         sys.exit(1)
     # Target the directory where the user executed the command
@@ -177,8 +164,7 @@ def run_formatter():
         if os.path.exists(filepath):
             try:
                 res = jsbeautifier.beautify_file(filepath, opts)
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(res)
+                Path(filepath).write_text(res, encoding="utf-8")
                 
                 # Display relative path for cleaner terminal output
                 display_path = filepath.replace(workspace_root + os.sep, "")

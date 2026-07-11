@@ -12,6 +12,7 @@ insetu/
 │   ├── 02_extension_api_contract.md # [comment required]
 │   ├── 03_extension_inventory_topology.md # [comment required]
 │   ├── 04_ui_design_standards.md   # [comment required]
+│   ├── 05_extension_developer_guide.md # [comment required]
 │   ├── adrs/                       # [comment required]
 │   │   ├── 0001-insetu-genesis-and-extension-architecture.md # [comment required]
 │   │   ├── 0002-workspace-physics-and-extensions.md # [comment required]

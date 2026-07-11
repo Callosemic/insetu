@@ -2,28 +2,14 @@ import { currentModalIsFS } from '../fs.js';
 import { openSelectorModal } from '../ui.js';
 import { AppStore } from '../store.js';
 import { getFlattenedBuckets } from '../app.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-
-const _getActiveWs = () => AppStore.getState().activeWorkspace || 'default';
-const _safeParseSet = (key) => {
-    try {
-        const item = localStorage.getItem(key);
-        return new Set(item ? JSON.parse(item) : ["ALL"]);
-    } catch (e) {
-        console.warn(`[Citations Storage Safeguard] Resetting corrupted key: ${key}`);
-        localStorage.setItem(key, JSON.stringify(["ALL"]));
-        return new Set(["ALL"]);
-    }
-};
+import { createExtensionStore, InSetuElement } from '../sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-export const CitationStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            localLibrary: [],
-            pinnedRepos: _safeParseSet(`insetu_lib_pinned_repos_${_getActiveWs()}`),
-            pinnedBuckets: _safeParseSet(`insetu_lib_pinned_buckets_${_getActiveWs()}`),
-            reposExpanded: false,
+
+export const CitationStore = createExtensionStore('Citations', {
+    localLibrary: [],
+    pinnedRepos: new Set(['ALL']),
+    pinnedBuckets: new Set(['ALL']),
+    reposExpanded: false,
             bucketsExpanded: {},
             cachedPublications: [],
             cachedAuthors: [],
@@ -33,18 +19,14 @@ export const CitationStore = createStore(
             currentExplorePage: 1,
             citationLibraryCache: null,
             attachForm: { repo: '', bucket: 'None' },
-            editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
-            resetState: () => set({ localLibrary: [], cachedPublications: [], cachedAuthors: [], activeAttachCitation: null, activeEditCitation: null, currentEditAuthors: [], currentExplorePage: 1, citationLibraryCache: null, attachForm: { repo: '', bucket: 'None' }, editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' } })
-        })),
-        { name: 'CitationStore' }
-    )
-);
+            editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' }
+}, ['pinnedRepos', 'pinnedBuckets']);
 
 window.inSetu.stores.Citations = CitationStore;
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 
-export class InSetuExtCitations extends LitElement {
+export class InSetuExtCitations extends InSetuElement {
     static properties = {
         localLibrary: { type: Array },
         pinnedRepos: { type: Object },
@@ -115,7 +97,7 @@ export class InSetuExtCitations extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = CitationStore.subscribe(state => {
+        this.subscribe(CitationStore, state => {
             this.localLibrary = state.localLibrary || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.pinnedBuckets = state.pinnedBuckets || new Set(['ALL']);
@@ -129,7 +111,7 @@ export class InSetuExtCitations extends LitElement {
             this.attachForm = state.attachForm || { repo: '', bucket: 'None' };
             this.editForm = state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' };
         });
-        this._unsubApp = AppStore.subscribe(state => {
+        this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
         });
 
@@ -143,23 +125,20 @@ export class InSetuExtCitations extends LitElement {
         document.addEventListener('citations-load-main', this._handleLoadMain);
         this.loadMainLibrary();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-        if (this._unsubApp) this._unsubApp();
         document.removeEventListener('citations-load-main', this._handleLoadMain);
     }
     async loadMainLibrary() {
         this.mainLoading = true;
         try {
-            const idxRes = await window.inSetu.api.workspace('citations/index');
+            const idxRes = await this.api.get('index');
             if (idxRes.ok) {
                 const d = await idxRes.json();
                 if(d.publications) CitationStore.setState({ cachedPublications: d.publications });
                 if(d.authors) CitationStore.setState({ cachedAuthors: d.authors });
             }
-            const res = await window.inSetu.api.workspace('citations');
+            const res = await this.api.get('list');
             if (res.ok) {
                 const data = await res.json();
                 CitationStore.setState({ localLibrary: data.citations || [] });
@@ -183,7 +162,7 @@ export class InSetuExtCitations extends LitElement {
         }
         try {
             const pageToFetch = loadMore ? this.currentExplorePage : 1;
-            const res = await window.inSetu.api.workspace(`citations/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(this.exploreSource)}&field=${encodeURIComponent(this.exploreField)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
+            const res = await this.api.get(`search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(this.exploreSource)}&field=${encodeURIComponent(this.exploreField)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
             if (res.ok) {
                 const data = await res.json();
                 const citations = data.citations || [];
@@ -213,11 +192,7 @@ export class InSetuExtCitations extends LitElement {
                 const jsonPayload = JSON.parse(ev.target.result);
                 const reqBody = { citations: jsonPayload.items || jsonPayload, strategy: this.importStrategy };
                 this.importLog += `Uploading ${reqBody.citations.length} records...\n`;
-                const res = await window.inSetu.api.workspace('citations/import', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(reqBody)
-                });
+                const res = await this.api.post('import', reqBody);
                 const data = await res.json();
                 if (res.ok) {
                     this.importLog += `✅ ${data.message}\n`;
@@ -238,11 +213,7 @@ export class InSetuExtCitations extends LitElement {
         this._importingIds = newSet;
         this.requestUpdate();
         try {
-            await window.inSetu.api.workspace('citations/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
-            });
+            await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
             this.loadMainLibrary();
         } catch (err) {
             alert("Error importing citation: " + err.message);
@@ -282,11 +253,7 @@ export class InSetuExtCitations extends LitElement {
     async _saveAttachmentList(newAtts) {
         if (!this.activeAttachCitation) return;
         try {
-            const res = await window.inSetu.api.workspace(`citations/${encodeURIComponent(this.activeAttachCitation.id)}/attach`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ attachments: newAtts })
-            });
+            const res = await this.api.post(`${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts });
             if (res.ok) {
                 CitationStore.setState({ activeAttachCitation: { ...this.activeAttachCitation, _attachments: newAtts } });
                 this.loadMainLibrary();
@@ -318,7 +285,7 @@ export class InSetuExtCitations extends LitElement {
         if (!this.activeEditCitation) return;
         if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return;
         try {
-            const res = await window.inSetu.api.workspace(`citations/${encodeURIComponent(this.activeEditCitation.id)}`, { method: 'DELETE' });
+            const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`);
             if (res.ok) {
                 CitationStore.setState({ activeEditCitation: null });
                 this.loadMainLibrary();
@@ -354,11 +321,7 @@ export class InSetuExtCitations extends LitElement {
         }
         if (payload.id !== this.activeEditCitation.id) payload.id = this.activeEditCitation.id;
         try {
-            const res = await window.inSetu.api.workspace('citations/import', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ citations: [payload], strategy: 'overwrite' })
-            });
+            const res = await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
             if (res.ok) {
                 CitationStore.setState({ activeEditCitation: null });
                 this.loadMainLibrary();
@@ -437,9 +400,8 @@ export class InSetuExtCitations extends LitElement {
             })();
             return matchesRepo && matchesBucket;
         });
-
         const filtered = this.mainSearchQuery 
-            ? window.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
+            ? window.inSetu.utils.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
             : pinnedSet;
 
         return html`
@@ -461,16 +423,10 @@ export class InSetuExtCitations extends LitElement {
                     .activeBuckets=${Array.from(this.pinnedBuckets)}
                     .getBucketsFn=${getFlattenedBuckets}
                     @repo-filter-changed=${(e) => {
-                        const newSet = new Set(e.detail.activeRepos);
-                        const ws = AppStore.getState().activeWorkspace || 'default';
-                        localStorage.setItem(`insetu_lib_pinned_repos_${ws}`, JSON.stringify(Array.from(newSet)));
-                        CitationStore.setState({ pinnedRepos: newSet, reposExpanded: false });
+                        CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos), reposExpanded: false });
                     }}
                     @bucket-filter-changed=${(e) => {
-                        const newSet = new Set(e.detail.activeBuckets);
-                        const ws = AppStore.getState().activeWorkspace || 'default';
-                        localStorage.setItem(`insetu_lib_pinned_buckets_${ws}`, JSON.stringify(Array.from(newSet)));
-                        CitationStore.setState({ pinnedBuckets: newSet });
+                        CitationStore.setState({ pinnedBuckets: new Set(e.detail.activeBuckets) });
                     }}>
                 </insetu-repo-filter>
                 </div>
@@ -670,8 +626,8 @@ export class InSetuExtCitations extends LitElement {
     }
 }
 customElements.define('insetu-ext-citations', InSetuExtCitations);
-
-export class InSetuExtCitationsModals extends LitElement {
+export class InSetuExtCitationsModals extends InSetuElement {
+    get extName() { return 'citations'; }
     static properties = {
         citationModalOpen: { type: Boolean },
         citationSearchQuery: { type: String },
@@ -688,21 +644,18 @@ export class InSetuExtCitationsModals extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = CitationStore.subscribe(state => {
+        this.subscribe(CitationStore, state => {
             this.citationModalOpen = state.citationModalOpen || false;
             this.citationSearchQuery = state.citationSearchQuery || '';
             this.citationLibraryCache = state.citationLibraryCache || [];
         });
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
     }
-
     render() {
         const q = this.citationSearchQuery.trim();
-        const results = q ? window.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
+        const results = q ? window.inSetu.utils.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
 
         return html`
             <insetu-modal ?open=${this.citationModalOpen} titleText="Insert Citation" @modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
@@ -791,7 +744,7 @@ window.ExtensionRegistry.registerExtension('citations', {
                 data.menuItems.push({ label: 'Cite', icon: '📚', onClick: async () => {
                     CitationStore.setState({ citationModalOpen: true, citationSearchQuery: '' });
                     try {
-                        const res = await window.inSetu.api.workspace('citations');
+                        const res = await window.inSetu.api.workspace('citations/list');
                         if (res.ok) {
                             const data = await res.json();
                             CitationStore.setState({ citationLibraryCache: data.citations || [] });
@@ -804,10 +757,7 @@ window.ExtensionRegistry.registerExtension('citations', {
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'library') {
-                const ws = AppStore.getState().activeWorkspace || 'default';
                 CitationStore.setState({
-                    pinnedRepos: _safeParseSet(`insetu_lib_pinned_repos_${ws}`),
-                    pinnedBuckets: _safeParseSet(`insetu_lib_pinned_buckets_${ws}`),
                     reposExpanded: false,
                     bucketsExpanded: {}
                 });

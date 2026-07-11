@@ -1,32 +1,26 @@
 import { executeWorkspaceMutation } from '../app.js';
 import { downloadFile } from '../fs.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-import { LitElement, html, css } from 'https://esm.sh/lit';
+import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { html, css } from 'lit';
+import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 // --- UDF STATE STORE ---
-export const ResearchStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            jobs: [],
-            inbox: [],
-            selectedJobId: null,
-            selectedItemId: null,
-            targetDir: 'research/',
-            aiTriageMode: false,
-            isTabActive: false,
-            searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
-            setSearchForm: (field, val) => set(state => ({ searchForm: { ...state.searchForm, [field]: val } })),
-            resetState: () => set({ jobs: [], inbox: [], selectedJobId: null, selectedItemId: null, aiTriageMode: false })
-        })),
-        { name: 'ResearchStore' }
-    )
-);
+export const ResearchStore = createExtensionStore('Research', {
+    jobs: [],
+    inbox: [],
+    selectedJobId: null,
+    selectedItemId: null,
+    targetDir: 'research/',
+    aiTriageMode: false,
+    isTabActive: false,
+    searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
+    setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } }))
+});
 
 window.inSetu.stores.Research = ResearchStore;
-export class InSetuExtResearch extends LitElement {
+export class InSetuExtResearch extends InSetuElement {
     static properties = {
         jobs: { type: Array },
         inbox: { type: Array },
@@ -57,7 +51,7 @@ export class InSetuExtResearch extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = ResearchStore.subscribe(state => {
+        this.subscribe(ResearchStore, state => {
             this.jobs = state.jobs;
             this.inbox = state.inbox;
             this.selectedJobId = state.selectedJobId;
@@ -78,16 +72,14 @@ export class InSetuExtResearch extends LitElement {
         this.searchForm = state.searchForm;
         this.fetchState();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
     }
     async fetchState() {
         try {
             const [jRes, iRes] = await Promise.all([
-                window.inSetu.api.workspace('research/jobs'),
-                window.inSetu.api.workspace('research/inbox?status=pending,duplicate,in_library')
+                this.api.get('jobs'),
+                this.api.get('inbox?status=pending,duplicate,in_library')
             ]);
             if (jRes.ok && iRes.ok) {
                 const jData = await jRes.json();
@@ -97,6 +89,10 @@ export class InSetuExtResearch extends LitElement {
         } catch (e) {
             console.error("Failed to fetch research state:", e);
         }
+    }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        this.fetchState();
     }
 
     async startJob(e) {
@@ -114,36 +110,23 @@ export class InSetuExtResearch extends LitElement {
             }
             return rawDateRange;
         })();
-
         if (dateRange === null) return alert("Valid date configuration required for custom ranges.");
         if (!query) return alert("Query required.");
 
-        btn.innerText = "⏳ Starting...";
-        try {
-            const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
-            const res = await window.inSetu.api.workspace('research/start', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange })
-            });
-            if (res.ok) {
-                ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' } }));
-                await this.fetchState();
-            } else {
-                const data = await res.json();
-                alert(data.error || "Failed to start job.");
-            }
-        } finally {
-            btn.innerText = "🚀 Start Scraping";
+        const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
+        const res = await this.api.post('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
+
+        if (res.ok) {
+            ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' } }));
+            await this.fetchState();
+        } else {
+            const data = await res.json();
+            throw new Error(data.error || "Failed to start job.");
         }
     }
     async handleJobAction(jobId, action) {
         if (action === 'delete' && !confirm("Are you sure you want to permanently delete this research job and all its scraped items? This cannot be undone.")) return;
-        await window.inSetu.api.workspace(`research/${jobId}/action`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action })
-        });
+        await this.api.post(`${jobId}/action`, { action });
         if (action === 'delete') {
             ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
         }
@@ -170,12 +153,8 @@ export class InSetuExtResearch extends LitElement {
             const success = await executeWorkspaceMutation('fs/save', { filepath, content: contentToSave }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
+        await this.api.post(`inbox/${inboxId}/disposition`, { status });
 
-        await window.inSetu.api.workspace(`research/inbox/${inboxId}/disposition`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status })
-        });
         if (this.selectedItemId === inboxId) {
             ResearchStore.setState({ selectedItemId: null });
         }
@@ -193,7 +172,7 @@ export class InSetuExtResearch extends LitElement {
         const btn = e.target;
         btn.innerText = "⏳ Packing...";
         try {
-            const res = await window.inSetu.api.workspace(`research/${jobId}/export_context`);
+            const res = await this.api.get(`${jobId}/export_context`);
             if (!res.ok) throw new Error("Failed to export context");
             const data = await res.json();
             const chunks = data.chunks || [];
@@ -448,7 +427,7 @@ export class InSetuExtResearch extends LitElement {
                                     <input type="number" placeholder="e.g. 150" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};" min="1" max="1000" .value=${this.searchForm.maxCustom || ''} @input=${(e) => ResearchStore.getState().setSearchForm('maxCustom', e.target.value)}>
                                 </div>
                             </div>
-                            <button class="btn-sm" style="background: var(--intent-highlight); width: 100%; margin: 0; padding: 10px; font-weight: bold;" @click=${this.startJob}>🚀 Start Scraping</button>
+                            <insetu-async-btn style="width: 100%; display: block;" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 10px;">
                             <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
@@ -491,7 +470,7 @@ export class InSetuExtResearch extends LitElement {
     }
 }
 customElements.define('insetu-ext-research', InSetuExtResearch);
-export class InSetuExtResearchActions extends LitElement {
+export class InSetuExtResearchActions extends InSetuElement {
     static properties = { selectedJobId: { type: String } };
     static styles = [sharedStyles, css`
         .research-back-btn { 
@@ -502,10 +481,9 @@ export class InSetuExtResearchActions extends LitElement {
     constructor() { super(); this.selectedJobId = null; }
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = ResearchStore.subscribe(state => this.selectedJobId = state.selectedJobId);
+        this.subscribe(ResearchStore, state => this.selectedJobId = state.selectedJobId);
         this.selectedJobId = ResearchStore.getState().selectedJobId;
     }
-    disconnectedCallback() { super.disconnectedCallback(); if (this._unsub) this._unsub(); }
     render() {
         if (!this.selectedJobId) return html``;
         return html`<button class="research-back-btn" @click=${() => ResearchStore.setState({ selectedJobId: null, selectedItemId: null })}>🔙 Back to Jobs</button>`;

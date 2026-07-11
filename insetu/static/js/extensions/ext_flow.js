@@ -1,8 +1,19 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { executeWorkspaceMutation, fetchAndCopy, fetchAndDownloadState, executeSystemCompile } from '../app.js';
 import { AppStore } from '../store.js';
+import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
-export class InSetuExtFlow extends LitElement {
+
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+
+export const FlowStore = createExtensionStore('Flow', {
+    batches: [],
+    loading: false,
+    searchQuery: ''
+});
+window.inSetu.stores.Flow = FlowStore;
+
+export class InSetuExtFlow extends InSetuElement {
     static properties = {
         batches: { type: Array },
         loading: { type: Boolean },
@@ -28,21 +39,24 @@ export class InSetuExtFlow extends LitElement {
         this._editForm = {};
         this._viewingBatchPromptText = '';
     }
+    onWorkspaceChanged(newWorkspaceId) {
+        this.fetchBatches();
+    }
 
     connectedCallback() {
         super.connectedCallback();
+        this.subscribe(FlowStore, state => {
+            this.batches = state.batches;
+            this.loading = state.loading;
+            this.searchQuery = state.searchQuery;
+        });
         this.fetchBatches();
-        this._unsub = AppStore.subscribe(state => state.activeWorkspace, () => this.fetchBatches());
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-    }
     async fetchBatches() {
-        this.loading = true;
+        FlowStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('flow/batches');
+            const res = await this.api.get('batches');
             if (res.ok) {
                 const data = await res.json();
                 AppStore.setState(state => ({
@@ -55,12 +69,12 @@ export class InSetuExtFlow extends LitElement {
                         profileDir: data.profile_dir || ".insetu/profiles/default"
                     }
                 }));
-                this.batches = data.batches || [];
+                FlowStore.setState({ batches: data.batches || [] });
             }
         } catch (e) {
             console.error("Error loading batches:", e);
         } finally {
-            this.loading = false;
+            FlowStore.setState({ loading: false });
         }
     }
     openEditBatchModal(batch = null) {
@@ -94,13 +108,9 @@ export class InSetuExtFlow extends LitElement {
     async deleteEditBatch() {
         if (!confirm("Delete this workflow batch?")) return;
         try {
-            const res = await window.inSetu.api.workspace('flow/batches/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: this._editingBatch.id })
-            });
+            const res = await this.api.post('batches/delete', { id: this._editingBatch.id });
             if (res.ok) {
-                this.batches = this.batches.filter(b => b.id !== this._editingBatch.id);
+                FlowStore.setState(s => ({ batches: s.batches.filter(b => b.id !== this._editingBatch.id) }));
                 this._editingBatch = null;
             } else alert("Failed to delete batch.");
         } catch (e) {
@@ -124,17 +134,14 @@ export class InSetuExtFlow extends LitElement {
             if (this._editForm.archivePath) payload.archive_path = this._editForm.archivePath.trim();
         }
         try {
-            const res = await window.inSetu.api.workspace('flow/batches/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const res = await this.api.post('batches/save', payload);
             if (res.ok) {
-                const isExisting = this.batches.some(b => b.id === payload.id);
+                const currentBatches = FlowStore.getState().batches;
+                const isExisting = currentBatches.some(b => b.id === payload.id);
                 if (isExisting) {
-                    this.batches = this.batches.map(b => b.id === payload.id ? payload : b);
+                    FlowStore.setState({ batches: currentBatches.map(b => b.id === payload.id ? payload : b) });
                 } else {
-                    this.batches = [...this.batches, payload];
+                    FlowStore.setState({ batches: [...currentBatches, payload] });
                 }
                 this._editingBatch = null;
             } else alert("Failed to save batch.");
@@ -178,7 +185,7 @@ export class InSetuExtFlow extends LitElement {
     render() {
             const categories = {};
             const filteredBatches = this.searchQuery 
-                ? window.fuzzyFilterObjects(this.batches, this.searchQuery, b => `${b.title} ${b.id} ${b.domain}`) 
+                ? window.inSetu.utils.fuzzyFilterObjects(this.batches, this.searchQuery, b => `${b.title} ${b.id} ${b.domain}`) 
                 : this.batches;
 
             filteredBatches.forEach(b => {
@@ -200,8 +207,8 @@ export class InSetuExtFlow extends LitElement {
                                         <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
                                             <input type="text" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} 
                                                 style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                                                @input=${(e) => this.searchQuery = e.target.value}>
-                                            ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
+                                                @input=${(e) => FlowStore.setState({ searchQuery: e.target.value })}>
+                                            ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => FlowStore.setState({ searchQuery: '' })}>Clear</button>` : ''}
                                         </div>
                                     </div>
 
@@ -355,7 +362,7 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
     }
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
-export class InSetuExtFlowActions extends LitElement {
+export class InSetuExtFlowActions extends InSetuElement {
     static styles = [sharedStyles];
     _openMenu(e) {
         if (!window.inSetu?.ui.Factory?.createDropdown) return;
