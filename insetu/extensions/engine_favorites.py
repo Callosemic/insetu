@@ -53,8 +53,7 @@ def add_favorite(ctx):
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@favorites_bp.route('<fav_id>', methods=['DELETE'])
+@favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'])
 def delete_favorite(ctx, fav_id):
     try:
         ctx.db.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))

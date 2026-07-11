@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260709_1120_UI_DRY_PRIMITIVES
 title: "UI DRY Violations: Abstract Global Component Primitives"

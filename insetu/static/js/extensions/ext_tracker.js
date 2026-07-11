@@ -2,11 +2,13 @@ import {
     executeSystemCompile,
     viewSourceFile,
     setContextManifest,
-    getFlattenedBuckets
+    getFlattenedBuckets,
+    fetchAndCopy,
+    fetchAndDownloadState
 } from '../app.js';
 import { AppStore } from '../store.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { createExtensionStore, InSetuElement } from '../sdk.js';
+
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
 // Utility functions mapped to avoid root-level mutable declarations
@@ -22,47 +24,42 @@ const _safeParseLocalStorageSet = (key) => {
     }
 };
 
-export const KanbanStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            tasks: [],
-            pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${_getActiveWs()}`),
-            pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${_getActiveWs()}`),
-            pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${_getActiveWs()}`),
-            reposExpanded: false,
-            bucketsExpanded: {},
-            tagsExpanded: false,
-            modals: { new: false, edit: false, config: false },
-            newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
-            editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '' },
-            trackerConfigForm: { domainStrat: 'default', customVal: '' },
-            setNewTaskField: (field, value) => set((state) => ({ newTaskForm: { ...state.newTaskForm, [field]: value } })),
-            setEditTaskField: (field, value) => set((state) => ({ editTaskForm: { ...state.editTaskForm, [field]: value } })),
-            setTrackerConfigField: (field, value) => set((state) => ({ trackerConfigForm: { ...state.trackerConfigForm, [field]: value } })),
-            setModal: (modalName, isOpen) => set((state) => ({ modals: { ...state.modals, [modalName]: isOpen } })),
-            resetState: () => set({ tasks: [] })
-        })),
-        { name: 'KanbanStore' }
-    )
-);
+export const KanbanStore = createExtensionStore('Kanban', {
+    tasks: [],
+    pinnedRepos: _safeParseLocalStorageSet(`insetu_task_pinned_repos_${_getActiveWs()}`),
+    pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${_getActiveWs()}`),
+    pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${_getActiveWs()}`),
+    reposExpanded: false,
+    bucketsExpanded: {},
+    tagsExpanded: false,
+    modals: { new: false, edit: false, config: false },
+    newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
+    editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '' },
+    trackerConfigForm: { domainStrat: 'default', customVal: '' },
+    setNewTaskField: (field, value) => KanbanStore.setState((state) => ({ newTaskForm: { ...state.newTaskForm, [field]: value } })),
+    setEditTaskField: (field, value) => KanbanStore.setState((state) => ({ editTaskForm: { ...state.editTaskForm, [field]: value } })),
+    setTrackerConfigField: (field, value) => KanbanStore.setState((state) => ({ trackerConfigForm: { ...state.trackerConfigForm, [field]: value } })),
+    setModal: (modalName, isOpen) => KanbanStore.setState((state) => ({ modals: { ...state.modals, [modalName]: isOpen } })),
+    resetState: () => KanbanStore.setState({ tasks: [] }),
+    fetchTasks: async () => {
+        if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
+        const res = await window.inSetu.api.workspace('tracker/files?t=' + Date.now());
+        if (res.ok) {
+            const data = await res.json();
+            KanbanStore.setState({ tasks: data.tasks || [] });
+        }
+    }
+});
 window.inSetu.stores.Kanban = KanbanStore;
+
+// Alias for legacy external triggers until fully deprecated
+window.loadTrackerBoard = () => KanbanStore.getState().fetchTasks();
+
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 
-export async function loadTrackerBoard() {
-    if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
-    await executeSystemCompile();
-const activeWs = AppStore.getState().activeWorkspace || 'default';
-const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-if (mRes.ok) setContextManifest(await mRes.json());
-
-const tRes = await window.inSetu.api.workspace('tracker/files?t=' + Date.now());
-if (tRes.ok) {
-        const data = await tRes.json();
-        KanbanStore.setState({ tasks: data.tasks || [] });
-    }
-}
-export class InSetuExtTracker extends LitElement {
+export class InSetuExtTracker extends InSetuElement {
+    get extName() { return 'tracker'; }
     static properties = {
         tasks: { type: Array },
         pinnedRepos: { type: Object },
@@ -137,11 +134,12 @@ this.pinnedBuckets = new Set(['ALL']);
         const parsedTab = this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
 
-        this._unsubApp = AppStore.subscribe((state) => {
+        this.subscribe(AppStore, (state) => {
             this.allRepos = state.allRepos || [];
         });
         this.allRepos = AppStore.getState().allRepos || [];
-        this._unsubKanban = KanbanStore.subscribe((state) => {
+
+        this.subscribe(KanbanStore, (state) => {
             this.tasks = state.tasks || [];
             this.pinnedRepos = state.pinnedRepos;
             this.pinnedBuckets = state.pinnedBuckets;
@@ -149,18 +147,22 @@ this.pinnedBuckets = new Set(['ALL']);
             this._modals = state.modals;
             this.requestUpdate();
         });
-const kState = KanbanStore.getState();
+        const kState = KanbanStore.getState();
         this.tasks = kState.tasks || [];
         this.pinnedRepos = kState.pinnedRepos;
         this.pinnedBuckets = kState.pinnedBuckets;
         this.pinnedTags = kState.pinnedTags;
         this._modals = kState.modals;
         document.addEventListener('click', this._docClickListener);
-}
+        KanbanStore.getState().fetchTasks();
+    }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        KanbanStore.getState().fetchTasks();
+    }
+
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsubApp) this._unsubApp();
-        if (this._unsubKanban) this._unsubKanban();
         document.removeEventListener('click', this._docClickListener);
     }
     _handleDocumentClick(e) {
@@ -183,15 +185,11 @@ const kState = KanbanStore.getState();
     }
     async _transitionTask(task, newStatus, newType = null) {
         try {
-            const res = await window.inSetu.api.workspace('tracker/transition', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    repo: task.repo,
-                    filepath: task.filepath,
-                    new_status: newStatus,
-                    new_type: newType
-                })
+            const res = await this.api.post('transition', {
+                repo: task.repo,
+                filepath: task.filepath,
+                new_status: newStatus,
+                new_type: newType
             });
 
             if (res.ok) {
@@ -362,14 +360,12 @@ if (this.allRepos.includes(pinnedRepo)) {
             return;
         }
         try {
-            const res = await window.inSetu.api.workspace('tracker/new', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate })
+            const res = await this.api.post('new', {
+                repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
             });
             if (res.ok) {
                 KanbanStore.getState().setModal('new', false);
-loadTrackerBoard();
+                KanbanStore.getState().fetchTasks();
             } else {
                 alert("Failed to create task.");
             }
@@ -491,10 +487,12 @@ this.pinnedRepos.size > 1;
 
         return html`
             ${this._renderNewTaskModal()}
-            <div class="sticky-header">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <div class="fuzzy-search-wrapper" style="margin-bottom: 0; flex: 1;">
-                        <input type="text" placeholder="🔍 Fuzzy search tickets..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
+                    <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; flex: 1;">
+                        <input type="text" placeholder="🔍 Fuzzy search tickets..." .value=${this.searchQuery} 
+                            style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                            @input=${(e) => this.searchQuery = e.target.value}>
                         ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
                     </div>
                     <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
@@ -633,12 +631,35 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
                 current.status !== orig.status ||
                 current.repo !== orig.repo;
     }
-
     _handleModalClosing(e) {
         if (this._isDirty() && !confirm("You have unsaved changes. Are you sure you want to go back?")) {
             e.preventDefault();
         }
     }
+
+    async _deleteTask() {
+        const { filepath } = KanbanStore.getState().editTaskForm;
+        if (!filepath) return;
+        if (!confirm("Are you sure you want to permanently delete this ticket? This cannot be undone.")) return;
+
+        try {
+            const res = await window.inSetu.api.workspace('fs/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filepath })
+            });
+            if (res.ok) {
+                KanbanStore.getState().setModal('edit', false);
+                this._originalTaskSnapshot = null;
+                KanbanStore.getState().fetchTasks();
+            } else {
+                alert("Failed to delete ticket.");
+            }
+        } catch (e) {
+            alert("Network error.");
+        }
+    }
+
     async _saveEditTask() {
         const { filepath, title, tagsRaw, bucket, deliveryDate, createdAt, closedAt, origYaml, type, status, repo, desc } = KanbanStore.getState().editTaskForm;
         if (!title || !desc.trim()) {
@@ -672,7 +693,7 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             if (res.ok) {
                 KanbanStore.getState().setModal('edit', false);
                 this._originalTaskSnapshot = null;
-                loadTrackerBoard();
+                KanbanStore.getState().fetchTasks();
             } else {
                 alert("Failed to save changes.");
             }
@@ -776,9 +797,11 @@ this.requestUpdate(); }}
                         </insetu-markdown-editor>
                     </div>
                 </div>
-
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold; font-size: 1.1rem; border-radius: 0; display: ${this._isDirty() ? 'block' : 'none'};"
+                <div slot="footer" style="display: flex; width: 100%;">
+                    <button class="btn-sm" style="flex: 0 0 auto; padding: 15px 20px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndCopy(editTaskForm.filepath, e.target)}>📋 Copy</button>
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-neutral); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndDownloadState(editTaskForm.filepath, e.target)}>⬇️ Download</button>
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; font-size: 1.1rem; border-radius: 0; display: ${this._isDirty() ? 'block' : 'none'};"
                         @click=${this._saveEditTask}>💾 Save & Sync Ticket</button>
                 </div>
             </insetu-modal>
@@ -1037,12 +1060,12 @@ window.ExtensionRegistry.registerExtension('tracker', {
             return false;
         },
         'zone:post-file-save': (filepath) => {
-            if (filepath.includes('.tracker/') && window.loadTrackerBoard) window.loadTrackerBoard();
+            if (filepath.includes('.tracker/')) KanbanStore.getState().fetchTasks();
             return false;
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'tasks') {
-                if (window.loadTrackerBoard) window.loadTrackerBoard();
+                KanbanStore.getState().fetchTasks();
             }
         },
         'zone:soft-refresh': (ws) => {
@@ -1052,15 +1075,14 @@ window.ExtensionRegistry.registerExtension('tracker', {
                 pinnedBuckets: _safeParseLocalStorageSet(`insetu_task_pinned_buckets_${ws}`),
                 pinnedTags: _safeParseLocalStorageSet(`insetu_task_pinned_tags_${ws}`)
             });
-            loadTrackerBoard(); // Headless sync for the new tenant
+            KanbanStore.getState().fetchTasks(); // Headless sync for the new tenant
             return false;
         }
     }
 });
 window.KanbanStore = KanbanStore;
-window.loadTrackerBoard = loadTrackerBoard;
 
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
 // Executes independently of the UI component to ensure other extensions (like Git Changelogs) 
 // always have access to the tracker backlog via the UDF KanbanStore.
-loadTrackerBoard();
+KanbanStore.getState().fetchTasks();

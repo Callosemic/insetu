@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260708_1610_SEARCH_STARVATION
 title: "Resolve External Network and Deep Search Starvation"

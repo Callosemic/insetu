@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260708_1605_THREAD_STARVATION
 title: "Offload URL Ingestion and Quick-Packs to Immediate Jobs"

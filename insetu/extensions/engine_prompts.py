@@ -41,10 +41,9 @@ def provide_available_prompts(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies available prompts to the Gather extension's UI dropdowns."""
     ctx = ExtensionContext('prompts', workspace_id)
     prompts = []
-
-    # Utilize the new SDK VFS Sweeper, guaranteeing boundaries and removing raw os.walk loops
-    for f in ctx.vfs.walk(ctx.paths["prompts_dir"], exts=['.md', '.txt', '.gitkeep', '.keep']):
-        prompts.append(f"prompts/{f}")
+    # VFS Walk natively yields paths relative to the workspace root.
+    for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"], exts=['.md', '.txt', '.gitkeep', '.keep']):
+        prompts.append(ws_rel_path)
 
     return prompts
 @prompts_bp.route('list', methods=['GET'])
@@ -55,46 +54,24 @@ def api_prompts_list(ctx):
         "prompts": prompts,
         "profile_dir": os.path.dirname(ctx.paths["config_path"])
     })
-def resolve_prompt_includes(text, current_filepath, ctx, depth=0):
-    if depth > 5:
-        return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
-
-    def replacer(match):
-        include_path = match.group(1).strip()
-
-        if include_path.startswith('./') or include_path.startswith('../'):
-            parts = current_filepath.split('/')[:-1]
-            for p in include_path.split('/'):
-                if p == '.': continue
-                elif p == '..': 
-                    if parts: parts.pop()
-                else: parts.append(p)
-            target_path = '/'.join(parts)
-        else:
-            target_path = include_path.lstrip('/')
-
-        if target_path.startswith('prompts/'):
-            target_path = f".insetu/{target_path}"
-
-        inc_content = ctx.vfs.read(target_path)
-
-        if inc_content is not None:
-            return resolve_prompt_includes(inc_content, target_path, ctx, depth + 1)
-        else:
-            return f"[!] INCLUDE_PROMPT NOT FOUND: {include_path}"
-
-    return re.sub(r'\{\{\s*include_prompt\s*:\s*(.+?)\s*\}\}', replacer, text)
-
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):
     """Fetches a prompt and recursively resolves {{include: ...}} macros."""
+    from insetu.utils_core import resolve_macro_includes
+
     filename = ctx.req.args.get('file', '')
     if not filename:
         return jsonify({"error": "File required"}), 400
 
     content = ctx.vfs.read(filename)
     if content is not None:
-        resolved_content = resolve_prompt_includes(content, filename, ctx)
+        def read_prompt(target_path):
+            if target_path.startswith('prompts/'):
+                target_path = f".insetu/{target_path}"
+            return ctx.vfs.read(target_path)
+
+        pattern = r'\{\{\s*include_prompt\s*:\s*(.+?)\s*\}\}'
+        resolved_content = resolve_macro_includes(content, filename, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

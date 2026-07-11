@@ -443,12 +443,15 @@ export class InSetuExtCitations extends LitElement {
             : pinnedSet;
 
         return html`
-            <div class="sticky-header">
-                <div class="fuzzy-search-wrapper" style="margin-bottom: 10px;">
-                    <input type="text" placeholder="🔍 Fuzzy search personal library..." .value=${this.mainSearchQuery} @input=${e => this.mainSearchQuery = e.target.value}>
+            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg); display: flex; flex-direction: column;">
+                <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: 1px solid var(--border);">
+                    <input type="text" placeholder="🔍 Fuzzy search personal library..." .value=${this.mainSearchQuery} 
+                        style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                        @input=${e => this.mainSearchQuery = e.target.value}>
                     ${this.mainSearchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.mainSearchQuery = ''}>Clear</button>` : ''}
                 </div>
-                <insetu-repo-filter
+                <div style="padding: 10px 12px; background: var(--input-bg);">
+                    <insetu-repo-filter
                     label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
@@ -470,6 +473,7 @@ export class InSetuExtCitations extends LitElement {
                         CitationStore.setState({ pinnedBuckets: newSet });
                     }}>
                 </insetu-repo-filter>
+                </div>
             </div>
             <div>
                 ${this.mainLoading ? html`<div class="spinner" style="display: block;">Loading library...</div>` : ''}

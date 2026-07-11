@@ -4,48 +4,36 @@ import shutil
 import re
 import json
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify
+from flask import request, jsonify
 from insetu.utils_core import get_sister_repos, get_workspace_physics, sniff_tenant_id
 from insetu.hooks import hooks
 from insetu.db import get_connection
+from insetu.sdk import InSetuExtension
 
-tracker_bp = Blueprint('tracker', __name__)
+TRACKER_SCHEMA = {
+    "tracker_tickets": {
+        "id": "TEXT PRIMARY KEY",
+        "repo": "TEXT",
+        "ticket_type": "TEXT",
+        "status": "TEXT",
+        "title": "TEXT",
+        "description": "TEXT",
+        "tags": "TEXT",
+        "sub_bucket": "TEXT",
+        "created_at": "TEXT",
+        "closed_at": "TEXT",
+        "delivery_date": "TEXT",
+        "filepath": "TEXT"
+    }
+}
+
+tracker_bp = InSetuExtension('tracker', __name__, schema=TRACKER_SCHEMA)
 __depends__ = []
 
 @hooks.on('system_boot')
 def init_tracker_db():
-    import json
-    from insetu.utils_core import _cwd
-    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
-    workspace_ids = ["default"]
-    if os.path.exists(index_path):
-        try:
-            with open(index_path, 'r', encoding='utf-8') as f:
-                w_data = json.load(f)
-            workspace_ids = list(w_data.get("workspaces", {}).keys())
-            if "default" not in workspace_ids:
-                workspace_ids.append("default")
-        except Exception:
-            pass
-    for ws_id in workspace_ids:
-        conn = get_connection('tracker', workspace_id=ws_id)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS tracker_tickets (
-                id TEXT PRIMARY KEY,
-                repo TEXT,
-                ticket_type TEXT,
-                status TEXT,
-                title TEXT,
-                description TEXT,
-                tags TEXT,
-                sub_bucket TEXT,
-                created_at TEXT,
-                closed_at TEXT,
-                delivery_date TEXT,
-                filepath TEXT
-            )
-        """)
-        conn.commit()
+    from insetu.utils_core import get_all_workspace_ids
+    for ws_id in get_all_workspace_ids():
         _sync_disk_to_db(workspace_id=ws_id)
 @hooks.on('post_file_save')
 def handle_tracker_file_save(filepath, workspace_id=None):
@@ -138,42 +126,17 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     except Exception as e:
         print(f"Error parsing ticket {rel_path}: {e}")
 def _sync_disk_to_db(workspace_id=None):
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    conn = get_connection('tracker', workspace_id=workspace_id)
-    # JIT Schema Creation (Ensures dynamically spawned tenant databases have the correct tables)
-    conn.execute('''CREATE TABLE IF NOT EXISTS tracker_tickets (
-        id TEXT PRIMARY KEY,
-        repo TEXT,
-        ticket_type TEXT,
-        status TEXT,
-        title TEXT,
-        description TEXT,
-        tags TEXT,
-        sub_bucket TEXT,
-        created_at TEXT,
-        closed_at TEXT,
-        delivery_date TEXT,
-        filepath TEXT
-    )''')
-
-    # Live Migration Guardrail: Retroactively self-heal legacy V1 cache database fields
-    try:
-        conn.execute("ALTER TABLE tracker_tickets ADD COLUMN delivery_date TEXT")
-        conn.commit()
-    except Exception:
-        pass
-
-    conn.execute("DELETE FROM tracker_tickets")
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
+    ctx.db.execute("DELETE FROM tracker_tickets")
     for repo in get_sister_repos(workspace_id):
-        base = Path(ws_root).joinpath(repo, ".tracker").as_posix()
-        if not os.path.exists(base): continue
-        for root, _, filenames in os.walk(base):
-            for f in filenames:
-                if f.endswith('.md'):
-                    abs_path = Path(root).joinpath(f).as_posix()
-                    rel_path = os.path.relpath(abs_path, ws_root)
-                    _parse_and_upsert_ticket(abs_path, rel_path, workspace_id)
-    conn.commit()
+        tracker_path = f"{repo}/.tracker"
+        # SDK VFS Walk abstracts physical path resolution and spatial bounds
+        for ws_rel_path in ctx.vfs.walk(tracker_path, exts=['.md']):
+            abs_path = ctx.resolve_path(ws_rel_path)
+            _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
+
+    ctx.db.commit()
 @hooks.on('mutate_workspace_config')
 def inject_tracker_config(cfg, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
@@ -628,9 +591,9 @@ def archive_stale_tickets(workspace_id=None):
                         archived_count += 1
 
     return archived_count
-@tracker_bp.route('/api/<workspace_id>/tracker/new', methods=['POST'])
-def api_tracker_new(workspace_id):
-    data = request.json
+@tracker_bp.route('new', methods=['POST'])
+def api_tracker_new(ctx):
+    data = ctx.req.json
     try:
         new_path = create_ticket(
             repo=data['repo'], 
@@ -641,20 +604,21 @@ def api_tracker_new(workspace_id):
             tags=data.get('tags', ''),
             sub_bucket=data.get('sub_bucket', 'None'),
             delivery_date=data.get('delivery_date'),
-            workspace_id=workspace_id
+            workspace_id=ctx.workspace_id
         )
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@tracker_bp.route('/api/<workspace_id>/tracker/files', methods=['GET'])
-def api_tracker_files(workspace_id):
+
+@tracker_bp.route('files', methods=['GET'])
+def api_tracker_files(ctx):
     try:
-        conn = get_connection('tracker', workspace_id=workspace_id)
+        conn = ctx.db
 
         # True CQRS Mandate: Perform an initial seed walk only if the cache index is completely blank.
         count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
         if count_check == 0:
-            _sync_disk_to_db(workspace_id)
+            _sync_disk_to_db(ctx.workspace_id)
         cursor = conn.execute("SELECT * FROM tracker_tickets")
         tasks = []
         for row in cursor.fetchall():
@@ -677,16 +641,16 @@ def api_tracker_files(workspace_id):
         return jsonify({"tasks": tasks})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@tracker_bp.route('/api/<workspace_id>/tracker/transition', methods=['POST'])
-def api_tracker_transition(workspace_id):
-    data = request.json
+@tracker_bp.route('transition', methods=['POST'])
+def api_tracker_transition(ctx):
+    data = ctx.req.json
     try:
         new_path = transition_ticket(
             repo=data['repo'], 
             current_rel_path=data['filepath'], 
             new_status=data['new_status'],
             new_type=data.get('new_type'),
-            workspace_id=workspace_id
+            workspace_id=ctx.workspace_id
         )
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:

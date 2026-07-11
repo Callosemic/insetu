@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260710_1309_SDK_MIGRATION_FLOW
 title: "SDK V2 Migration: Flow / Batch Extension"

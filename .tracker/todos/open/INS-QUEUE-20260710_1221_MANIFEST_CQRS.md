@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260710_1221_MANIFEST_CQRS
 title: "Migrate VFS Manifest to SQLite CQRS and Delta Payloads"

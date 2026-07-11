@@ -252,9 +252,11 @@ export class InSetuExtGitDiffs extends LitElement {
             return a.localeCompare(b);
         });
         return html`
-            <div class="sticky-header">
-                <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
-                    <input type="text" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} @input=${e => this.searchQuery = e.target.value}>
+            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
+                    <input type="text" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} 
+                        style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                        @input=${e => this.searchQuery = e.target.value}>
                     ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
                 </div>
             </div>

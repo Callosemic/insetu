@@ -196,9 +196,11 @@ export class InSetuExtFlow extends LitElement {
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
-                                    <div class="sticky-header">
-                                        <div class="fuzzy-search-wrapper" style="margin-bottom: 0;">
-                                            <input type="text" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} @input=${(e) => this.searchQuery = e.target.value}>
+                                    <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
+                                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
+                                            <input type="text" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} 
+                                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                                                @input=${(e) => this.searchQuery = e.target.value}>
                                             ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
                                         </div>
                                     </div>
@@ -319,7 +321,7 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                                     </div>
                                                     <div style="display: flex; gap: 10px;">
                                                             <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => fetchAndCopy(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>📋 Copy Context</button>
-                                                            <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => fetchAndDownloadState(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>⬇️ Download .txt</button>
+                                                            <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => fetchAndDownloadState(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>⬇️ Download</button>
                                                     </div>
                                             </div>
                                             ${this._viewingBatch.include_prompt ? html`

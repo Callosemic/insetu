@@ -1,6 +1,6 @@
 ---
 repo: "insetu"
-type: "queue"
+type: "todo"
 status: "open"
 id: INS-QUEUE-20260710_1305_SDK_MIGRATION_GIT
 title: "SDK V2 Migration: Git Extension"
