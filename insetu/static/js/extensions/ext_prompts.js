@@ -119,8 +119,7 @@ export class InSetuExtPrompts extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-prompts', InSetuExtPrompts);
-
-export class InSetuExtPromptsActions extends LitElement {
+export class InSetuExtPromptsActions extends InSetuElement {
     static styles = [sharedStyles];
 
     _openMenu(e) {

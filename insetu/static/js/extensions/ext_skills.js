@@ -173,7 +173,16 @@ export class InSetuExtSkills extends InSetuElement {
         this.subscribe(AppStore, state => state.activeWorkspace, () => {
             this._reloadAll();
         });
+
+        this._boundOpenConfig = this._openConfigModal.bind(this);
+        document.addEventListener('skills-open-config', this._boundOpenConfig);
+
         this._reloadAll();
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        document.removeEventListener('skills-open-config', this._boundOpenConfig);
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -788,11 +797,8 @@ window.ExtensionRegistry.registerExtension('skills', {
             icon: '🏋️',
             onClick: () => {
                 if (window.switchTab) window.switchTab(null, 'skills');
-                setTimeout(() => {
-                    const activeSub = localStorage.getItem('insetu_subtab_skills') || 'active';
-                    const skillsEl = document.querySelector(`#sub-${activeSub} insetu-ext-skills`);
-                    if (skillsEl) skillsEl._openConfigModal();
-                }, 50);
+                // UDF Enforcement: Dispatch intent to the centralized store statelessly
+                document.dispatchEvent(new CustomEvent('skills-open-config'));
             }
         }
     ],

@@ -189,11 +189,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
             const data = await res.json();
             AppStore.setState({ activePushJobId: data.job_id });
             this.pushModalOpen = false;
-
             this.api.pollJob(data.job_id, {
                 onProgress: (progressMsg) => {
-                    const spinner = document.getElementById('push-spinner');
-                    if (spinner) spinner.innerText = progressMsg || "Pushing to remote... please wait.";
+                    this.gitPushMessage = progressMsg || "Pushing to remote... please wait.";
                 },
                 onComplete: async (statusData) => {
                     const { currentPushRepo, dirtyDiffRepos } = AppStore.getState();
@@ -202,7 +200,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
                     AppStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
 
                     alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
-                    window.inSetu.ui.Factory.closeModal('push-modal');
+                    this.pushModalOpen = false;
                     try {
                         if(window.executeSystemCompile) await window.executeSystemCompile();
                     } catch (refreshErr) {
@@ -214,10 +212,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 onError: (err) => {
                     AppStore.setState({ activePushJobId: null });
                     alert(`❌ Push failed:\n\n${err.message}`);
-                    const btn = document.getElementById('execute-push-btn');
-                    const spinner = document.getElementById('push-spinner');
-                    if (btn) btn.style.display = 'block';
-                    if (spinner) spinner.style.display = 'none';
                 }
             });
 
@@ -232,13 +226,22 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.sweepFiles = {};
         this.selectedSweepFiles = {};
         try {
-            const res = await window.inSetu.api.workspace('git/sweep/status');
-            if (!res.ok) throw new Error("Failed to fetch status");
+            const res = await this.api.post('sweep/status', {});
+            if (!res.ok) throw new Error("Failed to start scan");
             const data = await res.json();
-            this.sweepFiles = data.repos || {};
+            this.api.pollJob(data.job_id, {
+                onProgress: () => {},
+                onComplete: (statusData) => {
+                    this.sweepFiles = statusData.artifact.repos || {};
+                    this.sweepLoading = false;
+                },
+                onError: (err) => {
+                    alert("Error scanning workspaces: " + err.message);
+                    this.sweepLoading = false;
+                }
+            });
         } catch (err) {
-            alert("Error scanning workspaces: " + err.message);
-        } finally {
+            alert("Error starting scan: " + err.message);
             this.sweepLoading = false;
         }
     }
@@ -264,16 +267,12 @@ export class InSetuExtGitDiffs extends InSetuElement {
             const data = await res.json();
             AppStore.setState({ activeSweepJobId: data.job_id });
             this.sweepModalOpen = false;
-
             this.api.pollJob(data.job_id, {
                 onProgress: (progressMsg) => {
-                    const spinner = document.getElementById('sweep-push-spinner');
-                    if (spinner) spinner.innerText = progressMsg || "Committing and pushing...";
+                    this.gitSweepMessage = progressMsg || "Committing and pushing...";
                 },
                 onComplete: async (statusData) => {
-                    const sweepMsgEl = document.getElementById('sweep-message');
-                    if (sweepMsgEl) sweepMsgEl.value = '';
-                    AppStore.setState({ gitSweepMessage: '' });
+                    this.gitSweepMessage = '';
 
                     const { dirtyDiffRepos } = AppStore.getState();
                     const newDirty = new Set(dirtyDiffRepos);
@@ -287,24 +286,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
                         window.generateDiffs();
                     }
                     alert(`✅ Sweep successful:\n\n${statusData.message}`);
-                    const btn = document.getElementById('execute-sweep-btn');
-                    const spinner = document.getElementById('sweep-push-spinner');
-                    if (btn) btn.style.display = 'block';
-                    if (spinner) {
-                        spinner.style.display = 'none';
-                        spinner.innerText = "Committing and pushing...";
-                    }
                 },
                 onError: (err) => {
                     AppStore.setState({ activeSweepJobId: null });
                     alert(`❌ Sweep failed:\n\n${err.message}`);
-                    const btn = document.getElementById('execute-sweep-btn');
-                    const spinner = document.getElementById('sweep-push-spinner');
-                    if (btn) btn.style.display = 'block';
-                    if (spinner) {
-                        spinner.style.display = 'none';
-                        spinner.innerText = "Committing and pushing...";
-                    }
                 }
             });
 

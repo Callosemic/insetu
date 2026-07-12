@@ -30,15 +30,15 @@ def generate_diff_context(workspace_id=None, target_repos=None):
     live_cfg = ctx.config
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
-
     if diffs_dir_path.exists():
+        from insetu.routes_fs import execute_vfs_delete
         for f_path in diffs_dir_path.iterdir():
             if f_path.is_file():
                 f = f_path.name
                 # If target_repos is provided, only clear diff files belonging to those repos
                 if not target_repos or any(f.startswith(st) for st in safe_targets):
                     try:
-                        os.remove(f_path)
+                        execute_vfs_delete(workspace_id, f_path.as_posix())
                     except Exception as e:
                         print(f"Warning: Failed to clear old diff file {f_path}: {e}")
 
@@ -168,11 +168,16 @@ def api_generate_diffs(ctx):
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("diffs_task", target_repos=data.get("target_repos"))
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('sweep/status', methods=['GET'])
-def api_git_sweep_status(ctx):
+def _background_sweep_status(job_id, workspace_id):
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import get_workspace_physics
+    ctx = ExtensionContext('git', workspace_id)
     cfg = ctx.config
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
+    _, ws_root, _ = get_workspace_physics(workspace_id)
     results = {}
+
+    update_immediate_job_status(job_id, 'processing', "Scanning workspaces for untracked files...", workspace_id=workspace_id)
+
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
         repo_path = Path(ws_root).joinpath(repo).as_posix()
@@ -180,7 +185,6 @@ def api_git_sweep_status(ctx):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
         if not os.path.exists(repo_path): continue
         try:
-            # Use -uall to recursively list untracked files inside new directories
             res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
             lines = res.stdout.splitlines()
             files = []
@@ -194,7 +198,15 @@ def api_git_sweep_status(ctx):
                 results[repo] = files
         except Exception:
             pass
-    return jsonify({"repos": results})
+
+    update_immediate_job_status(job_id, 'completed', "Scan complete.", artifact={"repos": results}, workspace_id=workspace_id)
+
+register_callback("git", "sweep_status_task", _background_sweep_status)
+
+@git_bp.route('sweep/status', methods=['POST'])
+def api_git_sweep_status(ctx):
+    job_id = ctx.jobs.submit("sweep_status_task")
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 def _background_sweep_push(job_id, workspace_id, selections, message):
     import os
     import subprocess
@@ -280,26 +292,42 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
     if not os.path.exists(repo_path): 
         update_immediate_job_status(job_id, 'failed', "Repo not found", workspace_id=workspace_id)
         return
-
     files_to_stage = set()
-    if diff_file:
-        diff_path = Path(ctx.paths["diffs_dir"]).joinpath(diff_file).as_posix()
-        if os.path.exists(diff_path):
-            content = ctx.vfs.read(diff_path) or ""
-            summary_section = content.split('\n\n')[0]
-            for line in summary_section.splitlines():
-                if line.startswith('[') and '] ' in line:
-                    filepath = line.split('] ', 1)[1].strip()
-                    files_to_stage.add(filepath)
+    from insetu.engine_gather import resolve_file_bucket
+    from insetu.utils_core import get_safe_repo_id
 
-    if not files_to_stage:
-        status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
-        for line in status_res.stdout.splitlines():
-            if len(line) >= 3:
-                filepath = line[3:]
-                if '->' in filepath: 
-                    filepath = filepath.split('->')[-1]
-                files_to_stage.add(filepath.strip())
+    repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
+    sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
+    safe_r_dir = get_safe_repo_id(repo)
+    target_diff_name = os.path.basename(diff_file) if diff_file else None
+
+    # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
+    status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
+    for line in status_res.stdout.splitlines():
+        if len(line) >= 3:
+            filepath = line[3:]
+            if '->' in filepath: 
+                filepath = filepath.split('->')[-1]
+            filepath = filepath.strip()
+
+            if target_diff_name:
+                if sub_buckets:
+                    b, module = resolve_file_bucket(filepath, sub_buckets)
+                    if b and module:
+                        b_id = f"{module}_diffs.txt"
+                    elif b:
+                        b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
+                    else:
+                        b_id = repo_cfg.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt") if repo_cfg else f"{safe_r_dir}_diffs.txt"
+                else:
+                    b_id = repo_cfg.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt") if repo_cfg else f"{safe_r_dir}_diffs.txt"
+
+                # Only stage the file if it maps to the exact bucket the user clicked
+                if b_id == target_diff_name:
+                    files_to_stage.add(filepath)
+            else:
+                # Fallback to sweeping the whole repo if no specific diff bucket was targeted
+                files_to_stage.add(filepath)
 
     if not files_to_stage:
         update_immediate_job_status(job_id, 'failed', "No files found to commit. Working tree is clean.", workspace_id=workspace_id)

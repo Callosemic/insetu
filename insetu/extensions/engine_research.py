@@ -184,7 +184,8 @@ class GooglePlaywrightProvider(SearchProvider):
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    Path(dump_path).write_text(page.content(), encoding="utf-8")
+                    from insetu.routes_fs import execute_vfs_save
+                    execute_vfs_save("default", dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
                     pass
@@ -512,15 +513,20 @@ def list_inbox(ctx):
     cursor = conn.execute(f"SELECT * FROM research_inbox WHERE status IN ({placeholders})", statuses)
     items = [dict(row) for row in cursor.fetchall()]
     return jsonify({"items": items})
-@research_bp.route('<job_id>/export_context', methods=['GET'])
-def export_context(ctx, job_id):
+def _background_export_context(job_id, workspace_id, research_job_id):
+    from insetu.sdk import ExtensionContext
+    from insetu.workers import register_ephemeral_artifact
+    from pathlib import Path
+
+    update_immediate_job_status(job_id, 'processing', "Compiling research context...", workspace_id=workspace_id)
+    ctx = ExtensionContext('research', workspace_id)
     conn = ctx.db
-    cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (job_id,))
+    cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (research_job_id,))
     items = cursor.fetchall()
 
     chunks = []
     current_chunk = ""
-    max_size = 250000  # ~250KB chunks to play nice with LLM file limits
+    max_size = 250000
 
     for item in items:
         content = item['raw_markdown'] if item['raw_markdown'] else "No content extracted."
@@ -535,7 +541,26 @@ def export_context(ctx, job_id):
     if current_chunk:
         chunks.append(current_chunk)
 
-    return jsonify({"chunks": chunks})
+    if not chunks:
+        update_immediate_job_status(job_id, 'failed', "No fully scraped pending links available to pack.", workspace_id=workspace_id)
+        return
+
+    artifacts = []
+    for i, chunk in enumerate(chunks):
+        filename = f"context_{research_job_id[:8]}_part_{i+1}.txt"
+        out_path = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
+        Path(out_path).write_text(chunk, encoding='utf-8')
+        register_ephemeral_artifact(out_path, "research", 3600, workspace_id=workspace_id)
+        artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
+
+    update_immediate_job_status(job_id, 'completed', "Context packed.", artifact={"files": artifacts}, workspace_id=workspace_id)
+
+register_callback("research", "export_context_task", _background_export_context)
+
+@research_bp.route('<job_id>/export_context', methods=['POST'])
+def export_context(ctx, job_id):
+    jid = ctx.jobs.submit("export_context_task", research_job_id=job_id)
+    return jsonify({"status": "accepted", "job_id": jid}), 202
 @research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'])
 def inbox_disposition(ctx, inbox_id):
     workspace_id = ctx.workspace_id

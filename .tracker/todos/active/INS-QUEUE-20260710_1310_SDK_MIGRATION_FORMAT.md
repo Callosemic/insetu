@@ -1,10 +1,10 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
-id: INS-QUEUE-20260710_1310_SDK_MIGRATION_FORMAT
+status: "active"
+id: "INS-QUEUE-20260710_1310_SDK_MIGRATION_FORMAT"
 title: "SDK V2 Migration: Format Extension"
-created_at: 2026-07-10T13:10:00
+created_at: "2026-07-10T13:10:00"
 closed_at: null
 sub_bucket: "None"
 delivery_date: "2026-07-26"

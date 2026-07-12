@@ -85,6 +85,21 @@ export class InSetuExtResearch extends InSetuElement {
                 const jData = await jRes.json();
                 const iData = await iRes.json();
                 ResearchStore.setState({ jobs: jData.jobs, inbox: iData.items });
+
+                // Native component polling to replace the banned global tick
+                const activeJobs = jData.jobs.filter(j => j.status === 'running' || j.status === 'gathering');
+                activeJobs.forEach(job => {
+                    if (!this._activePolls) this._activePolls = new Set();
+                    if (!this._activePolls.has(job.id)) {
+                        this._activePolls.add(job.id);
+                        this.api.pollJob(job.id, {
+                            interval: 3000,
+                            onProgress: () => this.fetchState(),
+                            onComplete: () => { this._activePolls.delete(job.id); this.fetchState(); },
+                            onError: () => { this._activePolls.delete(job.id); this.fetchState(); }
+                        });
+                    }
+                });
             }
         } catch (e) {
             console.error("Failed to fetch research state:", e);
@@ -169,26 +184,25 @@ export class InSetuExtResearch extends InSetuElement {
         }
     }
     async generateContext(jobId, e) {
-        const btn = e.target;
-        btn.innerText = "⏳ Packing...";
         try {
-            const res = await this.api.get(`${jobId}/export_context`);
-            if (!res.ok) throw new Error("Failed to export context");
+            const res = await this.api.post(`${jobId}/export_context`, {});
+            if (!res.ok) throw new Error("Failed to start export context job");
             const data = await res.json();
-            const chunks = data.chunks || [];
 
-            if (chunks.length === 0) return alert("No fully scraped pending links available to pack.");
-
-            chunks.forEach((chunk, i) => {
-                const filename = `context_${jobId.substring(0, 8)}_part_${i+1}.txt`;
-                const blob = new Blob([chunk], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                downloadFile(url, filename);
+            this.api.pollJob(data.job_id, {
+                onProgress: () => {},
+                onComplete: async (statusData) => {
+                    const files = statusData.artifact.files || [];
+                    for (const f of files) {
+                        if (window.downloadFile) {
+                            await window.downloadFile(f.download_url, f.filename);
+                        }
+                    }
+                },
+                onError: (err) => alert("Failed to generate context files: " + err.message)
             });
         } catch(err) {
-            alert("Failed to generate context files.");
-        } finally {
-            btn.innerText = "📦 Pack Context Files";
+            alert("Failed to generate context files: " + err.message);
         }
     }
     async executeAITriage(e) {
@@ -213,8 +227,6 @@ export class InSetuExtResearch extends InSetuElement {
         const rejectIds = Array.isArray(payload.reject) ? payload.reject.map(extractId) : [];
         const rescanIds = Array.isArray(payload.rescan) ? payload.rescan.map(extractId) : [];
 
-        const btn = e.target;
-        btn.innerText = "⏳ Processing (Please wait)...";
         try {
             for (const id of acceptIds) if (id) await this.handleDisposition(id, 'accepted');
             for (const id of rejectIds) if (id) await this.handleDisposition(id, 'rejected');
@@ -226,9 +238,7 @@ export class InSetuExtResearch extends InSetuElement {
             alert(`✅ Triage complete:\n- ${acceptIds.length} Accepted to Workspace\n- ${rejectIds.length} Rejected\n- ${rescanIds.length} Queued for Rescan`);
             ResearchStore.setState({ aiTriageMode: false, selectedItemId: null });
         } catch(err) {
-            alert("An error occurred executing the batch triage.");
-        } finally {
-            btn.innerText = "🤖 Execute Triage";
+            throw new Error("An error occurred executing the batch triage.");
         }
     }
 
@@ -328,14 +338,14 @@ export class InSetuExtResearch extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <button class="btn-sm" style="background: var(--intent-primary); width: fit-content; margin: 0 0 25px 0;" @click=${(e) => this.generateContext(job.id, e)}>📦 Pack Context Files</button>
+                    <insetu-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></insetu-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
                     <textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @input=${e => this._aiJsonInput = e.target.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
-                    <button class="btn-sm" style="background: var(--intent-highlight); width: 100%; margin: 0; padding: 10px; font-weight: bold;" @click=${this.executeAITriage}>🤖 Execute Triage</button>
+                    <insetu-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></insetu-async-btn>
                 </div>
             ` : html`
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
@@ -529,13 +539,3 @@ window.ExtensionRegistry.registerExtension('research', {
         }
     }
 });
-
-// Resurrect Metronome Hook via Declarative Registration
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerTick) {
-    window.inSetu.extensions.Registry.registerTick('research', 3000, () => {
-        if (ResearchStore.getState().jobs.some(j => j.status === 'running' || j.status === 'gathering')) {
-            const el = document.querySelector('insetu-ext-research');
-            if (el) el.fetchState();
-        }
-    });
-}

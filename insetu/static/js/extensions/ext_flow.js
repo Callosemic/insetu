@@ -168,17 +168,17 @@ export class InSetuExtFlow extends InSetuElement {
             original_response_path: this._viewingBatch.response_path
         };
         if (this._viewingBatch.archive_path) payload.archive_path = `${artifactsDir}/${this._viewingBatch.archive_path}`;
-        window.executeWorkspaceMutation(`/api/${activeWorkspace || 'default'}/fs/save`, payload, {
+        window.executeWorkspaceMutation('fs/save', payload, {
             loadingText: 'Saving...',
             onSuccess: () => {
                 this._viewingBatch = null;
-                executeSystemCompile().then(res => {
-                    if (res && res.status !== 'error') {
-                        window.inSetu.api.workspace('manifest?t=' + Date.now())
-                            .then(mRes => mRes.ok ? mRes.json() : {})
-                            .then(manifest => AppStore.setState({ manifest }));
-                    }
-                });
+                // Surgical Update: Let the VFS worker handle physical disk mapping,
+                // just pull the resulting manifest state statelessly.
+                setTimeout(() => {
+                    window.inSetu.api.workspace('manifest?t=' + Date.now())
+                        .then(mRes => mRes.ok ? mRes.json() : {})
+                        .then(manifest => AppStore.setState({ manifest }));
+                }, 500);
             }
         });
     }

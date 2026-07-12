@@ -49,12 +49,14 @@ def handle_tracker_file_delete(filepath, workspace_id=None):
         conn = get_connection('tracker', workspace_id=workspace_id)
         conn.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
         conn.commit()
-
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
     try:
-        with open(abs_path, 'r', encoding='utf-8') as file:
-            content = file.read()
+        content = ctx.vfs.read(abs_path)
+        if content is None:
+            return
         yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
 
         filename = os.path.basename(rel_path)
@@ -297,10 +299,11 @@ def enforce_declarative_tickets(workspace_id=None):
     If the physical path contradicts the YAML, the YAML wins -> file is moved.
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
-    from insetu.utils_core import load_config
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
     repos = get_sister_repos(workspace_id)
-    cfg = load_config(workspace_id)
+    cfg = ctx.config
     enforced_count = 0
 
     valid_buckets_by_repo = {}
@@ -311,38 +314,36 @@ def enforce_declarative_tickets(workspace_id=None):
             if b.get("id"): buckets.add(b["id"])
             if b.get("meta_map"): buckets.update(b["meta_map"].keys())
         valid_buckets_by_repo[r] = buckets
-
     for current_repo in repos:
-        base_dir = Path(ws_root).joinpath(current_repo, ".tracker").as_posix()
-        if not os.path.exists(base_dir): continue
+        tracker_rel_base = f"{current_repo}/.tracker"
 
-        for root, _, files in os.walk(base_dir):
-            for filename in files:
-                if not filename.endswith('.md'): continue
-                filepath = Path(root).joinpath(filename).as_posix()
-                rel_dir = os.path.relpath(root, base_dir)
-                rel_dir_lower = rel_dir.lower()
-                # Infer current state from path as fallback, defaulting to todo
-                inferred_type = "todo"
-                if "bug" in rel_dir_lower: inferred_type = "bug"
-                elif "queue" in rel_dir_lower: inferred_type = "queue"
-                inferred_status = "open"
-                if "active" in rel_dir_lower: inferred_status = "active"
-                elif "close" in rel_dir_lower: inferred_status = "closed"
-                elif "archive" in rel_dir_lower: inferred_status = "archived"
-                elif "log" in rel_dir_lower: inferred_status = "logged"
+        for ws_rel_path in ctx.vfs.walk(tracker_rel_base, exts=['.md']):
+            filename = os.path.basename(ws_rel_path)
+            filepath = ctx.resolve_path(ws_rel_path)
+            rel_dir = os.path.dirname(ws_rel_path[len(tracker_rel_base)+1:])
+            rel_dir_lower = rel_dir.lower()
+            # Infer current state from path as fallback, defaulting to todo
+            inferred_type = "todo"
+            if "bug" in rel_dir_lower: inferred_type = "bug"
+            elif "queue" in rel_dir_lower: inferred_type = "queue"
+            inferred_status = "open"
+            if "active" in rel_dir_lower: inferred_status = "active"
+            elif "close" in rel_dir_lower: inferred_status = "closed"
+            elif "archive" in rel_dir_lower: inferred_status = "archived"
+            elif "log" in rel_dir_lower: inferred_status = "logged"
 
-                # Attempt to rescue sub-bucket categorizations from messy AI-generated folders
-                inferred_sub_bucket = "None"
-                standard_dirs = {"todos", "bugs", "queue", "closed", "open", "active", "archived", "logged", "todo", "bug", ".", "log"}
-                for part in rel_dir.split('/'):
-                    if part and part.lower() not in standard_dirs:
-                        inferred_sub_bucket = part
-                        break
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    # Heal double-YAML malformations created by prior regex failures
+            # Attempt to rescue sub-bucket categorizations from messy AI-generated folders
+            inferred_sub_bucket = "None"
+            standard_dirs = {"todos", "bugs", "queue", "closed", "open", "active", "archived", "logged", "todo", "bug", ".", "log"}
+            for part in rel_dir.split('/'):
+                if part and part.lower() not in standard_dirs:
+                    inferred_sub_bucket = part
+                    break
+            try:
+                content = ctx.vfs.read(ws_rel_path)
+                if content is None:
+                    continue
+                # Heal double-YAML malformations created by prior regex failures
                     pseudo_match = re.search(r'^\s*---\n[\s\S]*?\n\s*---\n+((?:repo|type|status|id|title|created_at|closed_at|sub_bucket|tags):[\s\S]*?\n\s*---)', content)
                     yaml_data_rescue = {}
                     if pseudo_match:
@@ -482,8 +483,8 @@ def enforce_declarative_tickets(workspace_id=None):
                         # Lazy Evaluation: Only execute the expensive disk read if the mtime check fails 
                         # AND the file sizes are identical (a cheap heuristic for identical content).
                         if not should_delete_ghost and os.path.getsize(filepath) == os.path.getsize(intended_path):
-                            with open(intended_path, 'r', encoding='utf-8') as f_int:
-                                should_delete_ghost = (content == f_int.read())
+                            f_int_content = ctx.vfs.read(intended_rel_path)
+                            should_delete_ghost = (content == f_int_content)
 
                         if should_delete_ghost:
                             from insetu.routes_fs import execute_vfs_delete
@@ -511,28 +512,18 @@ def enforce_declarative_tickets(workspace_id=None):
                             new_content = content.replace(yaml_match.group(0), new_yaml)
                         else:
                             new_content = f"{new_yaml}\n\n{content}"
-
                         from insetu.routes_fs import execute_vfs_save
                         execute_vfs_save(workspace_id, intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
                         enforced_count += 1
 
-                except Exception:
-                    pass
-
-        # Post-sweep cleanup: remove empty ghost directories left behind
-        for root, dirs, files in os.walk(base_dir, topdown=False):
-            for d in dirs:
-                dir_path = Path(root).joinpath(d).as_posix()
-                try:
-                    if not os.listdir(dir_path):
-                        os.rmdir(dir_path)
-                except OSError:
-                    pass
+            except Exception:
+                pass
 
     return enforced_count
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the 7-day log and 30-day archive thresholds."""
-    _, ws_root, _ = get_workspace_physics(workspace_id)
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
     repos = get_sister_repos(workspace_id)
     date_7 = datetime.now() - timedelta(days=7)
     date_30 = datetime.now() - timedelta(days=30)
@@ -541,16 +532,11 @@ def archive_stale_tickets(workspace_id=None):
     for repo in repos:
         # Sweep 1: Move >7 day closed tickets to log
         for folder_type in ["todos", "bugs", "queue"]:
-            closed_dir = Path(ws_root).joinpath(repo, ".tracker", folder_type, "closed").as_posix()
-            if not os.path.exists(closed_dir): continue
-
-            for filename in os.listdir(closed_dir):
-                if not filename.endswith(".md"): continue
-
-                filepath = Path(closed_dir).joinpath(filename).as_posix()
-                if os.path.isfile(filepath):
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
+            closed_dir_rel = f"{repo}/.tracker/{folder_type}/closed"
+            for ws_rel_path in ctx.vfs.walk(closed_dir_rel, exts=['.md']):
+                filename = os.path.basename(ws_rel_path)
+                content = ctx.vfs.read(ws_rel_path)
+                if content:
                     closed_date = _extract_closed_date(content)
                     if closed_date and closed_date < date_7:
                         content = re.sub(r"status:\s*\"?closed\"?", 'status: "logged"', content)
@@ -561,23 +547,23 @@ def archive_stale_tickets(workspace_id=None):
                         archived_count += 1
 
         # Sweep 2: Move >30 day logged tickets to archive
-        log_dir = Path(ws_root).joinpath(repo, ".tracker", "log").as_posix()
-        if os.path.exists(log_dir):
-            for filename in os.listdir(log_dir):
-                if not filename.endswith(".md"): continue
+        log_dir_rel = f"{repo}/.tracker/log"
+        for ws_rel_path in ctx.vfs.walk(log_dir_rel, exts=['.md']):
+            filename = os.path.basename(ws_rel_path)
+            # Skip archived folder contents
+            if "archived" in ws_rel_path:
+                continue
 
-                filepath = Path(log_dir).joinpath(filename).as_posix()
-                if os.path.isfile(filepath):
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    closed_date = _extract_closed_date(content)
-                    if closed_date and closed_date < date_30:
-                        content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
-                        new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
-                        old_rel_path = f"{repo}/.tracker/log/{filename}"
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
-                        archived_count += 1
+            content = ctx.vfs.read(ws_rel_path)
+            if content:
+                closed_date = _extract_closed_date(content)
+                if closed_date and closed_date < date_30:
+                    content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
+                    new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
+                    old_rel_path = f"{repo}/.tracker/log/{filename}"
+                    from insetu.routes_fs import execute_vfs_save
+                    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                    archived_count += 1
 
     return archived_count
 @tracker_bp.route('new', methods=['POST'])

@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-TODO-20260701_1300_NAMESPACE_GLOBAL_STORES
 title: "Refactor Global Stores to window.inSetu Namespace"
 created_at: 2026-07-01T13:00:00

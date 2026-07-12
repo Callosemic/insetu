@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260701_1215_XSS_PREVIEW_INJECTION
 title: "Security Hardening: Replace Naive Regex Script Stripping with DOMPurify Sanitization"
 created_at: 2026-07-01T12:15:00

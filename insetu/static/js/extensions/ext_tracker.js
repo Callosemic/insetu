@@ -38,6 +38,20 @@ export const KanbanStore = createExtensionStore('Kanban', {
 }, ['pinnedRepos', 'pinnedBuckets', 'pinnedTags']);
 window.inSetu.stores.Kanban = KanbanStore;
 
+// UI Hooks for real-time reactivity
+if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+    window.ExtensionRegistry.registerUIHook('zone:post-file-save', (filepath) => {
+        if (filepath && filepath.includes('.tracker/') && filepath.endsWith('.md')) {
+            KanbanStore.getState().fetchTasks();
+        }
+    });
+    window.ExtensionRegistry.registerUIHook('zone:post-file-delete', (filepath) => {
+        if (filepath && filepath.includes('.tracker/') && filepath.endsWith('.md')) {
+            KanbanStore.getState().fetchTasks();
+        }
+    });
+}
+
 // Alias for legacy external triggers until fully deprecated
 window.loadTrackerBoard = () => KanbanStore.getState().fetchTasks();
 

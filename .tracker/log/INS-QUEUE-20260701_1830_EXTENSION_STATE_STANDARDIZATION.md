@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260701_1830_EXTENSION_STATE_STANDARDIZATION
 title: "Standardization: Replicate ext_citations Vanilla Zustand Architecture across Remaining Extensions"
 created_at: 2026-07-01T18:30:00

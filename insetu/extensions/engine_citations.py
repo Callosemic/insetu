@@ -135,42 +135,28 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
 
     except Exception as e:
         print(f"Extension Hook Error (citations compile): {e}")
-_METADATA_CACHE = {}
-_METADATA_INITIALIZED = set()
-
-def _rebuild_metadata_cache(workspace_id):
-    global _METADATA_CACHE, _METADATA_INITIALIZED
-    try:
-        conn = get_db(workspace_id)
-        cursor = conn.execute("SELECT raw_json FROM citations")
-        pubs = set()
-        authors = set()
-        for row in cursor.fetchall():
-            item = json.loads(row['raw_json'])
-            if item.get('container-title'):
-                pubs.add(item['container-title'])
-            for a in item.get('author', []):
-                if a.get('family') and a.get('given'):
-                    authors.add(f"{a['family']}, {a['given']}")
-                elif a.get('family'):
-                    authors.add(a['family'])
-        _METADATA_CACHE[workspace_id] = {
-            "publications": sorted(list(pubs)), 
-            "authors": sorted(list(authors))
-        }
-        _METADATA_INITIALIZED.add(workspace_id)
-    except Exception:
-        pass
 def get_db(workspace_id=None):
     from insetu.db import get_connection
     return get_connection("citations", workspace_id=workspace_id)
-
 @citations_bp.route('index', methods=['GET'])
 def get_metadata_index(ctx):
-    global _METADATA_CACHE, _METADATA_INITIALIZED
-    if ctx.workspace_id not in _METADATA_INITIALIZED:
-        _rebuild_metadata_cache(ctx.workspace_id)
-    return jsonify(_METADATA_CACHE.get(ctx.workspace_id, {"publications": [], "authors": []}))
+    """Leverages SQLite JSON1 C-extensions to calculate aggregates instantly, eliminating Python RAM caching."""
+    conn = ctx.db
+    try:
+        pubs = [row[0] for row in conn.execute("SELECT DISTINCT json_extract(raw_json, '$.container-title') FROM citations WHERE json_extract(raw_json, '$.container-title') IS NOT NULL ORDER BY 1").fetchall()]
+
+        authors = set()
+        cursor = conn.execute("SELECT json_extract(value, '$.family'), json_extract(value, '$.given') FROM citations, json_each(raw_json, '$.author')")
+        for row in cursor.fetchall():
+            family, given = row
+            if family and given:
+                authors.add(f"{family}, {given}")
+            elif family:
+                authors.add(family)
+
+        return jsonify({"publications": pubs, "authors": sorted(list(authors))})
+    except Exception as e:
+        return jsonify({"publications": [], "authors": []})
 @citations_bp.route('list', methods=['GET'])
 def get_citations(ctx):
     try:
@@ -195,22 +181,12 @@ def attach_citation(ctx, csl_id):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('search', methods=['GET'])
-def search_global_citations(ctx):
-    query = ctx.req.args.get('q', '').strip()
-    source = ctx.req.args.get('source', 'openalex').strip()
-    field = ctx.req.args.get('field', 'all').strip()
-    category = ctx.req.args.get('category', '').strip()
+from insetu.workers import update_immediate_job_status, register_callback
 
+def _background_citation_search(job_id, workspace_id, query, source, field, category, page):
     try:
-        page = int(ctx.req.args.get('page', 1))
-    except ValueError:
-        page = 1
-
-    if not query and not category:
-        return jsonify({"citations": []})
-
-    try:
+        update_immediate_job_status(job_id, 'processing', "Querying global academic catalogs...", workspace_id=workspace_id)
+        import urllib.parse, urllib.request, json
         safe_query = urllib.parse.quote(query) if query else ""
         csl_items = []
         offset = (page - 1) * 20
@@ -221,7 +197,8 @@ def search_global_citations(ctx):
             elif safe_query:
                 url = f"https://api.crossref.org/works?query={safe_query}&rows=20&offset={offset}"
             else:
-                return jsonify({"citations": []})
+                update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": []}, workspace_id=workspace_id)
+                return
 
             req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
             with urllib.request.urlopen(req) as response:
@@ -235,7 +212,9 @@ def search_global_citations(ctx):
                     "issued": item.get('issued', {"date-parts": [["n.d."]]})
                 })
         elif source == 'semanticscholar':
-            if not safe_query: return jsonify({"citations": []})
+            if not safe_query: 
+                update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": []}, workspace_id=workspace_id)
+                return
             url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={safe_query}&limit=20&offset={offset}&fields=title,authors,year,externalIds,isOpenAccess"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req) as response:
@@ -286,9 +265,35 @@ def search_global_citations(ctx):
                     "open_access": work.get('open_access', {}).get('is_oa', False)
                 })
 
-        return jsonify({"citations": csl_items})
+        update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": csl_items}, workspace_id=workspace_id)
     except Exception as e:
-        return jsonify({"error": f"Catalog Search Failed ({source}): {str(e)}"}), 500
+        update_immediate_job_status(job_id, 'failed', f"Catalog Search Failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("citations", "search_task", _background_citation_search)
+
+@citations_bp.route('search', methods=['POST'])
+def search_global_citations(ctx):
+    data = ctx.req.json or {}
+    query = data.get('q', '').strip()
+    source = data.get('source', 'openalex').strip()
+    field = data.get('field', 'all').strip()
+    category = data.get('category', '').strip()
+
+    try:
+        page = int(data.get('page', 1))
+    except ValueError:
+        page = 1
+
+    if not query and not category:
+        return jsonify({"citations": []})
+
+    job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+# REMOVE OLD LOGIC
+def _dummy_for_patching():
+    pass
+
 @citations_bp.route('import', methods=['POST'])
 def import_citations(ctx):
     data = ctx.req.json
@@ -329,7 +334,6 @@ def import_citations(ctx):
             )
             count += 1
         conn.commit()
-        _rebuild_metadata_cache(ctx.workspace_id)
 
         return jsonify({
             "status": "success",  
@@ -348,7 +352,6 @@ def delete_citation(ctx, csl_id):
             return jsonify({"error": "Citation not found"}), 404
         conn.commit()
 
-        _rebuild_metadata_cache(ctx.workspace_id)
         return jsonify({"status": "success", "message": f"Deleted citation {csl_id}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

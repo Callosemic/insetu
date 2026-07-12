@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-TODO-20260703_1930_CODEMIRROR_ABSTRACTION
 title: "Ecosystem Generalization: Abstract CodeMirror Mode Mapping"
 created_at: 2026-07-03T19:30:56

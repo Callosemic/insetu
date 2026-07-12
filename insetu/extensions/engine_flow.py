@@ -44,24 +44,23 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
         else:
             inc_path = Path(ctx.paths["artifacts_base"]).joinpath(inc).as_posix()
 
-        if os.path.exists(inc_path):
-            try:
-                with open(inc_path, 'r', encoding='utf-8') as f:
-                    content_lines.append(f"--- {inc} ---\n{f.read()}\n\n")
-            except Exception:
-                content_lines.append(f"--- {inc} (ERROR READING FILE) ---\n\n")
-        else:
-            content_lines.append(f"--- {inc} (NOT FOUND) ---\n\n")
+        try:
+            content = ctx.vfs.read(inc_path)
+            if content is not None:
+                content_lines.append(f"--- {inc} ---\n{content}\n\n")
+            else:
+                content_lines.append(f"--- {inc} (NOT FOUND) ---\n\n")
+        except Exception:
+            content_lines.append(f"--- {inc} (ERROR READING FILE) ---\n\n")
 
     ctx.vfs.save(out_path, "".join(content_lines), data={"is_absolute_artifact": True})
-
     # Strip artifacts array from workflow config if it exists
     w_cfg = load_workflows(workspace_id)
     for b in w_cfg.get("context_batches", []):
         if b["id"] == batch_id and "artifacts" in b:
             del b["artifacts"]
-            from insetu.utils_core import save_json_file
-            save_json_file(paths["workflows_path"], w_cfg, workspace_id)
+            import json
+            ctx.vfs.save(paths["workflows_path"], json.dumps(w_cfg, indent=2), data={"is_absolute_artifact": True})
             break
 @flow_bp.route('batches', methods=['GET'])
 def api_flow_batches(ctx):

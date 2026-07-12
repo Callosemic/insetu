@@ -19,7 +19,8 @@ export const CitationStore = createExtensionStore('Citations', {
             currentExplorePage: 1,
             citationLibraryCache: null,
             attachForm: { repo: '', bucket: 'None' },
-            editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' }
+            editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
+            importingIds: new Set()
 }, ['pinnedRepos', 'pinnedBuckets']);
 
 window.inSetu.stores.Citations = CitationStore;
@@ -28,6 +29,7 @@ import { sharedStyles } from '../shared_styles.js';
 
 export class InSetuExtCitations extends InSetuElement {
     static properties = {
+        importingIds: { type: Object },
         localLibrary: { type: Array },
         pinnedRepos: { type: Object },
         pinnedBuckets: { type: Object },
@@ -110,6 +112,7 @@ export class InSetuExtCitations extends InSetuElement {
             this.currentEditAuthors = state.currentEditAuthors || [];
             this.attachForm = state.attachForm || { repo: '', bucket: 'None' };
             this.editForm = state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' };
+            this.importingIds = state.importingIds || new Set();
         });
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
@@ -149,7 +152,6 @@ export class InSetuExtCitations extends InSetuElement {
             this.mainLoading = false;
         }
     }
-
     async _performExploreSearch(loadMore = false) {
         const query = this.exploreSearchQuery.trim();
         const category = this.exploreCategory.trim();
@@ -162,22 +164,38 @@ export class InSetuExtCitations extends InSetuElement {
         }
         try {
             const pageToFetch = loadMore ? this.currentExplorePage : 1;
-            const res = await this.api.get(`search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(this.exploreSource)}&field=${encodeURIComponent(this.exploreField)}&category=${encodeURIComponent(category)}&page=${pageToFetch}`);
-            if (res.ok) {
-                const data = await res.json();
-                const citations = data.citations || [];
-                if (loadMore) {
-                    this.exploredItems = [...this.exploredItems, ...citations];
-                } else {
-                    this.exploredItems = citations;
+            const res = await this.api.post('search', { 
+                q: query, 
+                source: this.exploreSource, 
+                field: this.exploreField, 
+                category: category, 
+                page: pageToFetch 
+            });
+
+            if (!res.ok) throw new Error("Search failed to start.");
+            const data = await res.json();
+
+            this.api.pollJob(data.job_id, {
+                onProgress: () => {},
+                onComplete: (statusData) => {
+                    const citations = statusData.artifact.citations || [];
+                    if (loadMore) {
+                        this.exploredItems = [...this.exploredItems, ...citations];
+                    } else {
+                        this.exploredItems = citations;
+                    }
+                    if (citations.length === 20) {
+                        this.currentExplorePage = pageToFetch + 1;
+                    }
+                    this.exploreLoading = false;
+                },
+                onError: (err) => {
+                    console.error("Explore Search Failed:", err);
+                    this.exploreLoading = false;
                 }
-                if (citations.length === 20) {
-                    this.currentExplorePage = pageToFetch + 1;
-                }
-            }
+            });
         } catch (e) {
             console.error("Explore Search Failed:", e);
-        } finally {
             this.exploreLoading = false;
         }
     }
@@ -208,31 +226,52 @@ export class InSetuExtCitations extends InSetuElement {
         reader.readAsText(file);
     }
     async _importExploreCitation(payload) {
-        const newSet = new Set(this._importingIds);
-        newSet.add(payload.id);
-        this._importingIds = newSet;
-        this.requestUpdate();
+        CitationStore.setState(state => {
+            const newSet = new Set(state.importingIds);
+            newSet.add(payload.id);
+            return { importingIds: newSet };
+        });
         try {
             await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
             this.loadMainLibrary();
         } catch (err) {
             alert("Error importing citation: " + err.message);
         } finally {
-            const finalSet = new Set(this._importingIds);
-            finalSet.delete(payload.id);
-            this._importingIds = finalSet;
-            this.requestUpdate();
+            CitationStore.setState(state => {
+                const finalSet = new Set(state.importingIds);
+                finalSet.delete(payload.id);
+                return { importingIds: finalSet };
+            });
         }
     }
-
     async _openCitationNotes(cslId) {
         try {
-            const res = await window.inSetu.api.workspace(`fs/search?q=${encodeURIComponent(cslId)}`);
+            const res = await window.inSetu.api.workspace('fs/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q: cslId })
+            });
             if (res.ok) {
                 const data = await res.json();
-                if (data.results && data.results.length === 1) {
-                    if (window.viewSourceFile) window.viewSourceFile(data.results[0].path, true);
-                } else if (data.results && data.results.length > 1) {
+                let results = data.results || [];
+                if (res.status === 202) {
+                    const jobId = data.job_id;
+                    while (true) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                        if (!pollRes.ok) throw new Error("Search job failed");
+                        const pollData = await pollRes.json();
+                        if (pollData.status === 'completed') {
+                            results = pollData.artifact?.results || [];
+                            break;
+                        } else if (pollData.status === 'failed') {
+                            throw new Error(pollData.message);
+                        }
+                    }
+                }
+                if (results && results.length === 1) {
+                    if (window.viewSourceFile) window.viewSourceFile(results[0].path, true);
+                } else if (results && results.length > 1) {
                     if (window.openLinkModal) {
                         window.openLinkModal(cslId, 'deep');
                     }
@@ -335,7 +374,7 @@ export class InSetuExtCitations extends InSetuElement {
     _renderCard(c, isExplore) {
         const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
         const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
-        const isImporting = this._importingIds && this._importingIds.has(c.id);
+        const isImporting = this.importingIds && this.importingIds.has(c.id);
 
         const actionHtml = (() => {
             if (isExplore) {
@@ -683,11 +722,9 @@ export class InSetuExtCitationsModals extends InSetuElement {
         const norm = window.normalizeAccentText || (str => str.toLowerCase());
         const normalizedAuthor = norm(author).replace(/[^a-z0-9]/g, '');
         const baseId = `${normalizedAuthor}${year}`;
-        const mdeWrap = document.getElementById('modal-cm6-container');
-        const litEditor = document.getElementById('global-os-editor');
-        const isCM6 = (mdeWrap && window.getComputedStyle(mdeWrap).display !== 'none' && litEditor);
-        const textArea = document.getElementById('modal-text');
-        const text = isCM6 ? litEditor.value : (textArea ? textArea.value : '');
+
+        // Use OS-level APIs to avoid Shadow DOM contamination
+        const text = window.getEditorContent ? window.getEditorContent() : '';
         const backmatterRegex = /\n+---\n+citations:\n([\s\S]*?)\n---$/;
         const match = text.match(backmatterRegex);
 
@@ -710,18 +747,10 @@ export class InSetuExtCitationsModals extends InSetuElement {
 
         citationsMap[finalPrettyId] = citation.id;
         const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(citationsMap).map(k => `  ${k}: "${citationsMap[k]}"\n`).join('') + "---";
-
         const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
         const linkText = `[@${finalPrettyId}]`;
 
-        if (isCM6) {
-            const cursor = litEditor.getCursor();
-            litEditor.value = updatedText;
-            litEditor.setCursor(cursor);
-        } else if (textArea) {
-            textArea.value = updatedText;
-        }
-
+        if (window.setEditorContent) window.setEditorContent(updatedText);
         if (window.insertTextAtCursor) window.insertTextAtCursor(linkText);
         CitationStore.setState({ citationModalOpen: false });
         if (window.currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
