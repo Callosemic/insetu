@@ -12,6 +12,7 @@ Extensions are strictly opt-in. The OS kernel is blind to an extension unless it
 ### Topological Sorting & Dependency Injection (The DAG)
 Extensions must be capable of relying on one another (e.g., a `zotero_sync` extension extending the `citations` extension).
 * **The Python Metadata:** Every `engine_{ext}.py` module must expose a module-level list named `__depends__ = ['citations', ...]` mapping its upstream requirements.
+* **The Blueprint Wrapper:** Backend extensions must utilize the `InSetuExtension` SDK class instead of raw Flask Blueprints to guarantee strict tenant path isolation and context injection.
 * **The Bootloader (app.py):** The `load_workspace_extensions()` routine must perform a topological sort (Directed Acyclic Graph) of the requested extensions in `config.json`. 
     * If an extension requires a dependency that is missing or fails to import, the child extension is gracefully aborted and logged as an `ImportError`.
 * **The JS Bootloader (app.js):** The frontend mirrors the backend DAG. ES6 imports guarantee that parent modules load and register their API surfaces before child extensions attempt to attach to them.
@@ -27,15 +28,15 @@ The RAG compiler and Cartographer will then natively process these environments 
 ## 3. The Frontend Injection Surface (Declarative Schema)
 Direct DOM mutation and imperative initialization (e.g., self-executing `registerTab` calls) of the core OS elements are strictly forbidden.
 Extensions must expose a static configuration payload using the Declarative Schema. The OS bootloader reads this payload and orchestrates the DOM injection statelessly.
-
 * **The Declarative Registration:**
-\`\`\`javascript
+
+```javascript
 window.ExtensionRegistry.registerExtension('ext_name', {
     name: "Extension Title",
     version: "2.0.0",
     layoutSlots: [
-        { slot: "slots:primary-navigation", id: "my_tab", label: "My Tab" },
-        { slot: "slots:sub-navigation", targetParent: "edit", id: "my_subtab", label: "Sub Tab", component: "insetu-ext-component" }
+        { slot: "primary-navigation", id: "my_tab", label: "My Tab", order: 5 },
+        { slot: "sub-navigation", targetParent: "my_tab", id: "my_subtab", label: "Sub Tab", order: 1, component: "insetu-ext-component" }
     ],
     settingsActions: [
         { id: 'config_id', label: 'Settings Label', icon: '⚙️', onClick: () => { ... } }
@@ -44,16 +45,29 @@ window.ExtensionRegistry.registerExtension('ext_name', {
         'zone:file-card-actions': (data) => { ... }
     }
 });
-\`\`\`
 
-* **Context-Aware Zone Injection:** Core UI files expose specific anchor points mapped via the \`uiHooks\` object in the schema.
+```
+
+* **Layout Slots (The Routing Topology):** Extensions declare their UI footprint via the `layoutSlots` array rather than imperatively appending themselves to the DOM.
+* **`slot`**: The target zone (e.g., `primary-navigation`, `sub-navigation`, `global`). Note: Do not use the redundant `slots:` prefix.
+* **`order`**: An integer dictating the left-to-right visual sequence.
+* **`component`**: The custom Web Component tag to mount (e.g., `"insetu-ext-tracker"`). **Omit this** for parent shells (like primary tabs) that only exist to house sub-tabs. **Require this** for actual views or actions that need to paint an interface on the canvas.
+
+* **Context-Aware Zone Injection:** Core UI files expose specific anchor points mapped via the `uiHooks` object in the schema.
+
 When triggered, the hook passes an \`ExecutionContext\` payload to the callback.
-        * **Defined Zones:** * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`.
+        * **Defined Zones:** 
+            * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`. Must return a declarative Lit `html` template string (or `null`), replacing legacy imperative `document.createElement` node injections.
             * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
             * `zone:new-file-modal`: Callback receives `{ basePath }`.
             * `zone:settings-menu`: Callback receives `{ currentConfig, saveConfigFn }`, allowing extensions to mount configuration inputs (e.g., API keys, default behaviors) directly into the OS Settings modal.
             * `zone:file-edit-override`: Callback receives `filepath`. If the callback returns `true`, the OS aborts opening the standard code editor, allowing the extension to mount a custom modal (e.g., the Kanban UI).
             * `zone:post-file-save`: Callback receives `filepath`, firing immediately after the OS confirms an atomic disk write.
+* **Action Ordering (The CSS Order Scale):** To prevent a visual "arms race" for the leftmost position on file cards and toolbars, extensions injecting action buttons (e.g., via `zone:file-card-actions`) MUST adhere to the following inline `style="order: X;"` scale:
+    * `< 0`: Quick/Pin actions (e.g., Favorites `order: -1`).
+    * `0` to `49`: Primary Domain actions (e.g., Git Push, Format Document).
+    * `50` to `99`: Secondary/Contextual actions (e.g., Copy Link, Tag).
+    * `>= 100`: Core OS Fallback actions (e.g., Browse, Download).
 * **Extending Extensions:** A parent extension (e.g., `citations`) can register its *own* custom zones via the Registry, allowing child extensions to mount UI natively inside the parent's layout.
 ### 3.1 The Client State Engine (Zustand Slices)
 To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must never mutate or query raw DOM layout strings directly. The client environment manages global state across two core reactive stores:

@@ -38,4 +38,13 @@ To prevent DOM bloat and spaghetti code, the creation of UI elements must strict
 
 * **Rule 1: The OS Skeleton (HTML-Bound):** The absolute foundational structure—top navigation bars, the global status bar, main tab container shells, and heavy singletons (specifically the `#file-modal` and its `<textarea>` editor)—must be hardcoded in `index.html`. This guarantees instant First Contentful Paint (FCP) and provides stable, immutable anchor nodes for extensions to hook into upon boot.
 * **Rule 2: Extension Canvases (JS Template Strings):** Extensions (e.g., Research, Tracker) must inject their primary fullscreen layouts into the OS Skeleton using static `innerHTML` template strings during their registration phase (`ExtensionRegistry.registerTab`). This keeps `index.html` strictly agnostic to domain-specific tools.
-* **Rule 3: Transient & Data-Driven Elements (JS Node Creation):** Anything that appears temporarily, layers over the screen, or iterates based on dynamic data (Modals, Dropdowns, Toast notifications, File/Task Cards) MUST be built programmatically via `document.createElement()` or `UIFactory`. Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation.
+* **Rule 3: Transient & Data-Driven Elements (Declarative Templates & UI Factory):** Anything that appears temporarily, layers over the screen, or iterates based on dynamic data (Modals, Dropdowns, Toast notifications, File/Task Cards) MUST be rendered declaratively within LitElement `html` templates or built via the stateless `UIFactory`.
+Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation, as is using imperative `document.createElement()` calls within graduated LitElement extensions.
+
+## 7. The Component Graduation Checklist (Compliance Guardrails)
+Before a Web Component is considered fully compliant and "Graduated", it must pass the following strict constraints:
+1. **Zero DOM Reading:** No `document.getElementById` or `querySelector` calls attempting to read state from the UI. Bind to Lit properties.
+2. **Shadow DOM Encapsulation:** Components must utilize native Shadow DOM with `sharedStyles` injected, completely isolating their structural footprint.
+3. **Teardown Hygiene:** Components must clean up all Zustand store subscriptions (`this._unsub()`) and global `window` event listeners during `disconnectedCallback` to prevent multi-tenant data contamination.
+4. **Declarative Purity:** Extensions must be stripped of self-executing imperative initialization code. Use `ExtensionRegistry.registerExtension` with static `layoutSlots`.
+5. **DOM Annihilation Prevention:** The `render()` method must utilize `lit-html` templates to surgically diff the UI, avoiding `innerHTML` or `replaceChildren()`.

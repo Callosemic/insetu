@@ -81,13 +81,13 @@ Does it strictly use `ExtensionRegistry.registerExtension` with static `layoutSl
 | Extension ID | Domain Role | Migration Status | Target Component Architecture |
 | :--- | :--- | :--- | :--- |
 | `bridge` | Yomama Sync Bridge | **Migrated (Native LitElement)** | `<insetu-ext-bridge>` |
-| `prompts` | Prompt Library | **Gold Standard** | `<insetu-ext-prompts>` |
+| `prompts` | Prompt Library | **Gold Standard (SDK V2)** | `<insetu-ext-prompts>` |
 | `gather` | Context Gatherer | **Gold Standard** | `<insetu-ext-gather>` | 
 | `flow` | Workflows | **Migrated (Native LitElement)** | `<insetu-ext-flow>` | 
 | `git` | Version Control | **Gold Standard** | `<insetu-ext-git-diffs>` | 
 | `tracker` | Kanban Board | **Migrated (Native LitElement)** | `<insetu-ext-tracker>` |
 | `research` | Triage Inbox | **Migrated (Native LitElement)** | `<insetu-ext-research>` |
-| `favorites` | Favorites Bar | **Gold Standard** | `<insetu-ext-favorites>` |
+| `favorites` | Favorites Bar | **Gold Standard (SDK V2)** | `<insetu-ext-favorites>` |
 | `skills` | Skills Tracker | **Debt (Minor)** | `<insetu-ext-skills>` |
 | `citations` | Reference Manager | **Gold Standard** | `<insetu-ext-citations>` |
 | `format` | Document Compilation | **Debt (Host Contamination)** | `<insetu-ext-format>` |
@@ -143,7 +143,8 @@ A final sweep confirms the successful graduation of the remaining Phase 1 target
 * **`ext_format.js` & `ext_ingest.js`**: **Remediated.** Host contamination eradicated. Modals render securely inside the declarative template, and metronome intervals are correctly registered.
 * **`ext_term.js`**: **Migrated.** Now utilizing a native, shadow-encapsulated iframe construct.
 ### 🚨 Remaining Technical Debt (The Hitlist)
-* **`ext_skills.js`**: Minor UDF bleed. Still relies on `new FormData(e.currentTarget)` inside `_handleCreateSkill` to read inputs instead of safely binding them to reactive `@input` Lit properties.
-* **`ext_flow.js`**: N+1 Fetch Penalty. `saveEditBatch()` and `deleteEditBatch()` invoke `this.fetchBatches()` upon completion. This forces the UI to execute a full API pull and full list re-render, violating the surgical UDF mutation mandate.
+* *(Update 2026-07-10: All remaining technical debt has been eradicated. The codebase is 100% compliant with the Phase 1 Declarative Web Component architecture.)*
 
 *(Update 2026-07-09: `fs.js` imperative modals have been successfully dismantled and migrated to the declarative `FsStore.modals` architecture, securing full compliance for the VFS Explorer.)*
+*(Update 2026-07-10: `ext_skills.js` FormData dependencies dismantled. Inputs securely bound to reactive properties.)*
+*(Update 2026-07-10: `ext_flow.js` N+1 Fetch Penalty eradicated. Local Zustand state now surgically splices mutations.)*

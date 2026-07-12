@@ -13,13 +13,15 @@ Logic, schemas, and configurations must exist in exactly one place. Redundancy b
 * **DRY Utility Centralization**: Any structural logic required by multiple engines (e.g., resolving absolute workspace paths, sanitizing directory names into `dot_` prefixes, parsing JSON safely) MUST be centralized in `insetu/utils_core.py`.
 "Fat Controllers" copying/pasting prefix logic are architectural failures.
 * **The Artifact Parser Anti-Pattern**: Never parse generated output artifacts (e.g., compiled `.txt` diff dumps, RAG context payloads, or rendered UI strings) to determine system state or drive backend execution. Artifacts are strictly one-way projections for human or LLM consumption. Always query the underlying SSOT directly (e.g., executing `git status` via subprocess instead of reading a `_diffs.txt` file).
-* **Stateless Multi-Tenancy & Scoped Request Routing**: The inSetu Developer OS handles multiple tenant environments statelessly inside the REST layer via explicit tracking scopes. Swapping profiles dynamically must occur via frontend headers without backend process restarts. All backend managers, hooks, and extensions must accept a request-scoped `workspace_id` parameter and completely reject un-parameterized global state storage.
-
+* **Stateless Multi-Tenancy & Scoped Request Routing**: The inSetu Developer OS handles multiple tenant environments statelessly inside the REST layer via explicit tracking scopes.
+Swapping profiles dynamically must occur via frontend headers or parameterized URL paths without backend process restarts.
+All backend managers, hooks, and extensions must accept an explicit request-scoped `workspace_id` parameter and completely reject un-parameterized global state storage. All extension API endpoints must map the tenant context directly within the route template layout (`/api/<workspace_id>/ext_name/verb`) to ensure absolute path-level data isolation and eliminate leaky dependencies on header-sniffing.
 ## 2. The Data Layer & CQRS Mandate
 inSetu operates directly on the user's hard drive. However, relying purely on raw filesystem I/O for high-velocity UI queries introduces unacceptable bottlenecks.
 * **Markdown as an Artifact**: `.tracker/` markdown files are human-readable, Git-friendly *artifacts*, not the live application database.
 * **The SQLite Cache Index**: Upon daemon boot, physical files are indexed into an embedded SQLite/DuckDB cache layer. All UI filtering, Kanban rendering, and API reads (`/api/tracker/files`) MUST query the fast SQL layer.
 * **CQRS Write-Path Separation**: When a user drags a Kanban ticket, the API must perform the mutation against the SQL layer (for instant UI feedback) and dispatch a background worker task to asynchronously write the `.md` mutation to the physical disk.
+* **Surgical Editing & O(1) Updates**: Global re-indexing (`DELETE FROM table` followed by bulk re-insertion) or complete DOM annihilation is strictly banned as a response to singular events. Event listeners must extract target boundaries and execute granular `INSERT OR REPLACE` or localized DOM reconciliation.
 
 ## 3. The Virtual File System (VFS) & Atomic Commits
 The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to disk creates half-patched, uncompilable codebases if an LLM hallucinates halfway through a transmission.
@@ -48,6 +50,17 @@ The frontend UI must be highly resilient, reactive, and entirely decoupled from 
 * **The Centralized Store**: The UI must operate as a pure function of a centralized state manager (Zustand or Vanilla PubSub in `store.js`). API payloads dispatch to the store; the DOM strictly subscribes to the store.
 * **The "Full Refresh" Anti-Pattern**: UI state desynchronization (ghost tickets, orphaned modals) indicates a failure of the UDF contract. The system must natively heal its own state tree asynchronously without requiring the user to execute manual browser reloads.
 * **The Low Memory Footprint Mandate**: The client layer must remain low-overhead to protect performance on low-spec and mobile platforms. The frontend is strictly banned from executing memory-intensive text chunking, holding massive multi-megabyte string buffers, or iterating over large regex arrays on raw text. All parsing, slicing, and segmentation operations must be offloaded to backend pipeline processes.
+
+### 4.1 Strict State Immutability & Reference Cloning
+When pulling complex objects or arrays from a Zustand slice via `getState()`, the raw object references must be treated as completely read-only. Modifying a nested key on an existing reference and feeding it back to `setState()` preserves identity parity and silences store broadcasts. 
+
+You MUST always enforce pristine cloning before executing mutations:
+* **Correct:** `const updatedManifest = { ...manifest };`
+* **Incorrect:** `manifest[bucket].files.push(filepath); AppStore.setState({ manifest });`
+
+### 4.5 Component & Communication Isolation
+All newly introduced system capabilities must implement the `InSetuExtension` framework on the backend and extend `InSetuElement` on the frontend[span_0](start_span)[span_0](end_span). Direct manipulation of the HTTP event loop for long-running processes or raw `fetch` interactions outside the `this.api` boundary is strictly prohibited[span_1](start_span)[span_1](end_span).
+
 ## 5. Asynchronous I/O & The Event Loop
 inSetu runs via a local Python web server (Flask/Uvicorn). You must never paralyze the local event loop.
 * **The I/O Block Ban**: Heavy workspace sweeps (e.g., parsing 500 files for Context Generation, executing blocking Git diff aggregations, spinning up cartography maps) MUST NOT block the main HTTP thread. All physical disk modifications, deletions, and massive multi-file collections must be executed through asynchronous off-thread background worker queues or pipelines.

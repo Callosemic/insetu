@@ -26,9 +26,8 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * UI Hooks: `zone:file-card-actions` to display diff statuses.
     * Core Hooks: `@hooks.on('pre_compile')` to handle JIT background diff cache assembly.
-
 ### B. Citations (`engine_citations.py`)
-* **Status:** Active in configuration.
+* **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Manages the academic reference library, bibliography parsing, and citation generation.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/citations.db`
@@ -36,7 +35,7 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Hooks: `zone:modal-edit-toolbar` (Injects "📚 Cite" button).
     * Config Hooks: `@hooks.on('mutate_workspace_config')` to inject `.bib` payload streams.
 ### C. Research (`engine_research.py`)
-* **Status:** Active.
+* **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Web scraping, payload extraction, and localized inbox triage.
 * **Dependencies (`__depends__`):** `['ingest']`
 * **Data Containment:** `~/.insetu/data/research.db` (Isolated Inbox).
@@ -44,7 +43,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Worker Matrix: Submits long-running URL scraping routines to the `TaskQueue`.
     * UI Hooks: Primary Navigation Tab injection (The Triage UI).
 ### D. Kanban Tracker (`engine_tracker.py`)
-* **Status:** Active Extension (Extracted from Micro-Kernel).
+* **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Project management, issue routing, and sprint tracking.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
@@ -60,11 +59,11 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Hooks: Injects `zone:modal-file-toolbar` actions.
     * Broadcasts `pre_compile_document` to intercept bibliography mappings.
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
-* **Status:** Active Extensions.
+* **Status:** Active Extensions (`prompts` upgraded to SDK V2).
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
 
 ### G. Favorites (`engine_favorites.py`)
-* **Status:** Active Extension.
+* **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Pinning files and folders for quick access, maintaining a localized SQLite cache.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/favorites.db`
@@ -74,18 +73,13 @@ These are fully built and compliant extensions currently operating within the sy
 * **Role:** Spaced repetition and track logging using the SM-2 algorithm.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
-
 ### I. Terminal Interface (`engine_term.py`)
-* **Status:** Active (UI-Only Scaffold).
+* **Status:** Active (UI-Only Scaffold, Upgraded to SDK V2).
 * **Role:** Manages the isolated `ttyd` interactive terminal canvas.
 * **Dependencies (`__depends__`):** `None`
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
-* **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
-* **Injection Surfaces:**
-    * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer.
-    * VFS Hooks: Uses `post_file_save` and `post_file_delete` to instantly sync the UI SQLite index.
+
 ---
 
 ## 3. Pending Decoupling (The V2 Extractions)
