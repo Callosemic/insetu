@@ -83,12 +83,12 @@ def execute_vfs_archive(workspace_id, filepath):
     from insetu.utils_core import get_workspace_physics
     _, ws_root, _ = get_workspace_physics(workspace_id)
     try:
-        rel_dest = os.path.relpath(new_path, ws_root)
+        rel_dest = os.path.relpath(new_path, ws_root).replace('\\', '/')
     except ValueError:
-        rel_dest = new_path
+        rel_dest = new_path.as_posix()
 
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": rel_dest}))
-    return {"status": "accepted", "message": f"File archive queued."}, 202
+    return {"status": "accepted", "message": f"File archive queued.", "new_path": rel_dest}, 202
 
 def execute_vfs_delete(workspace_id, filepath):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "delete"}))
@@ -131,14 +131,30 @@ def api_fs_exists(workspace_id):
     resolved_path = resolve_workspace_path(filename, workspace_id)
     exists = bool(resolved_path and os.path.exists(resolved_path))
     return jsonify({"exists": exists, "path": filename})
-@fs_bp.route('/api/<workspace_id>/fs/search', methods=['GET'])
+from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
+import json
+
+def _background_fs_search(job_id, workspace_id, query):
+    try:
+        update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
+        from insetu.utils_core import search_workspace_files
+        results = search_workspace_files(workspace_id, query)
+        update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"results": results}, workspace_id=workspace_id)
+    except Exception as e:
+        update_immediate_job_status(job_id, 'failed', f"Search failed: {str(e)}", workspace_id=workspace_id)
+
+register_callback("fs", "search_task", _background_fs_search)
+
+@fs_bp.route('/api/<workspace_id>/fs/search', methods=['POST'])
 def api_fs_search(workspace_id):
-    query = request.args.get('q', '').lower()
+    data = request.json or {}
+    query = data.get('q', '').lower()
     if not query: return jsonify({"results": []})
 
-    from insetu.utils_core import search_workspace_files
-    results = search_workspace_files(workspace_id, query)
-    return jsonify({"results": results})
+    import uuid
+    job_id = f"sch_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 def execute_vfs_save(workspace_id, filepath, content, data=None):
         """Enqueues file mutations asynchronously to unlock the HTTP thread instantly."""
         if data is None:

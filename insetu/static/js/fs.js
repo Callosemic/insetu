@@ -186,16 +186,8 @@ document.addEventListener('input', (e) => {
         }
     }
 });
-
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
-
-    if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
-        loadGlobalFS();
-    }
-    if (document.getElementById('st-prompts') && document.getElementById('st-prompts').classList.contains('active')) {
-        if (window.renderPromptsTab) window.renderPromptsTab();
-    }
 
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
         window.inSetu.extensions.Registry.executeUIHook('zone:post-file-delete', oldPath);
@@ -206,25 +198,54 @@ function refreshActiveFileViews(oldPath, newPath = null) {
         }
     }
 }
-
 function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
-    Object.values(manifest).forEach(obj => {
+    let changed = false;
+    const newManifest = { ...manifest };
+
+    Object.keys(newManifest).forEach(key => {
+        const obj = newManifest[key];
         if (obj.files) {
             const index = obj.files.indexOf(oldPath);
             if (index > -1) {
-                obj.files.splice(index, 1);
-                if (newPath) obj.files.push(newPath);
+                changed = true;
+                const newFiles = [...obj.files];
+                newFiles.splice(index, 1);
+
+                // SSOT Guardrail: We do NOT blindly inject newPath into the manifest.
+                // The target configuration might ignore it (e.g., "archived" or ".tracker").
+                // We optimistic-delete the old path to make the UI feel instant, 
+                // then rely on a silent background fetch to let the Cartographer dictate truth.
+
+                newManifest[key] = { ...obj, files: newFiles };
             }
         }
     });
+
+    if (changed) {
+        AppStore.setState({ manifest: newManifest });
+    }
+
+    // Silently pull the true Cartographer-validated manifest to heal new path additions
+    setTimeout(async () => {
+        try {
+            const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+            if (mRes.ok) {
+                AppStore.setState({ manifest: await mRes.json() });
+                if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
+                    loadGlobalFS();
+                }
+            }
+        } catch(e) {}
+    }, 500); // 500ms delay ensures the async VFS queue has fully drained to disk
+
     if (FsStore.getState().modals.browser?.open) {
         const mState = FsStore.getState().modals.browser;
         const updatedManifest = [...mState.manifest];
         const index = updatedManifest.indexOf(oldPath);
         if (index > -1) {
             updatedManifest.splice(index, 1);
-            if (newPath) updatedManifest.push(newPath);
+            // Same Cartographer constraint applies to the active browser modal
             FsStore.getState().setModal('browser', { manifest: updatedManifest });
         }
     }
@@ -301,6 +322,28 @@ function openMoveModal() {
     // remove filename
     FsStore.getState().setModal('move', { open: true, currentFile: currentModalFile, destPath: currentModalFile, initialParts: parts });
 }
+async function renameModalFile() {
+    const currentName = currentModalFile.split('/').pop();
+    const newName = prompt("Enter new filename:", currentName);
+    if (!newName || newName === currentName) return;
+
+    const parts = currentModalFile.split('/');
+    parts.pop();
+    const destPath = parts.length > 0 ? parts.join('/') + '/' + newName : newName;
+
+    await executeWorkspaceMutation('fs/move', {
+        filepath: currentModalFile,
+        dest_path: destPath
+    }, {
+        loadingText: 'Renaming...',
+        onSuccess: () => {
+            const oldPath = currentModalFile;
+            document.getElementById('file-modal').style.display = 'none';
+            refreshActiveFileViews(oldPath, destPath);
+        }
+    });
+}
+
 async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
@@ -322,10 +365,11 @@ async function archiveModalFile() {
     await executeWorkspaceMutation('fs/archive', {
         filepath: currentModalFile
     }, {
-        onSuccess: () => {
+        onSuccess: async (res) => {
+            const data = await res.json();
             const oldPath = currentModalFile;
             document.getElementById('file-modal').style.display = 'none';
-            refreshActiveFileViews(oldPath);
+            refreshActiveFileViews(oldPath, data.new_path);
         }
     });
 }
@@ -406,15 +450,29 @@ async function downloadFromModal() {
             window.URL.revokeObjectURL(url);
             a.remove();
         } else {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            let fetchUrl = currentModalIsFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
+            let fetchUrl = currentModalIsFS ? `bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
 
             if (window.inSetu?.extensions?.Registry?.executeUIHook) {
                 const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', currentModalFile);
                 if (overrideUrl) fetchUrl = overrideUrl;
             }
 
-            await downloadFile(fetchUrl, currentModalFile.split('/').pop());
+            if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
+                await downloadFile(fetchUrl, currentModalFile.split('/').pop());
+            } else {
+                const res = await window.inSetu.api.workspace(fetchUrl);
+                if (!res.ok) throw new Error('Download failed from server.');
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = currentModalFile.split('/').pop();
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+            }
         }
     } catch (e) {
         alert("Error downloading file: " + e.message);
@@ -453,9 +511,7 @@ export function createFileCard(fileInfo, container) {
     actionsNode.repoDir = fileInfo.repoDir;
     actionsNode.isFS = fileInfo.isFS;
     card.appendChild(actionsNode);
-
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    let dlFetchUrl = fileInfo.isSource ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
+    let dlFetchUrl = fileInfo.isSource ? `bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
         const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', fileInfo.filename);
         if (overrideUrl) dlFetchUrl = overrideUrl;
@@ -473,7 +529,12 @@ export function createFileCard(fileInfo, container) {
         const orig = dlBtn.innerText;
         dlBtn.innerText = 'Downloading...';
         try {
-            const res = await fetch(dlFetchUrl);
+            let res;
+            if (dlFetchUrl.startsWith('/') || dlFetchUrl.startsWith('http')) {
+                res = await fetch(dlFetchUrl, { headers: window.inSetu.api._getHeaders(true) });
+            } else {
+                res = await window.inSetu.api.workspace(dlFetchUrl);
+            }
             if (!res.ok) throw new Error("Failed to fetch");
             const text = await res.text();
             const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
@@ -668,16 +729,6 @@ window.ExtensionRegistry.registerExtension('files', {
         }
     ]
 });
-
-export function loadGlobalFS() {
-        const container = document.getElementById('global-fs-list');
-        if (container && !container.querySelector('insetu-vfs-explorer')) {
-                container.innerHTML = '<insetu-vfs-explorer></insetu-vfs-explorer>';
-        }
-        const legacyHeader = document.getElementById('global-fs-header');
-        if (legacyHeader) legacyHeader.style.display = 'none';
-}
-
 function checkFileExtension(filename) {
     const warningEl = document.getElementById('new-file-ext-warning');
     if (!warningEl) return;
@@ -715,15 +766,14 @@ function openNewFileModal(overridePath = null) {
     const prefix = typeof overridePath === 'string' ? overridePath : (gbPath.length > 0 ? gbPath.join('/') + '/' : '');
     FsStore.getState().setModal('newFile', { open: true, basePath: prefix, fileName: '', content: '' });
 }
-
 async function saveNewFile() {
     const mState = FsStore.getState().modals.newFile;
     const basePath = mState.basePath;
     let fileName = mState.fileName.trim();
     let content = mState.content;
 
-    if (!fileName || !content) {
-        alert("Filename and content are required.");
+    if (!fileName) {
+        alert("Filename is required.");
         return;
     }
     fileName = fileName.replace(/^\/+/, '');
@@ -740,31 +790,31 @@ async function saveNewFile() {
         onSuccess: async () => {
             FsStore.getState().setModal('newFile', { open: false });
 
-            // Surgically inject into the local manifest state
+            // Surgically inject into the local manifest state using pristine reference copies
             const { manifest } = AppStore.getState();
+            const updatedManifest = { ...manifest };
             const repoDir = filepath.split('/')[0];
             const defaultBucket = `${repoDir}_context.txt`;
 
-            if (manifest[defaultBucket]) {
-                if (!manifest[defaultBucket].files.includes(filepath)) {
-                    manifest[defaultBucket].files.push(filepath);
+            if (updatedManifest[defaultBucket]) {
+                const bucketCopy = { ...updatedManifest[defaultBucket], files: [...updatedManifest[defaultBucket].files] };
+                if (!bucketCopy.files.includes(filepath)) {
+                    bucketCopy.files.push(filepath);
                 }
+                updatedManifest[defaultBucket] = bucketCopy;
             } else {
-                manifest[defaultBucket] = {
+                updatedManifest[defaultBucket] = {
                     files: [filepath],
                     meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
                 };
             }
-            AppStore.setState({ manifest: manifest });
+            AppStore.setState({ manifest: updatedManifest });
 
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
-                loadGlobalFS();
-            }
-            if (document.getElementById('st-prompts') && document.getElementById('st-prompts').classList.contains('active')) {
-                if (window.renderPromptsTab) window.renderPromptsTab();
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', filepath);
             }
         }
-    });
+});
 }
 function openNewFolderModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
@@ -816,28 +866,54 @@ async function saveNewFolder() {
             }
 
             const { manifest } = AppStore.getState();
+            const updatedManifest = { ...manifest };
             const repoDir = filepath.split('/')[0];
             const defaultBucket = `${repoDir}_context.txt`;
 
-            if (manifest[defaultBucket]) {
-                if (!manifest[defaultBucket].files.includes(filepath)) {
-                    manifest[defaultBucket].files.push(filepath);
+            if (updatedManifest[defaultBucket]) {
+                const bucketCopy = { ...updatedManifest[defaultBucket], files: [...updatedManifest[defaultBucket].files] };
+                if (!bucketCopy.files.includes(filepath)) {
+                    bucketCopy.files.push(filepath);
                 }
+                updatedManifest[defaultBucket] = bucketCopy;
             } else {
-                manifest[defaultBucket] = {
+                updatedManifest[defaultBucket] = {
                     files: [filepath],
                     meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
                 };
             }
-            AppStore.setState({ manifest: manifest });
+            AppStore.setState({ manifest: updatedManifest });
             FsStore.getState().setModal('newFolder', { open: false });
 
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
-                loadGlobalFS();
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', filepath);
             }
         }
     });
 }
+export function getEditorContent() {
+    const litEditor = document.getElementById('global-os-editor');
+    const textArea = document.getElementById('modal-text');
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    if (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor) {
+        return litEditor.value;
+    }
+    return textArea ? textArea.value : '';
+}
+
+export function setEditorContent(text) {
+    const litEditor = document.getElementById('global-os-editor');
+    const textArea = document.getElementById('modal-text');
+    const cm6Wrap = document.getElementById('modal-cm6-container');
+    if (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor) {
+        const cursor = litEditor.getCursor();
+        litEditor.value = text;
+        litEditor.setCursor(cursor);
+    } else if (textArea) {
+        textArea.value = text;
+    }
+}
+
 export function insertTextAtCursor(textToInsert) {
     const textArea = document.getElementById('modal-text');
     const cm6Wrap = document.getElementById('modal-cm6-container');
@@ -891,10 +967,9 @@ export async function viewSourceFile(filepath, isFS = false) {
     const tb = document.getElementById('modal-action-toolbar');
     const dlBtn = document.getElementById('modal-dl-btn');
     if (dlBtn && !currentModalIsMemoryOnly) {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
         dlBtn.dataset.filename = filepath.split('/').pop();
 
-        let dlFetchUrl = isFS ? `/api/${activeWs}/bridge/fetch?file=${encodeURIComponent(filepath)}` : `/download/${filepath}`;
+        let dlFetchUrl = isFS ? `bridge/fetch?file=${encodeURIComponent(filepath)}` : `/download/${filepath}`;
         if (window.inSetu?.extensions?.Registry?.executeUIHook) {
             const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
             if (overrideUrl) dlFetchUrl = overrideUrl;
@@ -907,11 +982,11 @@ export async function viewSourceFile(filepath, isFS = false) {
         const btnFile = document.getElementById('btn-menu-file');
         const btnEdit = document.getElementById('btn-menu-edit');
         const btnExt = document.getElementById('btn-menu-ext');
-
         btnFile.onclick = (e) => {
             window.inSetu.ui.Factory.createDropdown({
                 anchor: e.target,
                 items: [
+                    { label: 'Rename', icon: '✏️', onClick: window.renameModalFile },
                     { label: 'Move', icon: '🚚', onClick: window.openMoveModal },
                     { label: 'Archive', icon: '📦', onClick: window.archiveModalFile },
                     { label: 'Delete', icon: '🗑️', onClick: window.deleteModalFile }
@@ -1129,6 +1204,7 @@ window.saveModalFile = saveModalFile;
 window.copyFromModal = copyFromModal;
 window.openMoveModal = openMoveModal;
 window.executeMove = executeMove;
+window.renameModalFile = renameModalFile;
 window.archiveModalFile = archiveModalFile;
 window.deleteModalFile = deleteModalFile;
 window.cleanModalFile = cleanModalFile;
@@ -1317,10 +1393,30 @@ export async function executeDeepLinkSearch(overrideQuery = null) {
 
     FsStore.getState().setModal('linkInsert', { deepSearchLoading: true, searchResults: [] });
     try {
-        const res = await window.inSetu.api.workspace('fs/search?q=' + encodeURIComponent(query));
+        const res = await window.inSetu.api.workspace('fs/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: query })
+        });
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
-        FsStore.getState().setModal('linkInsert', { searchResults: data.results || [] });
+        if (res.status === 202) {
+            const jobId = data.job_id;
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                if (!pollRes.ok) throw new Error("Search job failed");
+                const pollData = await pollRes.json();
+                if (pollData.status === 'completed') {
+                    FsStore.getState().setModal('linkInsert', { searchResults: pollData.artifact?.results || [] });
+                    break;
+                } else if (pollData.status === 'failed') {
+                    throw new Error(pollData.message);
+                }
+            }
+        } else {
+            FsStore.getState().setModal('linkInsert', { searchResults: data.results || [] });
+        }
     } catch (e) {
         console.error("Deep search error:", e);
     } finally {
@@ -1381,6 +1477,8 @@ window.switchLinkTab = switchLinkTab;
 window.onLinkSearchInput = onLinkSearchInput;
 window.executeDeepLinkSearch = executeDeepLinkSearch;
 window.viewSourceFile = viewSourceFile;
+window.getEditorContent = getEditorContent;
+window.setEditorContent = setEditorContent;
 window.insertTextAtCursor = insertTextAtCursor;
 export class InSetuVFSModals extends LitElement {
     static properties = {
@@ -1555,7 +1653,7 @@ export class InSetuVFSModals extends LitElement {
                     <div style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding-top: 15px;">
                         ${m.browser?.searchQuery ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px;">
-                                ${fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).slice(0, 50).map(filepath => {
+                                ${window.inSetu.utils.fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).slice(0, 50).map(filepath => {
                                     const filename = filepath.split('/').pop();
                                     return html`
                                         <insetu-card
@@ -1568,7 +1666,7 @@ export class InSetuVFSModals extends LitElement {
                                         </insetu-card>
                                     `;
                                 })}
-                                ${fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No files found.</span>` : ''}
+                                ${window.inSetu.utils.fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No files found.</span>` : ''}
                             </div>
                         ` : html`
                             <insetu-file-tree 

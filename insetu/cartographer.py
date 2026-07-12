@@ -29,9 +29,12 @@ def auto_trigger_cartography(filepath, workspace_id=None, **kwargs):
     import json
     repo = filepath.split('/')[0] if '/' in filepath else filepath
     args_json = json.dumps({"target_repos": [repo]})
-
     job_id = f"map_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id)
+    try:
+        submit_immediate_job(job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id)
+    except RuntimeError as e:
+        if "shutdown" not in str(e).lower():
+            raise
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
     def parse_text_for_comments(text):

@@ -7,19 +7,21 @@ const originalFetch = window.fetch;
 window.inSetu.api = {
     _getHeaders: function(isWorkspaceScoped = false) {
         const headers = new Headers();
-        
         // Universal Intent Security Token
-        const appToken = window.inSetu?.stores?.App?.getState()?.authToken || sessionStorage.getItem('insetu_boot_token');
+        let bootToken = '';
+        try { bootToken = sessionStorage.getItem('insetu_boot_token'); } catch(e) {}
+        const appToken = window.inSetu?.stores?.App?.getState()?.authToken || bootToken;
         if (appToken) headers.append('X-InSetu-Token', appToken);
 
         // Tenant Isolation
         if (isWorkspaceScoped) {
-            const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+            let localWs = 'default';
+            try { localWs = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default'; } catch(e) {}
+            const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || localWs;
             headers.append('X-Workspace-ID', activeWs);
         }
         return headers;
     },
-
     workspace: async function(path, options = {}) {
         const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
@@ -27,7 +29,7 @@ window.inSetu.api = {
 
         const headers = this._getHeaders(true);
         if (options.headers) {
-            new Headers(options.headers).forEach((value, key) => headers.append(key, value));
+            new Headers(options.headers).forEach((value, key) => headers.set(key, value));
         }
 
         // Future Architectural Seam: Offline Typewriter IndexedDB queue will intercept POST requests here
@@ -39,7 +41,7 @@ window.inSetu.api = {
         // System routes like config and jobs are vaulted per-tenant, so they require the scope token
         const headers = this._getHeaders(true);
         if (options.headers) {
-            new Headers(options.headers).forEach((value, key) => headers.append(key, value));
+            new Headers(options.headers).forEach((value, key) => headers.set(key, value));
         }
 
         return originalFetch(fullUrl, { ...options, headers });

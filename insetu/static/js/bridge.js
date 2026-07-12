@@ -209,9 +209,24 @@ export class InSetuExtBridge extends InSetuElement {
                     });
 
                     BridgeStore.setState({ consoleOutput: safeData });
-
                     if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
+                        const savedFiles = Array.from(BridgeStore.getState().activeFiles);
                         BridgeStore.getState().clearPayload();
+
+                        // Alert listening extensions (like the Tracker) that files have been modified
+                        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                            savedFiles.forEach(f => window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', f));
+                        }
+
+                        // Silently hydrate manifest to instantly capture any newly created files in the VFS Explorer
+                        setTimeout(async () => {
+                            try {
+                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                                if (mRes.ok) {
+                                    window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                                }
+                            } catch(e) {}
+                        }, 500);
                     }
                 },
                 onError: (err) => {

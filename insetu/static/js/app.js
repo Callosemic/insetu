@@ -1,6 +1,5 @@
 import {
     viewSourceFile,
-    loadGlobalFS,
     createFileCard,
     downloadFile,
     currentModalOriginalText,
@@ -406,10 +405,6 @@ document.addEventListener('click', (e) => {
 });
 // Restore UI State on Load
 window.addEventListener('DOMContentLoaded', async () => {
-    // The JS engine successfully booted. Hide the pure-HTML panic switch.
-    clearTimeout(window.panicTimeout);
-    const panicBtn = document.getElementById('js-panic-button');
-    if (panicBtn) panicBtn.style.display = 'none';
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
@@ -446,8 +441,25 @@ window.addEventListener('DOMContentLoaded', async () => {
         switchTab(null, 'context');
     }
 });
+// Evade iOS PWA suspension timeout races by clearing the panic switch immediately upon JS evaluation
+if (window.panicTimeout) clearTimeout(window.panicTimeout);
+const _initPanicBtn = document.getElementById('js-panic-button');
+if (_initPanicBtn) _initPanicBtn.style.display = 'none';
 
-const currentTheme = localStorage.getItem('insetu_theme') || 'dark';
+// PWA Isolation: Honor URL-bound workspace parameters before reading cache
+const urlParams = new URLSearchParams(window.location.search);
+const nodeParam = urlParams.get('node');
+if (nodeParam) {
+    try {
+        sessionStorage.setItem('insetu_workspace', nodeParam);
+        localStorage.setItem('insetu_workspace', nodeParam);
+    } catch(e) {}
+}
+
+let currentTheme = 'dark';
+try {
+    currentTheme = localStorage.getItem('insetu_theme') || 'dark';
+} catch(e) {}
 document.body.setAttribute('data-theme', currentTheme);
 
 const settingsToggle = document.getElementById('settings-toggle');
@@ -598,8 +610,6 @@ function switchTab(event, tabId) {
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                 window.ExtensionRegistry.executeUIHook('zone:force-refresh', tabId);
             }
-            if (tabId === 'tasks' && window.loadTrackerBoard) window.loadTrackerBoard();
-            if (tabId === 'library' && window.loadMainLibrary) window.loadMainLibrary();
         }
         return; // Break standard initialization to avoid double-firing
     }
@@ -611,14 +621,6 @@ function switchTab(event, tabId) {
     } else if (targetContent) {
         const firstSub = targetContent.querySelector('.sub-tab:not([style*="display: none"])');
         if (firstSub) switchSubTab(firstSub.id.replace('st-', ''), false, true);
-    }
-
-    if (tabId === 'context') {
-        // Trigger LitElement update
-        const gatherEl = document.querySelector('insetu-ext-gather');
-        if (gatherEl && (!window.inSetu.stores.App.getState().manifest || Object.keys(window.inSetu.stores.App.getState().manifest).length === 0)) {
-            gatherEl.loadContext();
-        }
     }
 
     if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
@@ -649,12 +651,8 @@ function switchSubTab(subId, forceRefresh = false, isProgrammatic = false) {
             act.style.display = act.dataset.subId === subId ? '' : 'none';
         });
     }
-
     if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
         window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId, forceRefresh: actualForceRefresh });
-    }
-    if (subId === 'files') {
-        loadGlobalFS();
     }
 }
 let lastRefreshed = null;
@@ -814,19 +812,36 @@ export const executeSystemCompile = (onProgress = null) => {
 
             const data = await response.json();
             let result = null;
-
             if (response.status === 202) {
                 const jobId = data.job_id;
                 while (true) {
+                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
+                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
+                        break;
+                    }
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
+                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
+                        break;
+                    }
+
+                    const pollRes = await window.inSetu.api.system(`jobs/${jobId}`, {
+                        headers: { 'X-Workspace-ID': compilePromiseWs }
+                    });
+
+                    if (pollRes.status === 404) {
+                        result = { status: 'aborted', message: 'Job not found (context shifted).', files: [] };
+                        break;
+                    }
                     if (!pollRes.ok) throw new Error("Compilation job failed");
                     const pollData = await pollRes.json();
-                    
+
                     if (pollData.status === 'processing' || pollData.status === 'pending') {
                         const msg = pollData.message || "Compiling...";
-                        setGlobalStatus(`⏳ ${msg}`, null);
-                        if (onProgress) onProgress(msg);
+                        if (AppStore.getState().activeWorkspace === compilePromiseWs) {
+                            setGlobalStatus(`⏳ ${msg}`, null);
+                            if (onProgress) onProgress(msg);
+                        }
                     } else if (pollData.status === 'completed') {
                         result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
                         break;

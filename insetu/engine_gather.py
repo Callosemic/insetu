@@ -10,13 +10,16 @@ from insetu.sdk import InSetuExtension
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 gather_bp = InSetuExtension('gather', __name__, core=True)
 __depends__ = []
-
 from insetu.hooks import hooks
 
 @hooks.on('vfs_transaction_committed')
-def _surgically_update_manifest(workspace_id=None, files=None, **kwargs):
+@hooks.on('post_file_save')
+@hooks.on('post_file_delete')
+def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
-    if not files: return
+    if not files and not filepath: return
+    if filepath:
+        files = [filepath]
     from insetu.sdk import ExtensionContext
     from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id, get_valid_workspace_files
     from pathlib import Path
@@ -287,19 +290,24 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
             dirty = True
 
     return dirty
-
 from insetu.hooks import hooks
 
 @hooks.on('vfs_transaction_committed')
-def _surgically_update_manifest(workspace_id=None, files=None, **kwargs):
+@hooks.on('post_file_save')
+@hooks.on('post_file_delete')
+def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
-    if not files: return
-    from insetu.utils_core import get_gather_paths, load_json_file, save_json_file, load_config, get_safe_repo_id
+    if not files and not filepath: return
+    if filepath:
+        files = [filepath]
+    from insetu.sdk import ExtensionContext
+    from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id
 
-    paths = get_gather_paths(workspace_id)
+    ctx = ExtensionContext('gather', workspace_id)
+    paths = ctx.paths
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest = load_json_file(manifest_path, {})
-    cfg = load_config(workspace_id)
+    cfg = ctx.config
 
     affected_repos = set()
     for f in files:

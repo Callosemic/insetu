@@ -28,7 +28,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.filename = filename
     def visit_Call(self, node):
         # SDK V2 Enforcement (Backend Extensions)
-        if self.filename.startswith("engine_"):
+        is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
+        if is_ext:
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'os' and node.func.attr == 'walk':
                 report_violation("SDK_VFS_WALK_MANDATE", self.filepath, node.lineno, "Raw os.walk() detected in extension. Use ctx.vfs.walk() instead.")
             if isinstance(node.func, ast.Name) and node.func.id == 'open':
@@ -112,19 +113,35 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_Import(self, node):
         self._check_sqlite_import(node)
-        if self.filename.startswith("engine_") and any(alias.name == 'flask' for alias in node.names):
-            report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Raw flask import detected in extension engine[span_2](start_span)[span_2](end_span). Use InSetuExtension framework instead[span_3](start_span)[span_3](end_span).")
+        is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
+        if is_ext and any(alias.name == 'flask' for alias in node.names):
+            report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Raw flask import detected in extension engine. Use InSetuExtension framework instead.")
         self.generic_visit(node)
+    def visit_FunctionDef(self, node):
+        # CQRS Hook Parity Check
+        hook_events = []
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
+                if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
+                    if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
+                        hook_events.append(dec.args[0].value)
+
+        if 'vfs_transaction_committed' in hook_events:
+            if 'post_file_save' not in hook_events or 'post_file_delete' not in hook_events:
+                report_violation("CQRS_EVENT_PARITY", self.filepath, node.lineno, "Function subscribes to 'vfs_transaction_committed' but is missing 'post_file_save' and/or 'post_file_delete'.")
+
+        self.generic_visit(node)
+
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
-
         # Catch from os.path import join bypass
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
 
-        if self.filename.startswith("engine_"):
+        is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
+        if is_ext:
             if node.module == 'flask' and any(alias.name == 'Blueprint' for alias in node.names):
-                report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine[span_4](start_span)[span_4](end_span). Use InSetuExtension instead[span_5](start_span)[span_5](end_span).")
+                report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
 
             banned_imports = {'load_config', 'resolve_workspace_path', 'get_gather_paths'}
             imported_names = {alias.name for alias in node.names}
@@ -159,7 +176,8 @@ def check_python_files():
                         visitor = BackendFitnessVisitor(filepath, file)
                         visitor.visit(tree)
                         # 4. Extension DAG Compliance
-                        if file.startswith("engine_"):
+                        is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
+                        if is_ext:
                             has_depends = any(
                                 isinstance(n, ast.Assign) and 
                                 any(isinstance(t, ast.Name) and t.id == '__depends__' for t in n.targets) 
@@ -174,7 +192,7 @@ def check_python_files():
                                     has_insetu_ext = True
                                     break
                             if not has_insetu_ext:
-                                report_violation("SDK_EXTENSION_MANDATE", filepath, 1, "Extension engine does not utilize InSetuExtension framework[span_6](start_span)[span_6](end_span).")
+                                report_violation("SDK_EXTENSION_MANDATE", filepath, 1, "Extension engine does not utilize InSetuExtension framework.")
                     except SyntaxError:
                         print(f"⚠️  Skipping {file} due to SyntaxError.")
 # --- JAVASCRIPT REGEX LINTER ---
@@ -205,6 +223,7 @@ def check_javascript_files():
     zustand_direct_import_pattern = re.compile(r'from\s+[\'"]https://esm\.sh/zustand(?:/[^\'"]*)?[\'"]')
     lit_element_class_pattern = re.compile(r'class\s+\w+\s+extends\s+LitElement\b')
     raw_register_tick_pattern = re.compile(r'\.registerTick\s*\(')
+    zustand_reference_mutation_pattern = re.compile(r'\.setState\(\{\s*([a-zA-Z0-9_]+)\s*:\s*\1\s*\}\)')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -306,11 +325,14 @@ def check_javascript_files():
 
                     # 19. LitElement Extension Ban
                     if is_extension and lit_element_class_pattern.search(line):
-                        report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement[span_7](start_span)[span_7](end_span). Use InSetuElement instead to enable managed lifecycles[span_8](start_span)[span_8](end_span).")
-
+                        report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")
                     # 20. Raw Polling Tick Ban
                     if is_extension and raw_register_tick_pattern.search(line):
-                        report_violation("POLLING_MANDATE", filepath, line_num, "Raw registerTick detected[span_9](start_span)[span_9](end_span). Use this.api.pollJob or central SDK polling mechanisms to coordinate worker jobs[span_10](start_span)[span_10](end_span).")
+                        report_violation("POLLING_MANDATE", filepath, line_num, "Raw registerTick detected. Use this.api.pollJob or central SDK polling mechanisms to coordinate worker jobs.")
+
+                    # 21. Zustand Reference Mutation Ban
+                    if zustand_reference_mutation_pattern.search(line):
+                        report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
 
 if __name__ == "__main__":
     print("============================================================")

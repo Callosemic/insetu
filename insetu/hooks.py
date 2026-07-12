@@ -1,4 +1,38 @@
 import threading
+from typing import TypedDict, Optional, List, Dict, Any
+
+# --- EVENT BUS PAYLOAD CONTRACTS ---
+# These TypedDicts serve as machine-readable documentation for extension authors (and LLMs)
+# to guarantee exact kwarg keys when hooking into OS lifecycle events.
+
+class HookPayload_MutateWorkspaceConfig(TypedDict, total=False):
+    cfg: Dict[str, Any]
+    workspace_id: Optional[str]
+
+class HookPayload_CompileContexts(TypedDict, total=False):
+    manifest: Dict[str, Any]
+    workspace_id: Optional[str]
+
+class HookPayload_PreCompileDocument(TypedDict, total=False):
+    filepath: str
+    text: str
+    workspace_id: Optional[str]
+
+class HookPayload_RequestChangelogSuggestions(TypedDict, total=False):
+    repo: str
+    workspace_id: Optional[str]
+
+class HookPayload_VFSTransactionCommitted(TypedDict, total=False):
+    files: List[str]
+    workspace_id: Optional[str]
+
+class HookPayload_FileMutation(TypedDict, total=False):
+    filepath: str
+    workspace_id: Optional[str]
+
+class HookPayload_WorkspaceScoped(TypedDict, total=False):
+    workspace_id: Optional[str]
+
 
 class HookRegistry:
     """The central Event Bus for the inSetu Micro-Kernel."""

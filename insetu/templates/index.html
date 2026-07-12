@@ -21,6 +21,7 @@
         <h3 style="margin-top: 0; color: var(--text); opacity: 0.8;">⏳ Loading inSetu Developer OS...</h3>
         <p style="font-size: 0.85rem; color: #888; margin-top: 10px;">
             If this screen remains visible, the UI engine has stalled.<br><br>
+            <a href="#" onclick="event.preventDefault(); localStorage.clear(); sessionStorage.clear(); window.location.reload();" style="color: #3b82f6; text-decoration: underline; font-weight: bold; margin-right: 15px;">[Hard Refresh]</a>
             <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='Rebooting Engine...'; setTimeout(()=>window.location.reload(), 3000);" style="color: #ef4444; text-decoration: underline; font-weight: bold;">[Boot Recovery OS]</a>
         </p>
     </div>
