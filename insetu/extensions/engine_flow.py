@@ -14,9 +14,35 @@ def compile_flow_batches(manifest, workspace_id=None, **kwargs):
     ctx = ExtensionContext('flow', workspace_id)
     cfg = ctx.config
     if "flow" not in cfg.get("extensions", []): return
+
+    is_full_sweep = kwargs.get('is_full_sweep', True)
+    touched_buckets = kwargs.get('touched_buckets')
     w_cfg = load_workflows(workspace_id)
     context_batches = w_cfg.get("context_batches", [])
+
     for batch in context_batches:
+        is_partial = (is_full_sweep is False) or isinstance(is_full_sweep, list)
+        if is_partial and touched_buckets is not None:
+            current_repo_forced = False
+            if isinstance(is_full_sweep, list):
+                includes = batch.get("includes", [])
+                if any(any(inc.startswith(r + '/') for r in is_full_sweep) for inc in includes):
+                    current_repo_forced = True
+
+            if not current_repo_forced:
+                includes = batch.get("includes", [])
+                needs_compile = False
+                for inc in includes:
+                    basename = os.path.basename(inc)
+                    if basename in touched_buckets:
+                        needs_compile = True
+                        break
+                    if not basename.endswith('_context.txt') and not basename.endswith('_diffs.txt'):
+                        needs_compile = True
+                        break
+                if not needs_compile:
+                    continue
+
         compile_batch(batch, workspace_id, manifest_data=manifest)
 def compile_batch(batch, workspace_id=None, manifest_data=None):
     from insetu.sdk import ExtensionContext

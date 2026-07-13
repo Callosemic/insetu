@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "closed"
+status: "logged"
 id: phase-2-frontend-state
 title: "Phase 2: Frontend State Hardening (UDF)"
 created_at: 2026-07-02T09:18:30

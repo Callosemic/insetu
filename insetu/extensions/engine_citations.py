@@ -69,6 +69,9 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
 @hooks.on('compile_contexts')
 def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
     try:
+        is_full_sweep = kwargs.get('is_full_sweep', True)
+        if not is_full_sweep:
+            return
         from insetu.sdk import ExtensionContext
         from insetu.db import get_connection
         ctx = ExtensionContext('citations', workspace_id)

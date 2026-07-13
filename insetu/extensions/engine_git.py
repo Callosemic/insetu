@@ -14,7 +14,12 @@ __depends__ = []
 @hooks.on('compile_contexts')
 def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
     try:
-        generate_diff_context(workspace_id, manifest_ref=manifest)
+        is_full_sweep = kwargs.get('is_full_sweep', True)
+        if isinstance(is_full_sweep, list):
+            target_repos = is_full_sweep
+        else:
+            target_repos = None if is_full_sweep else kwargs.get('target_repos')
+        generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 
