@@ -24,7 +24,17 @@ MY_SCHEMA = {
     }
 }
 
-my_ext_bp = InSetuExtension('my_ext', __name__, schema=MY_SCHEMA)
+MY_SETTINGS = [
+    {
+        "id": "api_key",
+        "label": "API Key",
+        "type": "text",
+        "default": "",
+        "description": "Global API key for this extension."
+    }
+]
+
+my_ext_bp = InSetuExtension('my_ext', __name__, schema=MY_SCHEMA, settings_schema=MY_SETTINGS)
 ```
 
 ### The Extension Context (`ctx`)
@@ -33,6 +43,7 @@ Routes must be declared relative to the extension root (e.g., `@bp.route('list')
 Handlers must accept the `ctx` object. This object enforces spatial physics and prevents cross-tenant contamination:
 * **`ctx.db`**: Returns an SQLite connection already keyed to the active workspace.
 * **`ctx.paths`**: Returns the active tenant's directory resolution maps.
+* **`ctx.settings`**: Returns a dictionary of the extension's runtime configuration, natively bound to either global switchboard settings or tenant configurations.
 * **`ctx.vfs.save()`**: Routes all file writes through the atomic background commit queue.
 * **`ctx.resolve_path(filepath)`**: Anchors relative paths to the physical workspace bounds natively.
 ```python
