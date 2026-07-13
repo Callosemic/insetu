@@ -1,7 +1,8 @@
 import {
     executeSystemCompile,
     setContextManifest,
-    createFileCard
+    createFileCard,
+    fetchAndDownloadState
 } from '../app.js';
 import { AppStore } from '../store.js';
 export async function generateDiffs(force = false) {
@@ -48,7 +49,6 @@ export async function generateDiffs(force = false) {
                                 return filtered.concat(newFiles);
                         }
                 })();
-
                 AppStore.setState({  
                         activeDiffJobId: null, 
                         cachedDiffFiles: updatedCachedFiles,
@@ -56,6 +56,7 @@ export async function generateDiffs(force = false) {
                         diffJobMessage: null,
                         diffJobError: null
                     });
+                window.dispatchEvent(new CustomEvent('git-diffs-refreshed'));
             },
             onError: (err) => {
                 AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
@@ -81,17 +82,17 @@ export class InSetuExtGitDiffs extends InSetuElement {
         categoryOrder: { type: Array },
         hiddenOutputs: { type: Array },
         pushModalOpen: { type: Boolean },
-        sweepModalOpen: { type: Boolean },
         pushChangelogs: { type: Array },
         sweepFiles: { type: Object },
         selectedSweepFiles: { type: Object },
+        sweepExpandedRepos: { type: Object },
         sweepLoading: { type: Boolean },
         gitPushMessage: { type: String },
-        gitSweepMessage: { type: String },
         currentPushRepo: { type: String },
         currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
-        activeSweepJobId: { type: String }
+        chunkModalOpen: { type: Boolean },
+        activeChunkFile: { type: String }
     };
     static styles = [sharedStyles];
 
@@ -105,17 +106,61 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.categoryOrder = [];
         this.hiddenOutputs = [];
         this.pushModalOpen = false;
-        this.sweepModalOpen = false;
         this.pushChangelogs = [];
         this.sweepFiles = {};
         this.selectedSweepFiles = {};
+        this.sweepExpandedRepos = new Set();
         this.sweepLoading = false;
         this.gitPushMessage = '';
-        this.gitSweepMessage = '';
         this.currentPushRepo = '';
         this.currentPushDiffFile = '';
         this.activePushJobId = null;
-        this.activeSweepJobId = null;
+        this.chunkModalOpen = false;
+        this.activeChunkFile = null;
+    }
+    async _downloadTarget(targetFile, btnComponent = null) {
+        if (btnComponent) btnComponent.innerText = "⏳...";
+        try {
+            const res = await window.inSetu.api.workspace(`../../download/${targetFile}`);
+            if (!res.ok) throw new Error("Download failed from server.");
+            const text = await res.text();
+            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = targetFile.split('/').pop();
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+            if (btnComponent) btnComponent.innerText = "✅ Downloaded";
+        } catch (err) {
+            alert("Error downloading file: " + err.message);
+            if (btnComponent) btnComponent.innerText = "❌ Error";
+        } finally {
+            if (btnComponent) {
+                setTimeout(() => { 
+                    if (btnComponent.innerText === "✅ Downloaded" || btnComponent.innerText === "❌ Error") {
+                        btnComponent.innerText = "⬇️ Download";
+                    }
+                }, 2000);
+            }
+        }
+    }
+    async _copyTarget(targetFile, btnElement) {
+        const orig = btnElement.innerText;
+        btnElement.innerText = "⏳...";
+        try {
+            const res = await window.inSetu.api.workspace(`../../download/${targetFile}`);
+            if (!res.ok) throw new Error("Download failed from server.");
+            const text = await res.text();
+            await navigator.clipboard.writeText(text);
+            btnElement.innerText = "✅ Copied";
+        } catch(err) {
+            btnElement.innerText = "❌ Error";
+        }
+        setTimeout(() => { btnElement.innerText = orig; }, 2000);
     }
 
     connectedCallback() {
@@ -128,7 +173,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
             this.activePushJobId = state.activePushJobId;
-            this.activeSweepJobId = state.activeSweepJobId;
         });
         const state = AppStore.getState();
         this.cachedDiffFiles = state.cachedDiffFiles || [];
@@ -138,19 +182,20 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.categoryOrder = state.categoryOrder || [];
         this.hiddenOutputs = state.hiddenOutputs || [];
         this.activePushJobId = state.activePushJobId;
-        this.activeSweepJobId = state.activeSweepJobId;
 
         // Secure boundary event listeners to allow external triggers (e.g. from file cards)
         this._boundHandleOpenPush = this._handleOpenPush.bind(this);
-        this._boundHandleOpenSweep = this._handleOpenSweep.bind(this);
+        this._boundRefreshSweep = this._fetchSweepStatusSilent.bind(this);
         window.addEventListener('open-push-modal', this._boundHandleOpenPush);
-        window.addEventListener('open-sweep-modal', this._boundHandleOpenSweep);
-    }
-    disconnectedCallback() {
+        window.addEventListener('git-diffs-refreshed', this._boundRefreshSweep);
+
+        this._fetchSweepStatusSilent();
+}
+disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
-        window.removeEventListener('open-sweep-modal', this._boundHandleOpenSweep);
-    }
+        window.removeEventListener('git-diffs-refreshed', this._boundRefreshSweep);
+}
 
     async _handleOpenPush(e) {
         const { diffFile, repo } = e.detail;
@@ -219,12 +264,8 @@ export class InSetuExtGitDiffs extends InSetuElement {
             alert("Network error executing push: " + err.message);
         }
     }
-    async _handleOpenSweep() {
-        this.gitSweepMessage = '';
-        this.sweepModalOpen = true;
+    async _fetchSweepStatusSilent() {
         this.sweepLoading = true;
-        this.sweepFiles = {};
-        this.selectedSweepFiles = {};
         try {
             const res = await this.api.post('sweep/status', {});
             if (!res.ok) throw new Error("Failed to start scan");
@@ -233,30 +274,34 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 onProgress: () => {},
                 onComplete: (statusData) => {
                     this.sweepFiles = statusData.artifact.repos || {};
+                    // Auto-select all discovered files by default
+                    const selections = {};
+                    Object.entries(this.sweepFiles).forEach(([r, files]) => {
+                        selections[r] = files.map(f => f.path);
+                    });
+                    this.selectedSweepFiles = selections;
                     this.sweepLoading = false;
+                    this.requestUpdate();
                 },
                 onError: (err) => {
-                    alert("Error scanning workspaces: " + err.message);
+                    console.error("Error scanning workspaces: ", err.message);
                     this.sweepLoading = false;
                 }
             });
         } catch (err) {
-            alert("Error starting scan: " + err.message);
+            console.error("Error starting scan: ", err.message);
             this.sweepLoading = false;
         }
     }
-    async _executeSweep() {
-        const msg = this.gitSweepMessage.trim();
-        if (!msg) return alert("Please enter a commit message for this sweep.");
 
-        // Filter out empty arrays to ensure we only send repos with actual selections
-        const selections = {};
-        Object.keys(this.selectedSweepFiles).forEach(repo => {
-            if (this.selectedSweepFiles[repo] && this.selectedSweepFiles[repo].length > 0) {
-                selections[repo] = this.selectedSweepFiles[repo];
-            }
-        });
-        if (Object.keys(selections).length === 0) return alert("No files selected.");
+    async _executeRepoSweep(repo) {
+        const files = this.selectedSweepFiles[repo] || [];
+        if (files.length === 0) return alert("No files selected to sweep.");
+
+        const msg = prompt(`Enter a commit message to sweep metadata for ${repo}:`, "chore: sweep remaining state");
+        if (!msg) return; // Cancelled
+
+        const selections = { [repo]: files };
 
         try {
             const res = await this.api.post('sweep/push', { selections, message: msg });
@@ -265,34 +310,28 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 throw new Error(err.error || "Sweep request failed.");
             }
             const data = await res.json();
-            AppStore.setState({ activeSweepJobId: data.job_id });
-            this.sweepModalOpen = false;
+
             this.api.pollJob(data.job_id, {
                 onProgress: (progressMsg) => {
-                    this.gitSweepMessage = progressMsg || "Committing and pushing...";
+                    if (window.setGlobalStatus) window.setGlobalStatus(progressMsg || "Sweeping repo...");
                 },
                 onComplete: async (statusData) => {
-                    this.gitSweepMessage = '';
-
                     const { dirtyDiffRepos } = AppStore.getState();
                     const newDirty = new Set(dirtyDiffRepos);
                     newDirty.add("ALL");
-                    AppStore.setState({ activeSweepJobId: null, dirtyDiffRepos: newDirty });
+                    AppStore.setState({ dirtyDiffRepos: newDirty });
 
-                    if (window.loadSweepFiles) await window.loadSweepFiles(); 
+                    alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
                     if (window.executeSystemCompile) {
-                        window.executeSystemCompile().then(() => window.generateDiffs());
+                        window.executeSystemCompile().then(() => window.generateDiffs(true));
                     } else {
-                        window.generateDiffs();
+                        window.generateDiffs(true);
                     }
-                    alert(`✅ Sweep successful:\n\n${statusData.message}`);
                 },
                 onError: (err) => {
-                    AppStore.setState({ activeSweepJobId: null });
-                    alert(`❌ Sweep failed:\n\n${err.message}`);
+                    alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`);
                 }
             });
-
         } catch (e) {
             alert("Network error executing sweep: " + e.message);
         }
@@ -315,16 +354,25 @@ export class InSetuExtGitDiffs extends InSetuElement {
             const extMeta = (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) 
                 ? window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile) 
                 : null;
-
             const finalCat = extMeta ? extMeta.cat : meta.domain;
             const finalDesc = extMeta ? extMeta.desc : meta.desc;
             const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : meta.title + " (Diffs)";
+
+            let sizeStr = "";
+            if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+                const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024) + "kb");
+                sizeStr = "( " + sizes.join(' + ') + " )";
+            } else if (meta.size_bytes !== undefined) {
+                const kb = Math.round(meta.size_bytes / 1024);
+                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+            }
 
             if (!categories[finalCat]) categories[finalCat] = [];
             categories[finalCat].push({
                 filename: file,
                 displayName: finalTitle,
                 description: finalDesc,
+                detailText: sizeStr ? `${file} | ${sizeStr}` : file,
                 isFS: false,
                 repoDir: repoDir
             });
@@ -349,31 +397,123 @@ export class InSetuExtGitDiffs extends InSetuElement {
             </div>
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-
             <div style="display: flex; flex-direction: column; margin-top: 15px;">
-                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 ? html`<p style="color: var(--text-muted);">No pending changes detected across tracked repositories.</p>` : ''}
+                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 ? html`
+                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 25px 15px; text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 2rem; margin-bottom: 10px;">✨</div>
+                        <h3 style="margin: 0 0 10px 0; color: var(--text);">Working Tree Clean</h3>
+                        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0 0 20px 0;">All major tracked code diffs have been committed or none were found.</p>
+                        <button class="btn-sm" style="background: var(--intent-primary); font-weight: bold; padding: 10px 20px; font-size: 1rem;" @click=${() => window.dispatchEvent(new CustomEvent('open-sweep-modal'))}>
+                            🧹 Sweep Remaining State Files
+                        </button>
+                    </div>
+                ` : ''}
                 ${sortedCats.map(catName => html`
-                    <div class="category-heading">${catName}</div>
-                    ${categories[catName].map(f => html`
-                        <insetu-card
-                            .filename=${f.filename}
-                            .titleText=${f.displayName}
-                            .descriptionText=${f.description}
-                            icon="📦"
-                            intentColor="var(--intent-highlight)"
-                            @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
-                            <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => {
-                                e.stopPropagation();
-                                if (window.fetchAndDownloadState) {
-                                    window.fetchAndDownloadState(f.filename, e.target);
-                                }
-                            }}>⬇️ Download</button>
-                        </insetu-card>
-                    `)}
+                    <insetu-category-section titleText=${catName}>
+                        ${categories[catName].map(f => html`
+                            <insetu-card
+                                .filename=${f.filename}
+                                .titleText=${f.displayName}
+                                .descriptionText=${f.description}
+                                .detailText=${f.detailText}
+                                icon="📦"
+                                intentColor="var(--intent-highlight)"
+                                @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                                <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
+${(() => {
+    const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
+    const hasChunks = chunks && chunks.length > 1;
+    if (hasChunks) {
+        return html`
+            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
+                @click=${(e) => {
+                    e.stopPropagation();
+                    this.activeChunkFile = f.filename;
+                    this.chunkModalOpen = true;
+                }}>
+                📦 View Parts
+            </button>
+        `;
+    } else {
+        return html`
+            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => {
+                e.stopPropagation();
+                this._downloadTarget(f.filename, e.target);
+            }}>⬇️ Download</button>
+        `;
+    }
+})()}
+                            </insetu-card>
+                        `)}
+                    </insetu-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
+                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).length > 0 ? html`
+                    <insetu-category-section titleText="🧹 Sweepable State">
+                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
+                        
+                        ${Object.entries(this.sweepFiles).map(([repo, files]) => html`
+                            <insetu-card
+                            .filename=${repo}
+                            .titleText=${repo}
+                            .descriptionText=${`${files.length} untracked or excluded files pending.`}
+                            icon="📦"
+                            intentColor="var(--intent-neutral)"
+                            @card-clicked=${() => {
+                                const newSet = new Set(this.sweepExpandedRepos);
+                                newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);
+                                this.sweepExpandedRepos = newSet;
+                                this.requestUpdate();
+                            }}>
+                            <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0; color: white; border: none; cursor: pointer;" 
+                                @click=${(e) => { e.stopPropagation(); this._executeRepoSweep(repo); }}>🚀 Sweep Repo</button>
+                        </insetu-card>
+
+                        ${this.sweepExpandedRepos.has(repo) ? html`
+                            <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: -8px; margin-bottom: 15px; margin-left: 15px;">
+                                ${files.map(f => html`
+                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                        <input type="checkbox" 
+                                            .checked=${(this.selectedSweepFiles[repo] || []).includes(f.path)}
+                                            @change=${(e) => {
+                                                const isChecked = e.target.checked;
+                                                const currentList = this.selectedSweepFiles[repo] || [];
+                                                this.selectedSweepFiles = {
+                                                    ...this.selectedSweepFiles,
+                                                    [repo]: isChecked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
+                                                };
+                                                this.requestUpdate();
+                                            }}>
+                                        <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
+                                    </div>
+                                `)}
+                            </div>
+                        ` : ''}
+                    `)}
+                    </insetu-category-section>
+                ` : ''}
+
+                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
+                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin-top: 20px;">
+                        <div style="font-size: 2.5rem; margin-bottom: 10px;">✨</div>
+                        <h3 style="margin: 0 0 5px 0; color: var(--text);">Working Tree Clean</h3>
+                        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>
+                    </div>
+                ` : ''}
             </div>
+            <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
+                    ${(this.activeChunkFile ? (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunks || []) : []).map((chunk, idx) => html`
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
+                            <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
+                            <div style="display: flex; gap: 8px;">
+                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${(e) => this._copyTarget(chunk, e.target)}>📋 Copy</button>
+                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => this._downloadTarget(chunk, e.target)}>⬇️ Download</button>
+                            </div>
+                        </div>
+                    `)}
+                </div>
+            </insetu-modal>
 
             <insetu-modal ?open=${this.pushModalOpen} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column;">
@@ -389,82 +529,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${this.sweepModalOpen} titleText="🧹 Selective Sweep" maxWidth="700px" @modal-closed=${() => this.sweepModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
-                    ${this.sweepLoading ? html`<div class="spinner" style="display:block; margin-top:0; margin-bottom:15px;">Scanning workspaces...</div>` : html`
-                        <div style="flex: 1; overflow-y: auto; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; min-height: 200px;">
-                            ${Object.keys(this.sweepFiles).length === 0 ? html`<p style="color: var(--intent-success); font-weight: bold; text-align: center; margin-top: 20px;">✨ Working tree clean! Nothing to sweep.</p>` : ''}
-                            ${Object.entries(this.sweepFiles).map(([repo, files]) => html`
-                                <h4 style="margin: 10px 0 5px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 3px;">📦 ${repo}</h4>
-                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; margin-left: 5px;">
-                                    <input type="checkbox" 
-                                        .checked=${this.selectedSweepFiles?.[repo]?.length === files.length && files.length > 0}
-                                        @change=${(e) => {
-                                        const isChecked = e.target.checked;
-                                        this.selectedSweepFiles = {
-                                            ...this.selectedSweepFiles,
-                                            [repo]: isChecked ? files.map(f => f.path) : []
-                                        };
-                                    }}>
-                                    <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); cursor: pointer;">Select All</label>
-                                </div>
-                                ${files.map(f => html`
-                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px; margin-left: 15px;">
-                                        <input type="checkbox" 
-                                            .checked=${(this.selectedSweepFiles?.[repo] || []).includes(f.path)}
-                                            @change=${(e) => {
-                                                const isChecked = e.target.checked;
-                                                const currentList = this.selectedSweepFiles?.[repo] || [];
-                                                this.selectedSweepFiles = {
-                                                    ...this.selectedSweepFiles,
-                                                    [repo]: isChecked 
-                                                        ? [...currentList, f.path] 
-                                                        : currentList.filter(p => p !== f.path)
-                                                };
-                                            }}>
-                                        <label style="font-family: monospace; font-size: 0.85rem; word-break: break-all; cursor: pointer;">[${f.status}] ${f.path}</label>
-                                    </div>
-                                `)}
-                            `)}
-                        </div>
-                    `}
-                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
-                    <textarea placeholder="e.g. chore: format, lint, and clear orphans" .value=${this.gitSweepMessage} @input=${(e) => this.gitSweepMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 60px; resize: none; width: 100%; box-sizing: border-box;"></textarea>
-                </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" ?disabled=${this.sweepLoading} @click=${this._executeSweep}>🚀 Commit & Push Selected</button>
-                </div>
-            </insetu-modal>
         `;
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
-export class InSetuExtGitActions extends InSetuElement {
-    get extName() { return 'git'; }
-    static properties = { hasChanges: { type: Boolean } };
-    static styles = [sharedStyles];
-    constructor() { super(); this.hasChanges = false; }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(AppStore, state => {
-            this.hasChanges = !!(state.cachedDiffFiles && state.cachedDiffFiles.length > 0);
-        });
-        this.hasChanges = !!(AppStore.getState().cachedDiffFiles && AppStore.getState().cachedDiffFiles.length > 0);
-    }
-    _openMenu(e) {
-        if (!window.inSetu?.ui.Factory?.createDropdown) return;
-        const items = [];
-        if (this.hasChanges) {
-            items.push({ label: 'Sweep Remaining', icon: '🧹', onClick: () => window.dispatchEvent(new CustomEvent('open-sweep-modal')) });
-        } else {
-            items.push({ label: 'No changes to sweep', icon: '✨', onClick: () => {} });
-        }
-        window.inSetu.ui.Factory.createDropdown({ anchor: e.target, items });
-    }
-    render() { return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`; }
-}
-customElements.define('insetu-ext-git-actions', InSetuExtGitActions);
 
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",
@@ -477,13 +545,6 @@ window.ExtensionRegistry.registerExtension('git', {
             label: "Diffs",
             order: 2,
             component: "insetu-ext-git-diffs"
-        },
-        {
-            slot: "slots:sub-navigation-actions",
-            targetParent: "context",
-            targetSub: "diffs",
-            component: "insetu-ext-git-actions",
-            order: 1
         }
     ]
 });

@@ -11,14 +11,14 @@ from insetu.workers import submit_immediate_job, update_immediate_job_status, re
 
 git_bp = InSetuExtension('git', __name__)
 __depends__ = []
-
-@hooks.on('pre_compile')
-def on_pre_compile_generate_diffs(workspace_id=None):
+@hooks.on('compile_contexts')
+def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
     try:
-        generate_diff_context(workspace_id)
+        generate_diff_context(workspace_id, manifest_ref=manifest)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
-def generate_diff_context(workspace_id=None, target_repos=None):
+
+def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None):
     from insetu.sdk import ExtensionContext
     from insetu.utils_core import get_safe_repo_id
     from insetu.engine_gather import resolve_file_bucket
@@ -33,14 +33,22 @@ def generate_diff_context(workspace_id=None, target_repos=None):
     if diffs_dir_path.exists():
         from insetu.routes_fs import execute_vfs_delete
         for f_path in diffs_dir_path.iterdir():
-            if f_path.is_file():
+            if f_path.is_file() and ('_diffs.txt' in f_path.name or '_diffs_part' in f_path.name):
                 f = f_path.name
-                # If target_repos is provided, only clear diff files belonging to those repos
                 if not target_repos or any(f.startswith(st) for st in safe_targets):
                     try:
                         execute_vfs_delete(workspace_id, f_path.as_posix())
                     except Exception as e:
                         print(f"Warning: Failed to clear old diff file {f_path}: {e}")
+    # Prune stale diff entries from the manifest to prevent ghost references
+    is_standalone = manifest_ref is None
+    from insetu.utils_core import load_json_file, save_json_file
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+
+    working_manifest = manifest_ref if not is_standalone else load_json_file(manifest_path, {})
+    stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k.startswith(st) for st in safe_targets))]
+    for k in stale_keys:
+        del working_manifest[k]
 
     diff_manifest = []
     ws_root_path = Path(ws_root).resolve()
@@ -55,12 +63,16 @@ def generate_diff_context(workspace_id=None, target_repos=None):
             repo_path = Path(physical_path).expanduser().resolve()
         else:
             repo_path = (ws_root_path / config["repo_dir"]).resolve()
-
         if not repo_path.exists(): continue
         try:
             result = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=str(repo_path))
             lines = result.stdout.splitlines()
             if not lines: continue
+
+            # Resolve Git root to normalize `--porcelain` paths against logical workspace directories
+            git_root_res = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=str(repo_path))
+            git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
+
             changed_files = []
             for line in lines:
                 if len(line) < 3: continue
@@ -69,89 +81,140 @@ def generate_diff_context(workspace_id=None, target_repos=None):
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
                 if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
 
-                if os.path.isfile(Path(repo_path).joinpath(filepath).as_posix()) or 'D' in status:
-                    changed_files.append((filepath, status))
+                abs_filepath = git_root / filepath
+                try:
+                    rel_to_repo = abs_filepath.relative_to(repo_path.resolve()).as_posix()
+                except ValueError:
+                    continue # File is outside our logical repo_dir bounding box, skip it
+                if abs_filepath.is_file() or 'D' in status:
+                    changed_files.append((rel_to_repo, status, filepath))
+
             if not changed_files: continue
             sub_buckets = config.get("sub_buckets", [])
             bucketed_files = {}
 
+            managed_dirs = live_cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
+            ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
+            ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
+
             if sub_buckets:
-                for filepath, status in changed_files:
-                    b, module = resolve_file_bucket(filepath, sub_buckets)
+                for rel_to_repo, status, orig_filepath in changed_files:
+                    b, module = resolve_file_bucket(rel_to_repo, sub_buckets)
+                    if b and b.get("exclude_from_diffs"): continue
+
                     if b and module:
                         b_id = f"{module}_diffs.txt"
                     elif b:
                         b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
                     else:
+                        # Anti-Pattern Guard: Prevent unmatched managed OS directories or ignored files from bleeding into the default diff context
+                        if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
+                        if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
+                        if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
+
                         b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
                     if b_id not in bucketed_files: bucketed_files[b_id] = []
-                    bucketed_files[b_id].append((filepath, status))
+                    bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
                 out_filename = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
-                bucketed_files[out_filename] = changed_files
-
+                filtered_files = []
+                for rel_to_repo, status, orig_filepath in changed_files:
+                    if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
+                    if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
+                    if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
+                    filtered_files.append((rel_to_repo, status, orig_filepath))
+                if filtered_files:
+                    bucketed_files[out_filename] = filtered_files
             for out_filename, files_in_bucket in bucketed_files.items():
-                out_lines = []
-                out_lines.append(f"============================================================")
-                out_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
-                out_lines.append(f"============================================================")
-                for f_path, f_status in files_in_bucket:
-                    out_lines.append(f"[{f_status.ljust(2)}] {f_path}")
-                out_lines.append("\n\n")
+                header_lines = []
+                header_lines.append(f"============================================================")
+                header_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
+                header_lines.append(f"============================================================")
+                for rel_path, f_status, _ in files_in_bucket:
+                    header_lines.append(f"[{f_status.ljust(2)}] {rel_path}")
+                header_lines.append("\n\n")
+                header_str = "\n".join(header_lines)
 
                 # OPTIMIZATION: Bulk fetch diffs to eliminate N+1 subprocess bottleneck
-                files_to_diff = [f for f, s in files_in_bucket if s != "??"]
+                files_to_diff = [orig_f for _, s, orig_f in files_in_bucket if s != "??"]
                 bulk_diffs = {}
                 if files_to_diff:
                     try:
-                        diff_res = subprocess.run(['git', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=repo_path)
+                        # Diffs must be fetched relative to the git root to match porcelain output
+                        diff_res = subprocess.run(['git', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=str(git_root))
                         for chunk in diff_res.stdout.split('diff --git '):
                             if not chunk.strip(): continue
                             first_line = chunk.split('\n')[0]
                             parts = first_line.split(' b/')
                             if len(parts) == 2:
-                                fname = parts[1].strip()
-                                fname = fname.strip('"') 
+                                fname = parts[1].strip().strip('"') 
                                 bulk_diffs[fname] = 'diff --git ' + chunk
                     except Exception as e:
                         print(f"Bulk diff error: {e}")
-                for filepath, status in files_in_bucket:
-                    abs_filepath = repo_path / filepath
+
+                text_blocks = []
+                for rel_path, status, orig_filepath in files_in_bucket:
+                    block_lines = []
+                    abs_filepath = git_root / orig_filepath
                     if 'D' in status:
-                        out_lines.append(f"============================================================")
-                        out_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{filepath} | PREVIOUSLY TRACKED")
-                        out_lines.append(f"============================================================")
-                        out_lines.append(bulk_diffs.get(filepath, "[No diff available or file is binary]"))
-                        out_lines.append("\n\n")
-                        continue
+                        block_lines.append(f"============================================================")
+                        block_lines.append(f">>>DELETED FILE :: {config['repo_dir']}/{rel_path} | PREVIOUSLY TRACKED")
+                        block_lines.append(f"============================================================")
+                        block_lines.append(bulk_diffs.get(orig_filepath, "[No diff available or file is binary]"))
+                        block_lines.append("\n\n")
                     else:
-                        out_lines.append(f"============================================================")
-                        out_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{filepath} | CURRENT CONTENTS")
-                        out_lines.append(f"============================================================")
+                        block_lines.append(f"============================================================")
+                        block_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{rel_path} | CURRENT CONTENTS")
+                        block_lines.append(f"============================================================")
                         try:
                             content = ctx.vfs.read(abs_filepath.as_posix())
-                            if content: out_lines.append(content)
-                            else: out_lines.append("[Binary or unreadable file]")
+                            if content: block_lines.append(content)
+                            else: block_lines.append("[Binary or unreadable file]")
                         except Exception:
-                            out_lines.append("[Binary or unreadable file]")
+                            block_lines.append("[Binary or unreadable file]")
 
-                    out_lines.append(f"\n============================================================")
-                    out_lines.append(f">>>DIFF :: {config['repo_dir']}/{filepath} | CHANGES SINCE LAST COMMIT")
-                    out_lines.append(f"============================================================")
+                        block_lines.append(f"\n============================================================")
+                        block_lines.append(f">>>DIFF :: {config['repo_dir']}/{rel_path} | CHANGES SINCE LAST COMMIT")
+                        block_lines.append(f"============================================================")
 
-                    if status == "??":
-                        out_lines.append("[Untracked file - full content above]")
-                    else:
-                        out_lines.append(bulk_diffs.get(filepath, "[No diff available or file is binary]"))
-                    out_lines.append("\n\n")
-                if out_lines:
-                    out_path = (diffs_dir_path / out_filename).as_posix()
+                        if status == "??":
+                            block_lines.append("[Untracked file - full content above]")
+                        else:
+                            block_lines.append(bulk_diffs.get(orig_filepath, "[No diff available or file is binary]"))
+                        block_lines.append("\n\n")
 
-                    from insetu.routes_fs import execute_vfs_save
-                    execute_vfs_save(workspace_id, out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
+                    text_blocks.append("\n".join(block_lines))
+                if text_blocks:
+                    from insetu.engine_gather import compile_context_payload
+
+                    # Diff specific manifest integration
+                    meta = {
+                        "type": "diff",
+                        "title": out_filename.replace('_diffs.txt', '').replace('_', ' ').title(),
+                        "domain": "Git Diffs",
+                        "desc": "Just-In-Time generated diff payload."
+                    }
+                    manifest_entry = compile_context_payload(
+                        workspace_id, 
+                        diffs_dir_path.as_posix(), 
+                        out_filename, 
+                        header_str, 
+                        text_blocks, 
+                        [f"{config['repo_dir']}/{f}" for f, _, _ in files_in_bucket], 
+                        meta
+                    )
+                    # Update central manifest explicitly so Gather/UI tools can find the diff chunks!
+                    working_manifest[out_filename] = manifest_entry
                     diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
         except Exception as e:
             print(f"Skipping diff generation for {config['repo_dir']}: {e}")
+    if is_standalone:
+        save_json_file(manifest_path, working_manifest, workspace_id)
+
+    # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
+    from insetu.routes_fs import _VFS_WRITE_QUEUE
+    _VFS_WRITE_QUEUE.join()
+
     return diff_manifest
 def _background_generate_diffs(job_id, workspace_id, target_repos=None):
     try:
@@ -177,6 +240,11 @@ def _background_sweep_status(job_id, workspace_id):
     results = {}
 
     update_immediate_job_status(job_id, 'processing', "Scanning workspaces for untracked files...", workspace_id=workspace_id)
+    from insetu.engine_gather import resolve_file_bucket
+
+    managed_dirs_global = cfg.get("managed_dirs", [])
+    ignore_dirs_global = cfg.get("ignore_dirs", [])
+    ignore_patterns_global = cfg.get("ignore_patterns", [])
 
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
@@ -188,12 +256,38 @@ def _background_sweep_status(job_id, workspace_id):
             res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
             lines = res.stdout.splitlines()
             files = []
+
+            repo_excluded = c.get("exclude_from_diffs", False)
+            sub_buckets = c.get("sub_buckets", [])
+            managed_dirs = managed_dirs_global + c.get("repo_managed_dirs", [])
+            ignore_dirs = set(ignore_dirs_global + c.get("repo_ignore_dirs", []))
+            ignore_patterns = ignore_patterns_global + c.get("repo_ignore_patterns", [])
+
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
                 filepath = line[3:]
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
-                files.append({"path": filepath, "status": status.strip()})
+
+                is_excluded = repo_excluded
+                if not is_excluded and sub_buckets:
+                    b, _ = resolve_file_bucket(filepath, sub_buckets)
+                    if b:
+                        if b.get("exclude_from_diffs"):
+                            is_excluded = True
+                    else:
+                        # Anti-Pattern Guard: If it falls through buckets and is a managed/ignored file, it is excluded from normal diffs
+                        if any(filepath.startswith(d + '/') or f"/{d}/" in filepath for d in managed_dirs):
+                            is_excluded = True
+                        elif any(pattern in filepath for pattern in ignore_patterns):
+                            is_excluded = True
+                        elif set(p.lower() for p in filepath.split('/')).intersection(ignore_dirs):
+                            is_excluded = True
+
+                # Sweepable State catches ALL untracked files (??) PLUS any tracked file explicitly excluded from Diffs
+                if is_excluded or status == "??":
+                    files.append({"path": filepath, "status": status.strip()})
+
             if files:
                 results[repo] = files
         except Exception:
@@ -397,11 +491,12 @@ def provide_available_diffs(workspace_id=None, **kwargs):
         r_dir = c.get("repo_dir", "")
         safe_r_dir = get_safe_repo_id(r_dir)
         subs = c.get("sub_buckets", [])
-
         out = c.get("out_file", f"{safe_r_dir}_context.txt")
         expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
         if subs:
             for b in subs:
+                if b.get("exclude_from_diffs"): continue
+
                 if not b.get("dynamic_split_prefix"):
                     sub_out = b.get("out_file", f"{safe_r_dir}_{b.get('id')}_context.txt")
                     expected_diffs.add(f"diffs/{sub_out.replace('_context.txt', '_diffs.txt')}")
@@ -411,10 +506,9 @@ def provide_available_diffs(workspace_id=None, **kwargs):
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_diffs.add(f"diffs/{module}_diffs.txt")
-
     if os.path.exists(paths["diffs_dir"]):
         for f in os.listdir(paths["diffs_dir"]):
-            if f.endswith('.txt'):
+            if f.endswith('_diffs.txt') or '_diffs_part' in f:
                 expected_diffs.add(f"diffs/{f}")
 
     return list(expected_diffs)

@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260701_1225_VFS_ASYNC_ERROR_FEEDBACK
 title: "Reliability Engineering: Establish Error Propagation Loop for Asynchronous VFS Commit Pipeline"
 created_at: 2026-07-01T12:25:00

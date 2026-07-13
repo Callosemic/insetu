@@ -31,6 +31,7 @@ def compile_prompts_context(manifest, workspace_id=None, **kwargs):
                     manifest["prompts_context.txt"] = {
                         "files": [f"{config['repo_dir']}/{f}" for f in final_list],
                         "meta": {
+                            "type": "prompt",
                             "title": config.get("title", "Prompts"),
                             "domain": config.get("domain", "Prompts & State"),
                             "desc": config.get("description", "The Master Ingestion Prompt and CLI templates.")

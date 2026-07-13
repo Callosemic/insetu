@@ -7,7 +7,6 @@ from pathlib import Path
 from flask import request, jsonify
 from insetu.sdk import InSetuExtension
 from insetu.hooks import hooks
-
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -24,7 +23,32 @@ SKILLS_SCHEMA = {
     }
 }
 
-skills_bp = InSetuExtension('skills', __name__, schema=SKILLS_SCHEMA)
+SKILLS_SETTINGS_SCHEMA = [
+    {
+        "id": "domains",
+        "label": "Practice Domains & Metrics Schema",
+        "type": "object",
+        "description": "JSON map defining metric tracking schemas and mastery steps for different practice domains.",
+        "default": {
+            "musical_repertoire": {
+                "label": "Musical Repertoire",
+                "metrics": {
+                    "tempo": { "type": "integer", "label": "Current Tempo", "unit": "BPM", "target": "target_tempo" },
+                    "intonation": { "type": "rating", "min": 1, "max": 10, "label": "Intonation Accuracy" }
+                },
+                "step_labels": [
+                    { "key": "untouched", "label": "Untouched (Not Started)" },
+                    { "key": "memorizing", "label": "Memorizing" },
+                    { "key": "memorized", "label": "Memorized" },
+                    { "key": "improvising", "label": "Improvising Over Structure" },
+                    { "key": "mastered", "label": "Mastered (Performance Ready)" }
+                ]
+            }
+        }
+    }
+]
+
+skills_bp = InSetuExtension('skills', __name__, schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
 __depends__ = []
 
 def _get_user_skills_dir(workspace_id=None):

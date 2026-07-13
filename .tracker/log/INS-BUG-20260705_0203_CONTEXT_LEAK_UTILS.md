@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260705_0203_CONTEXT_LEAK_UTILS
 title: "Flask Context Leakage in save_json_file Tenant Resolution"
 created_at: 2026-07-05T02:03:00

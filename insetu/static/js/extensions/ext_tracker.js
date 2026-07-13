@@ -18,13 +18,11 @@ export const KanbanStore = createExtensionStore('Kanban', {
     reposExpanded: false,
     bucketsExpanded: {},
     tagsExpanded: false,
-    modals: { new: false, edit: false, config: false },
+    modals: { new: false, edit: false },
     newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
     editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '' },
-    trackerConfigForm: { domainStrat: 'default', customVal: '' },
     setNewTaskField: (field, value) => KanbanStore.setState((state) => ({ newTaskForm: { ...state.newTaskForm, [field]: value } })),
     setEditTaskField: (field, value) => KanbanStore.setState((state) => ({ editTaskForm: { ...state.editTaskForm, [field]: value } })),
-    setTrackerConfigField: (field, value) => KanbanStore.setState((state) => ({ trackerConfigForm: { ...state.trackerConfigForm, [field]: value } })),
     setModal: (modalName, isOpen) => KanbanStore.setState((state) => ({ modals: { ...state.modals, [modalName]: isOpen } })),
     resetState: () => KanbanStore.setState({ tasks: [] }),
     fetchTasks: async () => {
@@ -37,7 +35,6 @@ export const KanbanStore = createExtensionStore('Kanban', {
     }
 }, ['pinnedRepos', 'pinnedBuckets', 'pinnedTags']);
 window.inSetu.stores.Kanban = KanbanStore;
-
 // UI Hooks for real-time reactivity
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     window.ExtensionRegistry.registerUIHook('zone:post-file-save', (filepath) => {
@@ -124,7 +121,7 @@ this.pinnedBuckets = new Set(['ALL']);
         this.allRepos = [];
         this.activeTab = 'todos';
         this.searchQuery = '';
-        this._modals = { new: false, edit: false, config: false };
+        this._modals = { new: false, edit: false };
         this._yamlExpanded = false;
         this._showFilters = false;
         this._docClickListener = this._handleDocumentClick.bind(this);
@@ -522,9 +519,7 @@ this.pinnedRepos.size > 1;
 ${this.activeTab === 'bugs' ? this._renderColumns('bugs', textFilteredTasks) : ''}
 ${this.activeTab === 'queue' ? this._renderColumns('queue', textFilteredTasks) : ''}
 ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
-
             ${this._renderEditTaskModal()}
-            ${this._renderConfigModal()}
         `;
     }
     async _openEditTaskModal(filepath) {
@@ -837,81 +832,6 @@ this.requestUpdate(); }}
             alert("Virtual file viewer is not available.");
         }
     }
-    async _openConfigModal() {
-        try {
-            const res = await window.inSetu.api.system('config?t=' + Date.now(), { cache: 'no-store' });
-            if (!res.ok) throw new Error("Failed to fetch config");
-            const config = await res.json();
-            this._rawSystemConfig = config;
-
-            const trackerCfg = (config.extension_config && config.extension_config.tracker) ? config.extension_config.tracker : {};
-            KanbanStore.getState().setTrackerConfigField('domainStrat', trackerCfg.domain_strategy || 'default');
-            KanbanStore.getState().setTrackerConfigField('customVal', trackerCfg.domain_custom_value || '');
-            KanbanStore.getState().setModal('config', true);
-        } catch (e) {
-            alert("Failed to load configuration.");
-        }
-    }
-    async _saveConfig() {
-        const { domainStrat, customVal } = KanbanStore.getState().trackerConfigForm;
-        const newStrat = domainStrat;
-        const newVal = customVal.trim();
-        const config = this._rawSystemConfig || {};
-
-        if (!config.extension_config) config.extension_config = {};
-        if (!config.extension_config.tracker) config.extension_config.tracker = {};
-        config.extension_config.tracker.domain_strategy = newStrat;
-        config.extension_config.tracker.domain_custom_value = newVal;
-
-        const saveRes = await window.inSetu.api.system('config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-        });
-        if (saveRes.ok) {
-            KanbanStore.getState().setModal('config', false);
-            if (window.executeSystemCompile) window.executeSystemCompile();
-        } else {
-            const err = await saveRes.json().catch(() => ({}));
-            throw new Error(err.error || "Failed to save settings.");
-        }
-    }
-    _renderConfigModal() {
-        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
-        if (this.activeTab !== globalActiveSub) return '';
-        const state = KanbanStore.getState().trackerConfigForm;
-        return html`
-            <insetu-modal
-                ?open=${this._modals?.config}
-                titleText="Tracker Settings"
-                @modal-closed=${() => KanbanStore.getState().setModal('config', false)}>
-                <div slot="body">
-                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                        <label style="font-weight: bold; margin-bottom: 5px; display: block; color: var(--text);">Tracker Context Domain Strategy</label>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">How should issue tracker context files be grouped in the Gather UI?</p>
-                        <select style="margin-bottom: 10px;"
-                            .value=${state.domainStrat}
-                            @change=${(e) => { KanbanStore.getState().setTrackerConfigField('domainStrat', e.target.value); this.requestUpdate(); }}>
-                            <option value="default">Default (Bundle all trackers together)</option>
-                            <option value="repo">Repo-based (Use parent repo's domain)</option>
-                            <option value="custom">Custom Domain...</option>
-                        </select>
-
-                        ${state.domainStrat === 'custom' ? html`
-                            <div>
-                                <input type="text" placeholder="e.g. Project Management"
-                                    .value=${state.customVal}
-                                    @input=${(e) => KanbanStore.getState().setTrackerConfigField('customVal', e.target.value)}>
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-                <div slot="footer" style="display: flex; width: 100%;">
-                    <insetu-async-btn style="flex: 1; display: block; width: 100%;" label="💾 Save Settings" intent="primary" .onClick=${this._saveConfig.bind(this)}></insetu-async-btn>
-                </div>
-            </insetu-modal>
-        `;
-    }
 }
 customElements.define('insetu-ext-tracker', InSetuExtTracker);
 export class InSetuExtTrackerActions extends InSetuElement {
@@ -940,7 +860,6 @@ export class InSetuExtTrackerActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
-
 // OS Registration Hook
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
@@ -1012,12 +931,6 @@ window.ExtensionRegistry.registerExtension('tracker', {
             component: "insetu-ext-tracker-actions",
             order: 4
         }
-    ],
-    settingsActions: [
-        { id: 'tracker_config', label: 'Tracker Settings', icon: '📋', onClick: async () => { 
-            const trackerEl = document.querySelector('insetu-ext-tracker');
-            if (trackerEl) trackerEl._openConfigModal();
-        } }
     ],
     uiHooks: {
         'zone:file-edit-override': (filepath) => {

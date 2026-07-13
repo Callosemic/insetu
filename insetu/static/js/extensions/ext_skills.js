@@ -46,26 +46,10 @@ export const SkillsStore = createExtensionStore('Skills', {
             },
             fetchDomainConfig: async () => {
                 try {
-                    const res = await window.inSetu.api.system('config');
+                    const res = await window.inSetu.api.workspace('skills/settings');
                     if (res.ok) {
-                        const config = await res.json();
-                        const skillCfg = config.extension_config?.skills_practice?.domains || {
-                            musical_repertoire: {
-                                label: "Musical Repertoire",
-                                metrics: {
-                                    tempo: { type: "integer", label: "Current Tempo", unit: "BPM", target: "target_tempo" },
-                                    intonation: { type: "rating", min: 1, max: 10, label: "Intonation Accuracy" }
-                                },
-                                step_labels: [
-                                    { key: "untouched", label: "Untouched (Not Started)" },
-                                    { key: "memorizing", label: "Memorizing" },
-                                    { key: "memorized", label: "Memorized" },
-                                    { key: "improvising", label: "Improvising Over Structure" },
-                                    { key: "mastered", label: "Mastered (Performance Ready)" }
-                                ]
-                            }
-                        };
-                        SkillsStore.setState({ domainConfig: skillCfg });
+                        const settings = await res.json();
+                        SkillsStore.setState({ domainConfig: settings.domains || {} });
                     }
                 } catch (e) {
                     console.warn("Failed to dynamically pull configurations matrix.", e);
@@ -121,9 +105,6 @@ export class InSetuExtSkills extends InSetuElement {
         this.formStatus = '';
         this.formMetrics = {};
         this.modalMode = 'train';
-        this._configModalOpen = false;
-        this._configText = '';
-        this._rawSystemConfig = null;
         this._newSkillDomain = '';
         this._newSkillForm = {};
         this._newSkillMetrics = {};
@@ -174,16 +155,9 @@ export class InSetuExtSkills extends InSetuElement {
             this._reloadAll();
         });
 
-        this._boundOpenConfig = this._openConfigModal.bind(this);
-        document.addEventListener('skills-open-config', this._boundOpenConfig);
-
         this._reloadAll();
     }
 
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        document.removeEventListener('skills-open-config', this._boundOpenConfig);
-    }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
@@ -226,19 +200,6 @@ export class InSetuExtSkills extends InSetuElement {
             }
         } catch (err) {
             alert(`Network synchronization failure: ${err.message}`);
-        }
-    }
-    async _openConfigModal() {
-        try {
-            const res = await window.inSetu.api.system('config');
-            if (res.ok) {
-                this._rawSystemConfig = await res.json();
-                this._configText = JSON.stringify(this._rawSystemConfig.extension_config?.skills_practice?.domains || {}, null, 2);
-                this._configModalOpen = true;
-            }
-        } catch(e) {
-            console.error("Config load error:", e);
-            alert("Failed to load skills targets.");
         }
     }
 
@@ -293,30 +254,6 @@ export class InSetuExtSkills extends InSetuElement {
         `;
     }
 
-    async _saveConfig() {
-        try {
-            const domains = JSON.parse(this._configText);
-            const config = this._rawSystemConfig || {};
-            if (!config.extension_config) config.extension_config = {};
-            if (!config.extension_config.skills_practice) config.extension_config.skills_practice = {};
-            config.extension_config.skills_practice.domains = domains;
-            const res = await window.inSetu.api.system('config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            if (res.ok) {
-                this._configModalOpen = false;
-                this._reloadAll();
-                alert("Skills targets committed safely to configuration matrix!");
-            } else {
-                alert("Failed to preserve configuration framework.");
-            }
-        } catch (err) {
-            console.error("Configuration Save Error:", err);
-            alert("Invalid JSON schema structure detected inside domains configuration. Check the console for details.");
-        }
-    }
     async _deleteSkillItem() {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
@@ -730,25 +667,8 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
                             </div>
                         `;
                     })()}
-                    
                     <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin-top: 10px;">➕ Initialize Track on Disk</button>
                 </form>
-            </insetu-modal>
-
-            <insetu-modal
-                ?open=${this._configModalOpen}
-                titleText="Practice Domain Configurations"
-                @modal-closed=${() => this._configModalOpen = false}>
-                <div slot="body">
-                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0;">Define metrics schemas polymorphically using JSON parameters:</p>
-                    <textarea 
-                        style="font-family: var(--font-mono); min-height: 250px; font-size: 13px;"
-                        .value=${this._configText}
-                        @input=${(e) => this._configText = e.target.value}></textarea>
-                </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); font-weight: bold;" @click=${this._saveConfig}>💾 Save Targets</button>
-                </div>
             </insetu-modal>
         `;
     }
@@ -788,18 +708,6 @@ window.ExtensionRegistry.registerExtension('skills', {
             label: "Groups",
             order: 2,
             component: "insetu-ext-skills"
-        }
-    ],
-    settingsActions: [
-        {
-            id: 'skills_config',
-            label: 'Practice Configurations',
-            icon: '🏋️',
-            onClick: () => {
-                if (window.switchTab) window.switchTab(null, 'skills');
-                // UDF Enforcement: Dispatch intent to the centralized store statelessly
-                document.dispatchEvent(new CustomEvent('skills-open-config'));
-            }
         }
     ],
     uiHooks: {

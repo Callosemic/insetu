@@ -107,7 +107,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                 execute_vfs_save(workspace_id, out_path, "\n".join(content_lines), data={"is_absolute_artifact": True})
                 manifest[filename] = {
                     "files": ["data/citations.db"],
-                    "meta": {"title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
+                    "meta": {"type": "citation", "title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
                 }
 
             global_items = []

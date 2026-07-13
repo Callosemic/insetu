@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260703_1055_GLOBAL_DRAG_DROP
 title: "Ecosystem Generalization: Migrate Desktop Drag-and-Drop Export to Global UI Namespace"
 created_at: 2026-07-03T10:55:00

@@ -9,7 +9,6 @@ from insetu.utils_core import get_sister_repos, get_workspace_physics, sniff_ten
 from insetu.hooks import hooks
 from insetu.db import get_connection
 from insetu.sdk import InSetuExtension
-
 TRACKER_SCHEMA = {
     "tracker_tickets": {
         "id": "TEXT PRIMARY KEY",
@@ -26,8 +25,19 @@ TRACKER_SCHEMA = {
         "filepath": "TEXT"
     }
 }
+TRACKER_SETTINGS_SCHEMA = [
+    {"id": "isolate_context", "label": "Spawn Separate Tracker Context", "type": "boolean", "default": True},
+    {"id": "exclude_from_diffs", "label": "Exclude Tracker from Git Diffs (Sends to Sweepable State)", "type": "boolean", "default": True},
+    {"id": "include_closed", "label": "Include Closed in Context", "type": "select", "options": [{"value": "grace_period", "label": "Grace Period"}, {"value": "all", "label": "All"}, {"value": "none", "label": "None"}], "default": "grace_period"},
+    {"id": "spawn_closed", "label": "Spawn Separate Closed Context", "type": "boolean", "default": False},
+    {"id": "grace_period_days", "label": "Grace Period (Days)", "type": "number", "default": 7},
+    {"id": "auto_archive", "label": "Auto-Archive", "type": "boolean", "default": True},
+    {"id": "archive_days", "label": "Archive After (Days)", "type": "number", "default": 30},
+    {"id": "domain_strategy", "label": "Domain Strategy", "type": "select", "options": [{"value": "default", "label": "Default"}, {"value": "repo", "label": "Match Repo Domain"}, {"value": "custom", "label": "Custom Domain"}], "default": "default"},
+    {"id": "domain_custom_value", "label": "Custom Domain Value", "type": "text", "default": ""}
+]
 
-tracker_bp = InSetuExtension('tracker', __name__, schema=TRACKER_SCHEMA)
+tracker_bp = InSetuExtension('tracker', __name__, schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
 
 @hooks.on('system_boot')
@@ -140,24 +150,38 @@ def _sync_disk_to_db(workspace_id=None):
 
     ctx.db.commit()
 @hooks.on('mutate_workspace_config')
-def inject_tracker_config(cfg, **kwargs):
+def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
     from insetu.utils_core import get_safe_repo_id
+    from insetu.sdk import ExtensionContext
+
+    ctx = ExtensionContext('tracker', workspace_id)
+    tracker_cfg = ctx.settings.get_all()
 
     # 1. Register .tracker as a Cartographer managed directory
     if "managed_dirs" not in cfg:
         cfg["managed_dirs"] = []
     if ".tracker" not in cfg["managed_dirs"]:
         cfg["managed_dirs"].append(".tracker")
+
     # 2. Inject the tracker sub-bucket into all mapped repositories
-    tracker_cfg = cfg.get("extension_config", {}).get("tracker", {})
     strat = tracker_cfg.get("domain_strategy", "default")
     custom_val = tracker_cfg.get("domain_custom_value", "")
+    isolate_context = tracker_cfg.get("isolate_context", True)
+    exclude_from_diffs = tracker_cfg.get("exclude_from_diffs", True)
+    include_closed = tracker_cfg.get("include_closed", "grace_period")
+    spawn_closed = tracker_cfg.get("spawn_closed", False)
 
     for repo_cfg in cfg.get("target_repos", []):
         if "sub_buckets" not in repo_cfg:
             repo_cfg["sub_buckets"] = []
+
+        # Ensure archived tickets are explicitly ignored by the VFS Cartographer globally
+        if "repo_ignore_dirs" not in repo_cfg:
+            repo_cfg["repo_ignore_dirs"] = []
+        if "archived" not in repo_cfg["repo_ignore_dirs"]:
+            repo_cfg["repo_ignore_dirs"].append("archived")
 
         safe_r_dir = get_safe_repo_id(repo_cfg.get("repo_dir", ""))
 
@@ -167,16 +191,48 @@ def inject_tracker_config(cfg, **kwargs):
         elif strat == "custom" and custom_val:
             domain = custom_val
 
-        # Prevent double-injection
-        if not any(b.get("id") == "tracker" for b in repo_cfg["sub_buckets"]):
+        main_prefixes = [
+            ".tracker/todos/open", ".tracker/todos/active", 
+            ".tracker/bugs/open", ".tracker/bugs/active", 
+            ".tracker/queue/open", ".tracker/queue/active"
+        ]
+        closed_prefixes = [".tracker/todos/closed", ".tracker/bugs/closed", ".tracker/queue/closed"]
+        log_prefixes = [".tracker/log/"]
+
+        if include_closed == "grace_period":
+            main_prefixes.extend(closed_prefixes)
+        elif include_closed == "all":
+            main_prefixes.extend(closed_prefixes)
+            main_prefixes.extend(log_prefixes)
+
+        # Clear existing dynamic sub-buckets to apply new logic
+        repo_cfg["sub_buckets"] = [b for b in repo_cfg["sub_buckets"] if b.get("id") not in ("tracker", "tracker_closed")]
+        if isolate_context:
             repo_cfg["sub_buckets"].insert(0, {
                 "id": "tracker",
                 "title": f"ISSUE TRACKER ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": domain,
-                "match_prefixes": [".tracker/"],
+                "match_prefixes": main_prefixes,
                 "out_file": f"{safe_r_dir}_tracker_context.txt",
+                "exclude_from_diffs": exclude_from_diffs,
                 "is_system": True
             })
+
+        if include_closed == "none":
+            if spawn_closed:
+                repo_cfg["sub_buckets"].append({
+                    "id": "tracker_closed",
+                    "title": f"CLOSED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
+                    "domain": "Closed and Logged Work",
+                    "match_prefixes": closed_prefixes + log_prefixes,
+                    "out_file": f"{safe_r_dir}_tracker_closed_context.txt",
+                    "exclude_from_diffs": exclude_from_diffs,
+                    "is_system": True
+                })
+            else:
+                if "repo_ignore_patterns" not in repo_cfg:
+                    repo_cfg["repo_ignore_patterns"] = []
+                repo_cfg["repo_ignore_patterns"].extend(closed_prefixes + log_prefixes)
 def get_tracker_path(repo, ticket_type, status, workspace_id=None):
     """Resolves the physical directory for a ticket based on your taxonomy."""
     _, ws_root, _ = get_workspace_physics(workspace_id)
@@ -521,16 +577,22 @@ def enforce_declarative_tickets(workspace_id=None):
 
     return enforced_count
 def archive_stale_tickets(workspace_id=None):
-    """Sweeps all repos for tickets passing the 7-day log and 30-day archive thresholds."""
+    """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
+    tracker_cfg = ctx.settings.get_all()
+
+    grace_days = int(tracker_cfg.get("grace_period_days", 7))
+    auto_archive = tracker_cfg.get("auto_archive", True)
+    archive_days = int(tracker_cfg.get("archive_days", 30))
+
     repos = get_sister_repos(workspace_id)
-    date_7 = datetime.now() - timedelta(days=7)
-    date_30 = datetime.now() - timedelta(days=30)
+    date_grace = datetime.now() - timedelta(days=grace_days)
+    date_archive = datetime.now() - timedelta(days=archive_days)
     archived_count = 0
 
     for repo in repos:
-        # Sweep 1: Move >7 day closed tickets to log
+        # Sweep 1: Move >grace_period day closed tickets to log
         for folder_type in ["todos", "bugs", "queue"]:
             closed_dir_rel = f"{repo}/.tracker/{folder_type}/closed"
             for ws_rel_path in ctx.vfs.walk(closed_dir_rel, exts=['.md']):
@@ -538,34 +600,35 @@ def archive_stale_tickets(workspace_id=None):
                 content = ctx.vfs.read(ws_rel_path)
                 if content:
                     closed_date = _extract_closed_date(content)
-                    if closed_date and closed_date < date_7:
+                    if closed_date and closed_date < date_grace:
                         content = re.sub(r"status:\s*\"?closed\"?", 'status: "logged"', content)
                         new_rel_path = f"{repo}/.tracker/log/{filename}"
                         old_rel_path = f"{repo}/.tracker/{folder_type}/closed/{filename}"
                         from insetu.routes_fs import execute_vfs_save
                         execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
                         archived_count += 1
+        # Sweep 2: Move >archive_days day logged tickets to archive
+        if auto_archive:
+            log_dir_rel = f"{repo}/.tracker/log"
+            for ws_rel_path in ctx.vfs.walk(log_dir_rel, exts=['.md']):
+                filename = os.path.basename(ws_rel_path)
+                # Skip archived folder contents
+                if "archived" in ws_rel_path:
+                    continue
 
-        # Sweep 2: Move >30 day logged tickets to archive
-        log_dir_rel = f"{repo}/.tracker/log"
-        for ws_rel_path in ctx.vfs.walk(log_dir_rel, exts=['.md']):
-            filename = os.path.basename(ws_rel_path)
-            # Skip archived folder contents
-            if "archived" in ws_rel_path:
-                continue
-
-            content = ctx.vfs.read(ws_rel_path)
-            if content:
-                closed_date = _extract_closed_date(content)
-                if closed_date and closed_date < date_30:
-                    content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
-                    new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
-                    old_rel_path = f"{repo}/.tracker/log/{filename}"
-                    from insetu.routes_fs import execute_vfs_save
-                    execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
-                    archived_count += 1
+                content = ctx.vfs.read(ws_rel_path)
+                if content:
+                    closed_date = _extract_closed_date(content)
+                    if closed_date and closed_date < date_archive:
+                        content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
+                        new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
+                        old_rel_path = f"{repo}/.tracker/log/{filename}"
+                        from insetu.routes_fs import execute_vfs_save
+                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                        archived_count += 1
 
     return archived_count
+
 @tracker_bp.route('new', methods=['POST'])
 def api_tracker_new(ctx):
     data = ctx.req.json

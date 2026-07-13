@@ -11,7 +11,6 @@ from insetu.extensions.engine_ingest import extract_markdown_from_url
 from insetu.db import get_connection
 from insetu.workers import submit_job, register_callback
 from insetu.hooks import hooks
-
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -34,7 +33,17 @@ RESEARCH_SCHEMA = {
     }
 }
 
-research_bp = InSetuExtension('research', __name__, schema=RESEARCH_SCHEMA)
+RESEARCH_SETTINGS_SCHEMA = [
+    {
+        "id": "serper_api_key",
+        "label": "Serper.dev API Key",
+        "type": "text",
+        "default": "",
+        "description": "Required for Google Search provider. Obtain a free key at serper.dev."
+    }
+]
+
+research_bp = InSetuExtension('research', __name__, schema=RESEARCH_SCHEMA, settings_schema=RESEARCH_SETTINGS_SCHEMA)
 __depends__ = ['ingest']
 
 # --- SEARCH STRATEGY PATTERN ---
@@ -197,14 +206,13 @@ class SerperDevProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
         from insetu.sdk import ExtensionContext
         import urllib.error
+        # We look up settings in 'default' context as API keys are generally instance-wide
         ctx = ExtensionContext('research', 'default')
 
-        cfg = ctx.config
-        # Look for the key globally or nested inside the research extension config
-        api_key = cfg.get("serper_api_key") or cfg.get("extension_config", {}).get("research", {}).get("serper_api_key")
+        api_key = ctx.settings.get("serper_api_key")
 
         if not api_key:
-            raise Exception("Missing Serper API Key. Please add 'serper_api_key' to your config.json.")
+            raise Exception("Missing Serper API Key. Please add it via the Settings menu.")
 
         url = "https://google.serper.dev/search"
 

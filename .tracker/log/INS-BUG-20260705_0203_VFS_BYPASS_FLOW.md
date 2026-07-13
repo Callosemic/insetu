@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260705_0203_VFS_BYPASS_FLOW
 title: "VFS Pipeline Bypass in Flow Batch Deletion"
 created_at: 2026-07-05T02:03:00

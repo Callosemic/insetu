@@ -5,61 +5,17 @@ import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
-
 export const FlowStore = createExtensionStore('Flow', {
     batches: [],
     loading: false,
-    searchQuery: ''
-});
-window.inSetu.stores.Flow = FlowStore;
-
-export class InSetuExtFlow extends InSetuElement {
-    static properties = {
-        batches: { type: Array },
-        loading: { type: Boolean },
-        searchQuery: { type: String },
-        _editingBatch: { type: Object },
-        _viewingBatch: { type: Object },
-        _showSelectContexts: { type: Boolean },
-        _tempContexts: { type: Array },
-        _editForm: { type: Object },
-        _viewingBatchPromptText: { type: String },
-        _responseContent: { type: String }
-    };
-    static styles = [sharedStyles];
-    constructor() {
-        super();
-        this.batches = [];
-        this.loading = false;
-        this.searchQuery = '';
-        this._editingBatch = null;
-        this._viewingBatch = null;
-        this._showSelectContexts = false;
-        this._tempContexts = [];
-        this._editForm = {};
-        this._viewingBatchPromptText = '';
-    }
-    onWorkspaceChanged(newWorkspaceId) {
-        this.fetchBatches();
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(FlowStore, state => {
-            this.batches = state.batches;
-            this.loading = state.loading;
-            this.searchQuery = state.searchQuery;
-        });
-        this.fetchBatches();
-    }
-
-    async fetchBatches() {
+    searchQuery: '',
+    fetchBatches: async () => {
         FlowStore.setState({ loading: true });
         try {
-            const res = await this.api.get('batches');
+            const res = await window.inSetu.api.workspace('flow/batches');
             if (res.ok) {
                 const data = await res.json();
-                AppStore.setState(state => ({
+                window.inSetu.stores.App.setState(state => ({
                     gatherOptions: {
                         ...state.gatherOptions,
                         contexts: data.available_contexts || [],
@@ -77,6 +33,56 @@ export class InSetuExtFlow extends InSetuElement {
             FlowStore.setState({ loading: false });
         }
     }
+});
+window.inSetu.stores.Flow = FlowStore;
+
+export class InSetuExtFlow extends InSetuElement {
+    static properties = {
+        batches: { type: Array },
+        loading: { type: Boolean },
+        searchQuery: { type: String },
+        _editingBatch: { type: Object },
+        _viewingBatch: { type: Object },
+        _editModalOpen: { type: Boolean },
+        _viewModalOpen: { type: Boolean },
+        _showSelectContexts: { type: Boolean },
+        _tempContexts: { type: Array },
+        _editForm: { type: Object },
+        _viewingBatchPromptText: { type: String },
+        _responseContent: { type: String },
+        chunkModalOpen: { type: Boolean },
+        activeChunkFile: { type: String }
+    };
+    static styles = [sharedStyles];
+    constructor() {
+        super();
+        this.batches = [];
+        this.loading = false;
+        this.searchQuery = '';
+        this._editingBatch = null;
+        this._viewingBatch = null;
+        this._editModalOpen = false;
+        this._viewModalOpen = false;
+        this._showSelectContexts = false;
+        this._tempContexts = [];
+        this._editForm = {};
+        this._viewingBatchPromptText = '';
+        this.chunkModalOpen = false;
+        this.activeChunkFile = null;
+    }
+    onWorkspaceChanged(newWorkspaceId) {
+        FlowStore.getState().fetchBatches();
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(FlowStore, state => {
+            this.batches = state.batches;
+            this.loading = state.loading;
+            this.searchQuery = state.searchQuery;
+        });
+        FlowStore.getState().fetchBatches();
+    }
     openEditBatchModal(batch = null) {
         this._editingBatch = batch;
         this._editForm = {
@@ -90,11 +96,59 @@ export class InSetuExtFlow extends InSetuElement {
             responsePath: batch && batch.response_path ? batch.response_path : '',
             archivePath: batch && batch.archive_path ? batch.archive_path : ''
         };
+        this._editModalOpen = true;
+        this.requestUpdate();
+    }
+    async _downloadTarget(targetFile, btnComponent = null) {
+        if (btnComponent) btnComponent.innerText = "⏳...";
+        try {
+            const res = await fetch(`/download/${targetFile}`, { headers: window.inSetu.api._getHeaders(true) });
+            if (!res.ok) throw new Error("Download failed from server.");
+            const text = await res.text();
+            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = targetFile.split('/').pop();
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+            if (btnComponent) btnComponent.innerText = "✅ Downloaded";
+        } catch (err) {
+            alert("Error downloading file: " + err.message);
+            if (btnComponent) btnComponent.innerText = "❌ Error";
+        } finally {
+            if (btnComponent) {
+                setTimeout(() => { 
+                    if (btnComponent.innerText === "✅ Downloaded" || btnComponent.innerText === "❌ Error") {
+                        btnComponent.innerText = "⬇️ Download";
+                    }
+                }, 2000);
+            }
+        }
+    }
+    async _copyTarget(targetFile, btnElement) {
+        const orig = btnElement.innerText;
+        btnElement.innerText = "⏳...";
+        try {
+            const res = await fetch(`/download/${targetFile}`, { headers: window.inSetu.api._getHeaders(true) });
+            if (!res.ok) throw new Error("Download failed from server.");
+            const text = await res.text();
+            await navigator.clipboard.writeText(text);
+            btnElement.innerText = "✅ Copied";
+        } catch(err) {
+            btnElement.innerText = "❌ Error";
+        }
+        setTimeout(() => { btnElement.innerText = orig; }, 2000);
     }
     openBatchModal(batch) {
         this._viewingBatch = batch;
         this._viewingBatchPromptText = 'Loading prompt...';
         this._responseContent = '';
+        this._viewModalOpen = true;
+        this.requestUpdate();
         const { gatherOptions, activeWorkspace } = AppStore.getState();
         if (batch.include_prompt) {
             const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
@@ -112,6 +166,7 @@ export class InSetuExtFlow extends InSetuElement {
             if (res.ok) {
                 FlowStore.setState(s => ({ batches: s.batches.filter(b => b.id !== this._editingBatch.id) }));
                 this._editingBatch = null;
+                this._editModalOpen = false;
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -144,6 +199,7 @@ export class InSetuExtFlow extends InSetuElement {
                     FlowStore.setState({ batches: [...currentBatches, payload] });
                 }
                 this._editingBatch = null;
+                this._editModalOpen = false;
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -172,6 +228,8 @@ export class InSetuExtFlow extends InSetuElement {
             loadingText: 'Saving...',
             onSuccess: () => {
                 this._viewingBatch = null;
+                this._viewModalOpen = false;
+                this.requestUpdate();
                 // Surgical Update: Let the VFS worker handle physical disk mapping,
                 // just pull the resulting manifest state statelessly.
                 setTimeout(() => {
@@ -219,11 +277,25 @@ export class InSetuExtFlow extends InSetuElement {
 html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
                             ${sortedCats.map(cat => html`
                                     <insetu-category-section titleText=${cat}>
-                                            ${categories[cat].map(b => html`
+                                            ${categories[cat].map(b => {
+                                                    const filename = `workflow_${b.id}_context.txt`;
+                                                    const manifestObj = AppStore.getState().manifest[filename] || {};
+                                                    const meta = manifestObj.meta || {};
+                                                    let sizeStr = "";
+                                                    if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+                                                        const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
+                                                        sizeStr = sizes.join(' + ') + " kb";
+                                                    } else if (meta.size_bytes !== undefined) {
+                                                        const kb = Math.round(meta.size_bytes / 1024);
+                                                        sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+                                                    }
+
+                                                    return html`
                                                     <insetu-card
                                                             .filename=${b.id}
                                                             .titleText=${`📦 ${b.title || b.id}`}
                                                             .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
+                                                            .detailText=${sizeStr ? `${filename} | ${sizeStr}` : filename}
                                                             icon=""
                                                             intentColor="var(--intent-primary)"
                                                             @card-clicked=${() => this.openBatchModal(b)}>
@@ -233,15 +305,14 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                                                     ✏️ Edit
                                                             </button>
                                                     </insetu-card>
-                                            `)}
+                                            `})}
                                     </insetu-category-section>
                             `)}
                     </div>
-
                     <insetu-modal 
-                            ?open=${this._editingBatch !== undefined && this._editingBatch !== null} 
+                            ?open=${this._editModalOpen} 
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
-                            @modal-closed=${() => this._editingBatch = null}>
+                            @modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
                                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                             <div style="flex: 1; min-width: 150px;">
@@ -261,10 +332,34 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                     <div>
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${this._editForm?.includes?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No contexts selected.</div>` : 
-                                                        this._editForm?.includes?.map(inc => html`<div style="font-family: monospace; font-size: 0.85rem; padding: 6px 0; border-bottom: 1px solid var(--border); color: var(--text);">${inc}</div>`)}
+                                                    ${this._editForm?.includes?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No files selected.</div>` : 
+                                                        this._editForm?.includes?.map((inc, idx) => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                    this._editForm.includes.splice(idx, 1);
+                                                                    this.requestUpdate();
+                                                                }}>×</button>
+                                                            </div>
+                                                        `)}
                                             </div>
-                                            <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📁 Select Contexts</button>
+                                            <div style="display: flex; gap: 10px;">
+                                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📁 Select Contexts</button>
+                                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" @click=${() => {
+                                                    if (window.openWorkspaceBrowser) {
+                                                        window.openWorkspaceBrowser({
+                                                            mode: 'file',
+                                                            title: 'Select Arbitrary File',
+                                                            callback: (filepath) => {
+                                                                if (!this._editForm.includes.includes(filepath)) {
+                                                                    this._editForm.includes = [...this._editForm.includes, filepath];
+                                                                    this.requestUpdate();
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                }}>📄 Add Arbitrary File</button>
+                                            </div>
                                     </div>
                                     <div>
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
@@ -315,8 +410,7 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                     <button style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${() => { this._editForm.includes = [...this._tempContexts]; this._showSelectContexts = false; }}>✅ Confirm Selection</button>
                             </div>
                     </insetu-modal>
-
-                    <insetu-modal ?open=${this._viewingBatch !== null} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => this._viewingBatch = null}>
+                    <insetu-modal ?open=${this._viewModalOpen} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
                                     ${this._viewingBatch ? html`
                                             <div>
@@ -327,8 +421,25 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                                             </ul>
                                                     </div>
                                                     <div style="display: flex; gap: 10px;">
-                                                            <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => fetchAndCopy(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>📋 Copy Context</button>
-                                                            <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => fetchAndDownloadState(`${artifactsDir}/workflows/${this._viewingBatch.id}_context.txt`, e.target)}>⬇️ Download</button>
+                                                            ${(() => {
+                                                                const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
+                                                                const chunks = AppStore.getState().manifest[baseFile]?.meta?.chunks;
+                                                                if (chunks && chunks.length > 1) {
+                                                                    return html`
+                                                                        <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => {
+                                                                            e.stopPropagation();
+                                                                            this.activeChunkFile = baseFile;
+                                                                            this.chunkModalOpen = true;
+                                                                            this.requestUpdate();
+                                                                        }}>📦 View Parts</button>
+                                                                    `;
+                                                                } else {
+                                                                    return html`
+                                                                        <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => this._copyTarget(baseFile, e.target)}>📋 Copy Context</button>
+                                                                        <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => this._downloadTarget(baseFile, e.target)}>⬇️ Download</button>
+                                                                    `;
+                                                                }
+                                                            })()}
                                                     </div>
                                             </div>
                                             ${this._viewingBatch.include_prompt ? html`
@@ -358,8 +469,21 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
                                     ` : ''}
                             </div>
                     </insetu-modal>
-            `;
-    }
+                    <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Batch Parts" maxWidth="500px" @modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
+                        <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
+                            ${(this.activeChunkFile ? (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunks || []) : []).map((chunk, idx) => html`
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
+                                    <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
+                                    <div style="display: flex; gap: 8px;">
+                                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${(e) => this._copyTarget(chunk, e.target)}>📋 Copy</button>
+                                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => this._downloadTarget(chunk, e.target)}>⬇️ Download</button>
+                                    </div>
+                                </div>
+                            `)}
+                        </div>
+                </insetu-modal>
+    `;
+}
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
 export class InSetuExtFlowActions extends InSetuElement {
@@ -403,9 +527,7 @@ window.ExtensionRegistry.registerExtension('flow', {
     uiHooks: {
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'context' && data.subId === 'flow') {
-                const container = document.getElementById('sub-flow');
-                const litEl = container?.querySelector('insetu-ext-flow');
-                if (litEl && data.forceRefresh) litEl.fetchBatches();
+                if (data.forceRefresh) FlowStore.getState().fetchBatches();
             }
         }
     }
