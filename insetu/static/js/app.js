@@ -350,6 +350,46 @@ window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () =
 window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => window.saveNewTask && window.saveNewTask());
 window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => window.saveEditTask && window.saveEditTask());
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
+export function autoWireSettingsSchemas() {
+    if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+        window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
+
+        const allExts = new Set([
+            ...Array.from(window.ExtensionRegistry._manifests.keys()),
+            ...Object.keys(window.inSetu.settingsSchemas),
+            ...Object.keys(window.inSetu.serverSchemas || {})
+        ]);
+
+        allExts.forEach((extName) => {
+            const manifest = window.ExtensionRegistry._manifests.get(extName) || { name: extName.charAt(0).toUpperCase() + extName.slice(1), settingsActions: [] };
+            const schema = manifest.settingsSchema || window.inSetu.settingsSchemas[extName] || window.inSetu.serverSchemas?.[extName];
+
+            if (schema && schema.length > 0) {
+                manifest.settingsActions = manifest.settingsActions || [];
+                // Prevent duplicate injections during soft-refreshes
+                if (!manifest.settingsActions.some(a => a.id === `${extName}_generic_settings`)) {
+                    const action = {
+                        id: `${extName}_generic_settings`,
+                        label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Settings`,
+                        icon: '📋',
+                        onClick: () => {
+                            if (window.closeSettingsModal) window.closeSettingsModal();
+                            const genericModal = document.getElementById('insetu-generic-settings-root');
+                            if (genericModal) genericModal.openModal(extName);
+                        }
+                    };
+                    manifest.settingsActions.push(action);
+
+                    // Push directly to the registry to ensure it renders in the DOM
+                    if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
+                        window.ExtensionRegistry.registerSettingsAction(action.id, action.label, action.icon, action.onClick);
+                    }
+                }
+            }
+        });
+    }
+}
+
 async function bootExtensions() {
     if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.length > 0) {
         for (const ext of window.ACTIVE_EXTENSIONS) {
@@ -363,6 +403,8 @@ async function bootExtensions() {
             }
         }
     }
+    // Automatically map schemas to the System Settings menu
+    autoWireSettingsSchemas();
 }
 // --- THE CENTRALIZED FRONTEND METRONOME ---
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
@@ -411,6 +453,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
+            window.inSetu.serverSchemas = config._settings_schemas || {};
 
             // Synchronize branding tokens while we have the config
             const toggleBtn = document.getElementById('settings-toggle');
@@ -422,6 +465,12 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     await bootExtensions();
+
+    // Compile the primary and settings layouts cleanly from the registry blueprints
+    if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+        window.ExtensionRegistry.compileLayout();
+    }
+
     const container = document.getElementById('modal-cm6-container');
     const textArea = document.getElementById('modal-text');
     if (container && !container.querySelector('insetu-markdown-editor')) {
@@ -924,6 +973,7 @@ async function performSoftRefresh() {
         if (cRes.ok) {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
+            window.inSetu.serverSchemas = config._settings_schemas || {};
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
             const toggleBtn = document.getElementById('settings-toggle');
@@ -958,6 +1008,7 @@ async function performSoftRefresh() {
                 const isActive = isCore || window.ACTIVE_EXTENSIONS.includes(extName);
                 tabEl.style.display = isActive ? '' : 'none';
             });
+            autoWireSettingsSchemas();
 
             // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
             if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {

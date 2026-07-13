@@ -64,6 +64,75 @@ def parse_blocks(text):
             if state == "SEARCH": search_lines.append(line)
             elif state == "REPLACE": replace_lines.append(line)
     return files
+def is_effectively_identical(lines_a, lines_b):
+    """
+    Externalized comparison logic.
+    Pass 1: Strip whitespace. If they don't match, return False.
+    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
+    Returns True only if both text and indentation are completely identical.
+    """
+    a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
+    b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
+
+    if len(a_clean) != len(b_clean):
+        return False
+
+    # Pass 1: Stripped comparison
+    for a, b in zip(a_clean, b_clean):
+        if a.strip() != b.strip():
+            return False
+
+    # Pass 2: Indentation check
+    for a, b in zip(a_clean, b_clean):
+        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
+            return False
+
+    return True
+def is_effectively_identical(lines_a, lines_b):
+    """
+    Externalized comparison logic.
+    Pass 1: Strip whitespace. If they don't match, return False.
+    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
+    Returns True only if both text and indentation are completely identical.
+    """
+    a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
+    b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
+
+    if len(a_clean) != len(b_clean):
+        return False
+
+    # Pass 1: Stripped comparison
+    for a, b in zip(a_clean, b_clean):
+        if a.strip() != b.strip():
+            return False
+
+    # Pass 2: Indentation check
+    for a, b in zip(a_clean, b_clean):
+        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
+            return False
+
+    return True
+def is_effectively_identical(lines_a, lines_b):
+    """
+    Pass 1: Strip whitespace. If they don't match, return False.
+    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
+    """
+    a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
+    b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
+
+    if len(a_clean) != len(b_clean):
+        return False
+
+    for a, b in zip(a_clean, b_clean):
+        if a.strip() != b.strip():
+            return False
+
+    for a, b in zip(a_clean, b_clean):
+        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
+            return False
+
+    return True
+
 def _get_base_step_and_diffs(lines):
     """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
     indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
@@ -104,16 +173,15 @@ def apply_block_in_memory(content, block, silent=False):
     file_lines = content.split('\n')
     search_str = expand_macros(block["search"]).replace('\xa0', ' ')
     replace_str = expand_macros(block["replace"]).replace('\xa0', ' ')
-
     if not search_str.strip(): return True, replace_str
-
-    # Scaffolding: Skip No-Ops (INS-TODO-20260708_0940)
-    if search_str.strip() == replace_str.strip():
-        if not silent: print("  └─ ℹ️  No-Op: SEARCH and REPLACE blocks are identical. Skipping chunk.")
-        return True, content
 
     search_lines = search_str.split('\n')
     replace_lines = replace_str.split('\n')
+
+    # Scaffolding: Skip No-Ops (INS-TODO-20260708_0940)
+    if is_effectively_identical(search_lines, replace_lines):
+        if not silent: print("  └─ ℹ️  No-Op: SEARCH and REPLACE blocks are identical. Skipping chunk.")
+        return True, content
 
     for r_line in replace_lines:
         if r_line.strip().upper() == "{{UNTIL}}":
@@ -179,11 +247,11 @@ def apply_block_in_memory(content, block, silent=False):
         if ok:
             s_non_empty = [l.strip() for l in search_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
             r_non_empty = [l.strip() for l in replace_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
-
             is_already_patched = False
             if len(r_non_empty) >= len(s_non_empty) and len(r_non_empty) > 0:
-                f_subset = [file_lines[f_idx].strip() for f_idx in range(i, len(file_lines)) if file_lines[f_idx].strip()][:len(r_non_empty)]
-                if len(f_subset) == len(r_non_empty) and f_subset == r_non_empty: is_already_patched = True
+                f_subset_raw = [file_lines[f_idx] for f_idx in range(i, len(file_lines)) if file_lines[f_idx].strip()][:len(r_non_empty)]
+                if is_effectively_identical(f_subset_raw, replace_lines):
+                    is_already_patched = True
 
             if is_already_patched: continue
 
@@ -193,6 +261,9 @@ def apply_block_in_memory(content, block, silent=False):
         r_stripped = [l.strip() for l in replace_lines if l.strip()]
         s_stripped = [l.strip() for l in search_lines if l.strip()]
         f_stripped = [l.strip() for l in file_lines if l.strip()]
+
+        f_raw_non_empty = [l for l in file_lines if l.strip()]
+        r_raw_non_empty = [l for l in replace_lines if l.strip()]
 
         added_lines = [l for l in r_stripped if l not in s_stripped]
         deleted_lines = [l for l in s_stripped if l not in r_stripped]
@@ -206,10 +277,10 @@ def apply_block_in_memory(content, block, silent=False):
             if not any(dl in f_stripped for dl in deleted_lines):
                 is_idempotent = True
         elif is_pure_addition:
-            if any(r_stripped == f_stripped[i:i+len(r_stripped)] for i in range(len(f_stripped) - len(r_stripped) + 1)):
+            if any(is_effectively_identical(f_raw_non_empty[i:i+len(r_raw_non_empty)], r_raw_non_empty) for i in range(len(f_raw_non_empty) - len(r_raw_non_empty) + 1)):
                 is_idempotent = True
         else:
-            if r_stripped and any(r_stripped == f_stripped[i:i+len(r_stripped)] for i in range(len(f_stripped) - len(r_stripped) + 1)):
+            if r_raw_non_empty and any(is_effectively_identical(f_raw_non_empty[i:i+len(r_raw_non_empty)], r_raw_non_empty) for i in range(len(f_raw_non_empty) - len(r_raw_non_empty) + 1)):
                 if not any(dl in f_stripped for dl in deleted_lines):
                     is_idempotent = True
 
@@ -486,7 +557,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             ['node', '--input-type=module', '-c'], 
                             input=working_content, 
                             capture_output=True, 
-                            text=True
+                            text=True,
+                            encoding='utf-8'
                         )
                         if res.returncode != 0:
                             err_str = res.stderr.strip()

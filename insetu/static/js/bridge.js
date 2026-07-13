@@ -136,30 +136,12 @@ export class InSetuExtBridge extends InSetuElement {
             }
         });
     }
-
-    _isIdempotencyRisk(text) {
-        const blocks = text.split('>>>>>>> REPLACE');
-        for (const b of blocks) {
-            if (!b.includes('<<<<<<< SEARCH') || !b.includes('=======')) continue;
-            const searchPart = b.split('<<<<<<< SEARCH')[1].split('=======')[0].trim();
-            const replacePart = b.split('=======')[1].trim();
-            if (!searchPart) continue;
-            if (replacePart.includes(searchPart)) return true;
-        }
-        return false;
-    }
     async _sync(dryRunActive, bypassSandwich = false) {
         if (bypassSandwich) this._globalBypassSandwich = true;
         this._lastDryRun = dryRunActive;
         const textVal = BridgeStore.getState().payloadText;
         BridgeStore.setState({ viewMode: 'console' });
 
-        if (!this._globalBypassSandwich && this._isIdempotencyRisk(textVal)) {
-            BridgeStore.setState({ 
-                consoleOutput: `<span style="color: var(--intent-warning); font-weight: bold;">[!] WARNING: Idempotency Risk Detected.</span><br><br>Your REPLACE block contains an exact copy of your SEARCH block. This can lead to endless duplication if applied multiple times.<br><br><button type="button" data-action="force-sync" data-dryrun="${dryRunActive}" style="background: var(--intent-danger); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;">⚠️ Do it anyway</button>` 
-            });
-            return;
-        }
         const activeFiles = Array.from(BridgeStore.getState().activeFiles);
         BridgeStore.setState({ consoleOutput: "Dispatching transaction to the Bridge..." });
 
@@ -252,9 +234,11 @@ export class InSetuExtBridge extends InSetuElement {
             BridgeStore.getState().setPayloadText(updatedVal);
             this._sync(this._lastDryRun || false, this._globalBypassSandwich);
         } else if (action === 'view-diff') {
-            if (window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', atob(btn.dataset.b64));
+            const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
+            if (window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', decodedDiff);
         } else if (action === 'copy-diff') {
-            navigator.clipboard.writeText(atob(btn.dataset.b64));
+            const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
+            navigator.clipboard.writeText(decodedDiff);
             const orig = btn.innerText;
             btn.innerText = '✅ Copied!';
             setTimeout(() => btn.innerText = orig, 2000);

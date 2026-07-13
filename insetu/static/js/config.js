@@ -8,7 +8,6 @@ export class InSetuExtConfig extends LitElement {
         _isOpen: { type: Boolean }
     };
     static styles = [sharedStyles];
-
     constructor() {
         super();
         this.configForm = null;
@@ -176,7 +175,6 @@ export class InSetuExtConfig extends LitElement {
             `;
         });
     }
-
     renderRepos() {
         if (!this.configForm) return '';
         const repos = this.configForm.target_repos || [];
@@ -581,9 +579,141 @@ export class InSetuWorkspaceEditor extends LitElement {
     }
 }
 customElements.define('insetu-workspace-editor', InSetuWorkspaceEditor);
-
 if (!document.getElementById('insetu-workspace-editor-root')) {
     const wsRoot = document.createElement('insetu-workspace-editor');
     wsRoot.id = 'insetu-workspace-editor-root';
     document.body.appendChild(wsRoot);
+}
+
+// OS-Managed Generic Settings Form Engine
+export class InSetuGenericSettingsModal extends LitElement {
+    static properties = {
+        open: { type: Boolean, reflect: true },
+        extName: { type: String },
+        schema: { type: Array },
+        formData: { type: Object }
+    };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.open = false;
+        this.extName = '';
+        this.schema = [];
+        this.formData = {};
+    }
+    async openModal(extName) {
+        this.extName = extName;
+        this.schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
+        this.open = true;
+        try {
+            const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
+            if (res.ok) {
+                this.formData = await res.json();
+            } else {
+                this.formData = {};
+            }
+        } catch(e) {
+            this.formData = {};
+        }
+        this.requestUpdate();
+    }
+
+    async saveSettings(e) {
+        const btn = e.target;
+        const orig = btn.innerText;
+        btn.innerText = '⏳ Saving...';
+        try {
+            const payload = {};
+            this.schema.forEach(f => {
+                payload[f.id] = this.formData[f.id] !== undefined ? this.formData[f.id] : f.default;
+            });
+            const res = await window.inSetu.api.workspace(`${this.extName}/settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                this.open = false;
+                btn.innerText = orig;
+                if(window.executeSystemCompile) window.executeSystemCompile();
+            } else {
+                alert("Failed to save settings.");
+                btn.innerText = orig;
+            }
+        } catch(err) {
+            alert("Network error: " + err.message);
+            btn.innerText = orig;
+        }
+    }
+
+    render() {
+        if (!this.open) return '';
+
+        const title = (window.ExtensionRegistry?._manifests?.get(this.extName)?.name || this.extName) + ' Settings';
+
+        return html`
+            <insetu-modal 
+                ?open=${this.open} 
+                titleText=${title} 
+                maxWidth="600px" 
+                @modal-closed=${() => this.open = false}>
+
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    ${this.schema.map(field => {
+                        const val = this.formData[field.id] !== undefined ? this.formData[field.id] : field.default;
+                        let inputHtml = '';
+                        if (field.type === 'boolean') {
+                            inputHtml = html`<input type="checkbox" style="transform: scale(1.2); cursor: pointer;" .checked=${!!val} @change=${e => { this.formData = {...this.formData, [field.id]: e.target.checked}; this.requestUpdate(); }}>`;
+                        } else if (field.type === 'select') {
+                            inputHtml = html`
+                                <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"
+                                    .value=${val} @change=${e => { this.formData = {...this.formData, [field.id]: e.target.value}; this.requestUpdate(); }}>
+                                    ${(field.options || []).map(opt => html`<option value="${opt.value !== undefined ? opt.value : opt}">${opt.label || opt.title || opt.value || opt}</option>`)}
+                                </select>
+                            `;
+                        } else if (field.type === 'number') {
+                            inputHtml = html`<input type="number" .value=${val} style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); box-sizing: border-box;" @input=${e => { this.formData = {...this.formData, [field.id]: parseFloat(e.target.value)}; this.requestUpdate(); }}>`;
+                        } else if (field.type === 'object' || field.type === 'json' || (typeof val === 'object' && val !== null)) {
+                            const strVal = typeof val === 'object' && val !== null ? JSON.stringify(val, null, 2) : val;
+                            inputHtml = html`<textarea style="width: 100%; height: 120px; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); box-sizing: border-box; font-family: monospace;" @input=${e => {
+                                try {
+                                    this.formData = {...this.formData, [field.id]: JSON.parse(e.target.value)};
+                                    e.target.style.borderColor = 'var(--border)';
+                                } catch(err) {
+                                    e.target.style.borderColor = 'var(--intent-danger)';
+                                }
+                                this.requestUpdate();
+                            }}>${strVal}</textarea>`;
+                        } else {
+                            inputHtml = html`<input type="text" .value=${val} style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); box-sizing: border-box;" @input=${e => { this.formData = {...this.formData, [field.id]: e.target.value}; this.requestUpdate(); }}>`;
+                        }
+
+                        const displayLabel = field.title || field.label || field.id;
+                        return html`
+                            <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;">
+                                ${field.type === 'boolean' 
+                                    ? html`<label style="font-size: 0.95rem; color: var(--text); cursor: pointer; display: flex; align-items: center; gap: 10px; font-weight: bold;">${inputHtml} ${displayLabel}</label>` 
+                                    : html`<label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">${displayLabel}</label>${inputHtml}`}
+                                ${field.description || field.desc ? html`<div style="font-size: 0.75rem; color: var(--text-muted);">${field.description || field.desc}</div>` : ''}
+                            </div>
+                        `;
+                    })}
+                </div>
+                <div slot="footer">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
+                        @click=${this.saveSettings}>
+                        💾 Save Settings
+                    </button>
+                </div>
+            </insetu-modal>
+        `;
+    }
+}
+customElements.define('insetu-generic-settings', InSetuGenericSettingsModal);
+
+if (!document.getElementById('insetu-generic-settings-root')) {
+    const genRoot = document.createElement('insetu-generic-settings');
+    genRoot.id = 'insetu-generic-settings-root';
+    document.body.appendChild(genRoot);
 }

@@ -295,7 +295,7 @@ async function saveModalFile(autoSave = false) {
     });
 }
 async function copyFromModal() {
-    let text = document.getElementById('modal-text').value;
+    let text = getEditorContent();
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
         const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', currentModalFile);
         if (overrideUrl) {
@@ -517,42 +517,66 @@ export function createFileCard(fileInfo, container) {
         if (overrideUrl) dlFetchUrl = overrideUrl;
     }
     const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
+    const chunks = (!fileInfo.isSource && manifest[fileInfo.filename]?.meta?.chunks) ? manifest[fileInfo.filename].meta.chunks : null;
+
     const dlBtn = document.createElement('button');
     dlBtn.className = 'btn-sm';
     dlBtn.style.background = 'var(--intent-primary)';
     dlBtn.style.margin = '0';
     dlBtn.style.order = '100';
-    dlBtn.innerText = '⬇️ Download';
+    dlBtn.innerText = chunks && chunks.length > 1 ? '⬇️ Download Parts ▾' : '⬇️ Download';
     dlBtn.slot = 'actions';
-    dlBtn.onclick = async (e) => {
-        e.stopPropagation();
-        const orig = dlBtn.innerText;
-        dlBtn.innerText = 'Downloading...';
+
+    const performDownload = async (url, targetName, btn) => {
+        const orig = btn.innerText;
+        btn.innerText = 'Downloading...';
         try {
             let res;
-            if (dlFetchUrl.startsWith('/') || dlFetchUrl.startsWith('http')) {
-                res = await fetch(dlFetchUrl, { headers: window.inSetu.api._getHeaders(true) });
+            if (url.startsWith('/') || url.startsWith('http')) {
+                res = await fetch(url, { headers: window.inSetu.api._getHeaders(true) });
             } else {
-                res = await window.inSetu.api.workspace(dlFetchUrl);
+                res = await window.inSetu.api.workspace(url);
             }
             if (!res.ok) throw new Error("Failed to fetch");
             const text = await res.text();
             const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-            const url = window.URL.createObjectURL(blob);
+            const objUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
-            a.href = url;
-            a.download = safeName;
+            a.href = objUrl;
+            a.download = targetName;
             document.body.appendChild(a);
             a.click();
-            window.URL.revokeObjectURL(url);
+            window.URL.revokeObjectURL(objUrl);
             a.remove();
         } catch (err) {
             alert("Error downloading file: " + err.message);
         } finally {
-            dlBtn.innerText = orig;
+            btn.innerText = orig;
         }
     };
+
+    if (chunks && chunks.length > 1) {
+        dlBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (window.inSetu.ui.Factory.createDropdown) {
+                const items = chunks.map((chunk, idx) => ({
+                    label: `📄 Part ${idx + 1}`,
+                    icon: '⬇️',
+                    onClick: () => performDownload(`/download/${chunk}`, chunk, dlBtn)
+                }));
+                window.inSetu.ui.Factory.createDropdown({
+                    anchor: e.target,
+                    items: items
+                });
+            }
+        };
+    } else {
+        dlBtn.onclick = async (e) => {
+            e.stopPropagation();
+            await performDownload(dlFetchUrl, safeName, dlBtn);
+        };
+    }
     card.appendChild(dlBtn);
 
     container.appendChild(card);

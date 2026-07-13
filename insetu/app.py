@@ -72,9 +72,14 @@ def load_workspace_extensions():
         try:
             # Try the extensions folder first, fallback to core chassis
             try:
-                modules[ext] = importlib.import_module(f"insetu.extensions.engine_{ext}")
+                # ADR 0012: Bundled Subdirectory Extraction
+                modules[ext] = importlib.import_module(f"insetu.extensions.{ext}.engine_{ext}")
             except ImportError:
-                modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
+                try:
+                    # Legacy flat topology
+                    modules[ext] = importlib.import_module(f"insetu.extensions.engine_{ext}")
+                except ImportError:
+                    modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
         except Exception as e:
             print(f"⚠️  Extension Load Failed [{ext}]: {type(e).__name__} - {str(e)}")
 
@@ -117,9 +122,26 @@ def load_workspace_extensions():
             print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
         except AttributeError as e:
             print(f"⚠️  Blueprint Mount Failed [{ext}]: {str(e)}")
-
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
+
+@app.route('/static/js/extensions/ext_<ext_name>.js')
+def serve_extension_js(ext_name):
+    """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
+    import os
+    from flask import send_file
+
+    # 1. Try bundled topology
+    bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
+    if os.path.exists(bundled_path):
+        return send_file(bundled_path, mimetype='application/javascript')
+
+    # 2. Fallback to legacy flat topology
+    legacy_path = Path(app.static_folder).joinpath("js", "extensions", f"ext_{ext_name}.js").as_posix()
+    if os.path.exists(legacy_path):
+        return send_file(legacy_path, mimetype='application/javascript')
+
+    return "Extension UI not found", 404
 
 @app.route('/sw.js')
 def sw():

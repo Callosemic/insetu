@@ -16,10 +16,23 @@ class VFSTransaction:
         else:
             from insetu.routes_fs import execute_vfs_save
             execute_vfs_save(self.workspace_id, filepath, content, data)
-
-    def read(self, filepath):
+    def read(self, filepath, is_absolute_artifact=False):
         """Safely resolves and reads a file's contents, returning None if missing."""
-        resolved = resolve_workspace_path(filepath, self.workspace_id)
+        from pathlib import Path
+        if is_absolute_artifact and Path(filepath).is_absolute():
+            # SECURITY GUARDRAIL: Ensure the absolute path strictly resides within the OS control plane (.insetu)
+            from insetu.utils_core import _cwd
+            insetu_base = Path(_cwd).joinpath(".insetu").resolve()
+
+            resolved_abs = Path(filepath).resolve()
+            if str(resolved_abs).startswith(str(insetu_base)):
+                resolved = resolved_abs.as_posix()
+            else:
+                # If it breaches the OS boundary, throw it back to the standard workspace jail
+                resolved = resolve_workspace_path(filepath, self.workspace_id)
+        else:
+            resolved = resolve_workspace_path(filepath, self.workspace_id)
+
         if not os.path.exists(resolved):
             return None
         with open(resolved, 'r', encoding='utf-8') as f:

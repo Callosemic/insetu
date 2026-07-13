@@ -52,13 +52,24 @@ def get_system_config(workspace_id):
     available = []
     extensions_dir = Path(script_dir).joinpath("extensions").as_posix()
     if os.path.exists(extensions_dir):
-        for file in os.listdir(extensions_dir):
-            if file.startswith("engine_") and file.endswith(".py"):
-                ext_name = file.replace("engine_", "").replace(".py", "")
-                if ext_name not in core_engines:
+        for item in os.listdir(extensions_dir):
+            item_path = Path(extensions_dir).joinpath(item).as_posix()
+
+            if os.path.isdir(item_path):
+                # Bundled topology (ADR 0012)
+                if os.path.exists(Path(item_path).joinpath(f"engine_{item}.py").as_posix()):
+                    if item not in core_engines:
+                        available.append(item)
+            elif item.startswith("engine_") and item.endswith(".py"):
+                # Legacy flat topology
+                ext_name = item.replace("engine_", "").replace(".py", "")
+                if ext_name not in core_engines and ext_name not in available:
                     available.append(ext_name)
 
+    from insetu.sdk.extension import _REGISTERED_SETTINGS_SCHEMAS
+
     data["_available_extensions"] = sorted(available)
+    data["_settings_schemas"] = _REGISTERED_SETTINGS_SCHEMAS
     return data
 
 def save_system_config(workspace_id, payload):

@@ -171,7 +171,16 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
         """Handles the synchronous physical I/O execution loop off-thread."""
         if data.get("is_absolute_artifact"):
-                resolved_path = filepath
+                # SECURITY GUARDRAIL: Restrict artifact writes strictly to the .insetu OS directory
+                from insetu.utils_core import _cwd
+                insetu_base = Path(_cwd).joinpath(".insetu").resolve()
+                resolved_abs = Path(filepath).resolve()
+
+                if str(resolved_abs).startswith(str(insetu_base)):
+                        resolved_path = resolved_abs.as_posix()
+                else:
+                        # If it breaches the OS boundary, jail it back into the standard workspace
+                        resolved_path = resolve_workspace_path(filepath, workspace_id)
         elif data.get("is_new_repo"):
                 from insetu.utils_core import get_workspace_physics
                 _, ws_root, _ = get_workspace_physics(workspace_id)
@@ -241,13 +250,16 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         cfg_path, _, _ = get_workspace_physics(workspace_id)
                         utils_core.save_json_file(cfg_path, cfg)
         hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
-
 @fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])
 def api_fs_save(workspace_id):
         """Universal save-back endpoint with explicit path routing guardrails."""
         data = request.json
         if not data:
                 return jsonify({"error": "Invalid or missing JSON payload"}), 400
+
+        # SECURITY GUARDRAIL: Prevent frontend from bypassing the VFS sandbox
+        if "is_absolute_artifact" in data:
+                del data["is_absolute_artifact"]
 
         filepath, content = data.get("filepath", "").strip(), data.get("content", "")
         if not filepath: 

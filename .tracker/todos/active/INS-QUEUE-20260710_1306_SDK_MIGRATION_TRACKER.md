@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "active"
+status: "closed"
 id: "INS-QUEUE-20260710_1306_SDK_MIGRATION_TRACKER"
 title: "SDK V2 Migration: Kanban Tracker Extension"
 created_at: "2026-07-10T13:06:00"
