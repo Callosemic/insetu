@@ -122,35 +122,35 @@ customElements.define('insetu-ext-prompts', InSetuExtPrompts);
 export class InSetuExtPromptsActions extends InSetuElement {
     static styles = [sharedStyles];
 
-    _openMenu(e) {
-        if (!window.inSetu?.ui.Factory?.createDropdown) return;
-        window.inSetu.ui.Factory.createDropdown({
-            anchor: e.target,
-            items: [
-                { 
-                    label: 'New Folder', 
-                    icon: '📁', 
-                    onClick: () => { 
-                        const cpPath = AppStore.getState().currentPromptsPath || []; 
-                        const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
-                        if (window.openNewFolderModal) window.openNewFolderModal(prefix); 
-                    } 
-                },
-                { 
-                    label: 'New Prompt', 
-                    icon: '📄', 
-                    onClick: () => { 
-                        const cpPath = AppStore.getState().currentPromptsPath || []; 
-                        const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
-                        if (window.openNewFileModal) window.openNewFileModal(prefix); 
-                    } 
-                }
-            ]
-        });
+    get _menuItems() {
+        return [
+            { 
+                label: 'New Folder', 
+                icon: '📁', 
+                onClick: () => { 
+                    const cpPath = AppStore.getState().currentPromptsPath || []; 
+                    const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                    if (window.openNewFolderModal) window.openNewFolderModal(prefix); 
+                } 
+            },
+            { 
+                label: 'New Prompt', 
+                icon: '📄', 
+                onClick: () => { 
+                    const cpPath = AppStore.getState().currentPromptsPath || []; 
+                    const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
+                    if (window.openNewFileModal) window.openNewFileModal(prefix); 
+                } 
+            }
+        ];
     }
 
     render() {
-        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
+        return html`
+            <insetu-dropdown align="right" .items=${this._menuItems}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </insetu-dropdown>
+        `;
     }
 }
 customElements.define('insetu-ext-prompts-actions', InSetuExtPromptsActions);

@@ -2,12 +2,11 @@
 repo: "insetu"
 type: "todo"
 status: "closed"
-id: "INS-QUEUE-20260710_1307_SDK_MIGRATION_RESEARCH"
+id: INS-QUEUE-20260710_1307_SDK_MIGRATION_RESEARCH
 title: "SDK V2 Migration: Research Inbox Extension"
-created_at: "2026-07-10T13:07:00"
-closed_at: "2026-07-13T01:22:12"
+created_at: 2026-07-10T13:07:00
+closed_at: 2026-07-13T01:22:12
 sub_bucket: "None"
-delivery_date: "2026-07-26"
 tags: ["Architecture", "SDK", "Refactor"]
 ---
 

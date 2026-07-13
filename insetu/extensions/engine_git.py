@@ -42,10 +42,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         print(f"Warning: Failed to clear old diff file {f_path}: {e}")
     # Prune stale diff entries from the manifest to prevent ghost references
     is_standalone = manifest_ref is None
-    from insetu.utils_core import load_json_file, save_json_file
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
 
-    working_manifest = manifest_ref if not is_standalone else load_json_file(manifest_path, {})
+    working_manifest = manifest_ref if not is_standalone else ctx.manifest
     stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k.startswith(st) for st in safe_targets))]
     for k in stale_keys:
         del working_manifest[k]
@@ -209,7 +207,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         except Exception as e:
             print(f"Skipping diff generation for {config['repo_dir']}: {e}")
     if is_standalone:
-        save_json_file(manifest_path, working_manifest, workspace_id)
+        ctx.save_manifest(working_manifest)
 
     # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
     from insetu.routes_fs import _VFS_WRITE_QUEUE

@@ -2,7 +2,8 @@ import {
     executeSystemCompile,
     setContextManifest,
     createFileCard,
-    fetchAndDownloadState
+    fetchAndDownloadState,
+    fetchAndCopy
 } from '../app.js';
 import { AppStore } from '../store.js';
 export async function generateDiffs(force = false) {
@@ -15,10 +16,9 @@ export async function generateDiffs(force = false) {
         return;
     }
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
         const res = await window.inSetu.api.workspace(`git/diffs/generate?_t=${Date.now()}`, { 
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Workspace-ID': activeWs },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_repos: targetRepos })
         });
         if (!res.ok) {
@@ -119,48 +119,18 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activeChunkFile = null;
     }
     async _downloadTarget(targetFile, btnComponent = null) {
-        if (btnComponent) btnComponent.innerText = "⏳...";
-        try {
-            const res = await window.inSetu.api.workspace(`../../download/${targetFile}`);
-            if (!res.ok) throw new Error("Download failed from server.");
-            const text = await res.text();
-            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = targetFile.split('/').pop();
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-            if (btnComponent) btnComponent.innerText = "✅ Downloaded";
-        } catch (err) {
-            alert("Error downloading file: " + err.message);
-            if (btnComponent) btnComponent.innerText = "❌ Error";
-        } finally {
-            if (btnComponent) {
-                setTimeout(() => { 
-                    if (btnComponent.innerText === "✅ Downloaded" || btnComponent.innerText === "❌ Error") {
-                        btnComponent.innerText = "⬇️ Download";
-                    }
-                }, 2000);
-            }
+        const explicitUrl = `/download/${targetFile}`;
+        if (btnComponent) {
+            await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
+        } else {
+            const dummyBtn = document.createElement('button');
+            await fetchAndDownloadState(targetFile, dummyBtn, explicitUrl);
         }
     }
+
     async _copyTarget(targetFile, btnElement) {
-        const orig = btnElement.innerText;
-        btnElement.innerText = "⏳...";
-        try {
-            const res = await window.inSetu.api.workspace(`../../download/${targetFile}`);
-            if (!res.ok) throw new Error("Download failed from server.");
-            const text = await res.text();
-            await navigator.clipboard.writeText(text);
-            btnElement.innerText = "✅ Copied";
-        } catch(err) {
-            btnElement.innerText = "❌ Error";
-        }
-        setTimeout(() => { btnElement.innerText = orig; }, 2000);
+        const explicitUrl = `/download/${targetFile}`;
+        await fetchAndCopy(targetFile, btnElement, explicitUrl);
     }
 
     connectedCallback() {
@@ -388,12 +358,11 @@ disconnectedCallback() {
         });
         return html`
             <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
-                    <input type="text" placeholder="🔍 Fuzzy search pending diffs..." .value=${this.searchQuery} 
-                        style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                        @input=${e => this.searchQuery = e.target.value}>
-                    ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
-                </div>
+                <insetu-search-bar 
+                    placeholder="🔍 Fuzzy search pending diffs..." 
+                    .value=${this.searchQuery} 
+                    @search-changed=${e => this.searchQuery = e.detail.value}>
+                </insetu-search-bar>
             </div>
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}

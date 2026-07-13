@@ -5,14 +5,11 @@ import { downloadFile } from '../fs.js';
 import { AppStore } from '../store.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
-
 export const FormatStore = createExtensionStore('Format', {
     formatModalOpen: false,
     currentFormatTarget: '',
     formatMode: 'pdf',
-    activeFormatJobId: null,
-    formatJobMessage: null,
-    formatJobError: null
+    activeFormatJobId: null
 });
 
 window.inSetu.stores.Format = FormatStore;
@@ -22,9 +19,7 @@ export class InSetuExtFormatModals extends InSetuElement {
         formatModalOpen: { type: Boolean },
         currentFormatTarget: { type: String },
         formatMode: { type: String },
-        activeFormatJobId: { type: String },
-        formatJobMessage: { type: String },
-        formatJobError: { type: String }
+        activeFormatJobId: { type: String }
     };
     static styles = [sharedStyles];
 
@@ -34,8 +29,6 @@ export class InSetuExtFormatModals extends InSetuElement {
         this.currentFormatTarget = '';
         this.formatMode = 'pdf';
         this.activeFormatJobId = null;
-        this.formatJobMessage = null;
-        this.formatJobError = null;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -44,20 +37,16 @@ export class InSetuExtFormatModals extends InSetuElement {
             this.currentFormatTarget = state.currentFormatTarget;
             this.formatMode = state.formatMode;
             this.activeFormatJobId = state.activeFormatJobId;
-            this.formatJobMessage = state.formatJobMessage;
-            this.formatJobError = state.formatJobError;
         });
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUnload) {
             window.inSetu.extensions.Registry.executeUnload('format');
         }
     }
     async _executePublish() {
-        FormatStore.setState({ activeFormatJobId: 'starting', formatJobMessage: '⏳ Compiling...', formatJobError: null });
+        FormatStore.setState({ activeFormatJobId: 'starting' });
         try {
             const res = await this.api.post('compile-document', { 
                 filepath: this.currentFormatTarget, 
@@ -68,21 +57,10 @@ export class InSetuExtFormatModals extends InSetuElement {
                 throw new Error(err.error || "Compilation request failed.");
             }
             const data = await res.json();
-            FormatStore.setState({ activeFormatJobId: data.job_id, formatJobMessage: '⏳ Compiling...' });
-
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => FormatStore.setState({ formatJobMessage: msg }),
-                onComplete: async (statusData) => {
-                    FormatStore.setState({ activeFormatJobId: null, formatModalOpen: false });
-                    if (window.downloadFile) await window.downloadFile(statusData.artifact.download_url, statusData.artifact.filename);
-                },
-                onError: (err) => {
-                    FormatStore.setState({ activeFormatJobId: null, formatJobError: err.message });
-                }
-            });
-
+            FormatStore.setState({ activeFormatJobId: data.job_id });
         } catch (e) {
-            FormatStore.setState({ activeFormatJobId: null, formatJobError: e.message });
+            FormatStore.setState({ activeFormatJobId: null });
+            alert("Error starting format job: " + e.message);
         }
     }
 
@@ -97,8 +75,14 @@ export class InSetuExtFormatModals extends InSetuElement {
                         <option value="docx">Word Document (.docx)</option>
                         <option value="html">HTML Webpage</option>
                     </select>
-                    ${this.activeFormatJobId ? html`<div class="spinner" style="display: block; margin-top: 10px;">${this.formatJobMessage}</div>` : ''}
-                    ${this.formatJobError ? html`<div style="color: var(--intent-danger); margin-top: 10px; font-weight: bold;">❌ Error: ${this.formatJobError}</div>` : ''}
+                    <insetu-job-tracker 
+                        .jobId=${this.activeFormatJobId} 
+                        @job-complete=${async (e) => {
+                            FormatStore.setState({ activeFormatJobId: null, formatModalOpen: false });
+                            if (window.downloadFile) await window.downloadFile(e.detail.artifact.download_url, e.detail.artifact.filename);
+                        }}
+                        @job-error=${() => FormatStore.setState({ activeFormatJobId: null })}>
+                    </insetu-job-tracker>
                 </div>
                 <div slot="footer">
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"

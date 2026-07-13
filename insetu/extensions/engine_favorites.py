@@ -21,8 +21,7 @@ __depends__ = []
 @favorites_bp.route('list', methods=['GET'])
 def list_favorites(ctx):
     try:
-        cursor = ctx.db.execute("SELECT * FROM favorites ORDER BY created_at DESC")
-        items = [dict(row) for row in cursor.fetchall()]
+        items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
         return jsonify({"favorites": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -42,22 +41,18 @@ def add_favorite(ctx):
         exists = ctx.db.execute("SELECT id FROM favorites WHERE path = ?", (path,)).fetchone()
         if exists:
             return jsonify({"status": "success", "message": "Already favorited", "id": exists['id']})
-
         fav_id = f"fav_{uuid.uuid4().hex[:8]}"
         now = datetime.datetime.now().isoformat()
-        ctx.db.execute(
-            "INSERT INTO favorites (id, path, type, name, created_at) VALUES (?, ?, ?, ?, ?)",
-            (fav_id, path, fav_type, name, now)
-        )
-        ctx.db.commit()
+        ctx.db.insert_or_replace("favorites", {
+            "id": fav_id, "path": path, "type": fav_type, "name": name, "created_at": now
+        })
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 @favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'])
 def delete_favorite(ctx, fav_id):
     try:
-        ctx.db.execute("DELETE FROM favorites WHERE id = ?", (fav_id,))
-        ctx.db.commit()
+        ctx.db.delete("favorites", "id", fav_id)
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

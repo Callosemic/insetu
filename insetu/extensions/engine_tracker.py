@@ -5,7 +5,7 @@ import re
 import json
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from insetu.utils_core import get_sister_repos, get_workspace_physics, sniff_tenant_id
+from insetu.utils_core import sniff_tenant_id
 from insetu.hooks import hooks
 from insetu.db import get_connection
 from insetu.sdk import InSetuExtension
@@ -48,10 +48,17 @@ def init_tracker_db():
 @hooks.on('post_file_save')
 def handle_tracker_file_save(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
-        _, ws_root, _ = get_workspace_physics(workspace_id)
-        abs_path = Path(ws_root).joinpath(filepath).as_posix()
+        from insetu.sdk import ExtensionContext
+        ctx = ExtensionContext('tracker', workspace_id)
+        abs_path = ctx.resolve_path(filepath)
         if os.path.exists(abs_path):
             _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
+
+            # Elegant grab: Automatically heal misplaced or malformed tickets immediately upon save
+            try:
+                enforce_declarative_tickets(workspace_id=workspace_id, specific_file=filepath)
+            except Exception as e:
+                print(f"Targeted tracker housekeeping failed: {e}")
 
 @hooks.on('post_file_delete')
 def handle_tracker_file_delete(filepath, workspace_id=None):
@@ -141,7 +148,8 @@ def _sync_disk_to_db(workspace_id=None):
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     ctx.db.execute("DELETE FROM tracker_tickets")
-    for repo in get_sister_repos(workspace_id):
+    repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
+    for repo in repos:
         tracker_path = f"{repo}/.tracker"
         # SDK VFS Walk abstracts physical path resolution and spatial bounds
         for ws_rel_path in ctx.vfs.walk(tracker_path, exts=['.md']):
@@ -233,17 +241,16 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                 if "repo_ignore_patterns" not in repo_cfg:
                     repo_cfg["repo_ignore_patterns"] = []
                 repo_cfg["repo_ignore_patterns"].extend(closed_prefixes + log_prefixes)
-def get_tracker_path(repo, ticket_type, status, workspace_id=None):
-    """Resolves the physical directory for a ticket based on your taxonomy."""
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    base = Path(ws_root).joinpath(repo, ".tracker").as_posix()
+def get_tracker_path(repo, ticket_type, status):
+    """Resolves the relative directory for a ticket based on your taxonomy."""
+    base = f"{repo}/.tracker"
     if status == "archived":
-        return Path(base).joinpath("log", "archived").as_posix()
+        return f"{base}/log/archived"
     elif status == "logged":
-        return Path(base).joinpath("log").as_posix()
+        return f"{base}/log"
 
     folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
-    return Path(base).joinpath(folder_type, status).as_posix()
+    return f"{base}/{folder_type}/{status}"
 def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     from insetu.utils_core import update_frontmatter
@@ -256,8 +263,7 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
     ticket_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}"
     filename = f"{ticket_id}.md"
 
-    target_dir = get_tracker_path(repo, ticket_type, status, workspace_id=ctx.workspace_id)
-    os.makedirs(target_dir, exist_ok=True)
+    target_dir = get_tracker_path(repo, ticket_type, status)
 
     raw_content = f"## Description\n{description}\n\n## Notes / Execution Log\n"
 
@@ -349,16 +355,15 @@ def pre_compile_tracker_housekeeping(workspace_id=None):
         archive_stale_tickets(workspace_id=workspace_id)
     except Exception as e:
         print(f"Tracker housekeeping failed: {e}")
-def enforce_declarative_tickets(workspace_id=None):
+def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
-    SSOT Enforcer: Sweeps all .tracker directories. Reads the YAML frontmatter.
+    SSOT Enforcer: Sweeps all .tracker directories (or a specific file). 
     If the physical path contradicts the YAML, the YAML wins -> file is moved.
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    repos = get_sister_repos(workspace_id)
+    repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     cfg = ctx.config
     enforced_count = 0
 
@@ -370,10 +375,20 @@ def enforce_declarative_tickets(workspace_id=None):
             if b.get("id"): buckets.add(b["id"])
             if b.get("meta_map"): buckets.update(b["meta_map"].keys())
         valid_buckets_by_repo[r] = buckets
-    for current_repo in repos:
+
+    target_files = []
+    if specific_file:
+        target_files.append((specific_file.split('/')[0], specific_file))
+    else:
+        for current_repo in repos:
+            tracker_rel_base = f"{current_repo}/.tracker"
+            for ws_rel_path in ctx.vfs.walk(tracker_rel_base, exts=['.md']):
+                target_files.append((current_repo, ws_rel_path))
+
+    for current_repo, ws_rel_path in target_files:
         tracker_rel_base = f"{current_repo}/.tracker"
 
-        for ws_rel_path in ctx.vfs.walk(tracker_rel_base, exts=['.md']):
+        if True:
             filename = os.path.basename(ws_rel_path)
             filepath = ctx.resolve_path(ws_rel_path)
             rel_dir = os.path.dirname(ws_rel_path[len(tracker_rel_base)+1:])
@@ -400,182 +415,179 @@ def enforce_declarative_tickets(workspace_id=None):
                 if content is None:
                     continue
                 # Heal double-YAML malformations created by prior regex failures
-                    pseudo_match = re.search(r'^\s*---\n[\s\S]*?\n\s*---\n+((?:repo|type|status|id|title|created_at|closed_at|sub_bucket|tags):[\s\S]*?\n\s*---)', content)
-                    yaml_data_rescue = {}
-                    if pseudo_match:
-                        bad_block = pseudo_match.group(1)
-                        for line in bad_block.split('\n'):
-                            if ':' in line and not line.strip().startswith('---'):
-                                k, v = line.split(':', 1)
-                                yaml_data_rescue[k.strip()] = v.strip().strip('\'"')
-                        content = content.replace(bad_block, '').strip()
+                pseudo_match = re.search(r'^\s*---\n[\s\S]*?\n\s*---\n+((?:repo|type|status|id|title|created_at|closed_at|sub_bucket|tags):[\s\S]*?\n\s*---)', content)
+                yaml_data_rescue = {}
+                if pseudo_match:
+                    bad_block = pseudo_match.group(1)
+                    for line in bad_block.split('\n'):
+                        if ':' in line and not line.strip().startswith('---'):
+                            k, v = line.split(':', 1)
+                            yaml_data_rescue[k.strip()] = v.strip().strip('\'"')
+                    content = content.replace(bad_block, '').strip()
 
-                    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+                yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
 
-                    yaml_data = {}
-                    if yaml_match:
-                        yaml_lines = yaml_match.group(1).split('\n')
-                        for line in yaml_lines:
-                            if ':' in line:
-                                k, v = line.split(':', 1)
-                                yaml_data[k.strip()] = v.strip().strip('\'"')
+                yaml_data = {}
+                if yaml_match:
+                    yaml_lines = yaml_match.group(1).split('\n')
+                    for line in yaml_lines:
+                        if ':' in line:
+                            k, v = line.split(':', 1)
+                            yaml_data[k.strip()] = v.strip().strip('\'"')
 
-                    yaml_data.update(yaml_data_rescue)
+                yaml_data.update(yaml_data_rescue)
 
-                    # Read declarative values or fallback to inferred values if missing
-                    raw_repo = yaml_data.get('repo', current_repo)
-                    decl_repo = raw_repo if raw_repo in repos else current_repo
+                # Read declarative values or fallback to inferred values if missing
+                raw_repo = yaml_data.get('repo', current_repo)
+                decl_repo = raw_repo if raw_repo in repos else current_repo
 
-                    hallucinated_tags = []
-                    if raw_repo != decl_repo and raw_repo and raw_repo.lower() != 'none':
-                        hallucinated_tags.append(raw_repo.replace(' ', '-').replace('"', ''))
+                hallucinated_tags = []
+                if raw_repo != decl_repo and raw_repo and raw_repo.lower() != 'none':
+                    hallucinated_tags.append(raw_repo.replace(' ', '-').replace('"', ''))
 
-                    # Strict validation: clamp AI hallucinations back to system enumerations
-                    raw_type = yaml_data.get('type', inferred_type).lower()
-                    if "bug" in raw_type: decl_type = "bug"
-                    elif "todo" in raw_type: decl_type = "todo"
-                    elif "queue" in raw_type: decl_type = "queue"
-                    else: decl_type = inferred_type
-                    raw_status = yaml_data.get('status', inferred_status).lower()
-                    if "active" in raw_status: decl_status = "active"
-                    elif "clos" in raw_status: decl_status = "closed"
-                    elif "archiv" in raw_status: decl_status = "archived"
-                    elif "log" in raw_status: decl_status = "logged"
-                    else: decl_status = "open"
-                    decl_id = yaml_data.get('id', filename.replace('.md', ''))
-                    decl_title = yaml_data.get('title', filename.replace('.md', ''))
+                # Strict validation: clamp AI hallucinations back to system enumerations
+                raw_type = yaml_data.get('type', inferred_type).lower()
+                if "bug" in raw_type: decl_type = "bug"
+                elif "todo" in raw_type: decl_type = "todo"
+                elif "queue" in raw_type: decl_type = "queue"
+                else: decl_type = inferred_type
+                raw_status = yaml_data.get('status', inferred_status).lower()
+                if "active" in raw_status: decl_status = "active"
+                elif "clos" in raw_status: decl_status = "closed"
+                elif "archiv" in raw_status: decl_status = "archived"
+                elif "log" in raw_status: decl_status = "logged"
+                else: decl_status = "open"
+                decl_id = yaml_data.get('id', filename.replace('.md', ''))
+                decl_title = yaml_data.get('title', filename.replace('.md', ''))
 
-                    # Query the SQLite cache ledger to evaluate historical context metrics
-                    db_status = None
-                    db_created_at = None
-                    db_closed_at = None
-                    try:
-                        conn = get_connection('tracker', workspace_id=workspace_id)
-                        cache_row = conn.execute("SELECT status, created_at, closed_at FROM tracker_tickets WHERE id = ?", (decl_id,)).fetchone()
-                        if cache_row:
-                            db_status = cache_row['status']
-                            db_created_at = cache_row['created_at']
-                            db_closed_at = cache_row['closed_at']
-                    except Exception:
-                        pass
+                # Query the SQLite cache ledger to evaluate historical context metrics
+                db_status = None
+                db_created_at = None
+                db_closed_at = None
+                try:
+                    conn = get_connection('tracker', workspace_id=workspace_id)
+                    cache_row = conn.execute("SELECT status, created_at, closed_at FROM tracker_tickets WHERE id = ?", (decl_id,)).fetchone()
+                    if cache_row:
+                        db_status = cache_row['status']
+                        db_created_at = cache_row['created_at']
+                        db_closed_at = cache_row['closed_at']
+                except Exception:
+                    pass
 
-                    # Lock down original creation metrics against LLM omissions or overwrites
-                    if db_created_at:
-                        decl_created = db_created_at
+                # Lock down original creation metrics against LLM omissions or overwrites
+                if db_created_at:
+                    decl_created = db_created_at
+                else:
+                    # Fall back to file frontmatter string, or stamp fresh system time if truly new
+                    file_created = yaml_data.get('created_at')
+                    if file_created and file_created.lower() != 'null':
+                        decl_created = file_created
                     else:
-                        # Fall back to file frontmatter string, or stamp fresh system time if truly new
-                        file_created = yaml_data.get('created_at')
-                        if file_created and file_created.lower() != 'null':
-                            decl_created = file_created
+                        decl_created = datetime.now().isoformat(timespec='seconds')
+                # Enforce the System Clock as the single authority on closure timelines
+                if decl_status in ('closed', 'logged', 'archived'):
+                    if db_status in ('open', 'active', 'queue', 'todo', 'bug'):
+                        # State transition detected (Open -> Closed)! Force system clock to override LLM hallucinations.
+                        decl_closed = datetime.now().isoformat(timespec='seconds')
+                    elif db_status in ('closed', 'logged', 'archived') and db_closed_at:
+                        # Ticket was already closed historically; retain original system record
+                        decl_closed = db_closed_at
+                    else:
+                        # db_status is None (Untracked from Git) OR missing date. Trust the file to preserve history.
+                        file_closed = yaml_data.get('closed_at')
+                        if file_closed and file_closed.lower() != 'null':
+                            decl_closed = file_closed
                         else:
-                            decl_created = datetime.now().isoformat(timespec='seconds')
-                    # Enforce the System Clock as the single authority on closure timelines
-                    if decl_status in ('closed', 'logged', 'archived'):
-                        if db_status in ('open', 'active', 'queue', 'todo', 'bug'):
-                            # State transition detected (Open -> Closed)! Force system clock to override LLM hallucinations.
                             decl_closed = datetime.now().isoformat(timespec='seconds')
-                        elif db_status in ('closed', 'logged', 'archived') and db_closed_at:
-                            # Ticket was already closed historically; retain original system record
-                            decl_closed = db_closed_at
-                        else:
-                            # db_status is None (Untracked from Git) OR missing date. Trust the file to preserve history.
-                            file_closed = yaml_data.get('closed_at')
-                            if file_closed and file_closed.lower() != 'null':
-                                decl_closed = file_closed
-                            else:
-                                decl_closed = datetime.now().isoformat(timespec='seconds')
+                else:
+                    decl_closed = 'null'
+
+                decl_sub = yaml_data.get('sub_bucket')
+                if not decl_sub or decl_sub == 'None':
+                    # If the AI hallucinated a category in 'type', rescue it!
+                    bad_type = yaml_data.get('type', '')
+                    if bad_type.lower() not in ["bug", "todo", "queue"] and bad_type:
+                        decl_sub = bad_type
                     else:
-                        decl_closed = 'null'
+                        decl_sub = inferred_sub_bucket
 
-                    decl_sub = yaml_data.get('sub_bucket')
-                    if not decl_sub or decl_sub == 'None':
-                        # If the AI hallucinated a category in 'type', rescue it!
-                        bad_type = yaml_data.get('type', '')
-                        if bad_type.lower() not in ["bug", "todo", "queue"] and bad_type:
-                            decl_sub = bad_type
-                        else:
-                            decl_sub = inferred_sub_bucket
+                # Validate sub_bucket against config.json
+                valid_buckets = valid_buckets_by_repo.get(decl_repo, {"None", "tracker"})
+                if decl_sub not in valid_buckets:
+                    if decl_sub and decl_sub.lower() != 'none':
+                        hallucinated_tags.append(decl_sub.replace(' ', '-').replace('"', ''))
+                    decl_sub = "None"
 
-                    # Validate sub_bucket against config.json
-                    valid_buckets = valid_buckets_by_repo.get(decl_repo, {"None", "tracker"})
-                    if decl_sub not in valid_buckets:
-                        if decl_sub and decl_sub.lower() != 'none':
-                            hallucinated_tags.append(decl_sub.replace(' ', '-').replace('"', ''))
-                        decl_sub = "None"
+                decl_tags_raw = yaml_data.get('tags', '[]')
+                try:
+                    import json
+                    # Attempt to parse as JSON array, otherwise split by comma
+                    decl_tags_list = json.loads(decl_tags_raw) if decl_tags_raw.startswith('[') else [t.strip() for t in decl_tags_raw.split(',') if t.strip()]
+                except Exception:
+                    decl_tags_list = []
 
-                    decl_tags_raw = yaml_data.get('tags', '[]')
-                    try:
-                        import json
-                        # Attempt to parse as JSON array, otherwise split by comma
-                        decl_tags_list = json.loads(decl_tags_raw) if decl_tags_raw.startswith('[') else [t.strip() for t in decl_tags_raw.split(',') if t.strip()]
-                    except Exception:
-                        decl_tags_list = []
+                for ht in hallucinated_tags:
+                    if ht not in decl_tags_list: decl_tags_list.append(ht)
 
-                    for ht in hallucinated_tags:
-                        if ht not in decl_tags_list: decl_tags_list.append(ht)
+                decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
+                # Determine if we need to rewrite YAML (fields missing or mismatched)
+                needs_rewrite = (
+                    'repo' not in yaml_data or 'type' not in yaml_data or 
+                    'status' not in yaml_data or yaml_data.get('closed_at', '').lower() != decl_closed.lower() or
+                    yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type or
+                    bool(pseudo_match)
+                )
+                # Determine intended physical destination based on declarative state
+                intended_dir = get_tracker_path(decl_repo, decl_type, decl_status)
+                intended_filename = f"{decl_id}.md"
+                intended_rel_path = f"{intended_dir}/{intended_filename}"
+                current_rel_path = ws_rel_path
+                intended_path = ctx.resolve_path(intended_rel_path)
 
-                    decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
-                    # Determine if we need to rewrite YAML (fields missing or mismatched)
-                    needs_rewrite = (
-                        'repo' not in yaml_data or 'type' not in yaml_data or 
-                        'status' not in yaml_data or yaml_data.get('closed_at', '').lower() != decl_closed.lower() or
-                        yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type or
-                        bool(pseudo_match)
+                # Self-Healing: Duplicate / Ghost File Detection
+                if current_rel_path != intended_rel_path and os.path.exists(intended_path):
+                    current_mtime = os.path.getmtime(filepath)
+                    intended_mtime = os.path.getmtime(intended_path)
+
+                    should_delete_ghost = (intended_mtime >= current_mtime)
+
+                    # Lazy Evaluation: Only execute the expensive disk read if the mtime check fails 
+                    # AND the file sizes are identical (a cheap heuristic for identical content).
+                    if not should_delete_ghost and os.path.getsize(filepath) == os.path.getsize(intended_path):
+                        f_int_content = ctx.vfs.read(intended_rel_path)
+                        should_delete_ghost = (content == f_int_content)
+
+                    if should_delete_ghost:
+                        ctx.vfs.save(current_rel_path, "", data={"action": "delete"})
+                        continue
+
+                if current_rel_path != intended_rel_path or needs_rewrite:
+                    # Reconstruct pristine YAML
+                    new_yaml = (
+                        f"---\n"
+                        f"repo: \"{decl_repo}\"\n"
+                        f"type: \"{decl_type}\"\n"
+                        f"status: \"{decl_status}\"\n"
+                        f"id: {decl_id}\n"
+                        f"title: \"{decl_title}\"\n"
+                        f"created_at: {decl_created}\n"
+                        f"closed_at: {decl_closed}\n"
+                        f"sub_bucket: \"{decl_sub}\"\n"
                     )
-
-                    # Determine intended physical destination based on declarative state
-                    intended_dir = get_tracker_path(decl_repo, decl_type, decl_status, workspace_id=workspace_id)
-                    intended_filename = f"{decl_id}.md"
-                    intended_path = Path(intended_dir).joinpath(intended_filename).as_posix()
-                    current_rel_path = os.path.relpath(filepath, ws_root)
-                    intended_rel_path = os.path.relpath(intended_path, ws_root)
-                    # Self-Healing: Duplicate / Ghost File Detection
-                    if current_rel_path != intended_rel_path and os.path.exists(intended_path):
-                        current_mtime = os.path.getmtime(filepath)
-                        intended_mtime = os.path.getmtime(intended_path)
-
-                        should_delete_ghost = (intended_mtime >= current_mtime)
-
-                        # Lazy Evaluation: Only execute the expensive disk read if the mtime check fails 
-                        # AND the file sizes are identical (a cheap heuristic for identical content).
-                        if not should_delete_ghost and os.path.getsize(filepath) == os.path.getsize(intended_path):
-                            f_int_content = ctx.vfs.read(intended_rel_path)
-                            should_delete_ghost = (content == f_int_content)
-
-                        if should_delete_ghost:
-                            from insetu.routes_fs import execute_vfs_delete
-                            execute_vfs_delete(workspace_id, current_rel_path)
-                            continue
-
-                    if current_rel_path != intended_rel_path or needs_rewrite:
-                        # Reconstruct pristine YAML
-                        new_yaml = (
-                            f"---\n"
-                            f"repo: \"{decl_repo}\"\n"
-                            f"type: \"{decl_type}\"\n"
-                            f"status: \"{decl_status}\"\n"
-                            f"id: {decl_id}\n"
-                            f"title: \"{decl_title}\"\n"
-                            f"created_at: {decl_created}\n"
-                            f"closed_at: {decl_closed}\n"
-                            f"sub_bucket: \"{decl_sub}\"\n"
-                        )
-                        if decl_tags and decl_tags != '[]':
-                            new_yaml += f"tags: {decl_tags}\n"
-                        new_yaml += "---"
-
-                        if yaml_match:
-                            new_content = content.replace(yaml_match.group(0), new_yaml)
-                        else:
-                            new_content = f"{new_yaml}\n\n{content}"
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
-                        enforced_count += 1
-
-            except Exception:
-                pass
+                    if decl_tags and decl_tags != '[]':
+                        new_yaml += f"tags: {decl_tags}\n"
+                    new_yaml += "---"
+                    if yaml_match:
+                        new_content = content.replace(yaml_match.group(0), new_yaml)
+                    else:
+                        new_content = f"{new_yaml}\n\n{content}"
+                    ctx.vfs.save(intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
+                    enforced_count += 1
+            except Exception as e:
+                print(f"Warning: Ticket Housekeeping failed on {ws_rel_path}: {e}")
 
     return enforced_count
+
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
     from insetu.sdk import ExtensionContext
@@ -586,7 +598,7 @@ def archive_stale_tickets(workspace_id=None):
     auto_archive = tracker_cfg.get("auto_archive", True)
     archive_days = int(tracker_cfg.get("archive_days", 30))
 
-    repos = get_sister_repos(workspace_id)
+    repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     date_grace = datetime.now() - timedelta(days=grace_days)
     date_archive = datetime.now() - timedelta(days=archive_days)
     archived_count = 0
@@ -604,8 +616,7 @@ def archive_stale_tickets(workspace_id=None):
                         content = re.sub(r"status:\s*\"?closed\"?", 'status: "logged"', content)
                         new_rel_path = f"{repo}/.tracker/log/{filename}"
                         old_rel_path = f"{repo}/.tracker/{folder_type}/closed/{filename}"
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                        ctx.vfs.save(new_rel_path, content, data={"delete_source": old_rel_path})
                         archived_count += 1
         # Sweep 2: Move >archive_days day logged tickets to archive
         if auto_archive:
@@ -623,8 +634,7 @@ def archive_stale_tickets(workspace_id=None):
                         content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
                         new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
                         old_rel_path = f"{repo}/.tracker/log/{filename}"
-                        from insetu.routes_fs import execute_vfs_save
-                        execute_vfs_save(workspace_id, new_rel_path, content, data={"delete_source": old_rel_path})
+                        ctx.vfs.save(new_rel_path, content, data={"delete_source": old_rel_path})
                         archived_count += 1
 
     return archived_count

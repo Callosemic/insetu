@@ -7,7 +7,7 @@ import {
     fetchAndDownloadState
 } from '../app.js';
 import { AppStore } from '../store.js';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const KanbanStore = createExtensionStore('Kanban', {
@@ -373,44 +373,15 @@ if (this.allRepos.includes(pinnedRepo)) {
 
                 <div slot="body">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
-                        <select style="flex: 1; min-width: 120px;"
-                            .value=${newTaskForm.repo}
-                            @change=${(e) => { KanbanStore.getState().setNewTaskField('repo', e.target.value); KanbanStore.getState().setNewTaskField('bucket', 'None'); this.requestUpdate(); }}>
-                            ${this.allRepos.map(repo => html`<option value="${repo}">${repo}</option>`)}
-                        </select>
-                        <select style="flex: 1; min-width: 120px;"
-                            .value=${newTaskForm.type}
-                            @change=${(e) => KanbanStore.getState().setNewTaskField('type', e.target.value)}>
-                            <option value="todo">To-Do (Task)</option>
-                            <option value="bug">Bug</option>
-                            <option value="queue">Queue (Research)</option>
-                        </select>
-                        <select style="flex: 1; min-width: 120px;"
-                            .value=${newTaskForm.status}
-                            @change=${(e) => KanbanStore.getState().setNewTaskField('status', e.target.value)}>
-                            <option value="open">Open (Backlog)</option>
-                            <option value="active">Active (In Progress)</option>
-                        </select>
-                        <select style="flex: 1; min-width: 120px;"
-                        .value=${newTaskForm.bucket}
-                            @change=${(e) => KanbanStore.getState().setNewTaskField('bucket', e.target.value)}>
-                            <option value="None">No Bucket</option>
-                            ${buckets.map(b => html`<option value=${b.id}>${b.title}</option>`)}
-                        </select>
-                        <input type="date" style="flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);"
-                            .value=${newTaskForm.deliveryDate || ''}
-                            @change=${(e) => KanbanStore.getState().setNewTaskField('deliveryDate', e.target.value)}>
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: this.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...buckets.map(b => ({value: b.id, label: b.title}))] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { type: 'date', style: 'flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);' })}
                     </div>
-                    <input type="text" placeholder="Ticket Title (e.g., Fix schema registry timeout)" style="margin-bottom: 10px; font-weight: bold;"
-                        .value=${newTaskForm.title}
-                        @input=${(e) => KanbanStore.getState().setNewTaskField('title', e.target.value)}>
-                    <input type="text" placeholder="Tags (comma separated, e.g. frontend, critical)" style="margin-bottom: 10px;"
-                        .value=${newTaskForm.tags}
-                        @input=${(e) => KanbanStore.getState().setNewTaskField('tags', e.target.value)}>
-                    <textarea style="flex: 1; margin-bottom: 10px; min-height: 150px;"
-                        placeholder="Markdown description..."
-                        .value=${newTaskForm.desc}
-                        @input=${(e) => KanbanStore.getState().setNewTaskField('desc', e.target.value)}></textarea>
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { placeholder: 'Ticket Title (e.g., Fix schema registry timeout)', style: 'margin-bottom: 10px; font-weight: bold;' })}
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { placeholder: 'Tags (comma separated, e.g. frontend, critical)', style: 'margin-bottom: 10px;' })}
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; margin-bottom: 10px; min-height: 150px;' })}
                 </div>
                 <div slot="footer" style="display: flex; width: 100%;">
                     <insetu-async-btn style="flex: 1; display: block; width: 100%;" label="💾 Create Ticket" intent="primary" .onClick=${this._saveNewTask.bind(this)}></insetu-async-btn>
@@ -474,12 +445,12 @@ this.pinnedRepos.size > 1;
             ${this._renderNewTaskModal()}
             <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
                 <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
-                    <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; flex: 1;">
-                        <input type="text" placeholder="🔍 Fuzzy search tickets..." .value=${this.searchQuery} 
-                            style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                            @input=${(e) => this.searchQuery = e.target.value}>
-                        ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.searchQuery = ''}>Clear</button>` : ''}
-                    </div>
+                    <insetu-search-bar 
+                        style="flex: 1;"
+                        placeholder="🔍 Fuzzy search tickets..." 
+                        .value=${this.searchQuery} 
+                        @search-changed=${(e) => this.searchQuery = e.detail.value}>
+                    </insetu-search-bar>
                     <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
                         ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
                     </button>
@@ -710,56 +681,35 @@ this.requestUpdate(); }}
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 4px 20px 16px 20px; border-top: 1px solid var(--border);">
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository</label>
-                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.repo} @change=${(e) => { KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, repo: e.target.value, bucket: 'None' } })); this.requestUpdate(); }}>
-                                        ${this.allRepos.map(r => html`<option value="${r}">${r}</option>`)}
-                                    </select>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: this.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None' } })) })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticket Type</label>
-                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.type} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: e.target.value } }))}>
-                                        <option value="todo">To-Do (Task)</option>
-                                        <option value="bug">Bug</option>
-                                        <option value="queue">Queue (Research)</option>
-                                    </select>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Status Zone</label>
-                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.status} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, status: e.target.value } }))}>
-                                        <option value="open">Open (Backlog)</option>
-                                        <option value="active">Active (In Progress)</option>
-                                        <option value="closed">Closed (Resolved)</option>
-                                    </select>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Sub-Bucket Mapping</label>
-                                    <select style="width: 100%; padding: 6px 8px;" .value=${editTaskForm.bucket} @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: e.target.value } }))}>
-                                        <option value="None">No Bucket</option>
-                                        ${buckets.map(b => html`<option value=${b.id}>${b.title}</option>`)}
-                                    </select>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...buckets.map(b => ({value: b.id, label: b.title}))] })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Delivery Deadline</label>
-                                    <input type="date" style="width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;"
-                                        .value=${editTaskForm.deliveryDate || ''}
-                                        @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, deliveryDate: e.target.value } }))}>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { type: 'date', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Created At</label>
-                                    <input type="datetime-local" step="1" style="width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;"
-                                        .value=${editTaskForm.createdAt || ''}
-                                        @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, createdAt: e.target.value } }))}>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { type: 'datetime-local', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Closed At</label>
-                                    <input type="datetime-local" step="1" style="width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;"
-                                        .value=${editTaskForm.closedAt || ''}
-                                        @change=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, closedAt: e.target.value } }))}>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { type: 'datetime-local', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
                                 </div>
                                 <div style="grid-column: 1 / -1; margin-top: 4px;">
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Tags (comma-separated tokens)</label>
-                                    <input type="text" placeholder="Tags (comma-separated tokens, e.g. architecture, latency)..." style="width: 100%; padding: 6px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;"
-                                        .value=${editTaskForm.tagsRaw}
-                                        @input=${(e) => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, tagsRaw: e.target.value } }))}>
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { placeholder: 'Tags (comma-separated tokens, e.g. architecture, latency)...', style: 'width: 100%; padding: 6px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
                                 </div>
                             </div>
                         ` : ''}
@@ -837,11 +787,10 @@ customElements.define('insetu-ext-tracker', InSetuExtTracker);
 export class InSetuExtTrackerActions extends InSetuElement {
     get extName() { return 'tracker'; }
     static styles = [sharedStyles];
-    _openMenu(e) {
-        if (!window.inSetu?.ui.Factory?.createDropdown) return;
+
+    get _menuItems() {
         const activeSubTab = this.dataset.subId || 'todos';
         const trackerEl = document.querySelector(`#sub-${activeSubTab} insetu-ext-tracker`);
-
         const items = [];
         if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
             items.push({ label: 'New Task', icon: '🎫', onClick: () => { trackerEl?._openNewTaskModal(); } });
@@ -849,14 +798,15 @@ export class InSetuExtTrackerActions extends InSetuElement {
             items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { trackerEl?._generateHistoricalChangelog(true); } });
             items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { trackerEl?._generateHistoricalChangelog(false); } });
         }
-
-        window.inSetu.ui.Factory.createDropdown({
-            anchor: e.target,
-            items: items
-        });
+        return items;
     }
+
     render() {
-        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
+        return html`
+            <insetu-dropdown align="right" .items=${this._menuItems}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </insetu-dropdown>
+        `;
     }
 }
 customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
@@ -935,8 +885,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
     uiHooks: {
         'zone:file-edit-override': (filepath) => {
             if (filepath.includes('.tracker/')) {
-                const fm = document.querySelector('#file-modal');
-                if (fm) fm.style.display = 'none';
+                window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
                 if (window.switchTab) window.switchTab(null, 'tasks');
                 const activeSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
                 const trackerEl = document.querySelector(`#sub-${activeSub} insetu-ext-tracker`);

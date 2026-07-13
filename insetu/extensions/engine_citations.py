@@ -6,7 +6,6 @@ import urllib.parse
 from flask import request, jsonify
 from insetu.sdk import InSetuExtension
 from insetu.hooks import hooks
-
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -17,7 +16,12 @@ CITATIONS_SCHEMA = {
     }
 }
 
-citations_bp = InSetuExtension('citations', __name__, schema=CITATIONS_SCHEMA)
+citations_bp = InSetuExtension('citations', __name__, schema=CITATIONS_SCHEMA, virtual_contexts=[{
+    "title": "Global Reference Library",
+    "domain": "Reference Library",
+    "description": "Academic citations and bibliography records.",
+    "out_file": "citations_context.txt"
+}])
 __depends__ = []
 
 @hooks.on('mutate_workspace_config')
@@ -26,20 +30,7 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     if "citations" not in cfg.get("extensions", []): return
     if "virtual_contexts" not in cfg:
         cfg["virtual_contexts"] = []
-
     v_ctxs = cfg["virtual_contexts"]
-
-    # Prevent duplication across in-memory cache loads
-    if any(v.get("out_file") == "citations_context.txt" for v in v_ctxs):
-        return
-
-    # Inject the Global Library mapping
-    v_ctxs.append({
-        "title": "Global Reference Library",
-        "domain": "Reference Library",
-        "description": "Academic citations and bibliography records.",
-        "out_file": "citations_context.txt"
-    })
 
     # Dynamically inject mappings for repo-specific citation buckets
     try:
@@ -103,8 +94,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                     content_lines.append(f"Author(s): {authors}")
                     content_lines.append(f"Type: {item.get('type', 'unknown')}")
                     content_lines.append(f"Raw CSL-JSON: {json.dumps(item)}\n")
-                from insetu.routes_fs import execute_vfs_save
-                execute_vfs_save(workspace_id, out_path, "\n".join(content_lines), data={"is_absolute_artifact": True})
+                ctx.vfs.save(out_path, "\n".join(content_lines), data={"is_absolute_artifact": True})
                 manifest[filename] = {
                     "files": ["data/citations.db"],
                     "meta": {"type": "citation", "title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
@@ -160,10 +150,9 @@ def get_metadata_index(ctx):
 @citations_bp.route('list', methods=['GET'])
 def get_citations(ctx):
     try:
-        conn = ctx.db
-        cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
+        rows = ctx.db.get_all(table="citations", order_by="id ASC")
         items = []
-        for row in cursor.fetchall():
+        for row in rows:
             item = json.loads(row['raw_json'])
             item['_attachments'] = json.loads(row['attachments']) if row['attachments'] else []
             items.append(item)

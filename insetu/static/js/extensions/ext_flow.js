@@ -100,48 +100,18 @@ export class InSetuExtFlow extends InSetuElement {
         this.requestUpdate();
     }
     async _downloadTarget(targetFile, btnComponent = null) {
-        if (btnComponent) btnComponent.innerText = "⏳...";
-        try {
-            const res = await fetch(`/download/${targetFile}`, { headers: window.inSetu.api._getHeaders(true) });
-            if (!res.ok) throw new Error("Download failed from server.");
-            const text = await res.text();
-            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = targetFile.split('/').pop();
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-            if (btnComponent) btnComponent.innerText = "✅ Downloaded";
-        } catch (err) {
-            alert("Error downloading file: " + err.message);
-            if (btnComponent) btnComponent.innerText = "❌ Error";
-        } finally {
-            if (btnComponent) {
-                setTimeout(() => { 
-                    if (btnComponent.innerText === "✅ Downloaded" || btnComponent.innerText === "❌ Error") {
-                        btnComponent.innerText = "⬇️ Download";
-                    }
-                }, 2000);
-            }
+        const explicitUrl = `/download/${targetFile}`;
+        if (btnComponent) {
+            await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
+        } else {
+            const dummyBtn = document.createElement('button');
+            await fetchAndDownloadState(targetFile, dummyBtn, explicitUrl);
         }
     }
+
     async _copyTarget(targetFile, btnElement) {
-        const orig = btnElement.innerText;
-        btnElement.innerText = "⏳...";
-        try {
-            const res = await fetch(`/download/${targetFile}`, { headers: window.inSetu.api._getHeaders(true) });
-            if (!res.ok) throw new Error("Download failed from server.");
-            const text = await res.text();
-            await navigator.clipboard.writeText(text);
-            btnElement.innerText = "✅ Copied";
-        } catch(err) {
-            btnElement.innerText = "❌ Error";
-        }
-        setTimeout(() => { btnElement.innerText = orig; }, 2000);
+        const explicitUrl = `/download/${targetFile}`;
+        await fetchAndCopy(targetFile, btnElement, explicitUrl);
     }
     openBatchModal(batch) {
         this._viewingBatch = batch;
@@ -241,73 +211,60 @@ export class InSetuExtFlow extends InSetuElement {
         });
     }
     render() {
-            const categories = {};
             const filteredBatches = this.searchQuery 
                 ? window.inSetu.utils.fuzzyFilterObjects(this.batches, this.searchQuery, b => `${b.title} ${b.id} ${b.domain}`) 
                 : this.batches;
 
-            filteredBatches.forEach(b => {
-                    const domain = b.domain || 'Workflows';
-                    if (!categories[domain]) categories[domain] = [];
-                    categories[domain].push(b);
-            });
             const { categoryOrder, gatherOptions } = AppStore.getState();
-            const sortedCats = Object.keys(categories).sort((a, b) => {
-                    const iA = categoryOrder.indexOf(a) === -1 ? 999 : categoryOrder.indexOf(a);
-                    const iB = categoryOrder.indexOf(b) === -1 ? 999 : categoryOrder.indexOf(b);
-                    if (iA !== iB) return iA - iB;
-                    return a.localeCompare(b);
-            });
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
                                     <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
-                                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
-                                            <input type="text" placeholder="🔍 Fuzzy search workflows..." .value=${this.searchQuery} 
-                                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                                                @input=${(e) => FlowStore.setState({ searchQuery: e.target.value })}>
-                                            ${this.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => FlowStore.setState({ searchQuery: '' })}>Clear</button>` : ''}
-                                        </div>
+                                        <insetu-search-bar 
+                                            placeholder="🔍 Fuzzy search workflows..." 
+                                            .value=${this.searchQuery} 
+                                            @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}>
+                                        </insetu-search-bar>
                                     </div>
 
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
-
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
-                                ${this.batches.length === 0 ?
-html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
-                            ${sortedCats.map(cat => html`
-                                    <insetu-category-section titleText=${cat}>
-                                            ${categories[cat].map(b => {
-                                                    const filename = `workflow_${b.id}_context.txt`;
-                                                    const manifestObj = AppStore.getState().manifest[filename] || {};
-                                                    const meta = manifestObj.meta || {};
-                                                    let sizeStr = "";
-                                                    if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                                                        const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-                                                        sizeStr = sizes.join(' + ') + " kb";
-                                                    } else if (meta.size_bytes !== undefined) {
-                                                        const kb = Math.round(meta.size_bytes / 1024);
-                                                        sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-                                                    }
+                        ${this.batches.length === 0 ? html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
+                        <insetu-categorized-list
+                            .items=${filteredBatches.map(b => ({...b, _domain: b.domain || 'Workflows'}))}
+                            categoryKey="_domain"
+                            .categoryOrder=${categoryOrder}
+                            .renderItem=${(b) => {
+                                const filename = `workflow_${b.id}_context.txt`;
+                                const manifestObj = AppStore.getState().manifest[filename] || {};
+                                const meta = manifestObj.meta || {};
+                                let sizeStr = "";
+                                if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+                                    const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
+                                    sizeStr = sizes.join(' + ') + " kb";
+                                } else if (meta.size_bytes !== undefined) {
+                                    const kb = Math.round(meta.size_bytes / 1024);
+                                    sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+                                }
 
-                                                    return html`
-                                                    <insetu-card
-                                                            .filename=${b.id}
-                                                            .titleText=${`📦 ${b.title || b.id}`}
-                                                            .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
-                                                            .detailText=${sizeStr ? `${filename} | ${sizeStr}` : filename}
-                                                            icon=""
-                                                            intentColor="var(--intent-primary)"
-                                                            @card-clicked=${() => this.openBatchModal(b)}>
+                                return html`
+                                <insetu-card
+                                        .filename=${b.id}
+                                        .titleText=${`📦 ${b.title || b.id}`}
+                                        .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
+                                        .detailText=${sizeStr ? `${filename} | ${sizeStr}` : filename}
+                                        icon=""
+                                        intentColor="var(--intent-primary)"
+                                        @card-clicked=${() => this.openBatchModal(b)}>
 
-                                                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer; padding: 6px 12px; font-size: 0.85rem; font-weight: bold;" 
-                                                                    @click=${(e) => { e.stopPropagation(); this.openEditBatchModal(b); }}>
-                                                                    ✏️ Edit
-                                                            </button>
-                                                    </insetu-card>
-                                            `})}
-                                    </insetu-category-section>
-                            `)}
+                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer; padding: 6px 12px; font-size: 0.85rem; font-weight: bold;" 
+                                                @click=${(e) => { e.stopPropagation(); this.openEditBatchModal(b); }}>
+                                                ✏️ Edit
+                                        </button>
+                                </insetu-card>
+                                `;
+                            }}>
+                        </insetu-categorized-list>
                     </div>
                     <insetu-modal 
                             ?open=${this._editModalOpen} 
@@ -488,18 +445,20 @@ html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''
 customElements.define('insetu-ext-flow', InSetuExtFlow);
 export class InSetuExtFlowActions extends InSetuElement {
     static styles = [sharedStyles];
-    _openMenu(e) {
-        if (!window.inSetu?.ui.Factory?.createDropdown) return;
-        const flowEl = document.querySelector('insetu-ext-flow');
-        window.inSetu.ui.Factory.createDropdown({
-            anchor: e.target,
-            items: [
-                { label: 'New Batch', icon: '📦', onClick: () => { flowEl?.openEditBatchModal(null); } }
-            ]
-        });
+    get _menuItems() {
+        return [
+            { label: 'New Batch', icon: '📦', onClick: () => { 
+                const flowEl = document.querySelector('insetu-ext-flow');
+                if (flowEl) flowEl.openEditBatchModal(null); 
+            }}
+        ];
     }
     render() {
-        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
+        return html`
+            <insetu-dropdown align="right" .items=${this._menuItems}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </insetu-dropdown>
+        `;
     }
 }
 customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);

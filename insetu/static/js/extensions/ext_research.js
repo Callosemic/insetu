@@ -1,6 +1,6 @@
 import { executeWorkspaceMutation } from '../app.js';
 import { downloadFile } from '../fs.js';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 
@@ -382,43 +382,28 @@ export class InSetuExtResearch extends InSetuElement {
                     <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
                         <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
                             <h3 style="margin-top: 0; color: var(--intent-primary);">New Research Job</h3>
-                            <input type="text" placeholder="Search Query..." style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;" .value=${this.searchForm.query || ''} @input=${(e) => ResearchStore.getState().setSearchForm('query', e.target.value)}>
+                            ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;' })}
                             <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                                <select style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.provider || 'serper'} @change=${(e) => ResearchStore.getState().setSearchForm('provider', e.target.value)}>
-                                    <option value="serper">Google (Serper.dev API)</option>
-                                    <option value="google">Google (Playwright)</option>
-                                    <option value="duckduckgo">DuckDuckGo</option>
-                                </select>
-                                <select style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.dateRange || ''} @change=${(e) => ResearchStore.getState().setSearchForm('dateRange', e.target.value)}>
-                                    <option value="">Any Time</option>
-                                    <option value="d">Past Day</option>
-                                    <option value="w">Past Week</option>
-                                    <option value="m">Past Month</option>
-                                    <option value="y">Past Year</option>
-                                    <option value="custom">Custom Range (Exact)...</option>
-                                    <option value="custom_year">Custom Range (Years)...</option>
-                                </select>
+                                ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
+                                ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
                             </div>
                             <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px; margin-bottom: 10px;">
-                                <input type="date" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.dateStart || ''} @input=${(e) => ResearchStore.getState().setSearchForm('dateStart', e.target.value)}>
-                                <input type="date" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.dateEnd || ''} @input=${(e) => ResearchStore.getState().setSearchForm('dateEnd', e.target.value)}>
+                                ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                                ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
                             </div>
                             <div style="display: ${this.searchForm.dateRange === 'custom_year' ? 'flex' : 'none'}; gap: 10px; margin-bottom: 10px;">
-                                <input type="number" placeholder="YYYY (e.g. 1999)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="1990" max="2100" .value=${this.searchForm.yearStart || ''} @input=${(e) => ResearchStore.getState().setSearchForm('yearStart', e.target.value)}>
-                                <input type="number" placeholder="YYYY (e.g. 2005)" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" min="1990" max="2100" .value=${this.searchForm.yearEnd || ''} @input=${(e) => ResearchStore.getState().setSearchForm('yearEnd', e.target.value)}>
+                                ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                                ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
                             </div>
                             <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: flex-end;">
                                 <div style="flex: 1;">
                                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Extraction Parser</label>
-                                    <select style="width: 100%; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.parser || 'jina'} @change=${(e) => ResearchStore.getState().setSearchForm('parser', e.target.value)}>
-                                        <option value="jina">Jina AI (Rich Markdown)</option>
-                                        <option value="bs4">Local (BeautifulSoup)</option>
-                                    </select>
+                                    ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { type: 'select', style: 'width: 100%; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
                                 </div>
                                 <div style="flex: 1;">
                                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Default Output Folder</label>
                                     <div style="display: flex; gap: 8px;">
-                                        <input type="text" placeholder="e.g. research/" style="flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;" .value=${this.targetDir || 'research/'} @input=${(e) => ResearchStore.setState({ targetDir: e.target.value })}>
+                                        ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { placeholder: 'e.g. research/', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;' })}
                                         <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(window.openFolderBrowser) window.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
                                     </div>
                                 </div>
@@ -426,15 +411,8 @@ export class InSetuExtResearch extends InSetuElement {
                             <div style="margin-bottom: 15px;">
                                 <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Max Results</label>
                                 <div style="display: flex; gap: 8px;">
-                                    <select style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this.searchForm.maxResults || '50'} @change=${(e) => ResearchStore.getState().setSearchForm('maxResults', e.target.value)}>
-                                        <option value="10">10 Results</option>
-                                        <option value="25">25 Results</option>
-                                        <option value="50">50 Results</option>
-                                        <option value="100">100 Results</option>
-                                        <option value="9999">All (Keep Scraping)</option>
-                                        <option value="custom">Custom...</option>
-                                    </select>
-                                    <input type="number" placeholder="e.g. 150" style="flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};" min="1" max="1000" .value=${this.searchForm.maxCustom || ''} @input=${(e) => ResearchStore.getState().setSearchForm('maxCustom', e.target.value)}>
+                                    ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
+                                    ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
                                 </div>
                             </div>
                             <insetu-async-btn style="width: 100%; display: block;" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>

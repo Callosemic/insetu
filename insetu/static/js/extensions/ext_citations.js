@@ -1,5 +1,4 @@
 import { currentModalIsFS } from '../fs.js';
-import { openSelectorModal } from '../ui.js';
 import { AppStore } from '../store.js';
 import { getFlattenedBuckets } from '../app.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
@@ -445,12 +444,12 @@ export class InSetuExtCitations extends InSetuElement {
 
         return html`
             <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg); display: flex; flex-direction: column;">
-                <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: 1px solid var(--border);">
-                    <input type="text" placeholder="🔍 Fuzzy search personal library..." .value=${this.mainSearchQuery} 
-                        style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                        @input=${e => this.mainSearchQuery = e.target.value}>
-                    ${this.mainSearchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this.mainSearchQuery = ''}>Clear</button>` : ''}
-                </div>
+                <insetu-search-bar 
+                    style="border-bottom: 1px solid var(--border);"
+                    placeholder="🔍 Fuzzy search personal library..." 
+                    .value=${this.mainSearchQuery} 
+                    @search-changed=${e => this.mainSearchQuery = e.detail.value}>
+                </insetu-search-bar>
                 <div style="padding: 10px 12px; background: var(--input-bg);">
                     <insetu-repo-filter
                     label="📌 Repos:"

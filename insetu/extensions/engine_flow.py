@@ -200,9 +200,7 @@ def api_flow_batches_delete(ctx):
     ctx.store.set("workflows.json", "context_batches", [b for b in batches if b.get("id") != batch_id])
     try:
         from insetu.routes_fs import execute_vfs_delete
-        from insetu.utils_core import load_json_file, save_json_file
-        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        manifest_data = load_json_file(manifest_path, {})
+        manifest_data = ctx.manifest
         manifest_key = f"workflow_{batch_id}_context.txt"
 
         chunks = []
@@ -210,7 +208,7 @@ def api_flow_batches_delete(ctx):
             meta = manifest_data[manifest_key].get("meta", {})
             chunks = meta.get("chunks", [manifest_key])
             del manifest_data[manifest_key]
-            save_json_file(manifest_path, manifest_data, ctx.workspace_id)
+            ctx.save_manifest(manifest_data)
 
         if not chunks:
             chunks = [manifest_key]

@@ -2,12 +2,11 @@
 repo: "insetu"
 type: "todo"
 status: "closed"
-id: "INS-QUEUE-20260710_1308_SDK_MIGRATION_CITATIONS"
+id: INS-QUEUE-20260710_1308_SDK_MIGRATION_CITATIONS
 title: "SDK V2 Migration: Citations Extension"
-created_at: "2026-07-10T13:08:00"
-closed_at: "2026-07-13T01:22:12"
+created_at: 2026-07-10T13:08:00
+closed_at: 2026-07-13T01:22:12
 sub_bucket: "None"
-delivery_date: "2026-07-26"
 tags: ["Architecture", "SDK", "Refactor"]
 ---
 
