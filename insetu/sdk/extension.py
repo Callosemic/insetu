@@ -105,6 +105,34 @@ class StoreManager:
         data = load_json_file(filepath, {})
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
+class DatabaseWrapper:
+    """Lightweight ORM/CRUD wrapper for centralized SQLite access."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def get_all(self, table, order_by=None):
+        query = f"SELECT * FROM {table}"
+        if order_by:
+            query += f" ORDER BY {order_by}"
+        cursor = self._conn.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def insert_or_replace(self, table, data):
+        keys = list(data.keys())
+        values = tuple(data[k] for k in keys)
+        placeholders = ", ".join(["?"] * len(keys))
+        cols = ", ".join(keys)
+        self._conn.execute(f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({placeholders})", values)
+        self._conn.commit()
+
+    def delete(self, table, where_col, where_val):
+        self._conn.execute(f"DELETE FROM {table} WHERE {where_col} = ?", (where_val,))
+        self._conn.commit()
+
+
 class ExtensionContext:
     """Pre-scoped context object injected into all SDK routes."""
     def __init__(self, ext_name, workspace_id, settings_schema=None):
@@ -118,7 +146,8 @@ class ExtensionContext:
     @property
     def db(self):
         """Returns an SQLite connection automatically keyed to the active tenant workspace."""
-        return get_connection(self.ext_name, self.workspace_id)
+        conn = get_connection(self.ext_name, self.workspace_id)
+        return DatabaseWrapper(conn)
 
     @property
     def paths(self):

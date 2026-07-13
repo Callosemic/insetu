@@ -68,8 +68,8 @@ def is_effectively_identical(lines_a, lines_b):
     """
     Externalized comparison logic.
     Pass 1: Strip whitespace. If they don't match, return False.
-    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
-    Returns True only if both text and indentation are completely identical.
+    Pass 2: If stripped strings match, calculate relative indents. If they differ, return False.
+    Returns True only if both text and relative indentation structure are completely identical.
     """
     a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
     b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
@@ -82,53 +82,14 @@ def is_effectively_identical(lines_a, lines_b):
         if a.strip() != b.strip():
             return False
 
-    # Pass 2: Indentation check
-    for a, b in zip(a_clean, b_clean):
-        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
-            return False
-
-    return True
-def is_effectively_identical(lines_a, lines_b):
-    """
-    Externalized comparison logic.
-    Pass 1: Strip whitespace. If they don't match, return False.
-    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
-    Returns True only if both text and indentation are completely identical.
-    """
-    a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
-    b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
-
-    if len(a_clean) != len(b_clean):
-        return False
-
-    # Pass 1: Stripped comparison
-    for a, b in zip(a_clean, b_clean):
-        if a.strip() != b.strip():
-            return False
-
-    # Pass 2: Indentation check
-    for a, b in zip(a_clean, b_clean):
-        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
-            return False
-
-    return True
-def is_effectively_identical(lines_a, lines_b):
-    """
-    Pass 1: Strip whitespace. If they don't match, return False.
-    Pass 2: If stripped strings match, calculate indents. If they differ, return False.
-    """
-    a_clean = [l for l in lines_a if l.strip() and l.strip().upper() != '{{UNTIL}}']
-    b_clean = [l for l in lines_b if l.strip() and l.strip().upper() != '{{UNTIL}}']
-
-    if len(a_clean) != len(b_clean):
-        return False
+    # Pass 2: Relative Indentation check
+    a_base = len(a_clean[0]) - len(a_clean[0].lstrip()) if a_clean else 0
+    b_base = len(b_clean[0]) - len(b_clean[0].lstrip()) if b_clean else 0
 
     for a, b in zip(a_clean, b_clean):
-        if a.strip() != b.strip():
-            return False
-
-    for a, b in zip(a_clean, b_clean):
-        if len(a) - len(a.lstrip()) != len(b) - len(b.lstrip()):
+        a_rel = (len(a) - len(a.lstrip())) - a_base
+        b_rel = (len(b) - len(b.lstrip())) - b_base
+        if a_rel != b_rel:
             return False
 
     return True

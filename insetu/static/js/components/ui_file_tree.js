@@ -253,6 +253,48 @@ if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false;
         }));
     }
 }
+export class InSetuCategorizedList extends LitElement {
+    static properties = {
+        items: { type: Array },
+        categoryKey: { type: String },
+        categoryOrder: { type: Array },
+        renderItem: { type: Object },
+        renderCategoryHeader: { type: Object }
+    };
+    static styles = [sharedStyles];
+
+    render() {
+        if (!this.items || this.items.length === 0) return html``;
+        const categories = {};
+        this.items.forEach(item => {
+            const cat = item[this.categoryKey] || 'Uncategorized';
+            if (!categories[cat]) categories[cat] = [];
+            categories[cat].push(item);
+        });
+
+        const sortedCats = Object.keys(categories).sort((a, b) => {
+            const orderArr = this.categoryOrder || [];
+            let iA = orderArr.indexOf(a);
+            let iB = orderArr.indexOf(b);
+            if (iA === -1) iA = 999;
+            if (iB === -1) iB = 999;
+            if (iA !== iB) return iA - iB;
+            return a.localeCompare(b);
+        });
+
+        return html`
+            <div style="display: flex; flex-direction: column;">
+                ${sortedCats.map(cat => html`
+                    <insetu-category-section titleText=${cat}>
+                        ${this.renderCategoryHeader ? this.renderCategoryHeader(cat) : ''}
+                        ${categories[cat].map(item => this.renderItem(item))}
+                    </insetu-category-section>
+                `)}
+            </div>
+        `;
+    }
+}
+
 export class InSetuCategorySection extends LitElement {
     static properties = {
         titleText: { type: String }
@@ -494,9 +536,96 @@ export class InSetuAsyncBtn extends LitElement {
         return html`<button class="btn-sm" style="background: var(--intent-${this.intent});" @click=${this._handleClick}>${text}</button>`;
     }
 }
+import { InSetuElement } from '../sdk.js';
 
+export class InSetuSearchBar extends LitElement {
+    static properties = {
+        placeholder: { type: String },
+        value: { type: String }
+    };
+    static styles = [sharedStyles];
+    constructor() { super(); this.placeholder = 'Search...'; this.value = ''; }
+    render() {
+        return html`
+            <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
+                <input type="text" placeholder=${this.placeholder} .value=${this.value} 
+                    style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                    @input=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: e.target.value }, bubbles: true, composed: true }))}>
+                ${this.value ? html`<button class="fuzzy-search-clear" @click=${() => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: '' }, bubbles: true, composed: true }))}>Clear</button>` : ''}
+            </div>
+        `;
+    }
+}
+
+export class InSetuJobTracker extends InSetuElement {
+    static properties = {
+        jobId: { type: String },
+        interval: { type: Number },
+        _status: { type: String },
+        _message: { type: String },
+        _error: { type: String }
+    };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.jobId = null;
+        this.interval = 1000;
+        this._status = 'idle';
+        this._message = '';
+        this._error = '';
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has('jobId')) {
+            if (this.jobId && this.jobId !== 'starting') {
+                this._startPolling();
+            } else if (this.jobId === 'starting') {
+                this._status = 'polling';
+                this._message = 'Initializing...';
+                this._error = '';
+            } else {
+                this._status = 'idle';
+                this._message = '';
+                this._error = '';
+            }
+        }
+    }
+
+    _startPolling() {
+        this._status = 'polling';
+        this._error = '';
+        this.api.pollJob(this.jobId, {
+            interval: this.interval,
+            onProgress: (msg) => {
+                this._message = msg;
+                this.dispatchEvent(new CustomEvent('job-progress', { detail: { message: msg }, bubbles: true, composed: true }));
+            },
+            onComplete: (data) => {
+                this._status = 'completed';
+                this.dispatchEvent(new CustomEvent('job-complete', { detail: data, bubbles: true, composed: true }));
+            },
+            onError: (err) => {
+                this._status = 'failed';
+                this._error = err.message;
+                this.dispatchEvent(new CustomEvent('job-error', { detail: { error: err.message }, bubbles: true, composed: true }));
+            }
+        });
+    }
+
+    render() {
+        if (this._status === 'idle' || this._status === 'completed') return html``;
+        if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px;">❌ Error: ${this._error}</div>`;
+        return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
+    }
+}
+
+customElements.define('insetu-search-bar', InSetuSearchBar);
+customElements.define('insetu-job-tracker', InSetuJobTracker);
 customElements.define('insetu-async-btn', InSetuAsyncBtn);
 customElements.define('insetu-card', InSetuCard);
+customElements.define('insetu-categorized-list', InSetuCategorizedList);
 customElements.define('insetu-category-section', InSetuCategorySection);
 customElements.define('insetu-file-tree', InSetuFileTree);
 customElements.define('insetu-file-actions', InSetuFileActions);

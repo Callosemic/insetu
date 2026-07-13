@@ -397,6 +397,19 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
+def resolve_system_artifact_path(filepath, workspace_id):
+    """Ensures an absolute path strictly resides within the OS control plane (.insetu) or jails it to the workspace."""
+    from pathlib import Path
+    import os
+
+    insetu_base = Path(_cwd).joinpath(".insetu").resolve()
+    resolved_abs = Path(filepath).resolve()
+
+    if str(resolved_abs).startswith(str(insetu_base)):
+        return resolved_abs.as_posix()
+    else:
+        return resolve_workspace_path(filepath, workspace_id)
+
 def resolve_workspace_path(path, workspace_id=None):
     from pathlib import Path
     import re

@@ -2,17 +2,17 @@ import {
     viewSourceFile,
     createFileCard,
     downloadFile,
-    currentModalOriginalText,
     buildFileTree
 } from './fs.js';
 import { BridgeStore } from './bridge.js';
 import { AppStore } from './store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-import './ui.js';
+import './components/ui_dropdowns.js';
 import './components/ui_file_tree.js';
 import './components/ui_folder_browser.js';
 import './components/ui_modal.js';
+import './components/ui_system_settings.js';
 import './components/ui_filter_pills.js';
 import './gather.js';
 import './config.js';
@@ -62,15 +62,14 @@ if ('serviceWorker' in navigator) {
 window.addEventListener('beforeunload', (e) => {
     let isDirty = false;
 
-    // Pull from the centralized Virtual File System Bridge Store
     const bridgeState = BridgeStore.getState();
     if (bridgeState && bridgeState.payloadText && bridgeState.payloadText.trim() !== '') {
         isDirty = true;
     }
 
-    // Verify modal original content states safely
-    if (typeof currentModalOriginalText !== 'undefined' && document.getElementById('modal-text')) {
-        if (document.getElementById('modal-text').value !== currentModalOriginalText) isDirty = true;
+    const fm = window.inSetu.stores.Fs?.getState()?.fileModal;
+    if (fm && fm.open && fm.isFS && fm.content !== fm.originalContent) {
+        isDirty = true;
     }
 
     if (isDirty) {
@@ -465,20 +464,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     await bootExtensions();
-
     // Compile the primary and settings layouts cleanly from the registry blueprints
     if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
         window.ExtensionRegistry.compileLayout();
     }
 
-    const container = document.getElementById('modal-cm6-container');
-    const textArea = document.getElementById('modal-text');
-    if (container && !container.querySelector('insetu-markdown-editor')) {
-        const litEditor = document.createElement('insetu-markdown-editor');
-        litEditor.id = 'global-os-editor';
-        litEditor.value = textArea ? textArea.value : '';
-        container.appendChild(litEditor);
-    }
     const ws = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
 
@@ -510,125 +500,56 @@ try {
     currentTheme = localStorage.getItem('insetu_theme') || 'dark';
 } catch(e) {}
 document.body.setAttribute('data-theme', currentTheme);
-
-const settingsToggle = document.getElementById('settings-toggle');
-const settingsMenu = document.getElementById('settings-menu');
-
-if (settingsToggle && settingsMenu) {
-    settingsToggle.onclick = (e) => {
-        e.stopPropagation();
-        settingsMenu.style.display = settingsMenu.style.display === 'none' ? 'block' : 'none';
-    };
-
-    document.addEventListener('click', (e) => {
-        if (!settingsMenu.contains(e.target) && e.target !== settingsToggle) {
-            settingsMenu.style.display = 'none';
-        }
+async function executeWorkspaceSwap(key, title) {
+    setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
+    if ('caches' in window) {
+        try {
+            const keys = await caches.keys();
+            await Promise.all(keys.map(k => caches.delete(k)));
+        } catch(e) {}
+    }
+    await window.inSetu.api.system('workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_workspace: key })
     });
-    document.querySelectorAll('.theme-btn').forEach(btn => {
-        btn.onclick = () => {
-            const newTheme = btn.getAttribute('data-theme-value');
-            document.body.setAttribute('data-theme', newTheme);
-            localStorage.setItem('insetu_theme', newTheme);
-            settingsMenu.style.display = 'none';
-            updateThemeSelectionUI(newTheme);
-        };
+    sessionStorage.setItem('insetu_workspace', key);
+    localStorage.setItem('insetu_workspace', key);
+    window.ACTIVE_EXTENSIONS = [];
+    document.querySelectorAll('[data-ext]').forEach(el => {
+        const extName = el.dataset.ext;
+        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
+        if (!isCore) el.remove();
     });
+    Object.values(window.inSetu.stores).forEach(store => {
+        if (store.getState().clearPayload) store.getState().clearPayload();
+        if (store.getState().resetState) store.getState().resetState();
+    });
+    AppStore.setState({ activeWorkspace: key });
+    await performSoftRefresh();
+    loadWorkspaces();
 }
+window.executeWorkspaceSwap = executeWorkspaceSwap;
+
 async function loadWorkspaces() {
     try {
-        // Prevent aggressive browser caching (e.g., Safari on tablets) from hiding new workspaces
         const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
-            // Strictly prioritize tab-scoped state for multi-tenant concurrency
             let activeWs = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace');
             if (!activeWs || !data.workspaces[activeWs]) {
-                activeWs = data.active_workspace ||
-                Object.keys(data.workspaces)[0] || 'default';
+                activeWs = data.active_workspace || Object.keys(data.workspaces)[0] || 'default';
                 sessionStorage.setItem('insetu_workspace', activeWs);
                 localStorage.setItem('insetu_workspace', activeWs);
             }
-            AppStore.setState({ activeWorkspace: activeWs });
-            document.getElementById('workspaces-header').style.display = 'block';
-            const list = document.getElementById('workspaces-list');
-            list.style.display = 'flex';
-            list.replaceChildren();
-            Object.entries(data.workspaces).forEach(([key, ws]) => {
-                const btn = document.createElement('button');
-                const isActive = activeWs === key; // Check against frontend local state
-                btn.innerText = (isActive ? '🟢 ' : '⚪ ') + (ws.title || key);
-                btn.style.cssText = `margin: 0; background: ${isActive ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; cursor: pointer; border-radius: 4px; font-weight: ${isActive ? 'bold' : 'normal'};`;
-                btn.onclick = async () => {
-                    btn.innerText = isActive ? '⏳ Refreshing...' : '⏳ Switching...';
-
-                    // Clear aggressive Service Worker caches to prevent ghost states
-                    if ('caches' in window) {
-                        try {
-                            const keys = await caches.keys();
-                            await Promise.all(keys.map(k => caches.delete(k)));
-                        } catch(e) {}
-                    }
-                    await window.inSetu.api.system('workspaces', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ active_workspace: key })
-                    });
-                    // THE FIX: Immediately bind the new workspace to tab-scoped storage and memory
-                    // so the fetch interceptor attaches the correct header exclusively for this tab.
-                    sessionStorage.setItem('insetu_workspace', key);
-                    localStorage.setItem('insetu_workspace', key); // Only for newly opened tabs to inherit
-
-                    // Clear active extensions list immediately to block eager background requests during hydration
-                    window.ACTIVE_EXTENSIONS = [];
-
-                    // Rigorous System Eviction: Unmount non-core components from the DOM before state change notifies listeners
-                    document.querySelectorAll('[data-ext]').forEach(el => {
-                        const extName = el.dataset.ext;
-                        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
-                        if (!isCore) el.remove();
-                    });
-
-                    // Flush global store memory states immediately to break any active microtask cycles
-                    Object.values(window.inSetu.stores).forEach(store => {
-                        if (store.getState().clearPayload) store.getState().clearPayload();
-                        if (store.getState().resetState) store.getState().resetState();
-                    });
-
-                    AppStore.setState({ activeWorkspace: key });
-
-                    // The Stateless Soft-Swap
-                    setGlobalStatus(`Switched to ${ws.title || key}. Hydrating UI...`, null);
-                    await performSoftRefresh();
-
-                    loadWorkspaces(); // Re-render the active green dot on the menu buttons
-                    document.getElementById('settings-menu').style.display = 'none';
-                };
-                list.appendChild(btn);
-            });
+            AppStore.setState({ activeWorkspace: activeWs, workspaces: data.workspaces });
         }
     } catch(e) {
         console.error("Failed to load workspaces:", e);
     }
 }
 loadWorkspaces();
-
-function updateThemeSelectionUI(theme) {
-    document.querySelectorAll('.theme-btn').forEach(btn => {
-        if (btn.getAttribute('data-theme-value') === theme) {
-            btn.style.fontWeight = 'bold';
-            btn.style.border = '1px solid var(--border)';
-            btn.style.borderRadius = '4px';
-            btn.style.background = 'var(--input-bg)';
-        } else {
-            btn.style.fontWeight = 'normal';
-            btn.style.border = '1px solid transparent';
-            btn.style.background = 'transparent';
-        }
-    });
-}
-updateThemeSelectionUI(currentTheme);
 function switchTab(event, tabId) {
     if (typeof event === 'string') {
         tabId = event;
@@ -976,10 +897,7 @@ async function performSoftRefresh() {
             window.inSetu.serverSchemas = config._settings_schemas || {};
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
-            const toggleBtn = document.getElementById('settings-toggle');
-            if (toggleBtn) {
-                toggleBtn.innerText = config.instance_emoji || "⚙️";
-            }
+            AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.getElementById('global-status-bar');
             if (statusBar) {
                 statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
@@ -1080,13 +998,10 @@ async function fullRefresh() {
     }
 }
 /* ==========================================================================
-   BRIDGE LOGIC (Extracted to bridge.js)
-   ========================================================================== */
-let HIDDEN_OUTPUTS = [];
-
+    BRIDGE LOGIC (Extracted to bridge.js)
+    ========================================================================== */
 const initialWs = AppStore.getState().activeWorkspace || 'default';
 fetch(`/api/${initialWs}/repos`).then(r => r.json()).then(d => {
-HIDDEN_OUTPUTS = d.hidden_outputs || [];
 AppStore.setState({
     allRepos: d.repos,
     targetConfigs: d.targets || [],
@@ -1102,18 +1017,22 @@ if (d.config_missing) {
     document.body.appendChild(banner);
 }
 });
-export async function fetchAndCopy(filePath, btnElement) {
+export async function fetchAndCopy(filePath, btnElement, explicitUrl = null) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Fetching...";
     try {
         let res;
-        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-            if (overrideUrl) res = await fetch(overrideUrl);
-        }
+        if (explicitUrl) {
+            res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
+        } else {
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+                if (overrideUrl) res = await fetch(overrideUrl);
+            }
 
-        if (!res) {
-            res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filePath)}`);
+            if (!res) {
+                res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filePath)}`);
+            }
         }
 
         if (!res.ok) throw new Error("File not found on disk.");
@@ -1127,16 +1046,20 @@ export async function fetchAndCopy(filePath, btnElement) {
         btnElement.innerText = originalText;
     }, 3000);
 }
-export async function fetchAndDownloadState(filePath, btnElement) {
+export async function fetchAndDownloadState(filePath, btnElement, explicitUrl = null) {
     const originalText = btnElement.innerText;
     btnElement.innerText = "Downloading...";
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        let fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
+        let fetchUrl = explicitUrl;
 
-        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-            if (override) fetchUrl = override;
+        if (!fetchUrl) {
+            const activeWs = AppStore.getState().activeWorkspace || 'default';
+            fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
+
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+                if (override) fetchUrl = override;
+            }
         }
 
         await downloadFile(fetchUrl, filePath.split('/').pop());
@@ -1196,14 +1119,3 @@ window.fullRefresh = fullRefresh;
 window.simulatePanic = simulatePanic;
 window.resolveEditorMode = resolveEditorMode;
 
-window.openSettingsModal = function() {
-    const menu = document.getElementById('settings-menu');
-    const modal = document.getElementById('settings-modal');
-    if (menu) menu.style.display = 'none';
-    if (modal) modal.style.display = 'block';
-};
-
-window.closeSettingsModal = function() {
-    const modal = document.getElementById('settings-modal');
-    if (modal) modal.style.display = 'none';
-};

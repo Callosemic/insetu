@@ -35,12 +35,10 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
     from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id, get_valid_workspace_files
     from pathlib import Path
     import os
-
     ctx = ExtensionContext('gather', workspace_id)
     paths = ctx.paths
     cfg = ctx.config
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest = load_json_file(manifest_path, {})
+    manifest = ctx.manifest
 
     affected_repos = set()
     for f in files:
@@ -157,7 +155,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         # Block until the VFS queue drains
         _VFS_WRITE_QUEUE.join()
 
-        save_json_file(manifest_path, manifest, workspace_id)
+        ctx.save_manifest(manifest)
 
 def generate_ascii_tree(file_paths):
     tree = {}
@@ -390,11 +388,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         files = [filepath]
     from insetu.sdk import ExtensionContext
     from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id
-
     ctx = ExtensionContext('gather', workspace_id)
     paths = ctx.paths
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest = load_json_file(manifest_path, {})
+    manifest = ctx.manifest
     cfg = ctx.config
 
     affected_repos = set()
@@ -438,7 +434,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         from insetu.routes_fs import _VFS_WRITE_QUEUE
         _VFS_WRITE_QUEUE.join() # Block until VFS drains
 
-        save_json_file(manifest_path, manifest, workspace_id)
+        ctx.save_manifest(manifest)
 def generate_context_file(workspace_id=None):
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('gather', workspace_id)
@@ -576,17 +572,15 @@ def _background_quick_pack(job_id, workspace_id, **kwargs):
 
         from insetu.routes_fs import _VFS_WRITE_QUEUE
         _VFS_WRITE_QUEUE.join()
-
         from insetu.workers import register_ephemeral_artifact
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        manifest = load_json_file(manifest_path, {})
+        manifest = ctx.manifest
         size_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
         manifest[filename] = {
             "files": [f"data/contexts/{filename}"],
             "meta": {"type": "gather", "title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)", "size_bytes": size_bytes}
         }
-        save_json_file(manifest_path, manifest, workspace_id)
+        ctx.save_manifest(manifest)
 
         update_immediate_job_status(job_id, 'completed', "Quick-Pack generated successfully.", artifact={"filename": filename}, workspace_id=workspace_id)
     except Exception as e:
@@ -634,12 +628,11 @@ def api_gather_quick_pack_clear(ctx):
             pass
     conn.commit()
 
-    manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest = load_json_file(manifest_path, {})
+    manifest = ctx.manifest
     keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
     if keys_to_remove:
         for k in keys_to_remove:
             del manifest[k]
-        save_json_file(manifest_path, manifest, ctx.workspace_id)
+        ctx.save_manifest(manifest)
 
     return jsonify({"status": "success", "cleared": count})

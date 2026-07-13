@@ -171,16 +171,8 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
         """Handles the synchronous physical I/O execution loop off-thread."""
         if data.get("is_absolute_artifact"):
-                # SECURITY GUARDRAIL: Restrict artifact writes strictly to the .insetu OS directory
-                from insetu.utils_core import _cwd
-                insetu_base = Path(_cwd).joinpath(".insetu").resolve()
-                resolved_abs = Path(filepath).resolve()
-
-                if str(resolved_abs).startswith(str(insetu_base)):
-                        resolved_path = resolved_abs.as_posix()
-                else:
-                        # If it breaches the OS boundary, jail it back into the standard workspace
-                        resolved_path = resolve_workspace_path(filepath, workspace_id)
+                from insetu.utils_core import resolve_system_artifact_path
+                resolved_path = resolve_system_artifact_path(filepath, workspace_id)
         elif data.get("is_new_repo"):
                 from insetu.utils_core import get_workspace_physics
                 _, ws_root, _ = get_workspace_physics(workspace_id)

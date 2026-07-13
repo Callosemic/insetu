@@ -309,8 +309,15 @@ def check_javascript_files():
                     if is_extension and raw_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
+                    # 22. Core File Utility Centralization Mandate (DRY Enforcement)
+                    if is_extension and ("navigator.clipboard.writeText" in line or "window.URL.createObjectURL" in line):
+                        report_violation("DRY_UTILITY_VIOLATION", filepath, line_num, "Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy or fetchAndDownloadState) instead.")
                     if is_extension and legacy_insetu_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
+
+                    # 23. Framework Component Inheritance Mandate
+                    if is_extension and re.search(r'class\s+\w+\s+extends\s+LitElement\b', line):
+                        report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends raw LitElement. Inherit from InSetuElement to protect multi-tenant lifecycles.")
                     # 16. Imperative DOM Creation Ban in Extensions
                     if is_extension and is_lit_component and imperative_dom_create_pattern.search(line):
                         report_violation("IMPERATIVE_DOM_CREATION", filepath, line_num, "document.createElement detected in a LitElement extension. Construct templates declaratively using lit-html.")

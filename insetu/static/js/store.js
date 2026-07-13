@@ -127,7 +127,7 @@ window.inSetu.extensions.Registry = {
                 });
             }
         });
-        this.renderSettingsActions();
+        window.dispatchEvent(new Event('insetu-settings-actions-updated'));
     },
     registerExtension: function(extName, config) {
         this._manifests.set(extName, config);
@@ -189,40 +189,7 @@ window.inSetu.extensions.Registry = {
     registerSettingsAction: function(id, label, icon, callback, section = 'Extensions') {
         this._settingsActions = this._settingsActions.filter(a => a.id !== id);
         this._settingsActions.push({ id, label, icon, callback, section });
-        this.renderSettingsActions();
-    },
-    renderSettingsActions: function() {
-        const container = document.getElementById('settings-modal-links');
-        if (!container) return;
-        container.replaceChildren();
-
-        const grouped = this._settingsActions.reduce((acc, act) => {
-            const sec = act.section || 'Extensions';
-            if (!acc[sec]) acc[sec] = [];
-            acc[sec].push(act);
-            return acc;
-        }, {});
-
-        Object.keys(grouped).forEach(sectionName => {
-            const heading = document.createElement('div');
-            heading.style.cssText = 'font-weight: bold; font-size: 0.85rem; color: var(--intent-primary); margin-top: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;';
-            heading.innerText = sectionName + ':';
-            container.appendChild(heading);
-
-            grouped[sectionName].forEach(act => {
-                const btn = document.createElement('button');
-                btn.className = 'btn-sm';
-                btn.style.cssText = 'background: var(--input-bg); color: var(--text); border: 1px solid var(--border); text-align: left; padding: 10px 15px; font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 10px; font-weight: bold; transition: background 0.2s; width: 100%;';
-                btn.innerHTML = `<span style="font-size: 1.2rem;">${act.icon}</span> <span>${act.label}</span>`;
-                btn.onmouseover = () => btn.style.background = 'var(--bg)';
-                btn.onmouseout = () => btn.style.background = 'var(--input-bg)';
-                btn.onclick = () => {
-                    document.getElementById('settings-modal').style.display = 'none';
-                    act.callback();
-                };
-                container.appendChild(btn);
-            });
-        });
+        window.dispatchEvent(new Event('insetu-settings-actions-updated'));
     },
     registerTab: (id, label, extName = null, componentTag = null) => {
         const container = document.getElementById('main-tabs-container');

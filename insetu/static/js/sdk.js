@@ -1,4 +1,4 @@
-import { LitElement } from 'lit';
+import { LitElement, html } from 'lit';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 export function createExtensionStore(name, initialState, persistKeys = []) {
@@ -142,6 +142,33 @@ export class InSetuElement extends LitElement {
 
     onWorkspaceChanged(newWorkspaceId) {}
 }
+export function bindStoreInput(store, statePath, currentValue, options = {}) {
+    const { type = 'text', placeholder = '', style = '', id = '', selectOptions = [], min, max, onUpdate } = options;
+    const handleInput = (e) => {
+        let val = type === 'checkbox' ? e.target.checked : e.target.value;
+        if (type === 'number') val = parseFloat(val);
+        const parts = statePath.split('.');
+        if (parts.length === 1) {
+            store.setState({ [parts[0]]: val });
+        } else {
+            const state = store.getState();
+            store.setState({ [parts[0]]: { ...state[parts[0]], [parts[1]]: val } });
+        }
+        if (onUpdate) onUpdate(val, e);
+    };
+
+    if (type === 'textarea') {
+        return html`<textarea id=${id} style=${style} placeholder=${placeholder} .value=${currentValue || ''} @input=${handleInput}></textarea>`;
+    } else if (type === 'select') {
+        return html`<select id=${id} style=${style} .value=${currentValue || ''} @change=${handleInput}>
+            ${selectOptions.map(o => html`<option value=${o.value !== undefined ? o.value : o}>${o.label || o}</option>`)}
+        </select>`;
+    } else if (type === 'checkbox') {
+        return html`<input id=${id} type="checkbox" style=${style} .checked=${!!currentValue} @change=${handleInput}>`;
+    }
+    return html`<input id=${id} type=${type} style=${style} placeholder=${placeholder} min=${min||''} max=${max||''} .value=${currentValue || ''} @input=${handleInput}>`;
+}
+
 export function normalizeAccentText(str) {
     if (!str) return '';
     return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();

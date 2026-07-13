@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from './shared_styles.js';
+import { InSetuElement } from './sdk.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import {
@@ -12,11 +13,69 @@ import {
     resolveEditorMode
 } from './app.js';
 import { AppStore } from './store.js';
+export function bindDownloadDrag(e, filename, fetchUrl) {
+    const absoluteUrl = window.location.origin + fetchUrl;
+    const safeName = filename.split('/').pop();
+    const ext = safeName.split('.').pop().toLowerCase();
 
+    let mime = 'application/octet-stream';
+    if (ext === 'md') mime = 'text/markdown';
+    else if (ext === 'txt') mime = 'text/plain';
+    else if (ext === 'json') mime = 'application/json';
+    else if (ext === 'py') mime = 'text/x-python';
+    else if (ext === 'js') mime = 'text/javascript';
+
+    const ghost = document.createElement('div');
+    ghost.style.cssText = 'position: absolute; top: -1000px; left: -1000px; background: var(--pane-bg); color: var(--text); border: 1px solid var(--btn); padding: 8px 12px; border-radius: 4px; font-family: monospace; font-weight: bold; z-index: -1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
+    ghost.innerText = `📄 ${safeName}`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 15, 15);
+
+    setTimeout(() => ghost.remove(), 50);
+
+    e.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${absoluteUrl}`);
+    e.dataTransfer.setData('text/uri-list', absoluteUrl);
+    e.dataTransfer.setData('text/plain', absoluteUrl);
+
+    e.dataTransfer.effectAllowed = 'copy';
+}
+
+document.addEventListener('dragstart', (e) => {
+    const dragEl = e.target.closest('.ui-draggable-export');
+    if (dragEl) {
+        const filename = dragEl.dataset.filename;
+        let fetchUrl = dragEl.dataset.fetchUrl;
+
+        // Resolve dynamic extension overrides natively
+        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+            const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filename);
+            if (overrideUrl) fetchUrl = overrideUrl;
+        }
+
+        if (filename && fetchUrl) {
+            bindDownloadDrag(e, filename, fetchUrl);
+        }
+    }
+});
 export const FsStore = createStore(
     devtools(
         subscribeWithSelector((set) => ({
             searchQuery: '',
+            fileModal: {
+                open: false,
+                filename: '',
+                content: '',
+                originalContent: '',
+                fullText: '',
+                isTruncated: false,
+                isFS: false,
+                forceEdit: false,
+                isMemoryOnly: false,
+                isMarkdown: false,
+                isSupportedEditor: false,
+                ext: '',
+                codeMode: ''
+            },
             modals: {
                 move: { open: false, currentFile: '', destPath: '', initialParts: [] },
                 newFile: { open: false, basePath: '', fileName: '', content: '' },
@@ -35,70 +94,35 @@ export const FsStore = createStore(
 );
 window.inSetu = window.inSetu || { stores: {} };
 window.inSetu.stores.Fs = FsStore;
+// Expose getters safely for legacy extensions bridging the gap
+Object.defineProperty(window, 'currentModalFile', { get: () => FsStore.getState().fileModal.filename });
+Object.defineProperty(window, 'currentModalIsFS', { get: () => FsStore.getState().fileModal.isFS });
+Object.defineProperty(window, 'currentModalOriginalText', { get: () => FsStore.getState().fileModal.originalContent });
+window.bindDownloadDrag = bindDownloadDrag;
 
-let currentModalFile = '';
-export let currentModalOriginalText = '';
-export let currentModalIsFS = false;
-let currentModalFullText = '';
-let isModalTruncated = false;
-let currentModalForceEdit = false;
-export let currentModalIsMemoryOnly = false;
 window.loadFullModalText = function() {
-    const banner = document.getElementById('modal-truncation-banner');
-    if (banner) banner.style.display = 'none';
-    isModalTruncated = false;
-
-    const { ext, isSupported, isMarkdown: extIsMd } = resolveEditorMode(currentModalFile);
-    const isSupportedEditor = isSupported || currentModalForceEdit;
-    const shouldBeReadOnly = !(currentModalIsFS || currentModalForceEdit);
-
-    const textArea = document.getElementById('modal-text');
-    const litEditor = document.getElementById('global-os-editor');
-
-    if (isSupportedEditor && litEditor) {
-        litEditor.value = currentModalFullText;
-        litEditor.readOnly = shouldBeReadOnly;
-    } else if (textArea) {
-        textArea.value = currentModalFullText;
-        textArea.readOnly = shouldBeReadOnly;
-    }
-    currentModalOriginalText = currentModalFullText;
+    const state = FsStore.getState().fileModal;
+    FsStore.setState({ fileModal: { ...state, content: state.fullText, originalContent: state.fullText, isTruncated: false } });
 };
+
 function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllowEdit = false) {
     const TRUNCATE_LIMIT = 200000;
-    currentModalFullText = text;
-    const banner = document.getElementById('modal-truncation-banner');
-    const textArea = document.getElementById('modal-text');
-    const litEditor = document.getElementById('global-os-editor');
-    const shouldBeReadOnly = !(isFS || forceAllowEdit);
+    let content = text;
+    let isTruncated = false;
 
     if (text.length > TRUNCATE_LIMIT) {
-        isModalTruncated = true;
-        const textToRender = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
-        const kbSize = Math.round(text.length / 1024);
-        document.getElementById('modal-truncation-msg').innerHTML = `⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.`;
-        if (banner) banner.style.display = 'flex';
-
-        if (isSupportedEditor && litEditor) {
-            litEditor.value = textToRender;
-            litEditor.readOnly = true; // Lock while truncated
-        } else if (textArea) {
-            textArea.value = textToRender;
-            textArea.readOnly = true;
-        }
-        currentModalOriginalText = textToRender;
-    } else {
-        isModalTruncated = false;
-        if (banner) banner.style.display = 'none';
-        if (isSupportedEditor && litEditor) {
-            litEditor.value = text;
-            litEditor.readOnly = shouldBeReadOnly;
-        } else if (textArea) {
-            textArea.value = text;
-            textArea.readOnly = shouldBeReadOnly;
-        }
-        currentModalOriginalText = text;
+        isTruncated = true;
+        content = text.substring(0, TRUNCATE_LIMIT) + '\n\n... [CONTENT TRUNCATED FOR PERFORMANCE] ...';
     }
+
+    FsStore.setState({ fileModal: {
+        ...FsStore.getState().fileModal,
+        content,
+        originalContent: content,
+        fullText: text,
+        isTruncated,
+        forceEdit: forceAllowEdit
+    }});
 }
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
     if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
@@ -127,37 +151,25 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     a.remove();
 }
 export async function viewAndCopy(filename) {
-    currentModalFile = filename;
-    currentModalIsFS = false;
-    currentModalForceEdit = false;
-    currentModalIsMemoryOnly = false;
-    document.getElementById('modal-title').innerText = filename;
-    const textArea = document.getElementById('modal-text');
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
-    const litEditor = document.getElementById('global-os-editor');
 
-    if (isSupportedEditor && litEditor) {
-        litEditor.value = "Loading...";
-        litEditor.language = codeMode;
-        litEditor.readOnly = true;
-    } else if (textArea) {
-        textArea.value = "Loading...";
-        textArea.readOnly = true;
-    }
-    document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('file-modal').style.display = 'block';
+    FsStore.setState({ fileModal: {
+        open: true,
+        filename: filename,
+        content: 'Loading...',
+        originalContent: 'Loading...',
+        fullText: 'Loading...',
+        isTruncated: false,
+        isFS: false,
+        forceEdit: false,
+        isMemoryOnly: false,
+        isMarkdown,
+        isSupportedEditor,
+        ext,
+        codeMode
+    }});
+
     closeBrowseModal();
-    const tb = document.getElementById('modal-action-toolbar');
-    if (tb) tb.style.display = 'none';
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-
-    if (isSupportedEditor && cm6Wrap) {
-        cm6Wrap.style.display = 'flex';
-        textArea.style.display = 'none';
-    } else {
-        if (cm6Wrap) cm6Wrap.style.display = 'none';
-        textArea.style.display = 'block';
-    }
 
     try {
         const res = await fetch(`/download/${filename}`);
@@ -165,27 +177,9 @@ export async function viewAndCopy(filename) {
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
     } catch (e) {
-        const errText = "Error loading file content.";
-        const litEditor = document.getElementById('global-os-editor');
-        if (isSupportedEditor && litEditor) litEditor.value = errText;
-        else if (textArea) textArea.value = errText;
-        currentModalOriginalText = "";
+        injectTextToModal("Error loading file content.", isSupportedEditor, isMarkdown, false);
     }
 }
-document.addEventListener('input', (e) => {
-    if (e.target && (e.target.id === 'modal-text' || e.target.id === 'global-os-editor')) {
-        if (currentModalIsFS) {
-            const saveBtn = document.getElementById('modal-save-btn');
-            if (saveBtn) {
-                if (e.target.value !== currentModalOriginalText) {
-                    saveBtn.style.display = 'block';
-                } else {
-                    saveBtn.style.display = 'none';
-                }
-            }
-        }
-    }
-});
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
 
@@ -251,95 +245,63 @@ function updateManifestState(oldPath, newPath = null) {
     }
 }
 async function saveModalFile(autoSave = false) {
-    if (autoSave !== true) autoSave = false; // Event object trap defense
+    if (autoSave !== true) autoSave = false;
+    const state = FsStore.getState().fileModal;
+    let content = state.content.replace(/\u00A0/g, ' ');
 
-    const litEditor = document.getElementById('global-os-editor');
-    const textArea = document.getElementById('modal-text');
-
-    let content = '';
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    if (cm6Wrap && cm6Wrap.style.display !== 'none' && litEditor) {
-        content = litEditor.value;
-    } else if (textArea) {
-        content = textArea.value;
+    if (state.filename.toLowerCase().endsWith('.json')) {
+        try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
     }
 
-    // Auto-sanitize non-breaking spaces that crash JSON and Python parsers
-    content = content.replace(/\u00A0/g, ' ');
-
-    // Pre-flight JSON validation
-    if (currentModalFile.toLowerCase().endsWith('.json')) {
-        try {
-            JSON.parse(content);
-        } catch (e) {
-            alert("Invalid JSON syntax: " + e.message);
-            return;
-        }
-    }
-    await executeWorkspaceMutation('fs/save', {
-        filepath: currentModalFile,
-        content: content
-    }, {
-        btnId: 'modal-save-btn',
+    await executeWorkspaceMutation('fs/save', { filepath: state.filename, content }, {
         loadingText: 'Saving...',
         silent: autoSave,
         onSuccess: () => {
-            currentModalOriginalText = content;
-            document.getElementById('modal-save-btn').style.display = 
-'none';
+            FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
             if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
             if (autoSave && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', currentModalFile);
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', state.filename);
             }
         }
     });
 }
 async function copyFromModal() {
-    let text = getEditorContent();
+    const state = FsStore.getState().fileModal;
+    let text = state.content;
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-        const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', currentModalFile);
+        const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
         if (overrideUrl) {
             try {
                 const res = await fetch(overrideUrl);
                 if (res.ok) text = await res.text();
-            } catch (e) {
-                console.warn("Failed to resolve extension fetch hook for copy", e);
-            }
+            } catch (e) { }
         }
     }
     navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('#file-modal button[style*="10b981"]');
-        const origText = btn.innerText;
-        btn.innerText = "✅ Copied!";
-        setTimeout(() => btn.innerText = origText, 2000);
-    }).catch(err => {
-        alert("Clipboard API failed. Please manually select the text and copy it directly from the text box.");
-    });
+        window.setGlobalStatus("✅ Copied!", 2000);
+    }).catch(err => alert("Clipboard API failed. Please manually select the text and copy it directly from the text box."));
 }
 function openMoveModal() {
-    const parts = currentModalFile ? currentModalFile.split('/').filter(p => p) : [];
+    const filename = FsStore.getState().fileModal.filename;
+    const parts = filename ? filename.split('/').filter(p => p) : [];
     parts.pop();
-    // remove filename
-    FsStore.getState().setModal('move', { open: true, currentFile: currentModalFile, destPath: currentModalFile, initialParts: parts });
+    FsStore.getState().setModal('move', { open: true, currentFile: filename, destPath: filename, initialParts: parts });
 }
 async function renameModalFile() {
-    const currentName = currentModalFile.split('/').pop();
+    const filename = FsStore.getState().fileModal.filename;
+    const currentName = filename.split('/').pop();
     const newName = prompt("Enter new filename:", currentName);
     if (!newName || newName === currentName) return;
 
-    const parts = currentModalFile.split('/');
+    const parts = filename.split('/');
     parts.pop();
     const destPath = parts.length > 0 ? parts.join('/') + '/' + newName : newName;
 
-    await executeWorkspaceMutation('fs/move', {
-        filepath: currentModalFile,
-        dest_path: destPath
-    }, {
+    await executeWorkspaceMutation('fs/move', { filepath: filename, dest_path: destPath }, {
         loadingText: 'Renaming...',
         onSuccess: () => {
-            const oldPath = currentModalFile;
-            document.getElementById('file-modal').style.display = 'none';
-            refreshActiveFileViews(oldPath, destPath);
+            closeFileModal(true);
+            refreshActiveFileViews(filename, destPath);
         }
     });
 }
@@ -348,117 +310,76 @@ async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
 
-    await executeWorkspaceMutation('fs/move', {
-        filepath: currentFile,
-        dest_path: destPath
-    }, {
+    await executeWorkspaceMutation('fs/move', { filepath: currentFile, dest_path: destPath }, {
         loadingText: 'Moving...',
         onSuccess: () => {
             FsStore.getState().setModal('move', { open: false });
-            document.getElementById('file-modal').style.display = 'none';
+            closeFileModal(true);
             refreshActiveFileViews(currentFile, destPath);
         }
     });
 }
 async function archiveModalFile() {
+    const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to archive this file?\nIt will be moved to an 'archived/' subdirectory.")) return;
-    await executeWorkspaceMutation('fs/archive', {
-        filepath: currentModalFile
-    }, {
+    await executeWorkspaceMutation('fs/archive', { filepath: filename }, {
         onSuccess: async (res) => {
             const data = await res.json();
-            const oldPath = currentModalFile;
-            document.getElementById('file-modal').style.display = 'none';
-            refreshActiveFileViews(oldPath, data.new_path);
+            closeFileModal(true);
+            refreshActiveFileViews(filename, data.new_path);
         }
     });
 }
 async function deleteModalFile() {
+    const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to delete this file?\nThis cannot be undone!")) return;
-    await executeWorkspaceMutation('fs/delete', {
-        filepath: currentModalFile
-    }, {
+    await executeWorkspaceMutation('fs/delete', { filepath: filename }, {
         onSuccess: () => {
-            const oldPath = currentModalFile;
-            document.getElementById('file-modal').style.display = 'none';
-            refreshActiveFileViews(oldPath);
+            closeFileModal(true);
+            refreshActiveFileViews(filename);
         }
     });
 }
 function cleanModalFile() {
     if (!confirm("Clean LLM cite and span tags from this file?")) return;
 
-    const { isSupported: isSupportedEditor } = resolveEditorMode(currentModalFile);
-    const litEditor = document.getElementById('global-os-editor');
-    const textArea = document.getElementById('modal-text');
+    const state = FsStore.getState().fileModal;
+    let text = state.content;
 
-    let text = (isSupportedEditor && litEditor) 
-        ? litEditor.value 
-        : (textArea ? textArea.value : '');
-
-    // Clean Citations
     text = text.replace(/\[cite(?:[^\]]*)\]/gi, '');
-
-    // Clean Combined Spans: [span_X](start_span) or [span_X](end_span)
     text = text.replace(/\[span_\d+\]\((?:start_span|end_span)\)/gi, '');
-    // Clean Orphaned Spans
     text = text.replace(/\((?:start_span|end_span)\)/gi, '');
     text = text.replace(/\[span_\d+\]/gi, '');
 
-    if (isSupportedEditor && litEditor) {
-        litEditor.value = text;
-    } else if (textArea) {
-        textArea.value = text;
-        textArea.dispatchEvent(new Event('input'));
-    }
+    FsStore.setState({ fileModal: { ...state, content: text } });
 
-    // Persist changes to disk automatically
-    if (currentModalIsFS && window.saveModalFile) {
+    if (state.isFS && window.saveModalFile) {
         window.saveModalFile(true);
     }
 }
 async function downloadFromModal() {
-    const btn = document.getElementById('modal-dl-btn');
-    if (!btn) return;
-    const origText = btn.innerText;
-    btn.innerText = 'Downloading...';
+    const state = FsStore.getState().fileModal;
     try {
-        if (currentModalIsMemoryOnly) {
-            let text = '';
-            const cm6Wrap = document.getElementById('modal-cm6-container');
-            const litEditor = document.getElementById('global-os-editor');
-            if (cm6Wrap && cm6Wrap.style.display !== 'none' && litEditor) {
-                text = litEditor.value;
-            } else {
-                text = document.getElementById('modal-text').value;
-            }
-
-            // If the UI is currently truncating the text for performance,  
-            // ensure we download the full underlying string instead.
-            if (isModalTruncated) {
-                text = currentModalFullText;
-            }
+        if (state.isMemoryOnly) {
+            let text = state.isTruncated ? state.fullText : state.content;
             const blob = new Blob([text], { type: 'text/plain' });
-
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.style.display = 'none';
             a.href = url;
-            a.download = currentModalFile;
+            a.download = state.filename;
             document.body.appendChild(a);
             a.click();
             window.URL.revokeObjectURL(url);
             a.remove();
         } else {
-            let fetchUrl = currentModalIsFS ? `bridge/fetch?file=${encodeURIComponent(currentModalFile)}` : `/download/${currentModalFile}`;
-
+            let fetchUrl = state.isFS ? `bridge/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
             if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', currentModalFile);
+                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
                 if (overrideUrl) fetchUrl = overrideUrl;
             }
-
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
-                await downloadFile(fetchUrl, currentModalFile.split('/').pop());
+                await downloadFile(fetchUrl, state.filename.split('/').pop());
             } else {
                 const res = await window.inSetu.api.workspace(fetchUrl);
                 if (!res.ok) throw new Error('Download failed from server.');
@@ -467,7 +388,7 @@ async function downloadFromModal() {
                 const a = document.createElement('a');
                 a.style.display = 'none';
                 a.href = url;
-                a.download = currentModalFile.split('/').pop();
+                a.download = state.filename.split('/').pop();
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
@@ -476,8 +397,6 @@ async function downloadFromModal() {
         }
     } catch (e) {
         alert("Error downloading file: " + e.message);
-    } finally {
-        btn.innerText = origText;
     }
 }
 export function createFileCard(fileInfo, container) {
@@ -555,35 +474,34 @@ export function createFileCard(fileInfo, container) {
             btn.innerText = orig;
         }
     };
-
     if (chunks && chunks.length > 1) {
-        dlBtn.onclick = (e) => {
-            e.stopPropagation();
-            if (window.inSetu.ui.Factory.createDropdown) {
-                const items = chunks.map((chunk, idx) => ({
-                    label: `📄 Part ${idx + 1}`,
-                    icon: '⬇️',
-                    onClick: () => performDownload(`/download/${chunk}`, chunk, dlBtn)
-                }));
-                window.inSetu.ui.Factory.createDropdown({
-                    anchor: e.target,
-                    items: items
-                });
-            }
-        };
+        const dropdown = document.createElement('insetu-dropdown');
+        dropdown.align = 'right';
+        dropdown.slot = 'actions';
+        dropdown.style.order = '100';
+
+        dlBtn.slot = 'trigger';
+        dropdown.appendChild(dlBtn);
+
+        dropdown.items = chunks.map((chunk, idx) => ({
+            label: `📄 Part ${idx + 1}`,
+            icon: '⬇️',
+            onClick: () => performDownload(`/download/${chunk}`, chunk, dlBtn)
+        }));
+
+        card.appendChild(dropdown);
     } else {
         dlBtn.onclick = async (e) => {
             e.stopPropagation();
             await performDownload(dlFetchUrl, safeName, dlBtn);
         };
+        card.appendChild(dlBtn);
     }
-    card.appendChild(dlBtn);
 
     container.appendChild(card);
 }
 export const getGlobalManifest = () => Array.from(new Set(Object.values(AppStore.getState().manifest || {}).flatMap(obj => obj.files || [])));
-
-export class InSetuVFSExplorer extends LitElement {
+export class InSetuVFSExplorer extends InSetuElement {
         static properties = {
                 searchQuery: { type: String },
                 manifestFiles: { type: Array },
@@ -614,13 +532,12 @@ export class InSetuVFSExplorer extends LitElement {
                 this.manifestFiles = Array.from(allFiles);
                 this.globalBrowsePath = state.globalBrowsePath || [];
         }
-
         connectedCallback() {
                 super.connectedCallback();
-                this._unsubApp = AppStore.subscribe((state) => {
+                this.subscribe(AppStore, (state) => {
                         this._updateState(state);
                 });
-                this._unsubFs = FsStore.subscribe((state) => {
+                this.subscribe(FsStore, (state) => {
                         this.searchQuery = state.searchQuery;
                 });
 
@@ -631,8 +548,6 @@ export class InSetuVFSExplorer extends LitElement {
 
         disconnectedCallback() {
                 super.disconnectedCallback();
-                if (this._unsubApp) this._unsubApp();
-                if (this._unsubFs) this._unsubFs();
         }
         _handlePathChange(e) {
                 AppStore.setState({ globalBrowsePath: e.detail.path });
@@ -695,17 +610,17 @@ export class InSetuVFSExplorer extends LitElement {
             return html`
                 <div style="display: flex; flex-direction: column; flex: 1;">
                     <div class="sticky-header" style="flex-shrink: 0; padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${this.globalBrowsePath.length > 0 ? '1px solid var(--border)' : 'none'};">
-                            <input type="text" placeholder="🔍 Fuzzy search files..." .value=${this.searchQuery}
-                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                                @input=${(e) => {
-                                    const val = e.target.value;
-                                    window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
-                                        window.inSetu.stores.Fs.getState().setSearchQuery(val);
-                                    }, 200);
-                                }}>
-                            ${q ? html`<button class="fuzzy-search-clear" @click=${() => window.inSetu.stores.Fs.getState().setSearchQuery('')}>Clear</button>` : ''}
-                        </div>
+                        <insetu-search-bar 
+                            style="border-bottom: ${this.globalBrowsePath.length > 0 ? '1px solid var(--border)' : 'none'};"
+                            placeholder="🔍 Fuzzy search files..." 
+                            .value=${this.searchQuery} 
+                            @search-changed=${(e) => {
+                                const val = e.detail.value;
+                                window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
+                                    window.inSetu.stores.Fs.getState().setSearchQuery(val);
+                                }, 200);
+                            }}>
+                        </insetu-search-bar>
                         ${this.globalBrowsePath.length > 0 ? html`
                             <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
                                 <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ globalBrowsePath: this.globalBrowsePath.slice(0, -1) })}>⬆️ Up</button>
@@ -721,13 +636,38 @@ export class InSetuVFSExplorer extends LitElement {
         }
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
-export class InSetuVFSExplorerActions extends LitElement {
+export class InSetuVFSExplorerActions extends InSetuElement {
     static styles = [sharedStyles];
-    _openMenu(e) {
-        if (window.openFsDropdown) window.openFsDropdown(e.target);
+
+    get _menuItems() {
+        const currentPath = (window.inSetu.stores.App.getState().globalBrowsePath || []).join('/');
+        const items = [];
+
+        if (!currentPath) {
+            items.push({ label: 'New Repository', icon: '📦', onClick: () => window.openNewFolderModal() });
+        } else {
+            const prefix = currentPath + '/';
+            items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(prefix) });
+            items.push({ label: 'New File', icon: '📄', onClick: () => window.openNewFileModal(prefix) });
+            items.push({ divider: true });
+            items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
+            items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
+            items.push({ divider: true });
+            items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
+        }
+
+        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+            window.inSetu.extensions.Registry.executeUIHook('zone:fs-dropdown-menu', { currentPath, isPrompts: false, menuItems: items });
+        }
+        return items;
     }
+
     render() {
-        return html`<button class="system-action-btn" @click=${this._openMenu}>☰</button>`;
+        return html`
+            <insetu-dropdown align="right" .items=${this._menuItems}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </insetu-dropdown>
+        `;
     }
 }
 customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
@@ -916,149 +856,42 @@ async function saveNewFolder() {
     });
 }
 export function getEditorContent() {
-    const litEditor = document.getElementById('global-os-editor');
-    const textArea = document.getElementById('modal-text');
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    if (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor) {
-        return litEditor.value;
-    }
-    return textArea ? textArea.value : '';
+    return FsStore.getState().fileModal.content;
 }
 
 export function setEditorContent(text) {
-    const litEditor = document.getElementById('global-os-editor');
-    const textArea = document.getElementById('modal-text');
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    if (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor) {
-        const cursor = litEditor.getCursor();
-        litEditor.value = text;
-        litEditor.setCursor(cursor);
-    } else if (textArea) {
-        textArea.value = text;
-    }
+    FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: text } }));
 }
 
 export function insertTextAtCursor(textToInsert) {
-    const textArea = document.getElementById('modal-text');
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    const litEditor = document.getElementById('global-os-editor');
-    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor && litEditor._view);
-
-    if (isCM6) {
-        const view = litEditor._view;
-        view.dispatch(view.state.update({
-            changes: view.state.selection.ranges.map(r => ({ from: r.from, to: r.to, insert: textToInsert })),
-            scrollIntoView: true
-        }));
-        view.focus();
-    } else if (textArea) {
-        const start = textArea.selectionStart;
-        const end = textArea.selectionEnd;
-        textArea.value = textArea.value.substring(0, start) + textToInsert + textArea.value.substring(end);
-        textArea.selectionStart = textArea.selectionEnd = start + textToInsert.length;
-        textArea.focus();
-        textArea.dispatchEvent(new Event('input'));
-    }
+    const state = FsStore.getState().fileModal;
+    FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
 }
+
 export async function viewSourceFile(filepath, isFS = false) {
-    // UDF/Extension Mandate: Allow extensions to hijack the rendering flow before booting the raw text modal
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-        if (window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', filepath)) {
-            return;
-        }
+        if (window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', filepath)) return;
     }
 
-    currentModalFile = filepath;
-    currentModalIsFS = isFS;
-    currentModalForceEdit = false;
-    currentModalIsMemoryOnly = false;
-    document.getElementById('modal-title').innerText = filepath;
-    const textArea = document.getElementById('modal-text');
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
-    const litEditor = document.getElementById('global-os-editor');
 
-    if (isSupportedEditor && litEditor) {
-        litEditor.value = "Loading...";
-        litEditor.language = codeMode;
-        litEditor.readOnly = !isFS;
-    } else if (textArea) {
-        textArea.value = "Loading...";
-        textArea.readOnly = !isFS;
-    }
-    document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('file-modal').style.display = 'block';
+    FsStore.setState({ fileModal: {
+        open: true,
+        filename: filepath,
+        content: 'Loading...',
+        originalContent: 'Loading...',
+        fullText: 'Loading...',
+        isTruncated: false,
+        isFS,
+        forceEdit: false,
+        isMemoryOnly: false,
+        isMarkdown,
+        isSupportedEditor,
+        ext,
+        codeMode
+    }});
+
     closeBrowseModal();
-    const tb = document.getElementById('modal-action-toolbar');
-    const dlBtn = document.getElementById('modal-dl-btn');
-    if (dlBtn && !currentModalIsMemoryOnly) {
-        dlBtn.dataset.filename = filepath.split('/').pop();
-
-        let dlFetchUrl = isFS ? `bridge/fetch?file=${encodeURIComponent(filepath)}` : `/download/${filepath}`;
-        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
-            if (overrideUrl) dlFetchUrl = overrideUrl;
-        }
-        dlBtn.dataset.fetchUrl = dlFetchUrl;
-    }
-    if (isFS) {
-        tb.style.display = 'flex';
-
-        const btnFile = document.getElementById('btn-menu-file');
-        const btnEdit = document.getElementById('btn-menu-edit');
-        const btnExt = document.getElementById('btn-menu-ext');
-        btnFile.onclick = (e) => {
-            window.inSetu.ui.Factory.createDropdown({
-                anchor: e.target,
-                items: [
-                    { label: 'Rename', icon: '✏️', onClick: window.renameModalFile },
-                    { label: 'Move', icon: '🚚', onClick: window.openMoveModal },
-                    { label: 'Archive', icon: '📦', onClick: window.archiveModalFile },
-                    { label: 'Delete', icon: '🗑️', onClick: window.deleteModalFile }
-                ]
-            });
-        };
-
-        btnEdit.onclick = (e) => {
-            const items = [
-                { label: 'Insert Link', icon: '🔗', onClick: window.openLinkModal }
-            ];
-            if (isMarkdown || ext === 'txt') {
-                items.push({ label: 'Clean AI Tags', icon: '🧹', onClick: window.cleanModalFile });
-            }
-            window.inSetu.ui.Factory.createDropdown({
-                anchor: e.target,
-                items: items
-            });
-        };
-
-        let extMenuItems = [];
-        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-            window.inSetu.extensions.Registry.executeUIHook('zone:modal-ext-menu', { filepath, isMarkdown, ext, menuItems: extMenuItems });
-        }
-
-        if (extMenuItems.length > 0) {
-            btnExt.style.display = 'block';
-            btnExt.onclick = (e) => {
-                window.inSetu.ui.Factory.createDropdown({
-                    anchor: e.target,
-                    items: extMenuItems
-                });
-            };
-        } else {
-            btnExt.style.display = 'none';
-        }
-    } else {
-        tb.style.display = 'none';
-    }
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-
-    if (isSupportedEditor && cm6Wrap) {
-        cm6Wrap.style.display = 'flex';
-        textArea.style.display = 'none';
-    } else {
-        if (cm6Wrap) cm6Wrap.style.display = 'none';
-        textArea.style.display = 'block';
-    }
 
     try {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
@@ -1067,10 +900,7 @@ export async function viewSourceFile(filepath, isFS = false) {
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
-        const errText = "Error loading file content.";
-        const litEditor = document.getElementById('global-os-editor');
-        if (isSupportedEditor && litEditor) litEditor.value = errText;
-        else if (textArea) textArea.value = errText;
+        injectTextToModal("Error loading file content.", isSupportedEditor, isMarkdown, isFS);
     }
 }
 function closeBrowseModal() {
@@ -1166,57 +996,152 @@ export function openBrowseModal(contextFilename) {
         autoDrilldown: true
     });
 }
-export function closeFileModal() {
-    const textArea = document.getElementById('modal-text');
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    const litEditor = document.getElementById('global-os-editor');
-    const isCM6 = (cm6Wrap && window.getComputedStyle(cm6Wrap).display !== 'none' && litEditor);
-    const currentVal = isCM6 ? litEditor.value : (textArea ? textArea.value : '');
-
-    if (currentModalIsFS && currentVal !== currentModalOriginalText) {
-        if (!confirm("You have unsaved changes. Are you sure you want to close this file?")) {
-            return;
-        }
+export function closeFileModal(force = false) {
+    const state = FsStore.getState().fileModal;
+    if (!force && state.isFS && state.content !== state.originalContent) {
+        if (!confirm("You have unsaved changes. Are you sure you want to close this file?")) return;
     }
-
-    document.getElementById('file-modal').style.display = 'none';
-    // Reset state
-    currentModalOriginalText = '';
-    if (textArea) textArea.value = '';
-    if (isCM6 && litEditor) litEditor.value = '';
-    const saveBtn = document.getElementById('modal-save-btn');
-    if (saveBtn) saveBtn.style.display = 'none';
+    FsStore.setState({ fileModal: { ...state, open: false, content: '', originalContent: '', fullText: '' } });
 }
 
 window.closeFileModal = closeFileModal;
 
 export function openVirtualFile(filename, content) {
-    currentModalFile = filename;
-    currentModalIsFS = false;
-    currentModalIsMemoryOnly = true;
-    document.getElementById('modal-title').innerText = filename;
-    const textArea = document.getElementById('modal-text');
-    const litEditor = document.getElementById('global-os-editor');
-    if (litEditor) {
-        litEditor.language = "markdown";
+    FsStore.setState({ fileModal: {
+        open: true,
+        filename: filename,
+        content: 'Loading...',
+        originalContent: 'Loading...',
+        fullText: 'Loading...',
+        isTruncated: false,
+        isFS: false,
+        forceEdit: true,
+        isMemoryOnly: true,
+        isMarkdown: true,
+        isSupportedEditor: true,
+        ext: 'md',
+        codeMode: 'markdown'
+    }});
+
+    closeBrowseModal();
+    injectTextToModal(content, true, true, false, true);
+}
+
+export class InSetuFileModal extends InSetuElement {
+    static properties = {
+        fileModal: { type: Object }
+    };
+    static styles = [sharedStyles, css`
+        .fullscreen-wrapper { display: flex; flex-direction: column; height: 100dvh; width: 100vw; background: var(--bg); }
+    `];
+
+    constructor() {
+        super();
+        this.fileModal = {};
     }
 
-    currentModalForceEdit = true;
-    injectTextToModal(content, true, true, false, true);
-    document.getElementById('modal-save-btn').style.display = 'none';
-    document.getElementById('file-modal').style.display = 'block';
-    closeBrowseModal();
-    const tb = document.getElementById('modal-action-toolbar');
-    if (tb) tb.style.display = 'none';
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(FsStore, state => {
+            this.fileModal = state.fileModal || {};
+        });
+    }
 
-    const cm6Wrap = document.getElementById('modal-cm6-container');
-    if (cm6Wrap) {
-        cm6Wrap.style.display = 'flex';
-        textArea.style.display = 'none';
-    } else {
-        textArea.style.display = 'block';
+    get isDirty() {
+        return this.fileModal.isFS && this.fileModal.content !== this.fileModal.originalContent;
+    }
+
+    render() {
+        const m = this.fileModal;
+        if (!m || !m.open) return html``;
+
+        const shouldBeReadOnly = !(m.isFS || m.forceEdit);
+        const kbSize = Math.round((m.fullText?.length || 0) / 1024);
+
+        let extMenuItems = [];
+        if (m.isFS && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+            window.inSetu.extensions.Registry.executeUIHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
+        }
+
+        return html`
+            <div class="fullscreen-modal" style="display: block; z-index: 1050; padding: 0;">
+                <div class="fullscreen-wrapper">
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
+                        <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
+                        <div style="display: flex; gap: 10px;">
+                            <button @click=${() => window.saveModalFile()} class="btn-sm" style="background: #f59e0b; display: ${this.isDirty ? 'block' : 'none'}; margin: 0;">💾 Save</button>
+                            <button @click=${() => window.closeFileModal()} class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
+                        </div>
+                    </div>
+
+                    ${m.isFS ? html`
+                        <div style="display: flex; gap: 10px; margin: 0; padding: 10px 20px 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); border-radius: 0; align-items: center; flex-shrink: 0;">
+                            <insetu-dropdown align="left" .items=${[
+                                { label: 'Rename', icon: '✏️', onClick: window.renameModalFile },
+                                { label: 'Move', icon: '🚚', onClick: window.openMoveModal },
+                                { label: 'Archive', icon: '📦', onClick: window.archiveModalFile },
+                                { label: 'Delete', icon: '🗑️', onClick: window.deleteModalFile }
+                            ]}>
+                                <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📁 File ▾</button>
+                            </insetu-dropdown>
+
+                            <insetu-dropdown align="left" .items=${[
+                                { label: 'Insert Link', icon: '🔗', onClick: window.openLinkModal },
+                                ...(m.isMarkdown || m.ext === 'txt' ? [{ label: 'Clean AI Tags', icon: '🧹', onClick: window.cleanModalFile }] : [])
+                            ]}>
+                                <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
+                            </insetu-dropdown>
+
+                            ${extMenuItems.length > 0 ? html`
+                                <insetu-dropdown align="left" .items=${extMenuItems}>
+                                    <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">🧩 Extensions ▾</button>
+                                </insetu-dropdown>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+
+                    ${m.isTruncated ? html`
+                        <div style="display: flex; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
+                            <span>⚠️ Only showing the first 200kb of <b>${kbSize}kb</b>.</span>
+                            <button @click=${() => window.loadFullModalText()} class="btn-sm" style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000;">Show All</button>
+                        </div>
+                    ` : ''}
+
+                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);">
+                        ${m.isSupportedEditor ? html`
+                            <insetu-markdown-editor 
+                                .value=${m.content} 
+                                .language=${m.codeMode} 
+                                .readOnly=${shouldBeReadOnly}
+                                @content-changed=${(e) => FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: e.detail.value } }))}>
+                            </insetu-markdown-editor>
+                        ` : html`
+                            <textarea 
+                                style="flex: 1; margin: 0; border: none; border-radius: 0; resize: none; background: var(--bg); color: var(--text); padding: 15px; font-family: monospace;"
+                                .value=${m.content}
+                                ?readOnly=${shouldBeReadOnly}
+                                @input=${(e) => FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: e.target.value } }))}>
+                            </textarea>
+                        `}
+                    </div>
+
+                    <div class="modal-footer" style="padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0;">
+                        <button class="ui-draggable-export" draggable="true" @dragstart=${(e) => {
+                            let fetchUrl = m.isFS ? `bridge/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
+                            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', m.filename);
+                                if (override) fetchUrl = override;
+                            }
+                            window.bindDownloadDrag(e, m.filename, fetchUrl);
+                        }} @click=${() => window.downloadFromModal()} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: 1px solid var(--border); cursor: pointer; background: #0284c7; color: white;">⬇️ Download</button>
+                        <button @click=${() => window.copyFromModal()} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; background: #10b981; color: white;">📋 Copy</button>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 }
+customElements.define('insetu-file-modal', InSetuFileModal);
 // Window Bindings
 window.openVirtualFile = openVirtualFile;
 window.openNewFileModal = openNewFileModal;
@@ -1233,7 +1158,6 @@ window.archiveModalFile = archiveModalFile;
 window.deleteModalFile = deleteModalFile;
 window.cleanModalFile = cleanModalFile;
 window.downloadFromModal = downloadFromModal;
-window.openFsDropdown = openFsDropdown;
 window.closeBrowseModal = closeBrowseModal;
 window.openFolderBrowser = openFolderBrowser;
 window.confirmFolderSelection = confirmFolderSelection;
@@ -1319,44 +1243,7 @@ window.executeQuickPackSelected = function() {
     executeQuickPack(targetDir, false, selectedArray);
     FsStore.getState().setModal('quickPack', { open: false });
 };
-export function openFsDropdown(anchorElement, options = {}) {
-    if (!window.inSetu.ui.Factory || !window.inSetu.ui.Factory.createDropdown) return;
 
-    const isPrompts = options.isPrompts;
-    const activePathList = isPrompts ? (AppStore.getState().currentPromptsPath || []) : (AppStore.getState().globalBrowsePath || []);
-    const currentPath = activePathList.join('/');
-
-    const items = [];
-
-    if (!isPrompts && activePathList.length === 0) {
-        items.push({ label: 'New Repository', icon: '📦', onClick: () => window.openNewFolderModal() });
-    } else {
-        const prefix = isPrompts 
-            ? (activePathList.length > 0 ? ".insetu/prompts/" + currentPath + "/" : ".insetu/prompts/") 
-            : (activePathList.length > 0 ? currentPath + '/' : '');
-
-        items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(prefix) });
-        items.push({ label: isPrompts ? 'New Prompt' : 'New File', icon: '📄', onClick: () => window.openNewFileModal(prefix) });
-        if (!isPrompts) {
-            items.push({ divider: true });
-            items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
-            items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
-            items.push({ divider: true });
-            items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
-        }
-    }
-
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        window.inSetu.extensions.Registry.executeUIHook('zone:fs-dropdown-menu', { currentPath, isPrompts, menuItems: items });
-    }
-
-    window.inSetu.ui.Factory.createDropdown({
-        anchor: anchorElement,
-        items: items
-    });
-}
-
-window.openFsDropdown = openFsDropdown;
 export async function clearQuickPacks() {
     if (!confirm("Clear all Quick-Pack clipboard items?")) return;
     setGlobalStatus("⏳ Clearing Clipboard...", null);
@@ -1504,7 +1391,7 @@ window.viewSourceFile = viewSourceFile;
 window.getEditorContent = getEditorContent;
 window.setEditorContent = setEditorContent;
 window.insertTextAtCursor = insertTextAtCursor;
-export class InSetuVFSModals extends LitElement {
+export class InSetuVFSModals extends InSetuElement {
     static properties = {
         modals: { type: Object },
         browserConfig: { type: Object },
@@ -1521,10 +1408,10 @@ export class InSetuVFSModals extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsub = FsStore.subscribe(state => {
+        this.subscribe(FsStore, state => {
             this.modals = state.modals;
         });
-        this._unsubApp = AppStore.subscribe(state => {
+        this.subscribe(AppStore, state => {
             this.browserConfig = state.browserConfig;
             this.currentBrowsePath = state.currentBrowsePath;
         });
@@ -1535,8 +1422,6 @@ export class InSetuVFSModals extends LitElement {
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsub) this._unsub();
-        if (this._unsubApp) this._unsubApp();
     }
 
     render() {

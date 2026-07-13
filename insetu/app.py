@@ -277,6 +277,10 @@ def _background_compile(job_id, workspace_id, **kwargs):
         try:
             from insetu.hooks import hooks
             hooks.emit('pre_compile', workspace_id=workspace_id)
+
+            # VFS BARRIER: Ensure housekeeping mutations settle before cartography maps the disk
+            from insetu.routes_fs import _VFS_WRITE_QUEUE
+            _VFS_WRITE_QUEUE.join()
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
 

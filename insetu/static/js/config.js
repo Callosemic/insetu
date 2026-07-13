@@ -1,8 +1,9 @@
 // config.js - Core OS Workspace Configuration Editor
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { AppStore } from './store.js';
+import { InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
-export class InSetuExtConfig extends LitElement {
+export class InSetuExtConfig extends InSetuElement {
     static properties = {
         configForm: { type: Object },
         _isOpen: { type: Boolean }
@@ -16,23 +17,21 @@ export class InSetuExtConfig extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this._unsubApp = AppStore.subscribe((state) => {
+        this.subscribe(AppStore, (state) => {
             if (state.isConfigOpen && !this._isOpen) {
                 this.openModal();
             } else if (!state.isConfigOpen && this._isOpen) {
                 this._isOpen = false;
             }
         });
-        // State Hydration Resilience: Re-fetch configurations natively when the active workspace tenant shifts
-        this._unsubWorkspace = AppStore.subscribe(state => state.activeWorkspace, () => {
-            if (this._isOpen) this.openModal();
-        });
+    }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        if (this._isOpen) this.openModal();
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._unsubApp) this._unsubApp();
-        if (this._unsubWorkspace) this._unsubWorkspace();
     }
     async openModal() {
         this._isOpen = true;
@@ -381,7 +380,7 @@ window.ExtensionRegistry.registerExtension('config', {
         }
     ]
 });
-export class InSetuWorkspaceEditor extends LitElement {
+export class InSetuWorkspaceEditor extends InSetuElement {
     static properties = {
         open: { type: Boolean, reflect: true },
         workspaces: { type: Object },
@@ -586,7 +585,7 @@ if (!document.getElementById('insetu-workspace-editor-root')) {
 }
 
 // OS-Managed Generic Settings Form Engine
-export class InSetuGenericSettingsModal extends LitElement {
+export class InSetuGenericSettingsModal extends InSetuElement {
     static properties = {
         open: { type: Boolean, reflect: true },
         extName: { type: String },

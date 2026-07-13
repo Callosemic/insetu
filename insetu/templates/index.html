@@ -35,23 +35,7 @@
             <div class="tab" onclick="switchTab(event, 'edit')">Edit</div>
         </div>
         <div style="display: flex; align-items: center; justify-content: flex-end;">
-            <button id="settings-toggle" class="system-action-btn">{{ emoji }}</button>
-            <div id="settings-menu" style="display: none; position: absolute; top: 100%; right: 0; margin-top: 10px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); width: 280px; z-index: 2000; overflow: hidden;">
-                <h4 id="workspaces-header" style="display: none; margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">Workspace</h4>
-                <div id="workspaces-list" style="display: none; flex-direction: column; gap: 5px; margin-bottom: 15px;"></div>
-
-                <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">Theme</h4>
-                <div style="display: flex; flex-direction: column; gap: 5px;">
-                    <button class="theme-btn" data-theme-value="light" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">☀️ Light</button>
-                    <button class="theme-btn" data-theme-value="dark" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">🌙 Dark</button>
-                    <button class="theme-btn" data-theme-value="e-ink" style="margin: 0; background: transparent; color: var(--text); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer;">📖 E-Ink</button>
-                </div>
-                <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
-                <div style="display: flex; flex-direction: column; gap: 5px;">
-                    <button id="full-refresh-btn" onclick="fullRefresh()" style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full Refresh</button>
-                    <button id="btn-settings-more" onclick="window.openSettingsModal()" style="margin: 0; background: transparent; color: var(--btn); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">⚙️ More...</button>
-                </div>
-            </div>
+            <insetu-system-settings></insetu-system-settings>
         </div>
     </div>
     <div id="tab-context" class="tab-content">
@@ -69,48 +53,8 @@
         </div>
         <div class="screen active"></div>
     </div>
+    <insetu-file-modal></insetu-file-modal>
 
-<div id="file-modal" class="fullscreen-modal" style="display: none; z-index: 1050;">
-<div style="display: flex; flex-direction: column; height: 100dvh; width: 100vw;">
-    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
-            <h3 id="modal-title" style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);"
-    title="File Content">File Content</h3>
-            <div style="display: flex; gap: 10px;">
-                <button id="modal-save-btn" onclick="saveModalFile()" class="btn-sm" style="background: #f59e0b; display: none; margin: 0;">💾 Save</button>
-                <button onclick="closeFileModal()" class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
-
-            </div>
-            </div>
-        <div id="modal-action-toolbar" style="display: none; gap: 10px; margin: 0 !important; padding: 10px 20px 12px 20px; background: var(--input-bg); border: none !important; border-bottom: 1px solid var(--border) !important; border-radius: 0; align-items: center; position: relative; flex-shrink: 0;">
-            <button id="btn-menu-file" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📁 File ▾</button>
-            <button id="btn-menu-edit" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
-            <button id="btn-menu-ext" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold; display: none;">🧩 Extensions ▾</button>
-        </div>
-        <div id="modal-truncation-banner" style="display: none; background: #f59e0b; color: #000; padding: 8px 20px; font-weight: bold; justify-content: space-between; align-items: center; flex-shrink: 0; border-bottom: 1px solid var(--border);">
-            <span id="modal-truncation-msg">⚠️ Truncated</span>
-            <button onclick="loadFullModalText()" class="btn-sm" style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000;">Show All</button>
-        </div>
-        <div id="modal-cm6-container" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);"></div>
-        <textarea id="modal-text" style="display: none; flex: 1; margin: 0; border: none !important; border-radius: 0 !important; resize: none; background: var(--bg) !important; color: var(--text) !important;"></textarea>
-        <div class="modal-footer">
-            <button id="modal-dl-btn" draggable="true" class="ui-draggable-export" onclick="downloadFromModal()" style="background: #0284c7; color: white;">⬇️ Download</button>
-            <button onclick="copyFromModal()" style="background: #10b981; color: white;">📋 Copy</button>
-        </div>
-    </div>
-</div>
-    <div id="settings-modal" class="fullscreen-modal" style="z-index: 1100;">
-        <div class="modal-content" style="max-height: 500px; height: auto; display: flex; flex-direction: column;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin:0; font-size: 1.1rem;">System Settings & Extensions</h3>
-                <button onclick="window.closeSettingsModal()" class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
-            </div>
-            <div id="settings-modal-links" style="display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; margin-bottom: 20px;">
-                </div>
-            <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end;">
-                <button id="simulate-panic-btn" onclick="simulatePanic()" class="btn-sm" style="background: #f59e0b; margin: 0; font-weight: bold;">⚠️ Test Recovery</button>
-            </div>
-        </div>
-    </div>
 
 
     <div id="global-status-bar" class="bottom-bar" data-default="{{ title }}">{{ title }}</div>
