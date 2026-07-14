@@ -40,11 +40,10 @@ class VFSTransaction:
             from insetu.routes_fs import execute_vfs_save
             for filepath, content, data in self._buffer:
                 execute_vfs_save(self.workspace_id, filepath, content, data)
-
             # Broadcast the atomic commit to the ecosystem
             try:
                 from insetu.hooks import hooks
-                hooks.emit('vfs_transaction_committed', workspace_id=self.workspace_id, files=[f[0] for f in self._buffer])
+                hooks.emit_background('vfs_transaction_committed', workspace_id=self.workspace_id, files=[f[0] for f in self._buffer])
             except Exception:
                 pass
 

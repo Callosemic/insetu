@@ -111,16 +111,20 @@ def api_create_workspace():
     if ws_id in w_data.get("workspaces", {}):
         return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
 
-    local_insetu_dir = Path(utils_core._cwd).joinpath(".insetu").as_posix()
-    ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
-    os.makedirs(ws_dir.joinpath("data").as_posix(), exist_ok=True)
-
-    config_rel_path = f"workspaces/{ws_id}/config.json"
-    config_abs_path = ws_dir.joinpath("config.json").as_posix()
     custom_root = data.get('workspace_root', '').strip()
     if not custom_root:
         return jsonify({"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}), 400
     resolved_root = os.path.abspath(os.path.expanduser(custom_root))
+
+    ws_insetu_dir = Path(resolved_root).joinpath("insetu")
+    try:
+        os.makedirs(ws_insetu_dir.joinpath("data").as_posix(), exist_ok=True)
+    except Exception as e:
+        return jsonify({"error": f"Failed to mount physical directory. Check path permissions: {str(e)}"}), 500
+    
+    config_abs_path = ws_insetu_dir.joinpath("config.json").as_posix()
+    config_rel_path = config_abs_path
+    
     starter_config = {
         "instance_title": f"inSetu Workspace: {ws_id}",
         "workspace_root": resolved_root,

@@ -376,6 +376,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     parsed_structure = parse_blocks(raw_text)
     pid = f"{random.getrandbits(16):04x}".upper()
     print(f"\n=== SYNC TRANSACTION PULSE [{datetime.datetime.now().strftime('%H:%M:%S')}] ID: {pid} ===")
+    omniscient_cache = None
 
     for target_file, blocks in parsed_structure.items():
         if target_file not in active_files or not blocks: continue
@@ -413,12 +414,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 print(f"  [!] TRANSACTION ABORTED: '{bad_anchor}' is not a recognized repository.\nPlease prepend the repository name (e.g., repo-name/path/to/file).")
                 print("." * 30)
                 continue
-
         # Smart Resolution Engine
         if not is_genesis:
             basename = os.path.basename(target_file)
-            all_files = get_omniscient_workspace_files(workspace_id, allowed_repos)
-            candidates = [cand_rel for f, cand_rel in all_files if f == basename]
+            if omniscient_cache is None:
+                omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+            candidates = [cand_rel for f, cand_rel in omniscient_cache if f == basename]
             target_norm = target_file
 
             def grade_candidate(c):

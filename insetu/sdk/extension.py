@@ -169,13 +169,17 @@ class ExtensionContext:
         from pathlib import Path
         manifest_path = Path(self.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         return load_json_file(manifest_path, {})
-
     def save_manifest(self, manifest_data):
         """Writes updates to the centralized context manifest."""
         from insetu.utils_core import save_json_file
         from pathlib import Path
         manifest_path = Path(self.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         save_json_file(manifest_path, manifest_data, self.workspace_id)
+
+    def sync_vfs_barrier(self):
+        """Halts the current thread until all pending VFS writes are physically flushed to disk."""
+        from insetu.routes_fs import _VFS_WRITE_QUEUE
+        _VFS_WRITE_QUEUE.join()
 
 class InSetuExtension:
     """

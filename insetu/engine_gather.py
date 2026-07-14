@@ -134,6 +134,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
         except Exception as e:
             print(f"Skipping {filepath}: {e}")
 
+
     output_dir = os.path.dirname(output_path)
     base_filename = os.path.basename(output_path)
     manifest_entry = compile_context_payload(
@@ -283,13 +284,15 @@ from insetu.hooks import hooks
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files and not filepath: return
-
     # Queue Coalescing Guardrail: Skip intermediate files if bulk mutations are actively draining
     if filepath:
         from insetu.routes_fs import _VFS_WRITE_QUEUE
         if not _VFS_WRITE_QUEUE.empty():
             return
         files = [filepath]
+    # VFS BARRIER: Ensure all physical disk writes have settled before locking the compiler
+    from insetu.routes_fs import _VFS_WRITE_QUEUE
+    _VFS_WRITE_QUEUE.join()
 
     from insetu.app import get_compiler_lock
     with get_compiler_lock(workspace_id or "default"):
@@ -336,15 +339,16 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             # Compile ONLY the touched buckets for this repo using the DRY helper
             if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
                 dirty = True
-        if dirty:
-            from insetu.routes_fs import _VFS_WRITE_QUEUE
-            _VFS_WRITE_QUEUE.join()
 
+        if dirty:
             from insetu.db import get_connection
             db_conn = get_connection("workers", workspace_id=workspace_id)
             for repo_dir in affected_repos:
                 db_conn.execute("DELETE FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,))
             db_conn.commit()
+
+            from insetu.routes_fs import _VFS_WRITE_QUEUE
+            _VFS_WRITE_QUEUE.join()
 
             hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
             ctx.save_manifest(manifest)

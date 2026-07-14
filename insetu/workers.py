@@ -19,6 +19,9 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}",
 
     jitter_ms=0, workspace_id=None):
     """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
+    if _shutdown_event.is_set():
+        return False
+
     if not workspace_id:
         from insetu.utils_core import sniff_tenant_id
         workspace_id = sniff_tenant_id()
@@ -41,6 +44,9 @@ INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, sta
     conn.commit()
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
+    if _shutdown_event.is_set():
+        return False
+
     if not workspace_id:
         from insetu.utils_core import sniff_tenant_id
         workspace_id = sniff_tenant_id()
@@ -55,14 +61,19 @@ def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", worksp
         args_json = json.dumps(args_payload)
     except Exception:
         pass
-
     conn.execute("""
         INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
         VALUES (?, ?, ?, 'processing', 'Initializing...', '{}', ?, ?, ?)
     """, (job_id, ext_name, callback_name, now, now, args_json))
     conn.commit()
 
-    _executor.submit(_execute_immediate_job, job_id, ext_name, callback_name, args_json, workspace_id)
+    if not _shutdown_event.is_set():
+        try:
+            _executor.submit(_execute_immediate_job, job_id, ext_name, callback_name, args_json, workspace_id)
+        except RuntimeError as e:
+            if "shutdown" not in str(e).lower():
+                raise
+    return True
 
 def update_immediate_job_status(job_id, status, message=None, artifact=None, workspace_id="default"):
     """Helper for workers to update their streaming status."""
@@ -214,14 +225,20 @@ def _metronome_loop():
                         conn.commit()
 
                         jitter = row['jitter_ms'] if 'jitter_ms' in row.keys() else 0
-                        _executor.submit(_execute_job, row['id'], row['ext_name'], row['callback_name'], row['interval_ms'], jitter, row['args_json'])
+                        _executor.submit(_execute_job, row['id'], row['ext_name'], row['callback_name'], row['interval_ms'], jitter, row['args_json'], ws_id)
                 except Exception:
                     pass
         except Exception:
             pass
-
         time.sleep(1.0) # Tick pace
+
+_INITIALIZED_WORKSPACES = set()
+
 def _init_worker_schema(workspace_id="default"):
+        global _INITIALIZED_WORKSPACES
+        if workspace_id in _INITIALIZED_WORKSPACES:
+                return
+
         conn = get_connection("workers", workspace_id=workspace_id)
         conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -268,6 +285,8 @@ def _init_worker_schema(workspace_id="default"):
                 VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
         """)
         conn.commit()
+        _INITIALIZED_WORKSPACES.add(workspace_id)
+
 _observer = None
 
 class NonGitDirectoryWatcher:
@@ -313,9 +332,12 @@ def start_workers():
                                 workspace_ids.append("default")
                 except Exception:
                         pass
-
         for ws_id in workspace_ids:
                 _init_worker_schema(ws_id)
+                # Clean up ghost jobs strictly once during the OS boot sequence
+                conn = get_connection("workers", workspace_id=ws_id)
+                conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
+                conn.commit()
 
         _executor = ThreadPoolExecutor(max_workers=3)
         _shutdown_event.clear()
@@ -369,7 +391,7 @@ def stop_workers():
             _observer.join(timeout=2.0)
         except Exception: pass
     if _executor:
-        _executor.shutdown(wait=True)
+        _executor.shutdown(wait=False)
 
     try:
         conn = get_connection("workers")

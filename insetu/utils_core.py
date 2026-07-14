@@ -65,15 +65,18 @@ def get_workspace_physics(workspace_id=None):
                 cfg_path = w_data["workspaces"][target_ws].get("config_path")
         except Exception:
             pass
-
     if cfg_path:
         if not os.path.isabs(os.path.expanduser(cfg_path)):
             resolved_cfg = os.path.abspath(Path(local_insetu_dir).joinpath(cfg_path).as_posix())
         else:
             resolved_cfg = os.path.abspath(os.path.expanduser(cfg_path))
 
-    if not os.path.exists(resolved_cfg):
+    # Guardrail: Prevent silent tenant state leakage.
+    # If a non-default workspace is missing its physical config, let it resolve to the missing path 
+    # so the frontend receives an empty state, rather than serving the default workspace's data.
+    if not os.path.exists(resolved_cfg) and target_ws == "default":
         resolved_cfg = default_config
+
     # 3. Resolve Workspace Root
     workflows_path = Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
     if os.path.exists(resolved_cfg):
@@ -176,13 +179,24 @@ def save_json_file(filepath, data, workspace_id=None):
 
     _JSON_CACHE[filepath] = data
     _JSON_MTIME[filepath] = 0  # Explicitly force mtime invalidation to bypass cache collisions
+_MUTATED_CONFIG_CACHE = {}
+_MUTATED_CONFIG_MTIME = {}
+
 def load_config(workspace_id=None):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
-    cfg = load_json_file(cfg_path, {})
-    from insetu.hooks import hooks
-    hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
 
-    return cfg
+    # Fast-path: Return cached mutated config if the disk file hasn't changed
+    current_mtime = os.path.getmtime(cfg_path) if os.path.exists(cfg_path) else 0
+    if cfg_path not in _MUTATED_CONFIG_CACHE or current_mtime > _MUTATED_CONFIG_MTIME.get(cfg_path, 0):
+        # Deep copy to prevent mutating the raw shared JSON cache
+        import copy
+        cfg = copy.deepcopy(load_json_file(cfg_path, {}))
+        from insetu.hooks import hooks
+        hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
+        _MUTATED_CONFIG_CACHE[cfg_path] = cfg
+        _MUTATED_CONFIG_MTIME[cfg_path] = current_mtime
+
+    return _MUTATED_CONFIG_CACHE[cfg_path]
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
     return load_json_file(wf_path, {"context_batches": []})

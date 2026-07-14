@@ -87,10 +87,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if node.func.value.id == 'shutil' and node.func.attr in ('move', 'rmtree'):
                     if self.filename not in VFS_WRITE_WHITELIST:
                         report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Synchronous shutil.move/rmtree detected. Route through the async VFS queue.")
-        # Pathlib Migration Mandate (os.path.join)
+        # Pathlib Migration Mandate (os.path.join, os.path.basename, os.path.dirname)
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
-            if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr == 'join':
-                report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, "os.path.join detected. Migrate to pathlib.Path.")
+            if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr in ('join', 'basename', 'dirname'):
+                report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
 
         # Enforce sniff_tenant_id over raw header extraction
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':

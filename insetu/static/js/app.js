@@ -784,6 +784,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             let result = null;
             if (response.status === 202) {
                 const jobId = data.job_id;
+                let retries = 0;
                 while (true) {
                     if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
                         result = { status: 'aborted', message: 'Workspace switched.', files: [] };
@@ -805,12 +806,17 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
                     }
                     if (!pollRes.ok) throw new Error("Compilation job failed");
                     const pollData = await pollRes.json();
-
                     if (pollData.status === 'processing' || pollData.status === 'pending') {
                         const msg = pollData.message || "Compiling...";
                         if (AppStore.getState().activeWorkspace === compilePromiseWs) {
                             setGlobalStatus(`⏳ ${msg}`, null);
                             if (onProgress) onProgress(msg);
+                        }
+
+                        retries++;
+                        if (retries > 600) { // 10 minute absolute timeout
+                            result = { status: 'error', message: 'Compilation timed out.', files: [] };
+                            break;
                         }
                     } else if (pollData.status === 'completed') {
                         result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
@@ -888,6 +894,21 @@ async function performSoftRefresh() {
 
                 hiddenOutputs: d.hidden_outputs || []
             });
+
+            let banner = document.getElementById('missing-config-banner');
+            if (d.config_missing) {
+                if (!banner) {
+                    banner = document.createElement('div');
+                    banner.id = 'missing-config-banner';
+                    banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
+                    banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
+                    document.body.appendChild(banner);
+                } else {
+                    banner.style.display = 'block';
+                }
+            } else if (banner) {
+                banner.style.display = 'none';
+            }
         }
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
@@ -955,15 +976,14 @@ async function performSoftRefresh() {
         let manifestData = mRes.ok ? await mRes.json() : {};
 
         const hasActiveRepos = AppStore.getState().targetConfigs.length > 0;
-
         if (Object.keys(manifestData).length === 0 && hasActiveRepos) {
             // Force a blocking build only if no cached topology exists and there are active repos to map
             await executeSystemCompile();
         } else {
             // Instant soft switch using cached state or a clean empty baseline
             AppStore.setState({ manifest: manifestData });
-            // Background non-blocking compile only if there are actually repositories to check
-            if (hasActiveRepos) executeSystemCompile();
+            // Trust the background watchdog/metronome to maintain SOTU differential syncs; 
+            // no need to thrash the compiler heavily on every UI tab swap.
         }
 
         // 4. Hydrate active DOM views using native routing
@@ -1018,6 +1038,7 @@ AppStore.setState({
 });
 if (d.config_missing) {
     const banner = document.createElement('div');
+    banner.id = 'missing-config-banner';
     banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
     banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
     document.body.appendChild(banner);

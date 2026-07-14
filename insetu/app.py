@@ -260,18 +260,20 @@ import threading
 import json
 from flask import Response
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-
+import threading
 _COMPILER_LOCKS = {}
 _COMPILER_GLOBAL_LOCK = threading.Lock()
 
 def get_compiler_lock(wid):
     with _COMPILER_GLOBAL_LOCK:
         if wid not in _COMPILER_LOCKS:
-            _COMPILER_LOCKS[wid] = threading.Lock()
+            _COMPILER_LOCKS[wid] = threading.RLock()
         return _COMPILER_LOCKS[wid]
+
 def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
     ws_lock = get_compiler_lock(workspace_id)
     try:
+        ws_lock.acquire()
         update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
         try:
             from insetu.hooks import hooks
@@ -342,7 +344,6 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
                         mutations = db_conn.execute("SELECT filepath FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,)).fetchall()
                         for m in mutations:
                             changed_files.add(m['filepath'])
-
                 if not forced_repos:
                     if changed_files:
                         update_immediate_job_status(job_id, 'processing', f"Differentially compiling {len(changed_files)} changed files...", workspace_id=workspace_id)
@@ -382,14 +383,17 @@ def submit():
     workspace_id = sniff_tenant_id()
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
-
     data = request.json or {}
     force_full = data.get("force_full", False)
 
-    ws_lock = get_compiler_lock(workspace_id)
-    if not ws_lock.acquire(blocking=False):
-        existing_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')] if os.path.exists(paths["contexts_dir"]) else []
-        return jsonify({"status": "success", "message": "Compilation locked. Serving cached context.", "files": sorted(existing_files)})
+    from insetu.db import get_connection
+    conn = get_connection("workers", workspace_id=workspace_id)
+    existing_job = conn.execute(
+        "SELECT id FROM immediate_jobs WHERE ext_name='gather' AND callback_name='compile_contexts' AND status IN ('pending', 'processing')"
+    ).fetchone()
+
+    if existing_job:
+        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing compilation."}), 202
 
     import uuid
     import json
