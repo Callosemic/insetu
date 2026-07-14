@@ -58,47 +58,41 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
         manifest_data = ctx.manifest
 
     from insetu.engine_gather import compile_context_payload
-
     header_str = f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n"
     text_blocks = []
     resolved_files = []
+
+    # Enforce VFS lock sync to survive race conditions during concurrent sweeps
+    ctx.sync_vfs_barrier()
     try:
         for inc in includes:
-            basename = os.path.basename(inc)
+            basename = Path(inc).name
             chunks = []
 
             if manifest_data and basename in manifest_data:
                 meta = manifest_data[basename].get("meta", {})
                 if "chunks" in meta and isinstance(meta["chunks"], list):
                     chunks = meta["chunks"]
-
             if not chunks:
                 chunks = [inc]
             for chunk_identifier in chunks:
+                safe_chunk_base = Path(chunk_identifier).name
                 if chunk_identifier != inc and chunk_identifier in manifest_data.get(basename, {}).get("meta", {}).get("chunks", []):
-                    # Always look in contexts_dir first (V2 spec), fallback to diffs_dir (V1 spec)
-                    inc_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk_identifier).as_posix()
+                    inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
                     if not os.path.exists(inc_path):
-                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(chunk_identifier).as_posix()
-                    display_name = f"{os.path.dirname(inc)}/{chunk_identifier}" if "/" in inc else chunk_identifier
+                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
+                    display_name = f"{Path(inc).parent.as_posix()}/{safe_chunk_base}" if "/" in inc else safe_chunk_base
                 else:
                     display_name = chunk_identifier
-                    if chunk_identifier.startswith("prompts/"):
-                        inc_path = Path(ctx.paths["prompts_dir"]).joinpath(chunk_identifier[8:]).as_posix()
-                    elif chunk_identifier.startswith("diffs/"):
-                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(chunk_identifier[6:]).as_posix()
+                    if "prompts/" in chunk_identifier:
+                        inc_path = Path(ctx.paths["prompts_dir"]).joinpath(safe_chunk_base).as_posix()
+                    elif "diffs/" in chunk_identifier or chunk_identifier.endswith("_diffs.txt"):
+                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
                         if not os.path.exists(inc_path):
-                            inc_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk_identifier[6:]).as_posix()
-                    elif chunk_identifier.startswith("contexts/"):
-                        inc_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk_identifier[9:]).as_posix()
-                    elif chunk_identifier.endswith("_diffs.txt"):
-                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(chunk_identifier).as_posix()
-                        if not os.path.exists(inc_path):
-                            inc_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk_identifier).as_posix()
-                    elif chunk_identifier.endswith("_context.txt"):
-                        inc_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk_identifier).as_posix()
+                            inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
+                    elif "contexts/" in chunk_identifier or chunk_identifier.endswith("_context.txt"):
+                        inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
                     else:
-                        # Allow arbitrary workspace files natively if they don't match known artifact paths
                         inc_path = ctx.resolve_path(inc)
                         if not os.path.exists(inc_path):
                             inc_path = Path(ctx.paths["artifacts_base"]).joinpath(inc).as_posix()
@@ -116,7 +110,7 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
                         verbose_debug += f"- Manifest basename: {basename}\n"
                         verbose_debug += f"- Present in manifest?: {basename in manifest_data if manifest_data else False}\n"
                         if not os.path.exists(inc_path):
-                            parent = os.path.dirname(inc_path)
+                            parent = Path(inc_path).parent.as_posix()
                             verbose_debug += f"- Parent exists?: {os.path.exists(parent)}\n"
                             if os.path.exists(parent):
                                 verbose_debug += f"- Parent contents (first 10): {os.listdir(parent)[:10]}\n"
@@ -192,7 +186,7 @@ def api_flow_batches(ctx):
         "available_diffs": sorted(list(set(available_diffs))),
         "available_prompts": sorted(available_prompts),
         "artifacts_dir": paths["artifacts_base"],
-        "profile_dir": os.path.dirname(paths["config_path"])
+        "profile_dir": Path(paths["config_path"]).parent.as_posix()
     })
 @flow_bp.route('batches/save', methods=['POST'])
 def api_flow_batches_save(ctx):

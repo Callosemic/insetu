@@ -99,9 +99,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             managed_dirs = live_cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
             ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
             ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
-
             if sub_buckets:
                 for rel_to_repo, status, orig_filepath in changed_files:
+                    # Global ignore guards should apply BEFORE sub-bucket routing
+                    if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
+                    if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
+                    if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
+
                     b, module = resolve_file_bucket(rel_to_repo, sub_buckets)
                     if b and b.get("exclude_from_diffs"): continue
 
@@ -110,12 +114,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     elif b:
                         b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
                     else:
-                        # Anti-Pattern Guard: Prevent unmatched managed OS directories or ignored files from bleeding into the default diff context
-                        if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
-                        if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
-                        if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
-
                         b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+
                     if b_id not in bucketed_files: bucketed_files[b_id] = []
                     bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
@@ -203,7 +203,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         out_filename, 
                         header_str, 
                         text_blocks, 
-                        [f"{config['repo_dir']}/{f}" for f, _, _ in files_in_bucket], 
+                        [f"{config['repo_dir']}/{f}" for f, s, _ in files_in_bucket if 'D' not in s], 
                         meta
                     )
                     # Update central manifest explicitly so Gather/UI tools can find the diff chunks!
@@ -392,11 +392,10 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
     files_to_stage = set()
     from insetu.engine_gather import resolve_file_bucket
     from insetu.utils_core import get_safe_repo_id
-
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
     safe_r_dir = get_safe_repo_id(repo)
-    target_diff_name = os.path.basename(diff_file) if diff_file else None
+    target_diff_name = Path(diff_file).name if diff_file else None
 
     # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
     status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
