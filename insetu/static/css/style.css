@@ -2,7 +2,7 @@
     --bg: #121212; --text: #e0e0e0;
 --pane-bg: #1e1e1e; --input-bg: #2d2d2d;
     --border: #444; --btn: #007bff; --btn-hover: #0056b3;
-    --console-bg: #0f172a; --console-text: #38bdf8;
+    --console-bg: #000000; --console-text: #38bdf8;
 
     /* Semantic Intent Tokens */
     --intent-primary: #3b82f6;
@@ -81,6 +81,8 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 #tab-term { padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
 .screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto;
 box-sizing: border-box; border-radius: 0; box-shadow: none; }
+/* Full-Bleed Chassis: Zero out layout padding and container scrollbars when the terminal view is active */
+.screen:has(#sub-term.active) { padding: 0 !important; overflow: hidden !important; }
 .sticky-header { position: sticky; top: -20px; margin: -20px -20px 15px -20px; padding: 20px 20px 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: block; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
@@ -325,10 +327,10 @@ h1, h2, h3, h4, h5, h6 {
 [data-theme="light"] input {
     background: #f1f5f9;
     color: #0f172a;
-border: 1px solid #cbd5e1;
+    border: 1px solid #cbd5e1;
 }
 [data-theme="light"] insetu-ext-term {
-    filter: invert(1) hue-rotate(180deg) brightness(1.15) contrast(1.05);
+    filter: invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.95);
 }
 /* E-Ink High Contrast Overrides */
 [data-theme="e-ink"] h1, [data-theme="e-ink"] h2, [data-theme="e-ink"] h3, 

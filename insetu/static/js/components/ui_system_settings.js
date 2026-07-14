@@ -96,10 +96,9 @@ export class InSetuSystemSettings extends InSetuElement {
                             <button style="margin: 0; background: ${this.currentTheme === 'dark' ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${this.currentTheme === 'dark' ? 'var(--border)' : 'transparent'}; cursor: pointer; font-weight: ${this.currentTheme === 'dark' ? 'bold' : 'normal'}; border-radius: 4px;" @click=${() => this._setTheme('dark')}>🌙 Dark</button>
                             <button style="margin: 0; background: ${this.currentTheme === 'e-ink' ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${this.currentTheme === 'e-ink' ? 'var(--border)' : 'transparent'}; cursor: pointer; font-weight: ${this.currentTheme === 'e-ink' ? 'bold' : 'normal'}; border-radius: 4px;" @click=${() => this._setTheme('e-ink')}>📖 E-Ink</button>
                         </div>
-
                         <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
                         <div style="display: flex; flex-direction: column; gap: 5px;">
-                            <button @click=${() => { this.menuOpen = false; if(window.fullRefresh) window.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full Refresh</button>
+                            <button @click=${() => { this.menuOpen = false; if(window.fullRefresh) window.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full UI Refresh</button>
                             <button @click=${() => { this.menuOpen = false; this.modalOpen = true; }} style="margin: 0; background: transparent; color: var(--btn); text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">⚙️ More...</button>
                         </div>
                     </div>
@@ -118,7 +117,17 @@ export class InSetuSystemSettings extends InSetuElement {
                             </button>
                         `)}
                     `)}
-                    <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end; margin-top: auto;">
+                    <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end; margin-top: auto; gap: 8px;">
+                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0; font-weight: bold; color: white;" 
+                            @click=${async (e) => {
+                                const btn = e.target;
+                                const orig = btn.innerText;
+                                btn.innerText = "⏳ Recompiling...";
+                                try {
+                                    if (window.executeSystemCompile) await window.executeSystemCompile(null, true);
+                                } catch(err) {}
+                                btn.innerText = orig;
+                            }}>⚙️ Full Context Recompile</button>
                         <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.simulatePanic) window.simulatePanic(); }}>⚠️ Test Recovery</button>
                     </div>
                 </div>

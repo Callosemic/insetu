@@ -18,144 +18,9 @@ GATHER_SETTINGS_SCHEMA = [
         "description": "Set to 0 to disable chunking. Context files exceeding this limit will be cleanly split into numbered parts."
     }
 ]
-
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
 __depends__ = []
 from insetu.hooks import hooks
-
-@hooks.on('vfs_transaction_committed')
-@hooks.on('post_file_save')
-@hooks.on('post_file_delete')
-def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
-    """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
-    if not files and not filepath: return
-    if filepath:
-        files = [filepath]
-    from insetu.sdk import ExtensionContext
-    from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id, get_valid_workspace_files
-    from pathlib import Path
-    import os
-    ctx = ExtensionContext('gather', workspace_id)
-    paths = ctx.paths
-    cfg = ctx.config
-    manifest = ctx.manifest
-
-    affected_repos = set()
-    for f in files:
-        parts = f.split('/', 1)
-        if len(parts) > 0: affected_repos.add(parts[0])
-
-    dirty = False
-    all_touched_buckets = set()
-
-    for repo_dir in affected_repos:
-        repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
-        if not repo_cfg or repo_cfg.get("exclude_from_context"): continue
-
-        safe_r_dir = get_safe_repo_id(repo_dir)
-        physical_path = repo_cfg.get("physical_path")
-        if physical_path:
-            repo_path = os.path.abspath(os.path.expanduser(physical_path))
-        else:
-            repo_path = ctx.resolve_path(repo_dir)
-
-        if not os.path.exists(repo_path): continue
-
-        # Pull current state of the repo to include the newly written VFS files
-        final_list = get_valid_workspace_files(repo_path, repo_cfg, workspace_id=workspace_id)
-        if not final_list: continue
-
-        sub_buckets = repo_cfg.get("sub_buckets", [])
-        touched_buckets = set()
-
-        # 1. Identify exactly which buckets the incoming files affect
-        for filepath in files:
-            if not filepath.startswith(repo_dir + '/'): continue
-            rel_path = filepath[len(repo_dir)+1:]
-
-            if sub_buckets:
-                b, module = resolve_file_bucket(rel_path, sub_buckets)
-                if b and module:
-                    touched_buckets.add(f"{module}_context.txt")
-                elif b:
-                    touched_buckets.add(b.get("out_file", f"{safe_r_dir}_{b['id']}_context.txt"))
-                else:
-                    touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
-            else:
-                touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
-
-        all_touched_buckets.update(touched_buckets)
-        # 2. Distribute all repo files into their buckets
-        if sub_buckets:
-            buckets = {b["id"]: {"files": [], "cfg": b} for b in sub_buckets if not b.get("dynamic_split_prefix")}
-            dynamic_files = {}
-            managed_dirs = cfg.get("managed_dirs", []) + repo_cfg.get("repo_managed_dirs", [])
-
-            for filepath in final_list:
-                b, module = resolve_file_bucket(filepath, sub_buckets)
-                if b and module:
-                    if module not in dynamic_files: dynamic_files[module] = {"files": [], "cfg": b}
-                    dynamic_files[module]["files"].append(filepath)
-                elif b:
-                    buckets[b["id"]]["files"].append(filepath)
-                else:
-                    # Anti-Pattern Guard: Prevent unmatched managed OS directories from bleeding into the default context
-                    if any(filepath.startswith(d + '/') or f"/{d}/" in filepath for d in managed_dirs):
-                        continue
-
-                    if "default_catch_all" not in buckets:
-                        buckets["default_catch_all"] = {
-                            "files": [], "cfg": {
-                                "id": "catch_all", "title": repo_cfg.get("title", repo_dir), 
-                                "domain": repo_cfg.get("domain", "Workspaces"), 
-                                "out_file": repo_cfg.get("out_file", f"{safe_r_dir}_context.txt")
-                            }
-                        }
-                    buckets["default_catch_all"]["files"].append(filepath)
-
-            # 3. Surgically write ONLY the buckets that were touched
-            for b_id, data in buckets.items():
-                safe_out = data["cfg"].get("out_file", f"{safe_r_dir}_{b_id}_context.txt")
-                if safe_out in touched_buckets and data["files"]:
-                    b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
-                    b_domain = data["cfg"].get("domain", repo_cfg.get("domain", "Workspaces"))
-                    b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
-                    out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
-                    manifest_entry = write_bucket(out_path, data["files"], b_title.upper(), b_domain, repo_path, repo_dir, workspace_id)
-                    manifest[safe_out] = manifest_entry
-                    dirty = True
-
-            for module, data in dynamic_files.items():
-                out_name = f"{module}_context.txt"
-                if out_name in touched_buckets and data["files"]:
-                    c = data["cfg"]
-                    meta = c.get("meta_map", {}).get(module, {})
-                    title = meta.get("title", module.replace('_', ' ').title())
-                    domain = meta.get("domain", c.get("domain", "Dynamic Modules"))
-                    desc = meta.get("description", c.get("description", f"Dynamically mapped logic and templates for {title}."))
-                    out_path = Path(paths["contexts_dir"]).joinpath(out_name).as_posix()
-                    manifest_entry = write_bucket(out_path, data["files"], title.upper(), domain, repo_path, repo_dir, workspace_id)
-                    manifest[out_name] = manifest_entry
-                    dirty = True
-        else:
-            safe_out = repo_cfg.get("out_file", f"{safe_r_dir}_context.txt")
-            if safe_out in touched_buckets:
-                r_title = repo_cfg.get("title", repo_dir.replace('-', ' ').title())
-                r_domain = repo_cfg.get("domain", "Workspaces")
-                r_desc = repo_cfg.get("description", f"Context payload for {r_title}.")
-                out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
-
-                managed_dirs = cfg.get("managed_dirs", []) + repo_cfg.get("repo_managed_dirs", [])
-                filtered_list = [f for f in final_list if not any(f.startswith(d + '/') or f"/{d}/" in f for d in managed_dirs)]
-                manifest_entry = write_bucket(out_path, filtered_list, r_title, r_domain, repo_path, repo_dir, workspace_id)
-                manifest[safe_out] = manifest_entry
-                dirty = True
-    if dirty:
-        from insetu.routes_fs import _VFS_WRITE_QUEUE
-        # Block until the VFS queue drains
-        _VFS_WRITE_QUEUE.join()
-
-        ctx.save_manifest(manifest)
 
 def generate_ascii_tree(file_paths):
     tree = {}
@@ -294,16 +159,19 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
 
     if not os.path.exists(repo_path): return False
 
-    final_list = get_valid_workspace_files(repo_path, config, workspace_id)
-    if not final_list: return False
+    final_list = get_valid_workspace_files(repo_path, config, workspace_id) or []
     archive_type = config.get("archive_type", "repo")
     if archive_type == "media-vault":
         if touched_buckets is None or f"{config['repo_dir']}_vault.json" in touched_buckets:
-            r_title = config.get("title", config["repo_dir"].replace('-', ' ').title())
-            manifest_ref[f"{config['repo_dir']}_vault.json"] = {
-                "files": [f"{config['repo_dir']}/{f}" for f in final_list],
-                "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets.")}
-            }
+            if final_list:
+                r_title = config.get("title", config["repo_dir"].replace('-', ' ').title())
+                manifest_ref[f"{config['repo_dir']}_vault.json"] = {
+                    "files": [f"{config['repo_dir']}/{f}" for f in final_list],
+                    "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets.")}
+                }
+            else:
+                if f"{config['repo_dir']}_vault.json" in manifest_ref:
+                    del manifest_ref[f"{config['repo_dir']}_vault.json"]
         return True
 
     dirty = False
@@ -335,10 +203,14 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                     }
                 buckets["default_catch_all"]["files"].append(filepath)
 
+        active_bucket_outputs = set()
+        active_dynamic_outputs = set()
+
         for b_id, data in buckets.items():
             safe_out = data["cfg"].get("out_file", f"{safe_r_dir}_{b_id}_context.txt")
             if touched_buckets is None or safe_out in touched_buckets:
                 if data["files"]:
+                    active_bucket_outputs.add(safe_out)
                     b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
                     b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
                     b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
@@ -346,11 +218,20 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                     manifest_entry = write_bucket(out_path, data["files"], b_title.upper(), b_domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
                     manifest_ref[safe_out] = manifest_entry
                     dirty = True
+                else:
+                    if safe_out in manifest_ref:
+                        del manifest_ref[safe_out]
+                        dirty = True
+                        out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
+                        if os.path.exists(out_path):
+                            try: os.remove(out_path)
+                            except Exception: pass
 
         for module, data in dynamic_files.items():
             out_name = f"{module}_context.txt"
             if touched_buckets is None or out_name in touched_buckets:
                 if data["files"]:
+                    active_dynamic_outputs.add(out_name)
                     c = data["cfg"]
                     meta_map = c.get("meta_map", {})
                     meta = meta_map.get(module, {})
@@ -361,6 +242,17 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                     manifest_entry = write_bucket(out_path, data["files"], title.upper(), domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
                     manifest_ref[out_name] = manifest_entry
                     dirty = True
+
+        if touched_buckets:
+            for touched_b in touched_buckets:
+                if touched_b.endswith('_context.txt') and touched_b not in active_bucket_outputs and touched_b not in active_dynamic_outputs:
+                    if touched_b in manifest_ref:
+                        del manifest_ref[touched_b]
+                        dirty = True
+                        out_path = Path(paths["contexts_dir"]).joinpath(touched_b).as_posix()
+                        if os.path.exists(out_path):
+                            try: os.remove(out_path)
+                            except Exception: pass
     else:
         safe_out = config.get("out_file", f"{safe_r_dir}_context.txt")
         if touched_buckets is None or safe_out in touched_buckets:
@@ -371,71 +263,93 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
 
             managed_dirs = ctx.config.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
             filtered_list = [f for f in final_list if not any(f.startswith(d + '/') or f"/{d}/" in f for d in managed_dirs)]
-            manifest_entry = write_bucket(out_path, filtered_list, r_title, r_domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
-            manifest_ref[safe_out] = manifest_entry
-            dirty = True
+            if filtered_list:
+                manifest_entry = write_bucket(out_path, filtered_list, r_title, r_domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
+                manifest_ref[safe_out] = manifest_entry
+                dirty = True
+            else:
+                if safe_out in manifest_ref:
+                    del manifest_ref[safe_out]
+                    dirty = True
+                    if os.path.exists(out_path):
+                        try: os.remove(out_path)
+                        except Exception: pass
 
     return dirty
 from insetu.hooks import hooks
-
 @hooks.on('vfs_transaction_committed')
 @hooks.on('post_file_save')
 @hooks.on('post_file_delete')
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files and not filepath: return
+
+    # Queue Coalescing Guardrail: Skip intermediate files if bulk mutations are actively draining
     if filepath:
+        from insetu.routes_fs import _VFS_WRITE_QUEUE
+        if not _VFS_WRITE_QUEUE.empty():
+            return
         files = [filepath]
-    from insetu.sdk import ExtensionContext
-    from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id
-    ctx = ExtensionContext('gather', workspace_id)
-    paths = ctx.paths
-    manifest = ctx.manifest
-    cfg = ctx.config
 
-    affected_repos = set()
-    for f in files:
-        parts = f.split('/', 1)
-        if len(parts) > 0: affected_repos.add(parts[0])
+    from insetu.app import get_compiler_lock
+    with get_compiler_lock(workspace_id or "default"):
+        from insetu.sdk import ExtensionContext
+        from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id
+        ctx = ExtensionContext('gather', workspace_id)
+        paths = ctx.paths
+        manifest = ctx.manifest
+        cfg = ctx.config
 
-    dirty = False
-    all_touched_buckets = set()
+        affected_repos = set()
+        for f in files:
+            parts = f.split('/', 1)
+            if len(parts) > 0: affected_repos.add(parts[0])
 
-    for repo_dir in affected_repos:
-        repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
-        if not repo_cfg or repo_cfg.get("exclude_from_context"): continue
+        dirty = False
+        all_touched_buckets = set()
 
-        safe_r_dir = get_safe_repo_id(repo_dir)
-        sub_buckets = repo_cfg.get("sub_buckets", [])
-        touched_buckets = set()
+        for repo_dir in affected_repos:
+            repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
+            if not repo_cfg or repo_cfg.get("exclude_from_context"): continue
 
-        # Identify exactly which buckets the incoming files affect
-        for filepath in files:
-            if not filepath.startswith(repo_dir + '/'): continue
-            rel_path = filepath[len(repo_dir)+1:]
+            safe_r_dir = get_safe_repo_id(repo_dir)
+            sub_buckets = repo_cfg.get("sub_buckets", [])
+            touched_buckets = set()
 
-            if sub_buckets:
-                b, module = resolve_file_bucket(rel_path, sub_buckets)
-                if b and module:
-                    touched_buckets.add(f"{module}_context.txt")
-                elif b:
-                    touched_buckets.add(b.get("out_file", f"{safe_r_dir}_{b['id']}_context.txt"))
+            # Identify exactly which buckets the incoming files affect
+            for filepath in files:
+                if not filepath.startswith(repo_dir + '/'): continue
+                rel_path = filepath[len(repo_dir)+1:]
+
+                if sub_buckets:
+                    b, module = resolve_file_bucket(rel_path, sub_buckets)
+                    if b and module:
+                        touched_buckets.add(f"{module}_context.txt")
+                    elif b:
+                        touched_buckets.add(b.get("out_file", f"{safe_r_dir}_{b['id']}_context.txt"))
+                    else:
+                        touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
                 else:
                     touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
-            else:
-                touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
 
-        all_touched_buckets.update(touched_buckets)
+            all_touched_buckets.update(touched_buckets)
+            # Compile ONLY the touched buckets for this repo using the DRY helper
+            if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
+                dirty = True
+        if dirty:
+            from insetu.routes_fs import _VFS_WRITE_QUEUE
+            _VFS_WRITE_QUEUE.join()
 
-        # Compile ONLY the touched buckets for this repo using the DRY helper
-        if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
-            dirty = True
-    if dirty:
-        from insetu.routes_fs import _VFS_WRITE_QUEUE
-        _VFS_WRITE_QUEUE.join() # Block until VFS drains
+            from insetu.db import get_connection
+            db_conn = get_connection("workers", workspace_id=workspace_id)
+            for repo_dir in affected_repos:
+                db_conn.execute("DELETE FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,))
+            db_conn.commit()
 
-        ctx.save_manifest(manifest)
-def generate_context_file(workspace_id=None):
+            hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
+            ctx.save_manifest(manifest)
+
+def generate_context_file(workspace_id=None, target_repos=None):
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('gather', workspace_id)
     paths = ctx.paths
@@ -458,17 +372,17 @@ def generate_context_file(workspace_id=None):
 
     live_cfg = ctx.config
     manifest = {}
-
     for config in live_cfg.get("target_repos", []):
         if config.get("exclude_from_context"): continue
+        if target_repos and config.get("repo_dir") not in target_repos: continue
         _compile_repo_buckets(config, paths, workspace_id, manifest)
     # --- EXTENSION HOOKS ---
     from insetu.hooks import hooks
     from insetu.routes_fs import execute_vfs_save, _VFS_WRITE_QUEUE
-    # Block until the async VFS queue drains so downstream workflows can read the physical files
     _VFS_WRITE_QUEUE.join()
 
-    hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id)
+    sweep_payload = True if target_repos is None else target_repos
+    hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, is_full_sweep=sweep_payload)
     # Set Analysis: Prune only orphaned context files that were not regenerated
     valid_basenames = set(manifest.keys())
     for data in manifest.values():

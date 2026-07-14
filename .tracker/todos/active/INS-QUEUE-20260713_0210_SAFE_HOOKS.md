@@ -1,12 +1,13 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "active"
 id: "INS-QUEUE-20260713_0210_SAFE_HOOKS"
 title: "Frontend DX: Fail-Safe Global UI Hook Emitter"
 created_at: "2026-07-13T02:10:00"
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-07-26"
 tags: ["Frontend", "DX", "SDK", "Event-Bus"]
 ---
 

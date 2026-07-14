@@ -135,8 +135,29 @@ export class InSetuExtGather extends InSetuElement {
                 }
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr };
         }).filter(f => f !== null);
+
+        if (this.loading) {
+            const { targetConfigs } = AppStore.getState();
+            if (targetConfigs) {
+                targetConfigs.forEach(cfg => {
+                    if (cfg.exclude_from_context) return;
+                    const hasContext = enrichedFiles.some(f => f.filename.includes(cfg.repo_dir) || (f.finalTitle && f.finalTitle.toLowerCase().includes(cfg.repo_dir.toLowerCase())));
+                    if (!hasContext) {
+                        enrichedFiles.push({
+                            filename: `skeleton_${cfg.repo_dir}`,
+                            finalCat: cfg.domain || "Workspaces",
+                            finalDesc: "Hydrating context payload... please wait.",
+                            finalTitle: cfg.title || cfg.repo_dir,
+                            sizeStr: "⏳ pending",
+                            isSkeleton: true
+                        });
+                    }
+                });
+            }
+        }
+
         // 2. Apply Fuzzy Search
-        const filteredFiles = this.searchQuery 
+        const filteredFiles = this.searchQuery  
                 ? window.inSetu.utils.fuzzyFilterObjects(enrichedFiles, this.searchQuery, f => `${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
                 : enrichedFiles;
         return html`
@@ -163,35 +184,39 @@ export class InSetuExtGather extends InSetuElement {
                             .detailText=${f.sizeStr ? `${f.filename} | ${f.sizeStr}` : f.filename}
                             icon="📦"
                             intentColor="var(--intent-highlight)"
-                            @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                            @card-clicked=${() => { if(!f.isSkeleton && window.viewAndCopy) window.viewAndCopy(f.filename); }}>
 
-                            <insetu-file-actions slot="actions" .filepath=${f.filename} .isFS=${false}></insetu-file-actions>
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-neutral); margin: 0 5px 0 0;"
-                                    @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
-                            ${(() => {
-                                const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
-                                const hasChunks = chunks && chunks.length > 1;
+                            ${f.isSkeleton ? html`
+                                <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
+                            ` : html`
+                                <insetu-file-actions slot="actions" .filepath=${f.filename} .isFS=${false}></insetu-file-actions>
+                                <button slot="actions" class="btn-sm" style="background: var(--intent-neutral); margin: 0 5px 0 0;"
+                                        @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
+                                ${(() => {
+                                    const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
+                                    const hasChunks = chunks && chunks.length > 1;
 
-                                if (hasChunks) {
-                                    return html`
-                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
-                                            @click=${(e) => {
+                                    if (hasChunks) {
+                                        return html`
+                                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
+                                                @click=${(e) => {
+                                                    e.stopPropagation();
+                                                    this.activeChunkFile = f.filename;
+                                                    this.chunkModalOpen = true;
+                                                }}>
+                                                📦 View Parts
+                                            </button>
+                                        `;
+                                    } else {
+                                        return html`
+                                            <insetu-async-btn slot="actions" label="⬇️ Download" intent="primary" .onClick=${async (e) => {
                                                 e.stopPropagation();
-                                                this.activeChunkFile = f.filename;
-                                                this.chunkModalOpen = true;
-                                            }}>
-                                            📦 View Parts
-                                        </button>
-                                    `;
-                                } else {
-                                    return html`
-                                        <insetu-async-btn slot="actions" label="⬇️ Download" intent="primary" .onClick=${async (e) => {
-                                            e.stopPropagation();
-                                            await this._downloadTarget(f.filename, e.target);
-                                        }}></insetu-async-btn>
-                                    `;
-                                }
-                            })()}
+                                                await this._downloadTarget(f.filename, e.target);
+                                            }}></insetu-async-btn>
+                                        `;
+                                    }
+                                })()}
+                            `}
                         </insetu-card>
                     `}>
                 </insetu-categorized-list>

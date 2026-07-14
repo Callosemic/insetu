@@ -296,7 +296,6 @@ The 'config' extension is locked.</p>
                     </div>
                 </div>
             `;
-
         return html`
             <insetu-modal 
                 ?open=${this._isOpen} 
@@ -329,7 +328,7 @@ The 'config' extension is locked.</p>
             if (res.ok) {
                 btn.innerText = '⏳ Re-indexing...';
                 if (window.executeSystemCompile) {
-                    await window.executeSystemCompile();
+                    await window.executeSystemCompile(null, true);
                 }
                 btn.innerText = '⏳ Rebooting...';
                 try {
@@ -635,7 +634,7 @@ export class InSetuGenericSettingsModal extends InSetuElement {
             if (res.ok) {
                 this.open = false;
                 btn.innerText = orig;
-                if(window.executeSystemCompile) window.executeSystemCompile();
+                if(window.executeSystemCompile) window.executeSystemCompile(null, true);
             } else {
                 alert("Failed to save settings.");
                 btn.innerText = orig;

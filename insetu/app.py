@@ -269,16 +269,13 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.Lock()
         return _COMPILER_LOCKS[wid]
-
-def _background_compile(job_id, workspace_id, **kwargs):
+def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
     ws_lock = get_compiler_lock(workspace_id)
     try:
         update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
         try:
             from insetu.hooks import hooks
             hooks.emit('pre_compile', workspace_id=workspace_id)
-
-            # VFS BARRIER: Ensure housekeeping mutations settle before cartography maps the disk
             from insetu.routes_fs import _VFS_WRITE_QUEUE
             _VFS_WRITE_QUEUE.join()
         except Exception as e:
@@ -291,21 +288,86 @@ def _background_compile(job_id, workspace_id, **kwargs):
         except Exception as e:
             print(f"Warning: Cartographer failed: {str(e)}")
 
-        update_immediate_job_status(job_id, 'processing', "Compiling context payloads...", workspace_id=workspace_id)
         import insetu.engine_gather as engine_gather
-        engine_gather.generate_context_file(workspace_id)
-        
-        from insetu.utils_core import get_gather_paths, load_json_file
+        from insetu.utils_core import get_gather_paths, load_json_file, get_workspace_physics, load_config
         from pathlib import Path
         import os
+        import subprocess
+
         paths = get_gather_paths(workspace_id)
         manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        manifest_data = load_json_file(manifest_path, {})
+
+        forced_repos = []
+        if isinstance(force_full, list):
+            forced_repos = force_full
+            needs_full_compile = False
+        else:
+            needs_full_compile = force_full or not manifest_data
+
+        if not needs_full_compile and not forced_repos:
+            try:
+                cfg, ws_root, _ = get_workspace_physics(workspace_id)
+                changed_files = set()
+                live_cfg = load_config(workspace_id)
+
+                for repo_cfg in live_cfg.get("target_repos", []):
+                    if repo_cfg.get("exclude_from_context"): continue
+                    repo_dir = repo_cfg.get("repo_dir")
+                    physical_path = repo_cfg.get("physical_path")
+
+                    if physical_path:
+                        repo_path = os.path.abspath(os.path.expanduser(physical_path))
+                    else:
+                        repo_path = os.path.abspath(os.path.join(ws_root, repo_dir))
+
+                    if not os.path.exists(repo_path): continue
+
+                    if repo_cfg.get("archive_type", "repo") == "repo":
+                        res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
+                        if res.returncode == 0:
+                            for line in res.stdout.splitlines():
+                                if len(line) < 3: continue
+                                status = line[:2]
+                                filepath = line[3:]
+                                if '->' in filepath: filepath = filepath.split('->')[-1].strip()
+
+                                ws_rel_path = f"{repo_dir}/{filepath}"
+                                changed_files.add(ws_rel_path)
+                        else:
+                            forced_repos.append(repo_dir)
+                    else:
+                        from insetu.db import get_connection
+                        db_conn = get_connection("workers", workspace_id=workspace_id)
+                        mutations = db_conn.execute("SELECT filepath FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,)).fetchall()
+                        for m in mutations:
+                            changed_files.add(m['filepath'])
+
+                if not forced_repos:
+                    if changed_files:
+                        update_immediate_job_status(job_id, 'processing', f"Differentially compiling {len(changed_files)} changed files...", workspace_id=workspace_id)
+                        engine_gather._surgically_update_manifest(workspace_id=workspace_id, files=list(changed_files))
+                    else:
+                        update_immediate_job_status(job_id, 'processing', "No external changes detected. Syncing extensions...", workspace_id=workspace_id)
+                        all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
+                        from insetu.hooks import hooks
+                        hooks.emit('compile_contexts', manifest=manifest_data, workspace_id=workspace_id, target_repos=all_repo_dirs, touched_buckets=[], is_full_sweep=False)
+                        engine_gather.save_json_file(manifest_path, manifest_data, workspace_id)
+            except Exception as e:
+                print(f"Warning: Differential compile failed, falling back to full sweep: {e}")
+                needs_full_compile = True
+
+        if needs_full_compile or forced_repos:
+            sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
+            update_immediate_job_status(job_id, 'processing', f"Compiling context payloads ({sweep_label})...", workspace_id=workspace_id)
+            engine_gather.generate_context_file(workspace_id, target_repos=None if needs_full_compile else forced_repos)
+
         manifest_data = load_json_file(manifest_path, {})
         manifest_keys = list(manifest_data.keys())
         if not manifest_keys and os.path.exists(paths["contexts_dir"]):
             manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
 
-        update_immediate_job_status(job_id, 'completed', "Context successfully compiled!", artifact={"files": sorted(manifest_keys)}, workspace_id=workspace_id)
+        update_immediate_job_status(job_id, 'completed', "Context successfully synchronized!", artifact={"files": sorted(manifest_keys)}, workspace_id=workspace_id)
     except Exception as e:
         import traceback
         print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
@@ -314,7 +376,6 @@ def _background_compile(job_id, workspace_id, **kwargs):
         ws_lock.release()
 
 register_callback("gather", "compile_contexts", _background_compile)
-
 @app.route('/submit', methods=['POST'])
 def submit():
     from insetu.utils_core import sniff_tenant_id
@@ -322,15 +383,20 @@ def submit():
     from insetu.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
 
+    data = request.json or {}
+    force_full = data.get("force_full", False)
+
     ws_lock = get_compiler_lock(workspace_id)
     if not ws_lock.acquire(blocking=False):
         existing_files = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')] if os.path.exists(paths["contexts_dir"]) else []
         return jsonify({"status": "success", "message": "Compilation locked. Serving cached context.", "files": sorted(existing_files)})
-    
+
     import uuid
+    import json
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "gather", "compile_contexts", "{}", workspace_id=workspace_id)
-    
+    args_json = json.dumps({"force_full": force_full})
+    submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
+
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @app.route('/api/<workspace_id>/manifest', methods=['GET'])
 def api_manifest(workspace_id):
@@ -371,21 +437,22 @@ def download_file(filename):
         return send_file(file_path, as_attachment=False)
 
     return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
-
 def run_app():
     from insetu.utils_core import load_config
     from insetu.hooks import hooks
     import os
-    
-    # Ignite OS Substrates
-    hooks.emit('system_boot')
-    
+
     cfg = load_config()
     # Lock the port on initial boot so it survives os.execv workspace swaps
     if "INSETU_PORT" not in os.environ:
         os.environ["INSETU_PORT"] = str(cfg.get("port", 5005))
 
     port = int(os.environ["INSETU_PORT"])
+
+    # Guardrail: If Flask debug reloader is active, only emit system_boot inside the active worker child.
+    # This prevents background terminals/daemons from binding to the master file-monitor process.
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        hooks.emit('system_boot')
 
     print(f"🚀 Starting inSetu Developer OS (Port {port})...")
     print(f"👉 Open http://127.0.0.1:{port} in your browser")

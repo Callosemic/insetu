@@ -268,10 +268,38 @@ def _init_worker_schema(workspace_id="default"):
                 VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
         """)
         conn.commit()
+_observer = None
+
+class NonGitDirectoryWatcher:
+    """Listens directly to the host OS filesystem for external unmanaged mutations."""
+    def __init__(self, workspace_id, repo_dir):
+        self.workspace_id = workspace_id
+        self.repo_dir = repo_dir
+
+    def dispatch(self, event):
+        if event.is_directory: return
+        filename = os.path.basename(event.src_path)
+        if filename.startswith('.') or filename.endswith('~'): return
+
+        from insetu.utils_core import get_workspace_physics
+        try:
+            _, ws_root, _ = get_workspace_physics(self.workspace_id)
+            ws_rel_path = os.path.relpath(event.src_path, ws_root).replace('\\', '/')
+
+            from insetu.db import get_connection
+            import time
+            db_conn = get_connection("workers", workspace_id=self.workspace_id)
+            db_conn.execute(
+                "INSERT OR REPLACE INTO nongit_fixtures (filepath, repo_dir, last_modified) VALUES (?, ?, ?)",
+                (ws_rel_path, self.repo_dir, time.time())
+            )
+            db_conn.commit()
+        except Exception:
+            pass
 
 @hooks.on('system_boot')
 def start_workers():
-        global _executor, _metronome_thread
+        global _executor, _metronome_thread, _observer
 
         from insetu.utils_core import _cwd, load_json_file
         import os
@@ -295,14 +323,54 @@ def start_workers():
         _metronome_thread.start()
         print("⚙️  Stateless Worker Metronome Online.")
 
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+
+            _observer = Observer()
+            has_watches = False
+
+            for ws_id in workspace_ids:
+                from insetu.utils_core import load_config, get_workspace_physics
+                cfg = load_config(ws_id)
+                _, ws_root, _ = get_workspace_physics(ws_id)
+
+                for repo_cfg in cfg.get("target_repos", []):
+                    if repo_cfg.get("archive_type", "repo") != "repo":
+                        r_dir = repo_cfg.get("repo_dir")
+                        p_path = repo_cfg.get("physical_path")
+                        target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else os.path.abspath(os.path.join(ws_root, r_dir))
+
+                        if os.path.exists(target_path):
+                            handler = FileSystemEventHandler()
+                            watcher = NonGitDirectoryWatcher(ws_id, r_dir)
+                            handler.on_modified = watcher.dispatch
+                            handler.on_created = watcher.dispatch
+                            handler.on_deleted = watcher.dispatch
+
+                            _observer.schedule(handler, target_path, recursive=True)
+                            has_watches = True
+            if has_watches:
+                _observer.start()
+                print("👁️  Native Non-Git Filesystem Watchers Engaged.")
+        except ImportError:
+            print("⚠️  Optional package 'watchdog' not found. External modifications require full sweeps.")
+        except Exception as e:
+            print(f"⚠️  Watcher initialization failed: {e}")
+
 @hooks.on('system_shutdown')
 def stop_workers():
-    global _executor
+    global _executor, _observer
     print("🛑 Suspending Worker Metronome...")
     _shutdown_event.set()
+    if _observer:
+        try:
+            _observer.stop()
+            _observer.join(timeout=2.0)
+        except Exception: pass
     if _executor:
         _executor.shutdown(wait=True)
-    
+
     try:
         conn = get_connection("workers")
         conn.execute("UPDATE jobs SET status='pending' WHERE status='running'")

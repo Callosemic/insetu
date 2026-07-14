@@ -2,9 +2,9 @@
 repo: "insetu"
 type: "todo"
 status: "open"
-id: INS-QUEUE-20260704_1700_OFFLINE_TYPEWRITER
+id: "INS-QUEUE-20260704_1700_OFFLINE_TYPEWRITER"
 title: "The Offline Typewriter: IndexedDB Mutation Queue for Citations & VFS"
-created_at: 2026-07-04T17:00:00
+created_at: "2026-07-04T17:00:00"
 closed_at: null
 sub_bucket: "None"
 delivery_date: "2026-08-09"

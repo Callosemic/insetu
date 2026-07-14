@@ -7,6 +7,7 @@ title: "Sweep V2 SDK Guardrail Violations & Technical Debt"
 created_at: 0000-00-00T00:00:00
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-08-09"
 tags: ["Tech Debt", "SDK", "Refactor", "Compliance"]
 ---
 

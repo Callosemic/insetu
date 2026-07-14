@@ -11,7 +11,7 @@ FRONTEND_DIR = BACKEND_DIR / "static" / "js"
 # Whitelists for legitimate use-cases to prevent false positives
 VFS_WRITE_WHITELIST = ["routes_fs.py", "fallback_bridge.py", "utils_core.py", "engine_format.py", "engine_git.py", "engine_gather.py", "cli.py", "workers.py", "engine_tracker.py", "engine_research.py"]
 SQLITE_WHITELIST = ["db.py", "workers.py"] # Workers needs it for direct ledger management
-SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "engine_bridge.py", "utils_core.py"]
+SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "engine_bridge.py", "utils_core.py", "engine_term.py"]
 HEX_COLOR_WHITELIST = ["style.css"] # Only CSS should define hex codes
 
 violations_found = 0
@@ -336,11 +336,14 @@ def check_javascript_files():
                     # 20. Raw Polling Tick Ban
                     if is_extension and raw_register_tick_pattern.search(line):
                         report_violation("POLLING_MANDATE", filepath, line_num, "Raw registerTick detected. Use this.api.pollJob or central SDK polling mechanisms to coordinate worker jobs.")
-
                     # 21. Zustand Reference Mutation Ban
                     if zustand_reference_mutation_pattern.search(line):
                         report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
 
+                    # 24. Hardcoded Extension Demolition Ban (Inversion of Control Enforcement)
+                    if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):
+                        if "tagName.startsWith" not in line:
+                            report_violation("HARDCODED_EXTENSION_EVICTION", filepath, line_num, "Hardcoded extension element tags found in reload sequence. Utilize stateless prefix checks to preserve Inversion of Control.")
 if __name__ == "__main__":
     print("============================================================")
     print("      inSetu Architectural Fitness Functions Validator      ")

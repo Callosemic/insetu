@@ -7,6 +7,7 @@ title: "Deprecate UIFactory and Finalize Declarative Dropdown Web Component"
 created_at: 2026-07-11T15:00:00
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-08-09"
 tags: ["Frontend", "UI", "LitElement", "Refactor"]
 ---
 

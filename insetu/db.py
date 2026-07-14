@@ -34,6 +34,15 @@ def apply_declarative_schema(db_name, schema_dict, workspace_id=None):
                     print(f"⚠️ Auto-migration failed for {table_name}.{col}: {e}")
     conn.commit()
 
+# Register core worker database schema for tracking unmanaged/non-Git file deltas contextually
+register_schema('workers', {
+    'nongit_fixtures': {
+        'filepath': 'TEXT PRIMARY KEY',
+        'repo_dir': 'TEXT',
+        'last_modified': 'REAL'
+    }
+})
+
 @hooks.on('system_boot')
 def init_declarative_schemas():
     """Automatically provisions and migrates SQLite schemas for all tenants on boot."""

@@ -7,6 +7,7 @@ title: "Backend DX: Background Task Orchestration Decorators"
 created_at: "2026-07-13T02:10:00"
 closed_at: null
 sub_bucket: "None"
+delivery_date: "2026-08-09"
 tags: ["Backend", "DX", "SDK", "Workers"]
 ---
 

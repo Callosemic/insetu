@@ -1,5 +1,5 @@
 import threading
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict, Any, Union
 
 # --- EVENT BUS PAYLOAD CONTRACTS ---
 # These TypedDicts serve as machine-readable documentation for extension authors (and LLMs)
@@ -12,6 +12,9 @@ class HookPayload_MutateWorkspaceConfig(TypedDict, total=False):
 class HookPayload_CompileContexts(TypedDict, total=False):
     manifest: Dict[str, Any]
     workspace_id: Optional[str]
+    target_repos: Optional[List[str]]
+    touched_buckets: Optional[List[str]]
+    is_full_sweep: Optional[Union[bool, List[str]]]
 
 class HookPayload_PreCompileDocument(TypedDict, total=False):
     filepath: str

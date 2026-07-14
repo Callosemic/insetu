@@ -759,7 +759,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
 }
 let compilePromise = null;
 let compilePromiseWs = null;
-export const executeSystemCompile = (onProgress = null) => {
+export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     const activeWs = AppStore.getState().activeWorkspace || 'default';
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
 
@@ -777,7 +777,7 @@ export const executeSystemCompile = (onProgress = null) => {
             const response = await fetch('/submit', {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify({})
+                body: JSON.stringify({ force_full: forceFull })
             });
 
             const data = await response.json();
@@ -904,7 +904,14 @@ async function performSoftRefresh() {
             }
             // Clear out dynamic sub-tab navigation tracks and extension views to prepare for a clean redraw
             document.querySelectorAll('.sub-tabs').forEach(track => track.replaceChildren());
-            document.querySelectorAll('insetu-ext-favorites, insetu-ext-citations, insetu-ext-research, insetu-vfs-explorer, insetu-ext-bridge').forEach(el => el.remove());
+
+            // Inversion of Control: Clean up views statelessly by parsing custom element conventions 
+            // inside the main content panes, keeping the kernel 100% blind to extension names.
+            document.querySelectorAll('.tab-content *').forEach(el => {
+                if (el.tagName.startsWith('INSETU-EXT-') || el.tagName === 'INSETU-VFS-EXPLORER') {
+                    el.remove();
+                }
+            });
 
             // Unmount extension-contributed top-level tabs completely so the layout manager can rebuild them fresh
             document.querySelectorAll('.tab[data-ext]').forEach(el => el.remove());
@@ -988,13 +995,12 @@ async function fullRefresh() {
                 localStorage.removeItem(k);
             }
         });
-
         // We skip performSoftRefresh here because the hard reload will natively  
         // fetch the correct tenant configuration on boot via the interceptor.
         window.location.reload();
     } catch (error) {
         alert("Error during full refresh.");
-        if (btn) btn.innerText = "🔄 Full Refresh";
+        if (btn) btn.innerText = "🔄 Full UI Refresh";
     }
 }
 /* ==========================================================================

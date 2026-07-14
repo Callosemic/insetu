@@ -195,7 +195,6 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         for f in os.listdir(resolved_target_dir):
                                 if f.startswith(prefix) and os.path.isfile(Path(resolved_target_dir).joinpath(f).as_posix()):
                                         shutil.move(Path(resolved_target_dir).joinpath(f).as_posix(), Path(resolved_archive).joinpath(f).as_posix())
-
         is_new = not os.path.exists(resolved_path)
 
         target_dir = os.path.dirname(resolved_path)
@@ -203,6 +202,20 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 os.makedirs(target_dir, exist_ok=True)
         with open(resolved_path, 'w', encoding='utf-8') as f:
                 f.write(content)
+
+        from insetu.utils_core import load_config
+        cfg = load_config(workspace_id)
+        repo_dir = filepath.split('/')[0] if '/' in filepath else ''
+        repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
+        if repo_cfg and repo_cfg.get("archive_type", "repo") != "repo":
+                from insetu.db import get_connection
+                import time
+                db_conn = get_connection("workers", workspace_id=workspace_id)
+                db_conn.execute(
+                        "INSERT OR REPLACE INTO nongit_fixtures (filepath, repo_dir, last_modified) VALUES (?, ?, ?)",
+                        (filepath, repo_dir, time.time())
+                )
+                db_conn.commit()
         delete_source = data.get("delete_source")
         if delete_source:
                 old_abs_path = resolve_workspace_path(delete_source, workspace_id)

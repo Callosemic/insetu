@@ -219,16 +219,12 @@ function updateManifestState(oldPath, newPath = null) {
     if (changed) {
         AppStore.setState({ manifest: newManifest });
     }
-
     // Silently pull the true Cartographer-validated manifest to heal new path additions
     setTimeout(async () => {
         try {
             const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
             if (mRes.ok) {
                 AppStore.setState({ manifest: await mRes.json() });
-                if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) {
-                    loadGlobalFS();
-                }
             }
         } catch(e) {}
     }, 500); // 500ms delay ensures the async VFS queue has fully drained to disk
@@ -252,13 +248,11 @@ async function saveModalFile(autoSave = false) {
     if (state.filename.toLowerCase().endsWith('.json')) {
         try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
     }
-
     await executeWorkspaceMutation('fs/save', { filepath: state.filename, content }, {
         loadingText: 'Saving...',
         silent: autoSave,
         onSuccess: () => {
             FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
-            if (document.getElementById('st-files') && document.getElementById('st-files').classList.contains('active')) loadGlobalFS();
             if (autoSave && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
                 window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', state.filename);
             }
@@ -1032,7 +1026,8 @@ export class InSetuFileModal extends InSetuElement {
         fileModal: { type: Object }
     };
     static styles = [sharedStyles, css`
-        .fullscreen-wrapper { display: flex; flex-direction: column; height: 100dvh; width: 100vw; background: var(--bg); }
+        .fullscreen-modal { position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh; }
+        .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
     `];
 
     constructor() {
@@ -1062,9 +1057,8 @@ export class InSetuFileModal extends InSetuElement {
         if (m.isFS && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
             window.inSetu.extensions.Registry.executeUIHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
         }
-
         return html`
-            <div class="fullscreen-modal" style="display: block; z-index: 1050; padding: 0;">
+            <div class="fullscreen-modal" style="display: block; z-index: 3000; padding: 0;">
                 <div class="fullscreen-wrapper">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
                         <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>

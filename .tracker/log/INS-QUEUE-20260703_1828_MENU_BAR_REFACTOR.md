@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260703_1828_MENU_BAR_REFACTOR
 title: "Refactor File Modal Toolbar to Dropdown Menu Bar"
 created_at: 2026-07-06T15:46:16
