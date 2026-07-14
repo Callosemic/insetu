@@ -85,11 +85,10 @@ import { javascript } from 'https://esm.sh/@codemirror/lang-javascript';
 
 const languageConf = new Compartment();
 const readOnlyConf = new Compartment();
-
 import { LitElement, css } from 'lit';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 
-export class InSetuMarkdownEditor extends LitElement {
+export class InSetuMarkdownEditor extends InSetuElement {
     static properties = {
         value: { type: String },
         readOnly: { type: Boolean },
@@ -453,10 +452,8 @@ window.addEventListener('DOMContentLoaded', async () => {
             const config = await cRes.json();
             window.ACTIVE_EXTENSIONS = config.extensions || [];
             window.inSetu.serverSchemas = config._settings_schemas || {};
-
             // Synchronize branding tokens while we have the config
-            const toggleBtn = document.getElementById('settings-toggle');
-            if (toggleBtn) toggleBtn.innerText = config.instance_emoji || "⚙️";
+            AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.getElementById('global-status-bar');
             if (statusBar) statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
         }
@@ -790,7 +787,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
                         result = { status: 'aborted', message: 'Workspace switched.', files: [] };
                         break;
                     }
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    await new Promise(resolve => setTimeout(resolve, 250));
                     if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
                         result = { status: 'aborted', message: 'Workspace switched.', files: [] };
                         break;

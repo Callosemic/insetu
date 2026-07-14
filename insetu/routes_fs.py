@@ -31,6 +31,16 @@ def _vfs_commit_worker():
                     resolved_path = resolve_workspace_path(filepath, workspace_id)
                     if os.path.exists(resolved_path):
                         os.remove(resolved_path)
+                    if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
+                        import time
+                        from insetu.db import get_connection
+                        db_conn = get_connection("workers", workspace_id=workspace_id)
+                        db_conn.execute(
+                            "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                            (filepath, 'deleted', time.time())
+                        )
+                        db_conn.commit()
+
                     _trigger_post_mutation_hooks(workspace_id, filepath)
                 elif action == "move":
                     dest_path = data.get("dest_path")
@@ -203,26 +213,23 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
         with open(resolved_path, 'w', encoding='utf-8') as f:
                 f.write(content)
 
-        from insetu.utils_core import load_config
-        cfg = load_config(workspace_id)
-        repo_dir = filepath.split('/')[0] if '/' in filepath else ''
-        repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
-        if repo_cfg and repo_cfg.get("archive_type", "repo") != "repo":
-                from insetu.db import get_connection
-                import time
-                db_conn = get_connection("workers", workspace_id=workspace_id)
-                db_conn.execute(
-                        "INSERT OR REPLACE INTO nongit_fixtures (filepath, repo_dir, last_modified) VALUES (?, ?, ?)",
-                        (filepath, repo_dir, time.time())
-                )
-                db_conn.commit()
+        import time
+        from insetu.db import get_connection
+        db_conn = get_connection("workers", workspace_id=workspace_id)
+        # Universal OS Ledger: Track every physical file mutation
+        if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
+            db_conn.execute(
+                    "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                    (filepath, 'modified' if not is_new else 'added', time.time())
+            )
+            db_conn.commit()
+
         delete_source = data.get("delete_source")
         if delete_source:
                 old_abs_path = resolve_workspace_path(delete_source, workspace_id)
                 if os.path.exists(old_abs_path) and os.path.abspath(old_abs_path) != os.path.abspath(resolved_path):
                         os.remove(old_abs_path)
                         hooks.emit_background('post_file_delete', filepath=delete_source, workspace_id=workspace_id)
-
                         # Clean up empty ghost directories left behind
                         try:
                             parent_dir = os.path.dirname(old_abs_path)
@@ -232,6 +239,12 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                                 parent_dir = os.path.dirname(parent_dir)
                         except OSError:
                             pass
+                        if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
+                            db_conn.execute(
+                                "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                                (delete_source, 'deleted', time.time())
+                            )
+                            db_conn.commit()
 
         if data.get("is_new_repo") and data.get("repo_dir"):
                 repo_dir = data.get("repo_dir")

@@ -37,17 +37,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Attribute) and node.func.attr == 'route':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('', '/'):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
-
-        # 1. VFS Write-Path Ban: Prevent native open(..., 'w') outside of the VFS pipeline
+        # 1. VFS Write-Path Ban (ADR 0018): Prevent native open(..., 'w') to maintain Event Ledger parity
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
                 # Check positional args for write modes
-                if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and 'w' in node.args[1].value:
-                    report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save instead.")
+                if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and any(m in node.args[1].value for m in ['w', 'a', 'x', '+']):
+                    report_violation("EVENT_LEDGER_SENTINEL", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).")
                 # Check keyword args
                 for kw in node.keywords:
-                    if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and 'w' in kw.value.value:
-                        report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save instead.")
+                    if kw.arg == 'mode' and isinstance(kw.value, ast.Constant) and any(m in kw.value.value for m in ['w', 'a', 'x', '+']):
+                        report_violation("EVENT_LEDGER_SENTINEL", self.filepath, node.lineno, "Native file write detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).")
 
             # Catch __import__('sqlite3') bypass
             if node.func.id == '__import__' and self.filename not in SQLITE_WHITELIST:
@@ -107,15 +106,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 func = item.context_expr.func
                 if isinstance(func, ast.Name) and func.id == 'open':
                     args = item.context_expr.args
-                    if len(args) > 1 and isinstance(args[1], ast.Constant) and args[1].value in ['w', 'a', 'wb', 'ab']:
+                    if len(args) > 1 and isinstance(args[1], ast.Constant) and any(m in args[1].value for m in ['w', 'a', 'x', '+']):
                         if self.filename not in VFS_WRITE_WHITELIST:
-                            report_violation("VFS_CONSTRAINT", self.filepath, node.lineno, "Native 'open' in write mode detected. Route through execute_vfs_save.")
+                            report_violation("EVENT_LEDGER_SENTINEL", self.filepath, node.lineno, "Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).")
         self.generic_visit(node)
     def visit_Import(self, node):
         self._check_sqlite_import(node)
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext and any(alias.name == 'flask' for alias in node.names):
             report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Raw flask import detected in extension engine. Use InSetuExtension framework instead.")
+        if is_ext and any(alias.name == 'socket' for alias in node.names):
+            report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
         # CQRS Hook Parity Check
@@ -131,7 +132,6 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("CQRS_EVENT_PARITY", self.filepath, node.lineno, "Function subscribes to 'vfs_transaction_committed' but is missing 'post_file_save' and/or 'post_file_delete'.")
 
         self.generic_visit(node)
-
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
         # Catch from os.path import join bypass
@@ -142,6 +142,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if is_ext:
             if node.module == 'flask' and any(alias.name == 'Blueprint' for alias in node.names):
                 report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
+            if node.module == 'socket':
+                report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
 
             banned_imports = {'load_config', 'resolve_workspace_path', 'get_gather_paths'}
             imported_names = {alias.name for alias in node.names}

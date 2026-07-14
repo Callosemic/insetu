@@ -32,6 +32,7 @@ insetu/
 │   │   ├── 0015-codemirror6-migration.md # [comment required]
 │   │   ├── 0016-explicit-api-client-and-fetch-deprecation.md # [comment required]
 │   │   ├── 0017-extension-sdk-and-pit-of-success.md # [comment required]
+│   │   ├── 0018-event-sourced-vfs-ledger.md # [comment required]
 │   │   ├── 0021_standardized_state_isolation.md # [comment required]
 │   │   └── 0022-differential-context-compilation.md # [comment required]
 │   └── standups/                   # [comment required]

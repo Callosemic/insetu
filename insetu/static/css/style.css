@@ -329,9 +329,6 @@ h1, h2, h3, h4, h5, h6 {
     color: #0f172a;
     border: 1px solid #cbd5e1;
 }
-[data-theme="light"] insetu-ext-term {
-    filter: invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.95);
-}
 /* E-Ink High Contrast Overrides */
 [data-theme="e-ink"] h1, [data-theme="e-ink"] h2, [data-theme="e-ink"] h3, 
 [data-theme="e-ink"] h4, [data-theme="e-ink"] h5, [data-theme="e-ink"] h6,
@@ -423,9 +420,6 @@ h1, h2, h3, h4, h5, h6 {
 color: #000000 !important;
     border: 1px dashed #000000 !important;
     opacity: 1 !important;
-}
-[data-theme="e-ink"] insetu-ext-term {
-    filter: invert(1) grayscale(1) contrast(1.5);
 }
 
 /* Wiki Link Popup */

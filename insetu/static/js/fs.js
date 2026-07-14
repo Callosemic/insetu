@@ -170,9 +170,8 @@ export async function viewAndCopy(filename) {
     }});
 
     closeBrowseModal();
-
     try {
-        const res = await fetch(`/download/${filename}`);
+        const res = await fetch(`/download/${filename}`, { headers: window.inSetu.api._getHeaders(true) });
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
@@ -266,7 +265,7 @@ async function copyFromModal() {
         const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
         if (overrideUrl) {
             try {
-                const res = await fetch(overrideUrl);
+                const res = await fetch(overrideUrl, { headers: window.inSetu.api._getHeaders(true) });
                 if (res.ok) text = await res.text();
             } catch (e) { }
         }
@@ -886,10 +885,8 @@ export async function viewSourceFile(filepath, isFS = false) {
     }});
 
     closeBrowseModal();
-
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        const res = await fetch(`/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filepath));
+        const res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filepath)}`);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);

@@ -33,13 +33,12 @@ def apply_declarative_schema(db_name, schema_dict, workspace_id=None):
                 except Exception as e:
                     print(f"⚠️ Auto-migration failed for {table_name}.{col}: {e}")
     conn.commit()
-
-# Register core worker database schema for tracking unmanaged/non-Git file deltas contextually
+# Register core worker database schema for tracking all file deltas contextually
 register_schema('workers', {
-    'nongit_fixtures': {
+    'vfs_event_log': {
         'filepath': 'TEXT PRIMARY KEY',
-        'repo_dir': 'TEXT',
-        'last_modified': 'REAL'
+        'mutation_type': 'TEXT',
+        'timestamp': 'REAL'
     }
 })
 

@@ -58,7 +58,6 @@ static styles = [
                 font-weight: bold;
                 background: transparent;
             }
-
             /* E-Ink overrides */
             :host-context([data-theme="e-ink"]) button.variant-standard.active {
                 background: #000000 !important;

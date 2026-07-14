@@ -114,11 +114,15 @@ def load_workspace_extensions():
     for ext in sorted_exts:
         try:
             ext_module = getattr(modules[ext], f"{ext}_bp")
-
             # SDK Check: Unwrap the Blueprint if it utilizes the InSetuExtension SDK class
             blueprint = ext_module.bp if hasattr(ext_module, 'bp') else ext_module
 
             app.register_blueprint(blueprint)
+
+            # Wire up native WebSockets natively via flask-sock if the extension provides it
+            if hasattr(ext_module, 'sock'):
+                ext_module.sock.init_app(app)
+
             print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
         except AttributeError as e:
             print(f"⚠️  Blueprint Mount Failed [{ext}]: {str(e)}")
@@ -269,27 +273,10 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.RLock()
         return _COMPILER_LOCKS[wid]
-
 def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
     ws_lock = get_compiler_lock(workspace_id)
     try:
         ws_lock.acquire()
-        update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
-        try:
-            from insetu.hooks import hooks
-            hooks.emit('pre_compile', workspace_id=workspace_id)
-            from insetu.routes_fs import _VFS_WRITE_QUEUE
-            _VFS_WRITE_QUEUE.join()
-        except Exception as e:
-            print(f"Warning: Pre-compile hooks failed: {str(e)}")
-
-        update_immediate_job_status(job_id, 'processing', "Mapping repositories (Cartographer)...", workspace_id=workspace_id)
-        try:
-            from insetu.cartographer import map_repositories
-            map_repositories(workspace_id)
-        except Exception as e:
-            print(f"Warning: Cartographer failed: {str(e)}")
-
         import insetu.engine_gather as engine_gather
         from insetu.utils_core import get_gather_paths, load_json_file, get_workspace_physics, load_config
         from pathlib import Path
@@ -307,58 +294,83 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
         else:
             needs_full_compile = force_full or not manifest_data
 
+        update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
+        try:
+            from insetu.hooks import hooks
+            hooks.emit('pre_compile', workspace_id=workspace_id, is_full_sweep=needs_full_compile, forced_repos=forced_repos)
+            from insetu.routes_fs import _VFS_WRITE_QUEUE
+            _VFS_WRITE_QUEUE.join()
+        except Exception as e:
+            print(f"Warning: Pre-compile hooks failed: {str(e)}")
+
         if not needs_full_compile and not forced_repos:
             try:
-                cfg, ws_root, _ = get_workspace_physics(workspace_id)
-                changed_files = set()
                 live_cfg = load_config(workspace_id)
+                ledger_events = kwargs.get('ledger_events')
 
-                for repo_cfg in live_cfg.get("target_repos", []):
-                    if repo_cfg.get("exclude_from_context"): continue
-                    repo_dir = repo_cfg.get("repo_dir")
-                    physical_path = repo_cfg.get("physical_path")
+                # Proactive Ledger Flush: If manual UI refresh, grab any pending VFS mutations instantly
+                if ledger_events is None:
+                    from insetu.db import get_connection
+                    db_conn = get_connection("workers", workspace_id=workspace_id)
+                    try:
+                        events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
+                    except Exception:
+                        events = []
 
-                    if physical_path:
-                        repo_path = os.path.abspath(os.path.expanduser(physical_path))
-                    else:
-                        repo_path = os.path.abspath(os.path.join(ws_root, repo_dir))
+                    if events:
+                        ledger_events = [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
+                        db_conn.execute("DELETE FROM vfs_event_log")
+                        db_conn.commit()
 
-                    if not os.path.exists(repo_path): continue
+                        # Trigger cartographer instantly before compiling
+                        touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
+                        if touched_repos:
+                            from insetu.cartographer import map_repositories
+                            try: map_repositories(workspace_id=workspace_id, target_repos=touched_repos)
+                            except Exception: pass
+                if ledger_events:
+                    # Phase 3: Pure Event Sourced Differential Routing
+                    changed_files = [e["filepath"] for e in ledger_events]
+                    from insetu.engine_gather import resolve_file_bucket
 
-                    if repo_cfg.get("archive_type", "repo") == "repo":
-                        res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
-                        if res.returncode == 0:
-                            for line in res.stdout.splitlines():
-                                if len(line) < 3: continue
-                                status = line[:2]
-                                filepath = line[3:]
-                                if '->' in filepath: filepath = filepath.split('->')[-1].strip()
+                    touched_buckets = set()
 
-                                ws_rel_path = f"{repo_dir}/{filepath}"
-                                changed_files.add(ws_rel_path)
-                        else:
-                            forced_repos.append(repo_dir)
-                    else:
-                        from insetu.db import get_connection
-                        db_conn = get_connection("workers", workspace_id=workspace_id)
-                        mutations = db_conn.execute("SELECT filepath FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,)).fetchall()
-                        for m in mutations:
-                            changed_files.add(m['filepath'])
-                if not forced_repos:
-                    if changed_files:
-                        update_immediate_job_status(job_id, 'processing', f"Differentially compiling {len(changed_files)} changed files...", workspace_id=workspace_id)
-                        engine_gather._surgically_update_manifest(workspace_id=workspace_id, files=list(changed_files))
-                    else:
-                        update_immediate_job_status(job_id, 'processing', "No external changes detected. Syncing extensions...", workspace_id=workspace_id)
-                        all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
-                        from insetu.hooks import hooks
-                        hooks.emit('compile_contexts', manifest=manifest_data, workspace_id=workspace_id, target_repos=all_repo_dirs, touched_buckets=[], is_full_sweep=False)
-                        engine_gather.save_json_file(manifest_path, manifest_data, workspace_id)
+                    for repo_cfg in live_cfg.get("target_repos", []):
+                        if repo_cfg.get("exclude_from_context"): continue
+                        repo_dir = repo_cfg.get("repo_dir")
+                        subs = repo_cfg.get("sub_buckets", [])
+
+                        repo_files = [f for f in changed_files if f.startswith(f"{repo_dir}/")]
+                        for f in repo_files:
+                            rel_path = f[len(repo_dir)+1:]
+                            if subs:
+                                b, module = resolve_file_bucket(rel_path, subs)
+                                if b and module: touched_buckets.add(f"{repo_dir}__{module}")
+                                elif b: touched_buckets.add(f"{repo_dir}__{b.get('id')}")
+                                else: touched_buckets.add(f"{repo_dir}__catch_all")
+                            else:
+                                touched_buckets.add(f"{repo_dir}__main")
+
+                    update_immediate_job_status(job_id, 'processing', f"Surgically compiling {len(touched_buckets)} touched bucket(s)...", workspace_id=workspace_id)
+                    engine_gather._surgically_update_manifest(workspace_id=workspace_id, files=changed_files)
+                else:
+                    update_immediate_job_status(job_id, 'processing', "No pending changes. Syncing extensions...", workspace_id=workspace_id)
+                    all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
+                    from insetu.hooks import hooks
+                    hooks.emit('compile_contexts', manifest=manifest_data, workspace_id=workspace_id, target_repos=all_repo_dirs, touched_buckets=[], is_full_sweep=False)
+                    from insetu.utils_core import save_json_file
+                    save_json_file(manifest_path, manifest_data, workspace_id)
             except Exception as e:
-                print(f"Warning: Differential compile failed, falling back to full sweep: {e}")
+                import traceback
+                print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
                 needs_full_compile = True
-
         if needs_full_compile or forced_repos:
+            update_immediate_job_status(job_id, 'processing', "Mapping repositories (Cartographer)...", workspace_id=workspace_id)
+            try:
+                from insetu.cartographer import map_repositories
+                map_repositories(workspace_id, target_repos=None if needs_full_compile else forced_repos)
+            except Exception: pass
+
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
             update_immediate_job_status(job_id, 'processing', f"Compiling context payloads ({sweep_label})...", workspace_id=workspace_id)
             engine_gather.generate_context_file(workspace_id, target_repos=None if needs_full_compile else forced_repos)

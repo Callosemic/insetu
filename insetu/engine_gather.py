@@ -278,21 +278,57 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
 
     return dirty
 from insetu.hooks import hooks
-@hooks.on('vfs_transaction_committed')
-@hooks.on('post_file_save')
-@hooks.on('post_file_delete')
+
+def _process_vfs_ledger(workspace_id="default"):
+    from insetu.db import get_connection
+    import time
+    db_conn = get_connection("workers", workspace_id=workspace_id)
+
+    cursor = db_conn.execute("SELECT MAX(timestamp) as last_mut FROM vfs_event_log")
+    row = cursor.fetchone()
+    if not row or not row['last_mut']:
+        return
+
+    last_mut = row['last_mut']
+    now = time.time()
+
+    # Macro Slew Limiter: 5-second silence window
+    if now - last_mut < 5.0:
+        return
+
+    events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
+    if not events: return
+
+    # Clear processed events
+    db_conn.execute("DELETE FROM vfs_event_log WHERE timestamp <= ?", (last_mut,))
+    db_conn.commit()
+
+    # Pre-flight Topology Sync: Inject Cartographer exactly here 
+    # so it natively limits to touched repos without stampeding.
+    touched_repos = list(set(e["filepath"].split('/')[0] for e in events if '/' in e["filepath"]))
+    if touched_repos:
+        from insetu.cartographer import map_repositories
+        try:
+            map_repositories(workspace_id=workspace_id, target_repos=touched_repos)
+        except Exception: pass
+
+    import uuid, json
+    from insetu.workers import submit_immediate_job
+    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+    args_json = json.dumps({
+        "force_full": False, 
+        "ledger_events": [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
+    })
+    # Dispatch to the UI-visible Job Queue for processing
+    submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
+
+from insetu.workers import register_callback
+register_callback("gather", "process_vfs_ledger", _process_vfs_ledger)
+
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files and not filepath: return
-    # Queue Coalescing Guardrail: Skip intermediate files if bulk mutations are actively draining
-    if filepath:
-        from insetu.routes_fs import _VFS_WRITE_QUEUE
-        if not _VFS_WRITE_QUEUE.empty():
-            return
-        files = [filepath]
-    # VFS BARRIER: Ensure all physical disk writes have settled before locking the compiler
-    from insetu.routes_fs import _VFS_WRITE_QUEUE
-    _VFS_WRITE_QUEUE.join()
+    if filepath: files = [filepath]
 
     from insetu.app import get_compiler_lock
     with get_compiler_lock(workspace_id or "default"):
@@ -339,14 +375,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             # Compile ONLY the touched buckets for this repo using the DRY helper
             if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
                 dirty = True
-
         if dirty:
-            from insetu.db import get_connection
-            db_conn = get_connection("workers", workspace_id=workspace_id)
-            for repo_dir in affected_repos:
-                db_conn.execute("DELETE FROM nongit_fixtures WHERE repo_dir = ?", (repo_dir,))
-            db_conn.commit()
-
+            # Note: Ledger wipe is handled in Phase 3 once Gather fully owns the event loop.
             from insetu.routes_fs import _VFS_WRITE_QUEUE
             _VFS_WRITE_QUEUE.join()
 
@@ -414,9 +444,16 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 "files": [f"data/contexts/{f_name}"],
                 "meta": {"type": "gather", "title": f"📦 {f_name.replace('.txt','')}", "domain": "Quick-Pack Clipboard", "desc": "Ad-hoc context payload.", "size_bytes": size_bytes}
             }
-
     manifest_out_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     execute_vfs_save(workspace_id, manifest_out_path, json.dumps(manifest, indent=2), data={"is_absolute_artifact": True})
+
+    import time
+    cache_path = Path(paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
+    cache_data = {
+        "manifest": manifest,
+        "last_full_compile_time": time.time()
+    }
+    execute_vfs_save(workspace_id, cache_path, json.dumps(cache_data, indent=2), data={"is_absolute_artifact": True})
 
     # Block until the manifest and workflows are flushed so the UI can fetch them instantly
     _VFS_WRITE_QUEUE.join()

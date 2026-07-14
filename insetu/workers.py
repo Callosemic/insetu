@@ -284,6 +284,10 @@ def _init_worker_schema(workspace_id="default"):
                 INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
                 VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
         """)
+        conn.execute("""
+                INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+                VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 2000, 0, 0, 'pending', '{}')
+        """)
         conn.commit()
         _INITIALIZED_WORKSPACES.add(workspace_id)
 
@@ -305,16 +309,22 @@ class NonGitDirectoryWatcher:
             _, ws_root, _ = get_workspace_physics(self.workspace_id)
             ws_rel_path = os.path.relpath(event.src_path, ws_root).replace('\\', '/')
 
+            mutation_type = 'modified'
+            if event.event_type == 'created': mutation_type = 'added'
+            elif event.event_type == 'deleted': mutation_type = 'deleted'
+
             from insetu.db import get_connection
             import time
             db_conn = get_connection("workers", workspace_id=self.workspace_id)
             db_conn.execute(
-                "INSERT OR REPLACE INTO nongit_fixtures (filepath, repo_dir, last_modified) VALUES (?, ?, ?)",
-                (ws_rel_path, self.repo_dir, time.time())
+                "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                (ws_rel_path, mutation_type, time.time())
             )
             db_conn.commit()
         except Exception:
             pass
+import time
+SYSTEM_BOOT_TIME = time.time()
 
 @hooks.on('system_boot')
 def start_workers():
@@ -339,7 +349,30 @@ def start_workers():
                 conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
                 conn.commit()
 
+                # Boot-Time Heuristic: Offline Mutation Guard
+                from insetu.sdk import ExtensionContext
+                from insetu.utils_core import load_json_file
+                import uuid, json
+                ctx = ExtensionContext('gather', ws_id)
+                cache_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
+                cache_data = load_json_file(cache_path, {})
+                last_compile = cache_data.get("last_full_compile_time", 0)
+
+                if SYSTEM_BOOT_TIME > last_compile:
+                    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+                    args_json = json.dumps({"force_full": True})
+                    conn.execute("""
+                        INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
+                        VALUES (?, ?, ?, 'processing', 'Healing offline mutations...', '{}', ?, ?, ?)
+                    """, (job_id, "gather", "compile_contexts", time.time(), time.time(), args_json))
+                    conn.commit()
+
         _executor = ThreadPoolExecutor(max_workers=3)
+        # Flush the immediate_jobs queue natively for the boot heuristics
+        for ws_id in workspace_ids:
+            conn = get_connection("workers", workspace_id=ws_id)
+            for row in conn.execute("SELECT id, args_json FROM immediate_jobs WHERE callback_name='compile_contexts' AND status='processing'").fetchall():
+                _executor.submit(_execute_immediate_job, row['id'], "gather", "compile_contexts", row['args_json'], ws_id)
         _shutdown_event.clear()
         _metronome_thread = threading.Thread(target=_metronome_loop, daemon=True)
         _metronome_thread.start()

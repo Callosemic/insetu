@@ -16,25 +16,8 @@ def _background_map(job_id, workspace_id, target_repos=None):
         update_immediate_job_status(job_id, 'completed', "Cartography complete.", workspace_id=workspace_id)
     except Exception as e:
         update_immediate_job_status(job_id, 'failed', f"Mapping failed: {str(e)}", workspace_id=workspace_id)
-
 register_callback("cartographer", "map_task", _background_map)
-@hooks.on('post_file_save')
-@hooks.on('post_file_delete')
-def auto_trigger_cartography(filepath, workspace_id=None, **kwargs):
-    """Event Bus listener: Triggers topology mapping on file changes, with recursion protection."""
-    # SHORT-CIRCUIT RECURSION: Ignore our own artifacts, system text dumps, and volatile ticket states
-    if filepath.endswith('CODE_INDEX.md') or filepath.endswith('_context.txt') or filepath.endswith('_diffs.txt') or '.tracker/' in filepath:
-        return
 
-    import json
-    repo = filepath.split('/')[0] if '/' in filepath else filepath
-    args_json = json.dumps({"target_repos": [repo]})
-    job_id = f"map_{uuid.uuid4().hex[:8]}"
-    try:
-        submit_immediate_job(job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id)
-    except RuntimeError as e:
-        if "shutdown" not in str(e).lower():
-            raise
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
     def parse_text_for_comments(text):
@@ -173,7 +156,8 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
 
         from insetu.routes_fs import execute_vfs_save
 
-        execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer)
+        # ADR 0018: Ignore Ledger to prevent Cartographer from triggering infinite recompilation loops
+        execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if missing > 0:
