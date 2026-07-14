@@ -39,12 +39,29 @@ TRACKER_SETTINGS_SCHEMA = [
 
 tracker_bp = InSetuExtension('tracker', __name__, schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
+def _background_archive_stale_tickets(job_id=None, workspace_id="default", **kwargs):
+    try:
+        archive_stale_tickets(workspace_id=workspace_id)
+    except Exception:
+        pass
+
+from insetu.workers import register_callback
+register_callback("tracker", "archive_stale_task", _background_archive_stale_tickets)
 
 @hooks.on('system_boot')
 def init_tracker_db():
     from insetu.utils_core import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
         _sync_disk_to_db(workspace_id=ws_id)
+
+        # Schedule background archiving to run silently every 1 hour
+        from insetu.db import get_connection
+        conn = get_connection("workers", workspace_id=ws_id)
+        conn.execute("""
+            INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+            VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
+        """, (f"trk_arch_{ws_id}",))
+        conn.commit()
 @hooks.on('post_file_save')
 def handle_tracker_file_save(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
@@ -349,12 +366,13 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
 
     return new_rel_path
 @hooks.on('pre_compile')
-def pre_compile_tracker_housekeeping(workspace_id=None):
-    try:
-        enforce_declarative_tickets(workspace_id=workspace_id)
-        archive_stale_tickets(workspace_id=workspace_id)
-    except Exception as e:
-        print(f"Tracker housekeeping failed: {e}")
+def pre_compile_tracker_housekeeping(workspace_id=None, is_full_sweep=False, **kwargs):
+    if is_full_sweep:
+        try:
+            enforce_declarative_tickets(workspace_id=workspace_id)
+        except Exception as e:
+            print(f"Tracker housekeeping failed: {e}")
+
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
     SSOT Enforcer: Sweeps all .tracker directories (or a specific file). 

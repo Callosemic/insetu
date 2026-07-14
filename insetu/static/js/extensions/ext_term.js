@@ -1,77 +1,146 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { Terminal } from 'https://esm.sh/xterm@5.3.0';
+import { FitAddon } from 'https://esm.sh/xterm-addon-fit@0.8.0';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-export const TerminalStore = createExtensionStore('Terminal', {
-    termPort: null,
-    errorMessage: null
-});
+export const TerminalStore = createExtensionStore('Terminal', {});
 window.inSetu.stores.Terminal = TerminalStore;
 
 export class InSetuExtTerm extends InSetuElement {
     get extName() { return 'term'; }
-    static properties = {
-        termPort: { type: Number },
-        errorMessage: { type: String }
-    };
-    // Host-level CSS filters handle Light/E-Ink theme inversions uniformly; term.css is deprecated.
     static styles = css`
-        :host { display: flex; flex-direction: column; height: 100%; padding: 0; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
-        /* 布局硬化：通过超越边界的加宽计算与容器级强制切边，彻底粉碎跨源浏览器造成的溢出黑条 */
-        iframe { flex: 1; width: calc(100% + 18px); height: 100%; border: none; outline: none; background: transparent; border-radius: 0; overflow: hidden; }
-        ::-webkit-scrollbar { width: 10px; height: 10px; }
-        ::-webkit-scrollbar-track { background: #0f172a; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; border: 2px solid #0f172a; }
-        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
+        #terminal-container { flex: 1; overflow: hidden; width: 100%; height: 100%; }
     `;
+
     constructor() {
         super();
-        this.termPort = null;
-        this.errorMessage = null;
-    }
-    async fetchTerminalPort() {
-        TerminalStore.setState({ termPort: null, errorMessage: null });
-        try {
-            const res = await this.api.get('port');
-            const data = await res.json();
-            if (res.ok) {
-                TerminalStore.setState({ termPort: data.term_port });
-            } else {
-                TerminalStore.setState({ errorMessage: data.error || "Failed to initialize terminal session channel." });
-            }
-        } catch (e) {
-            TerminalStore.setState({ errorMessage: "Ecosystem network disconnect or extension routing failure." });
-            console.error("Failed to fetch dynamic workspace terminal port routing context:", e);
-        }
+        this._term = null;
+        this._fitAddon = null;
+        this._ws = null;
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(TerminalStore, state => {
-            this.termPort = state.termPort;
-            this.errorMessage = state.errorMessage;
-        });
-        this.fetchTerminalPort();
+        setTimeout(() => this._initTerminal(), 0);
+        window.addEventListener('resize', this._handleResize);
+        this._themeObserver = new MutationObserver(() => this._applyTheme());
+        this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
     }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        window.removeEventListener('resize', this._handleResize);
+        if (this._themeObserver) this._themeObserver.disconnect();
+        if (this._ws) this._ws.close();
+        if (this._term) this._term.dispose();
+    }
+
     onWorkspaceChanged(newWorkspaceId) {
-        this.fetchTerminalPort();
+        if (this._ws) this._ws.close();
+        if (this._term) this._term.clear();
+        this._connectWebSocket();
     }
-    render() {
-        if (this.errorMessage) {
-            return html`
-                <div style="padding: 20px; background: var(--bg); height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-                    <div style="font-size: 2.5rem; margin-bottom: 15px;">⚠️</div>
-                    <h3 style="margin: 0 0 10px 0; color: var(--intent-danger); font-weight: bold;">Terminal Shell Allocation Error</h3>
-                    <p style="color: var(--text-muted); font-size: 0.95rem; max-width: 500px; margin: 0 0 20px 0; font-family: var(--font-mono);">${this.errorMessage}</p>
-                    <button class="btn-sm" style="background: var(--intent-primary); font-weight: bold;" @click=${this.fetchTerminalPort}>🔄 Retry Connection</button>
-                </div>
-            `;
+    _handleResize = () => {
+        // Only calculate geometry if the component is actively visible on the screen
+        if (this._fitAddon && this.offsetParent !== null) {
+            this._fitAddon.fit();
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+            }
         }
-        if (!this.termPort) return html`<div style="color: var(--text-muted); font-style: italic; padding: 20px;">Connecting to local TTYD terminal...</div>`;
-        return html`<iframe id="term-iframe" scrolling="no" src="${window.location.protocol}//${window.location.hostname}:${this.termPort}"></iframe>`;
+    };
+    _initTerminal() {
+        const container = this.shadowRoot.getElementById('terminal-container');
+        if (!container) return;
+
+        this._term = new Terminal({
+            cursorBlink: true,
+            fontFamily: 'monospace',
+            fontSize: 14
+        });
+        this._applyTheme();
+
+        this._fitAddon = new FitAddon();
+        this._term.loadAddon(this._fitAddon);
+        this._term.open(container);
+        // Wait slightly for DOM to settle before fitting
+        setTimeout(() => {
+            this._handleResize();
+            this._connectWebSocket();
+        }, 50);
+
+        this._term.onData(data => {
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this._ws.send(data);
+            }
+        });
+    }
+    _connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/${this.workspaceId}/term/stream`;
+
+        // Xterm WebSocket attachment
+        this._ws = new WebSocket(wsUrl);
+        this._ws.binaryType = 'arraybuffer';
+        this._ws.onopen = () => {
+            if (this._term) {
+                this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+            }
+        };
+
+        this._ws.onmessage = (event) => {
+            if (!this._term) return;
+            if (typeof event.data === 'string') {
+                this._term.write(event.data);
+            } else {
+                this._term.write(new Uint8Array(event.data));
+            }
+        };
+        this._ws.onclose = (event) => {
+            if (this._term) {
+                let msg = '\r\n\x1b[31m[Disconnected from terminal session]\x1b[0m\r\n';
+                if (event && event.code) {
+                    msg += `\x1b[33mCode: ${event.code} Reason: ${event.reason || 'Unknown'}\x1b[0m\r\n`;
+                }
+                this._term.write(msg);
+            }
+        };
+    }
+    _applyTheme() {
+        if (!this._term) return;
+        const theme = document.body.getAttribute('data-theme') || 'dark';
+        if (theme === 'light') {
+            this._term.options.theme = { 
+                background: '#f8fafc', foreground: '#0f172a', cursor: '#0f172a', selectionBackground: 'rgba(15, 23, 42, 0.2)',
+                black: '#000000', red: '#b91c1c', green: '#15803d', yellow: '#b45309', blue: '#1d4ed8', magenta: '#a21caf', cyan: '#0f766e', white: '#64748b',
+                brightBlack: '#475569', brightWhite: '#0f172a'
+            };
+        } else if (theme === 'e-ink') {
+            this._term.options.theme = { 
+                background: '#ffffff', foreground: '#000000', cursor: '#000000', selectionBackground: 'rgba(0, 0, 0, 0.2)',
+                black: '#000000', red: '#000000', green: '#000000', yellow: '#000000', blue: '#000000', magenta: '#000000', cyan: '#000000', white: '#000000',
+                brightBlack: '#000000', brightRed: '#000000', brightGreen: '#000000', brightYellow: '#000000', brightBlue: '#000000', brightMagenta: '#000000', brightCyan: '#000000', brightWhite: '#000000'
+            };
+        } else {
+            this._term.options.theme = { 
+                background: '#0f172a', foreground: '#38bdf8', cursor: '#38bdf8', selectionBackground: 'rgba(56, 189, 248, 0.3)',
+                black: '#000000', red: '#ef4444', green: '#22c55e', yellow: '#f59e0b', blue: '#3b82f6', magenta: '#d946ef', cyan: '#06b6d4', white: '#cbd5e1',
+                brightBlack: '#475569', brightWhite: '#f8fafc'
+            };
+        }
+    }
+
+    render() {
+        return html`
+            <link rel="stylesheet" href="https://esm.sh/xterm@5.3.0/css/xterm.css" />
+            <div id="terminal-container"></div>
+        `;
     }
 }
 customElements.define('insetu-ext-term', InSetuExtTerm);
+
 window.ExtensionRegistry.registerExtension('term', {
     name: "Terminal Interface",
     version: "2.0.0",
@@ -93,20 +162,26 @@ window.ExtensionRegistry.registerExtension('term', {
     ],
     uiHooks: {
         'zone:force-refresh': (tabId) => {
-            if (tabId === 'term') {
+            if (tabId === 'ctrl') {
                 const termEl = document.querySelector('insetu-ext-term');
                 if (termEl) {
-                    const iframe = termEl.shadowRoot.getElementById('term-iframe');
-                    if (iframe) iframe.src += '';
+                    termEl.onWorkspaceChanged(termEl.workspaceId);
                 }
             }
         },
         'zone:tab-changed': (tabId) => {
-            if (tabId === 'term') {
+            if (tabId === 'ctrl') {
                 const termEl = document.querySelector('insetu-ext-term');
-                if (termEl) {
-                    const iframe = termEl.shadowRoot.getElementById('term-iframe');
-                    if (iframe) iframe.focus();
+                if (termEl && termEl._handleResize) {
+                    setTimeout(() => termEl._handleResize(), 50);
+                }
+            }
+        },
+        'zone:subtab-changed': (data) => {
+            if (data.parentId === 'ctrl' && data.subId === 'term') {
+                const termEl = document.querySelector('insetu-ext-term');
+                if (termEl && termEl._handleResize) {
+                    setTimeout(() => termEl._handleResize(), 50);
                 }
             }
         }

@@ -1,128 +1,149 @@
 import os
 import subprocess
-import shutil
-import socket
+import threading
+import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
 from insetu.hooks import hooks
 from insetu.utils_core import get_all_workspace_ids, get_workspace_physics, load_config
 
-TERM_SETTINGS_SCHEMA = [
-    {
-        "id": "base_port",
-        "label": "Terminal Starting Port",
-        "type": "number",
-        "default": 8181,
-        "description": "The baseline network port to begin probing for available sockets sequentially."
-    }
-]
+try:
+    from flask_sock import Sock
+    HAS_SOCK = True
+except ImportError:
+    HAS_SOCK = False
+    class Sock:
+        def route(self, *args, **kwargs):
+            return lambda f: f
+    print("⚠️  [Terminal] flask-sock is not installed. Terminal connections will drop. Run: pip install flask-sock")
 
+# Cross-platform PTY support check
+try:
+    import pty
+    import select
+    import termios
+    import struct
+    import fcntl
+    SUPPORT_PTY = True
+except ImportError:
+    SUPPORT_PTY = False
+TERM_SETTINGS_SCHEMA = []
 term_bp = InSetuExtension('term', __name__, settings_schema=TERM_SETTINGS_SCHEMA)
 __depends__ = []
 
-_term_processes = {}
-_active_term_ports = {}
+sock = Sock()
+if HAS_SOCK:
+    term_bp.sock = sock
 
-def _find_next_free_port(start_port):
-    """Direct socket probing routine to verify socket availability natively."""
-    port = start_port
-    while port < 65535:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                port += 1
-    raise RuntimeError("No free sockets available within system operational limits.")
-@term_bp.route('port', methods=['GET'])
-def get_workspace_terminal_port(ctx):
-    """Stateless tenant route returning the dynamically tracked port allotment after auditing process health."""
-    port = _active_term_ports.get(ctx.workspace_id)
-    proc = _term_processes.get(ctx.workspace_id)
+def set_winsize(fd, row, col, xpix=0, ypix=0):
+    """Native IOCTL system call to resize the PTY grid."""
+    if not SUPPORT_PTY: return
+    try:
+        winsize = struct.pack("HHHH", row, col, xpix, ypix)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    except Exception:
+        pass
 
-    if not port:
-        return jsonify({"error": "Terminal process matrix not allocated for this workspace or extension is disabled."}), 404
-
-    # Direct Health Audit: Check if the background process has prematurely exited
-    if proc and proc.poll() is not None:
-        # Cleanup stale state maps instantly to heal the tracking matrix
-        _active_term_ports.pop(ctx.workspace_id, None)
-        _term_processes.pop(ctx.workspace_id, None)
-        return jsonify({"error": f"Terminal process crashed post-launch with exit code {proc.returncode}."}), 500
-
-    return jsonify({"term_port": port})
-
-@hooks.on('system_boot')
-def boot_managed_terminals():
-    """Lifecycle Hook: Scans active tenant registries and provisions dynamic ttyd instances sequentially."""
-    global _term_processes, _active_term_ports
-    ttyd_bin = shutil.which("ttyd")
-    if not ttyd_bin:
-        print("⚠️  [Terminal Extension] 'ttyd' binary not found in system PATH. Internal terminal management disabled.")
+@sock.route('/api/<workspace_id>/term/stream')
+def term_stream(ws, workspace_id):
+    """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
+    from insetu.utils_core import is_extension_enabled
+    if not is_extension_enabled('term', workspace_id):
+        ws.close(message="403 Forbidden: Terminal extension disabled.")
         return
 
-    from insetu.sdk import ExtensionContext
-    sys_ctx = ExtensionContext('term', 'default')
-    starting_port = int(sys_ctx.settings.get("base_port", 8181))
-    current_port = starting_port
+    if not SUPPORT_PTY:
+        ws.send("PTY is not supported on this host operating system (Windows natively requires pywinpty).\r\n")
+        ws.close()
+        return
+    _, ws_root, _ = get_workspace_physics(workspace_id)
 
-    for ws_id in get_all_workspace_ids():
+    # Fork a new PTY natively
+    master_fd, slave_fd = pty.openpty()
+
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    try:
+        p = subprocess.Popen(
+            ["bash", "-l"],
+            preexec_fn=os.setsid if os.name == 'posix' else None,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=ws_root,
+            env=env
+        )
+    except FileNotFoundError:
         try:
-            cfg = load_config(ws_id)
-            if "term" not in cfg.get("extensions", []):
-                continue
+            # Fallback to sh if bash is missing (e.g., Alpine Linux Docker containers)
+            p = subprocess.Popen(
+                ["sh", "-l"],
+                preexec_fn=os.setsid if os.name == 'posix' else None,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=ws_root,
+                env=env
+            )
+        except Exception as e:
+            ws.send(f"\r\n\x1b[31m[Terminal Error] Failed to start shell: {str(e)}\x1b[0m\r\n")
+            ws.close()
+            return
+    except Exception as e:
+        ws.send(f"\r\n\x1b[31m[Terminal Error] {str(e)}\x1b[0m\r\n")
+        ws.close()
+        return
 
-            _, ws_root, _ = get_workspace_physics(ws_id)
-            if not os.path.exists(ws_root):
-                print(f"⚠️  [Terminal Extension] Skipping workspace '{ws_id}'. Path missing: {ws_root}")
-                continue
-            allocated_port = _find_next_free_port(current_port)
-            current_port = allocated_port + 1  # Advance pointer for subsequent tenants
-            # Pit of Success: Enforce the -W write-access flag, as ttyd defaults to read-only security permissions
-            # We omit the client-option flag to ensure binary launch compatibility across varying host ttyd distributions.
-            cmd = [ttyd_bin, "-i", "127.0.0.1", "-p", str(allocated_port), "-W", "bash"]
+    os.close(slave_fd)
+    def read_from_pty():
+        try:
+            while True:
+                r, _, _ = select.select([master_fd], [], [], 0.1)
+                if master_fd in r:
+                    data = os.read(master_fd, 4096)
+                    if not data:
+                        break
+                    ws.send(data)
+        except OSError:
+            pass  # Expected standard exception when PTY gracefully closes
+        except Exception as e:
+            try: ws.send(f"\r\n\x1b[31m[PTY Read Error] {str(e)}\x1b[0m\r\n")
+            except: pass
+        finally:
+            try:
+                ws.close()
+            except:
+                pass
 
-            print(f"🔌 [Terminal Extension] Spawning isolated ttyd shell for tenant '{ws_id}' on port {allocated_port}...")
+    t = threading.Thread(target=read_from_pty, daemon=True)
+    t.start()
 
-            def _setup_linux_safety_jail():
-                """Configures process group isolation and registers a parent-death signal trigger."""
-                if hasattr(os, 'setsid'):
-                    os.setsid()
-                # Intercept parent termination natively via libc to prevent orphan zombies
+    try:
+        while True:
+            data = ws.receive()
+            if not data:
+                break
+
+            # Intercept declarative JSON configurations (like resize events) natively
+            if isinstance(data, str) and data.startswith('{"type":"resize"'):
                 try:
-                    import ctypes
-                    import signal
-                    libc = ctypes.CDLL(None)
-                    # PR_SET_PDEATHSIG = 1
-                    libc.prctl(1, signal.SIGTERM)
+                    msg = json.loads(data)
+                    set_winsize(master_fd, msg["rows"], msg["cols"])
                 except Exception:
                     pass
-
-            proc = subprocess.Popen(
-                cmd,
-                cwd=ws_root,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                preexec_fn=_setup_linux_safety_jail
-            )
-            _term_processes[ws_id] = proc
-            _active_term_ports[ws_id] = allocated_port
-        except Exception as e:
-            print(f"❌ [Terminal Extension] Failed to initialize process for workspace '{ws_id}': {e}")
-
-@hooks.on('system_shutdown')
-def shutdown_managed_terminals():
-    """Lifecycle Hook: Cleanly kills spawned subprocess grids to prevent rogue background worker leaks."""
-    global _term_processes, _active_term_ports
-    print("🛑 Terminating managed terminal process matrix...")
-    for ws_id, proc in _term_processes.items():
+            else:
+                # Pipe raw input directly to the kernel
+                os.write(master_fd, data if isinstance(data, bytes) else data.encode('utf-8'))
+    except Exception as e:
+        try: ws.send(f"\r\n\x1b[31m[WS Receive Error] {str(e)}\x1b[0m\r\n")
+        except: pass
+    finally:
         try:
-            if proc.poll() is None:
-                proc.terminate()
-                proc.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        except Exception as e:
-            print(f"⚠️  [Terminal Extension] Exception thrown clearing worker thread for '{ws_id}': {e}")
-    _term_processes.clear()
-    _active_term_ports.clear()
+            os.close(master_fd)
+            p.terminate()
+            p.wait(timeout=1.0)
+        except Exception:
+            try:
+                p.kill()
+            except:
+                pass
