@@ -12,17 +12,21 @@ import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const KanbanStore = createExtensionStore('Kanban', {
     tasks: [],
-    pinnedRepos: new Set(["ALL"]),
-    pinnedBuckets: new Set(["ALL"]),
     pinnedTags: new Set(["ALL"]),
-    reposExpanded: false,
-    bucketsExpanded: {},
     tagsExpanded: false,
     modals: { new: false, edit: false },
     newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
     editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '' },
-    setNewTaskField: (field, value) => KanbanStore.setState((state) => ({ newTaskForm: { ...state.newTaskForm, [field]: value } })),
-    setEditTaskField: (field, value) => KanbanStore.setState((state) => ({ editTaskForm: { ...state.editTaskForm, [field]: value } })),
+    setNewTaskField: (field, value) => KanbanStore.setState((state) => {
+        const updatedForm = { ...state.newTaskForm };
+        updatedForm[field] = value;
+        return { newTaskForm: updatedForm };
+    }),
+    setEditTaskField: (field, value) => KanbanStore.setState((state) => {
+        const updatedForm = { ...state.editTaskForm };
+        updatedForm[field] = value;
+        return { editTaskForm: updatedForm };
+    }),
     setModal: (modalName, isOpen) => KanbanStore.setState((state) => ({ modals: { ...state.modals, [modalName]: isOpen } })),
     resetState: () => KanbanStore.setState({ tasks: [] }),
     fetchTasks: async () => {
@@ -33,7 +37,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
             KanbanStore.setState({ tasks: data.tasks || [] });
         }
     }
-}, ['pinnedRepos', 'pinnedBuckets', 'pinnedTags']);
+}, ['pinnedTags']);
 window.inSetu.stores.Kanban = KanbanStore;
 // UI Hooks for real-time reactivity
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
@@ -60,7 +64,6 @@ export class InSetuExtTracker extends InSetuElement {
     static properties = {
         tasks: { type: Array },
         pinnedRepos: { type: Object },
-        pinnedBuckets: { type: Object },
         pinnedTags: { type: Object },
         allRepos: { type: Array },
         activeTab: { type: String },
@@ -116,7 +119,6 @@ constructor() {
         super();
         this.tasks = [];
         this.pinnedRepos = new Set(['ALL']);
-this.pinnedBuckets = new Set(['ALL']);
         this.pinnedTags = new Set(['ALL']);
         this.allRepos = [];
         this.activeTab = 'todos';
@@ -130,24 +132,21 @@ this.pinnedBuckets = new Set(['ALL']);
         super.connectedCallback();
         const parsedTab = this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
-
         this.subscribe(AppStore, (state) => {
             this.allRepos = state.allRepos || [];
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         });
         this.allRepos = AppStore.getState().allRepos || [];
+        this.pinnedRepos = AppStore.getState().pinnedRepos || new Set(['ALL']);
 
         this.subscribe(KanbanStore, (state) => {
             this.tasks = state.tasks || [];
-            this.pinnedRepos = state.pinnedRepos;
-            this.pinnedBuckets = state.pinnedBuckets;
             this.pinnedTags = state.pinnedTags;
             this._modals = state.modals;
             this.requestUpdate();
         });
         const kState = KanbanStore.getState();
         this.tasks = kState.tasks || [];
-        this.pinnedRepos = kState.pinnedRepos;
-        this.pinnedBuckets = kState.pinnedBuckets;
         this.pinnedTags = kState.pinnedTags;
         this._modals = kState.modals;
         document.addEventListener('click', this._docClickListener);
@@ -360,8 +359,9 @@ if (this.allRepos.includes(pinnedRepo)) {
         }
     }
     _renderNewTaskModal() {
-        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
-        if (this.activeTab !== globalActiveSub) return '';
+        // Strict UI isolation: read DOM state instead of global storage leaks
+        const isActiveView = this.closest('.sub-tab-content')?.classList.contains('active');
+        if (!isActiveView) return '';
         const { newTaskForm } = KanbanStore.getState();
         const selectedRepo = newTaskForm.repo || this.allRepos[0];
         const buckets = selectedRepo ? getFlattenedBuckets(selectedRepo) : [];
@@ -389,13 +389,9 @@ if (this.allRepos.includes(pinnedRepo)) {
             </insetu-modal>
         `;
     }
-
     _renderLog(filteredTasks) {
         const recentlyClosed = filteredTasks.filter(t => t.status === 'closed' || t.status === 'logged').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
-
-        const isMulti = this.pinnedRepos.has('ALL') ||
-this.pinnedRepos.size > 1;
 
         return html`
             <h4 class="category-heading" style="margin-top: 10px; margin-bottom: 10px;">Recently Closed</h4>
@@ -417,8 +413,7 @@ this.pinnedRepos.size > 1;
         const allTags = new Set();
         this.tasks.forEach(t => {
             const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
-            const matchesBucket = this.pinnedBuckets.has('ALL') || this.pinnedBuckets.has(t.subBucket);
-            if (matchesRepo && matchesBucket && t.tags) {
+            if (matchesRepo && t.tags) {
                 t.tags.forEach(tag => allTags.add(tag));
             }
         });
@@ -427,9 +422,8 @@ this.pinnedRepos.size > 1;
         // Apply filters to tasks
         const filteredTasks = this.tasks.filter(t => {
             const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
-            const matchesBucket = this.pinnedBuckets.has('ALL') || this.pinnedBuckets.has(t.subBucket);
             const matchesTag = this.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => this.pinnedTags.has(tag)));
-            return matchesRepo && matchesBucket && matchesTag;
+            return matchesRepo && matchesTag;
         });
         const textFilteredTasks = this.searchQuery 
             ? window.inSetu.utils.fuzzyFilterObjects(filteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
@@ -437,7 +431,6 @@ this.pinnedRepos.size > 1;
 
         const activeFilters = [];
         this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        this.pinnedBuckets.forEach(b => { if (b !== 'ALL') activeFilters.push(b); });
         this.pinnedTags.forEach(t => { if (t !== 'ALL') activeFilters.push('#' + t); });
         const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
 
@@ -461,15 +454,7 @@ this.pinnedRepos.size > 1;
                     label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
-                    .enableBuckets=${true}
-                    .activeBuckets=${Array.from(this.pinnedBuckets)}
-                    .getBucketsFn=${getFlattenedBuckets}
-                    @repo-filter-changed=${(e) => {
-                        KanbanStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) });
-                    }}
-                    @bucket-filter-changed=${(e) => {
-                        KanbanStore.setState({ pinnedBuckets: new Set(e.detail.activeBuckets) });
-                    }}>
+                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
 
                 ${tagsArray.length > 0 ? html`
@@ -647,8 +632,9 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
         }
     }
     _renderEditTaskModal() {
-        const globalActiveSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
-        if (this.activeTab !== globalActiveSub) return '';
+        // Strict UI isolation: read DOM state instead of global storage leaks
+        const isActiveView = this.closest('.sub-tab-content')?.classList.contains('active');
+        if (!isActiveView) return '';
         const { editTaskForm } = KanbanStore.getState();
         const activeRepo = editTaskForm.repo || '';
         const buckets = activeRepo ? getFlattenedBuckets(activeRepo) : [];
@@ -735,10 +721,9 @@ this.requestUpdate(); }}
         const closedTasks = state.tasks.filter(t => {
             const isClosed = t.status === 'closed' || t.status === 'archived' || t.status === 'logged';
             if (allRepos) return isClosed;
-            const matchesRepo = state.pinnedRepos.has('ALL') || state.pinnedRepos.has(t.repo);
-            const matchesBucket = state.pinnedBuckets.has('ALL') || state.pinnedBuckets.has(t.subBucket);
+            const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
             const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
-            return isClosed && matchesRepo && matchesBucket && matchesTag;
+            return isClosed && matchesRepo && matchesTag;
         });
         const tasksByRepo = closedTasks.reduce((acc, t) => {
                 if (!acc[t.repo]) acc[t.repo] = [];

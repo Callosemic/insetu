@@ -120,10 +120,9 @@ export class InSetuExtSkills extends InSetuElement {
         const parentId = this.parentNode?.id || '';
         return parentId.replace('sub-', '') || 'repertoire';
     }
-
     get isActiveTab() {
-        const globalActiveSub = localStorage.getItem('insetu_subtab_skills') || 'active';
-        return this.currentViewMode === globalActiveSub;
+        // Strict UI boundary isolation: Read layout state from the DOM tree, not global storage
+        return this.closest('.sub-tab-content')?.classList.contains('active') ?? false;
     }
 
     connectedCallback() {

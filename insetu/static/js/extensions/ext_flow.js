@@ -404,13 +404,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
                                                             <textarea style="height: 150px; margin-bottom: 10px;" readonly>${this._viewingBatchPromptText}</textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                                                    <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => {
-                                                                            navigator.clipboard.writeText(this._viewingBatchPromptText);
-                                                                            const btn = e.target;
-                                                                            const orig = btn.innerText;
-                                                                            btn.innerText = "✅ Copied!";
-                                                                            setTimeout(() => btn.innerText = orig, 2000);
-                                                                    }}>📋 Copy Prompt</button>
+                                                                    <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => this.utils.copyRawText(this._viewingBatchPromptText, e.target)}>📋 Copy Prompt</button>
                                                             </div>
                                                     </div>
                                             ` : 

@@ -3,13 +3,9 @@ import { AppStore } from '../store.js';
 import { getFlattenedBuckets } from '../app.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
-
 export const CitationStore = createExtensionStore('Citations', {
     localLibrary: [],
     pinnedRepos: new Set(['ALL']),
-    pinnedBuckets: new Set(['ALL']),
-    reposExpanded: false,
-            bucketsExpanded: {},
             cachedPublications: [],
             cachedAuthors: [],
             activeAttachCitation: null,
@@ -20,7 +16,7 @@ export const CitationStore = createExtensionStore('Citations', {
             attachForm: { repo: '', bucket: 'None' },
             editForm: { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' },
             importingIds: new Set()
-}, ['pinnedRepos', 'pinnedBuckets']);
+}, ['pinnedRepos']);
 
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';
@@ -31,9 +27,6 @@ export class InSetuExtCitations extends InSetuElement {
         importingIds: { type: Object },
         localLibrary: { type: Array },
         pinnedRepos: { type: Object },
-        pinnedBuckets: { type: Object },
-        reposExpanded: { type: Boolean },
-        bucketsExpanded: { type: Object },
         cachedPublications: { type: Array },
         cachedAuthors: { type: Array },
         activeAttachCitation: { type: Object },
@@ -60,14 +53,10 @@ export class InSetuExtCitations extends InSetuElement {
         .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; }
         :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
     `];
-
     constructor() {
         super();
         this.localLibrary = [];
         this.pinnedRepos = new Set(['ALL']);
-        this.pinnedBuckets = new Set(['ALL']);
-        this.reposExpanded = false;
-        this.bucketsExpanded = {};
         this.cachedPublications = [];
         this.cachedAuthors = [];
         this.activeAttachCitation = null;
@@ -101,9 +90,6 @@ export class InSetuExtCitations extends InSetuElement {
         this.subscribe(CitationStore, state => {
             this.localLibrary = state.localLibrary || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-            this.pinnedBuckets = state.pinnedBuckets || new Set(['ALL']);
-            this.reposExpanded = state.reposExpanded || false;
-            this.bucketsExpanded = state.bucketsExpanded || {};
             this.cachedPublications = state.cachedPublications || [];
             this.cachedAuthors = state.cachedAuthors || [];
             this.activeAttachCitation = state.activeAttachCitation;
@@ -116,20 +102,19 @@ export class InSetuExtCitations extends InSetuElement {
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
         });
-
         const cState = CitationStore.getState();
         this.localLibrary = cState.localLibrary || [];
         this.pinnedRepos = cState.pinnedRepos || new Set(['ALL']);
-        this.pinnedBuckets = cState.pinnedBuckets || new Set(['ALL']);
         this.allRepos = AppStore.getState().allRepos || [];
-
-        this._handleLoadMain = this.loadMainLibrary.bind(this);
-        document.addEventListener('citations-load-main', this._handleLoadMain);
         this.loadMainLibrary();
     }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        this.loadMainLibrary();
+    }
+
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('citations-load-main', this._handleLoadMain);
     }
     async loadMainLibrary() {
         this.mainLoading = true;
@@ -431,12 +416,7 @@ export class InSetuExtCitations extends InSetuElement {
                 if (this.pinnedRepos.has('ALL')) return true;
                 return (this.pinnedRepos.has('ORPHANS') && atts.length === 0) || atts.some(a => this.pinnedRepos.has(a.repo));
             })();
-            const matchesBucket = (() => {
-                if (atts.length === 0 && this.pinnedRepos.has('ORPHANS')) return true;
-                if (this.pinnedBuckets.has('ALL')) return true;
-                return matchesRepo && atts.some(a => this.pinnedBuckets.has(a.bucket) && (this.pinnedRepos.has('ALL') || this.pinnedRepos.has(a.repo)));
-            })();
-            return matchesRepo && matchesBucket;
+            return matchesRepo;
         });
         const filtered = this.mainSearchQuery 
             ? window.inSetu.utils.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
@@ -455,17 +435,8 @@ export class InSetuExtCitations extends InSetuElement {
                     label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
-                    .collapsed=${!this.reposExpanded}
                     .extraRepos=${[{id: "ORPHANS", label: "👻 Orphans"}]}
-                    .enableBuckets=${true}
-                    .activeBuckets=${Array.from(this.pinnedBuckets)}
-                    .getBucketsFn=${getFlattenedBuckets}
-                    @repo-filter-changed=${(e) => {
-                        CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos), reposExpanded: false });
-                    }}
-                    @bucket-filter-changed=${(e) => {
-                        CitationStore.setState({ pinnedBuckets: new Set(e.detail.activeBuckets) });
-                    }}>
+                    @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
                 </insetu-repo-filter>
                 </div>
             </div>

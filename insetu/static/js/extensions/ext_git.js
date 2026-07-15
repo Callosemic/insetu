@@ -92,7 +92,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
         currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
         chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String }
+        activeChunkFile: { type: String },
+        pinnedRepos: { type: Object },
+        allRepos: { type: Array },
+        _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles];
 
@@ -117,6 +120,20 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activePushJobId = null;
         this.chunkModalOpen = false;
         this.activeChunkFile = null;
+        this.pinnedRepos = new Set(['ALL']);
+        this.allRepos = [];
+        this._showFilters = false;
+        this._docClickListener = this._handleDocumentClick.bind(this);
+    }
+
+    _handleDocumentClick(e) {
+        if (!this._showFilters) return;
+        const path = e.composedPath();
+        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
+        if (!isFilterContent) {
+            this._showFilters = false;
+            this.requestUpdate();
+        }
     }
     async _downloadTarget(targetFile, btnComponent = null) {
         const explicitUrl = `/download/${targetFile}`;
@@ -143,6 +160,8 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
             this.activePushJobId = state.activePushJobId;
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.allRepos = state.allRepos || [];
         });
         const state = AppStore.getState();
         this.cachedDiffFiles = state.cachedDiffFiles || [];
@@ -152,12 +171,15 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.categoryOrder = state.categoryOrder || [];
         this.hiddenOutputs = state.hiddenOutputs || [];
         this.activePushJobId = state.activePushJobId;
+        this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+        this.allRepos = state.allRepos || [];
 
         // Secure boundary event listeners to allow external triggers (e.g. from file cards)
         this._boundHandleOpenPush = this._handleOpenPush.bind(this);
         this._boundRefreshSweep = this._fetchSweepStatusSilent.bind(this);
         window.addEventListener('open-push-modal', this._boundHandleOpenPush);
         window.addEventListener('git-diffs-refreshed', this._boundRefreshSweep);
+        document.addEventListener('click', this._docClickListener);
 
         this._fetchSweepStatusSilent();
 }
@@ -165,6 +187,7 @@ disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
         window.removeEventListener('git-diffs-refreshed', this._boundRefreshSweep);
+        document.removeEventListener('click', this._docClickListener);
 }
 
     async _handleOpenPush(e) {
@@ -308,8 +331,16 @@ disconnectedCallback() {
     }
     render() {
         const categories = {};
+        const repoFilteredFiles = this.cachedDiffFiles.filter(f => {
+            if (this.pinnedRepos.has('ALL')) return true;
+            const fileStr = typeof f === 'string' ? f : f.filename;
+            const repoDir = typeof f === 'object' ? f.repo : null;
+            if (repoDir && this.pinnedRepos.has(repoDir)) return true;
+            return Array.from(this.pinnedRepos).some(repo => fileStr.startsWith(repo + '_') || fileStr.includes('_' + repo + '_'));
+        });
+
         const sq = this.searchQuery;
-        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(this.cachedDiffFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : this.cachedDiffFiles;
+        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : repoFilteredFiles;
 
         filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
@@ -347,7 +378,6 @@ disconnectedCallback() {
                 repoDir: repoDir
             });
         });
-
         const sortedCats = Object.keys(categories).sort((a, b) => {
             if (a === "Quick-Pack Clipboard") return -1;
             if (b === "Quick-Pack Clipboard") return 1;
@@ -356,13 +386,32 @@ disconnectedCallback() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
+
+        const activeFilters = [];
+        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
+        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
+
         return html`
-            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <insetu-search-bar 
-                    placeholder="🔍 Fuzzy search pending diffs..." 
-                    .value=${this.searchQuery} 
-                    @search-changed=${e => this.searchQuery = e.detail.value}>
-                </insetu-search-bar>
+            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
+                    <insetu-search-bar 
+                        style="flex: 1;"
+                        placeholder="🔍 Fuzzy search pending diffs..." 
+                        .value=${this.searchQuery} 
+                        @search-changed=${e => this.searchQuery = e.detail.value}>
+                    </insetu-search-bar>
+                    <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
+                        ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
+                    </button>
+                </div>
+                <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                    <insetu-repo-filter
+                        label="📌 Repos:"
+                        .repos=${this.allRepos}
+                        .activeRepos=${Array.from(this.pinnedRepos)}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </div>
             </div>
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
@@ -417,11 +466,11 @@ ${(() => {
                     </insetu-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
-                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).length > 0 ? html`
+                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
                     <insetu-category-section titleText="🧹 Sweepable State">
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
-                        
-                        ${Object.entries(this.sweepFiles).map(([repo, files]) => html`
+
+                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => html`
                             <insetu-card
                             .filename=${repo}
                             .titleText=${repo}

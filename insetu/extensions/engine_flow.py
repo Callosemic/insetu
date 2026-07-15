@@ -5,8 +5,18 @@ from flask import jsonify
 from insetu.sdk import InSetuExtension
 from insetu.utils_core import load_workflows, save_json_file
 from insetu.hooks import hooks
-flow_bp = InSetuExtension('flow', __name__)
+flow_bp = InSetuExtension(
+    'flow', 
+    __name__,
+    virtual_contexts=[{
+        "title": "Workflow Batches",
+        "domain": "Workflows",
+        "description": "Compiled workflow batch automation payloads.",
+        "out_file": "workflows_context.txt"
+    }]
+)
 __depends__ = ['git', 'prompts']
+
 @hooks.on('compile_contexts')
 def compile_flow_batches(manifest, workspace_id=None, **kwargs):
     """Event Bus Hook: Auto-generates workflow batch payloads whenever the OS compiles."""

@@ -100,7 +100,7 @@ export class InSetuExtPrompts extends InSetuElement {
                                     const res = await this.api.get(`resolve?file=${encodeURIComponent(filepath)}`);
                                     if (!res.ok) throw new Error("Failed to fetch");
                                     const text = await res.text();
-                                    await navigator.clipboard.writeText(text);
+                                    await this.utils.copyToClipboard(text);
                                 }
                             },
                             { 

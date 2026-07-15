@@ -313,7 +313,7 @@ export class InSetuExtResearch extends InSetuElement {
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px;">
                     <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word;">🔍 ${job.query}</div>
                     <button class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 2px 8px; margin: 0; font-size: 0.8rem; white-space: nowrap; flex-shrink: 0;"
-                        @click=${(e) => { navigator.clipboard.writeText(job.query); e.target.innerText='✅ Copied!'; setTimeout(()=>e.target.innerText='📋 Copy', 2000); }}>📋 Copy</button>
+                        @click=${(e) => this.utils.copyRawText(job.query, e.target)}>📋 Copy</button>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                     <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: ${statusColor}; font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
