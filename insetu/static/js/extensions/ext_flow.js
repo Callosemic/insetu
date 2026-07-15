@@ -47,11 +47,15 @@ export class InSetuExtFlow extends InSetuElement {
         _viewModalOpen: { type: Boolean },
         _showSelectContexts: { type: Boolean },
         _tempContexts: { type: Array },
+        _selectingFor: { type: String },
         _editForm: { type: Object },
         _viewingBatchPromptText: { type: String },
         _responseContent: { type: String },
         chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String }
+        activeChunkFile: { type: String },
+        pinnedRepos: { type: Object },
+        allRepos: { type: Array },
+        _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles];
     constructor() {
@@ -65,24 +69,55 @@ export class InSetuExtFlow extends InSetuElement {
         this._viewModalOpen = false;
         this._showSelectContexts = false;
         this._tempContexts = [];
+        this._selectingFor = 'includes';
         this._editForm = {};
         this._viewingBatchPromptText = '';
         this.chunkModalOpen = false;
         this.activeChunkFile = null;
+        this.pinnedRepos = new Set(['ALL']);
+        this.allRepos = [];
+        this._showFilters = false;
+        this._docClickListener = this._handleDocumentClick.bind(this);
     }
+
+    _handleDocumentClick(e) {
+        if (!this._showFilters) return;
+        const path = e.composedPath();
+        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
+        if (!isFilterContent) {
+            this._showFilters = false;
+            this.requestUpdate();
+        }
+    }
+
     onWorkspaceChanged(newWorkspaceId) {
         FlowStore.getState().fetchBatches();
     }
-
     connectedCallback() {
         super.connectedCallback();
+        document.addEventListener('click', this._docClickListener);
         this.subscribe(FlowStore, state => {
             this.batches = state.batches;
             this.loading = state.loading;
             this.searchQuery = state.searchQuery;
         });
+        this.subscribe(AppStore, state => {
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.allRepos = state.allRepos || [];
+            this.requestUpdate();
+        });
+        const aState = AppStore.getState();
+        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
+        this.allRepos = aState.allRepos || [];
+
         FlowStore.getState().fetchBatches();
     }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        document.removeEventListener('click', this._docClickListener);
+    }
+
     openEditBatchModal(batch = null) {
         this._editingBatch = batch;
         this._editForm = {
@@ -90,6 +125,8 @@ export class InSetuExtFlow extends InSetuElement {
             title: batch ? batch.title : '',
             domain: batch && batch.domain ? batch.domain : 'Workflows',
             includes: batch && batch.includes ? [...batch.includes] : [],
+            showIfExists: batch && batch.show_if_exists ? [...batch.show_if_exists] : [],
+            showIfMissing: batch && batch.show_if_missing ? [...batch.show_if_missing] : [],
             hasPrompt: batch ? !!batch.include_prompt : false,
             prompt: batch && batch.include_prompt ? batch.include_prompt : '',
             hasResponse: batch ? !!batch.response_path : false,
@@ -149,8 +186,10 @@ export class InSetuExtFlow extends InSetuElement {
         const domain = (this._editForm.domain || '').trim() || "Workflows";
 
         if (!id || !title) return alert("Batch ID and Title are required.");
-
         const payload = { id, title, domain, includes: this._editForm.includes };
+
+        if (this._editForm.showIfExists && this._editForm.showIfExists.length > 0) payload.show_if_exists = this._editForm.showIfExists;
+        if (this._editForm.showIfMissing && this._editForm.showIfMissing.length > 0) payload.show_if_missing = this._editForm.showIfMissing;
 
         if (this._editForm.hasPrompt && this._editForm.prompt) payload.include_prompt = this._editForm.prompt;
 
@@ -211,21 +250,60 @@ export class InSetuExtFlow extends InSetuElement {
         });
     }
     render() {
-            const filteredBatches = this.searchQuery 
-                ? window.inSetu.utils.fuzzyFilterObjects(this.batches, this.searchQuery, b => `${b.title} ${b.id} ${b.domain}`) 
-                : this.batches;
+            const { categoryOrder, gatherOptions, manifest } = AppStore.getState();
+            const repoFilteredBatches = this.batches.map(b => {
+                const filename = `workflow_${b.id}_context.txt`;
+                const manifestObj = manifest[filename] || {};
+                const repos = manifestObj.meta?.repos || [];
+                return { ...b, _repos: repos };
+            }).filter(b => {
+                if (b.show_if_exists && b.show_if_exists.length > 0) {
+                    if (!b.show_if_exists.every(f => !!manifest[f.split('/').pop()])) return false;
+                }
+                if (b.show_if_missing && b.show_if_missing.length > 0) {
+                    if (b.show_if_missing.some(f => !!manifest[f.split('/').pop()])) return false;
+                }
 
-            const { categoryOrder, gatherOptions } = AppStore.getState();
+                if (this.pinnedRepos.has('ALL')) return true;
+                return Array.from(this.pinnedRepos).some(pr => 
+                    (b._repos && b._repos.includes(pr)) || 
+                    b.id.includes(pr) || 
+                    (b.title && b.title.toLowerCase().includes(pr.toLowerCase()))
+                );
+            });
+
+            const filteredBatches = this.searchQuery 
+                ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
+                : repoFilteredBatches;
+
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
+            const activeFilters = [];
+            this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
+            const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
+
             return html`
-                                    <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
-                                        <insetu-search-bar 
-                                            placeholder="🔍 Fuzzy search workflows..." 
-                                            .value=${this.searchQuery} 
-                                            @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}>
-                                        </insetu-search-bar>
-                                    </div>
+                <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                    <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
+                        <insetu-search-bar 
+                            style="flex: 1;"
+                            placeholder="🔍 Fuzzy search workflows..." 
+                            .value=${this.searchQuery} 
+                            @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}>
+                        </insetu-search-bar>
+                        <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
+                            ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
+                        </button>
+                    </div>
+                    <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                        <insetu-repo-filter
+                            label="📌 Repos:"
+                            .repos=${this.allRepos}
+                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                        </insetu-repo-filter>
+                    </div>
+                </div>
 
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
@@ -246,13 +324,12 @@ export class InSetuExtFlow extends InSetuElement {
                                     const kb = Math.round(meta.size_bytes / 1024);
                                     sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
                                 }
-
                                 return html`
                                 <insetu-card
                                         .filename=${b.id}
                                         .titleText=${`📦 ${b.title || b.id}`}
                                         .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
-                                        .detailText=${sizeStr ? `${filename} | ${sizeStr}` : filename}
+                                        .detailText=${sizeStr ? `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename} | ${sizeStr}` : `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename}`}
                                         icon=""
                                         intentColor="var(--intent-primary)"
                                         @card-clicked=${() => this.openBatchModal(b)}>
@@ -268,6 +345,7 @@ export class InSetuExtFlow extends InSetuElement {
                     </div>
                     <insetu-modal 
                             ?open=${this._editModalOpen} 
+                            fullscreen
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
                             @modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
@@ -301,7 +379,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                         `)}
                                             </div>
                                             <div style="display: flex; gap: 10px;">
-                                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📁 Select Contexts</button>
+                                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📁 Select Contexts</button>
                                                 <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" @click=${() => {
                                                     if (window.openWorkspaceBrowser) {
                                                         window.openWorkspaceBrowser({
@@ -319,10 +397,43 @@ export class InSetuExtFlow extends InSetuElement {
                                             </div>
                                     </div>
                                     <div>
+                                            <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
+
+                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these exist:</label>
+                                            <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
+                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
+                                                        this._editForm?.showIfExists?.map((inc, idx) => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                    this._editForm.showIfExists.splice(idx, 1);
+                                                                    this.requestUpdate();
+                                                                }}>×</button>
+                                                            </div>
+                                                        `)}
+                                            </div>
+                                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</button>
+
+                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these are missing:</label>
+                                            <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
+                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
+                                                        this._editForm?.showIfMissing?.map((inc, idx) => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
+                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                    this._editForm.showIfMissing.splice(idx, 1);
+                                                                    this.requestUpdate();
+                                                                }}>×</button>
+                                                            </div>
+                                                        `)}
+                                            </div>
+                                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'missing'; this._tempContexts = [...(this._editForm.showIfMissing || [])]; this._showSelectContexts = true; }}>➕ Add Missing Contexts</button>
+                                    </div>
+                                    <div>
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
                                                     <input type="checkbox" .checked=${this._editForm?.hasPrompt} style="transform: scale(1.3); cursor: pointer;"
                                                             @change=${() => { this._editForm.hasPrompt = !this._editForm.hasPrompt; this.requestUpdate(); }}>
-                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
+                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">3. Instruction Prompt</h4>
                                             </div>
                                             ${this._editForm?.hasPrompt ? html`
                                                     <div style="display: flex; gap: 8px;">
@@ -337,7 +448,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
                                                     <input type="checkbox" .checked=${this._editForm?.hasResponse} style="transform: scale(1.3); cursor: pointer;"
                                                             @change=${() => { this._editForm.hasResponse = !this._editForm.hasResponse; this.requestUpdate(); }}>
-                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">3. Response Text Box</h4>
+                                                    <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">4. Response Text Box</h4>
                                             </div>
                                             ${this._editForm?.hasResponse ? html`
                                                     <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Response Path</label>
@@ -364,7 +475,12 @@ export class InSetuExtFlow extends InSetuElement {
                                     `)}
                             </div>
                             <div slot="footer">
-                                    <button style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${() => { this._editForm.includes = [...this._tempContexts]; this._showSelectContexts = false; }}>✅ Confirm Selection</button>
+                                    <button style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${() => { 
+                                        if (this._selectingFor === 'exists') this._editForm.showIfExists = [...this._tempContexts];
+                                        else if (this._selectingFor === 'missing') this._editForm.showIfMissing = [...this._tempContexts];
+                                        else this._editForm.includes = [...this._tempContexts]; 
+                                        this._showSelectContexts = false; 
+                                    }}>✅ Confirm Selection</button>
                             </div>
                     </insetu-modal>
                     <insetu-modal ?open=${this._viewModalOpen} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>

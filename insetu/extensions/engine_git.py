@@ -195,7 +195,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         "type": "diff",
                         "title": out_filename.replace('_diffs.txt', '').replace('_', ' ').title(),
                         "domain": "Git Diffs",
-                        "desc": "Just-In-Time generated diff payload."
+                        "desc": "Just-In-Time generated diff payload.",
+                        "repo": config['repo_dir']
                     }
                     manifest_entry = compile_context_payload(
                         workspace_id, 

@@ -57,6 +57,12 @@ export async function generateDiffs(force = false) {
                         diffJobError: null
                     });
                 window.dispatchEvent(new CustomEvent('git-diffs-refreshed'));
+
+                setTimeout(() => {
+                    window.inSetu.api.workspace('manifest?t=' + Date.now())
+                        .then(mRes => mRes.ok ? mRes.json() : {})
+                        .then(manifest => AppStore.setState({ manifest }));
+                }, 500);
             },
             onError: (err) => {
                 AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
@@ -162,6 +168,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.activePushJobId = state.activePushJobId;
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.allRepos = state.allRepos || [];
+            this.requestUpdate();
         });
         const state = AppStore.getState();
         this.cachedDiffFiles = state.cachedDiffFiles || [];
@@ -338,42 +345,42 @@ disconnectedCallback() {
             if (repoDir && this.pinnedRepos.has(repoDir)) return true;
             return Array.from(this.pinnedRepos).some(repo => fileStr.startsWith(repo + '_') || fileStr.includes('_' + repo + '_'));
         });
-
         const sq = this.searchQuery;
-        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : f.filename)) : repoFilteredFiles;
+        const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : `${f.repo || ''} ${f.filename}`)) : repoFilteredFiles;
 
         filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
             if (this.hiddenOutputs && this.hiddenOutputs.includes(file)) return;
-
             const safeFile = file.split('/').pop();
             const baseFile = safeFile.replace('_diffs.txt', '_context.txt');
-            const manifestObj = AppStore.getState().manifest[baseFile] || {};
-            const meta = manifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
+            const contextManifestObj = AppStore.getState().manifest[baseFile] || {};
+            const diffManifestObj = AppStore.getState().manifest[safeFile] || {};
+
+            const contextMeta = contextManifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
+            const diffMeta = diffManifestObj.meta || {};
 
             const extMeta = (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) 
                 ? window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile) 
                 : null;
-            const finalCat = extMeta ? extMeta.cat : meta.domain;
-            const finalDesc = extMeta ? extMeta.desc : meta.desc;
-            const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : meta.title + " (Diffs)";
+            const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
+            const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
+            const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + " (Diffs)";
 
             let sizeStr = "";
-            if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024) + "kb");
+            if (diffMeta.chunk_sizes && diffMeta.chunk_sizes.length > 1) {
+                const sizes = diffMeta.chunk_sizes.map(s => Math.round(s / 1024) + "kb");
                 sizeStr = "( " + sizes.join(' + ') + " )";
-            } else if (meta.size_bytes !== undefined) {
-                const kb = Math.round(meta.size_bytes / 1024);
+            } else if (diffMeta.size_bytes !== undefined) {
+                const kb = Math.round(diffMeta.size_bytes / 1024);
                 sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
             }
-
             if (!categories[finalCat]) categories[finalCat] = [];
             categories[finalCat].push({
                 filename: file,
                 displayName: finalTitle,
                 description: finalDesc,
-                detailText: sizeStr ? `${file} | ${sizeStr}` : file,
+                detailText: sizeStr ? `${repoDir ? `[${repoDir}] ` : ''}${file} | ${sizeStr}` : `${repoDir ? `[${repoDir}] ` : ''}${file}`,
                 isFS: false,
                 repoDir: repoDir
             });

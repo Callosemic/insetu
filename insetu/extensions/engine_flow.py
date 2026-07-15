@@ -131,11 +131,13 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
                 except Exception as e:
                     import traceback
                     text_blocks.append(f"--- {display_name} (ERROR READING FILE: {str(e)})\n[Target Path: {inc_path}]\n[Traceback: {traceback.format_exc()}] ---\n\n")
+        repos = list(set([r.split('/')[0] for r in resolved_files if '/' in r]))
         meta = {
             "type": "flow",
             "title": batch.get("title", batch_id),
             "domain": batch.get("domain", "Workflows"),
-            "desc": f"Compiled workflow batch payload."
+            "desc": f"Compiled workflow batch payload.",
+            "repos": repos
         }
     except Exception as e:
         import traceback
@@ -204,9 +206,8 @@ def api_flow_batches_save(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
     batch_id = data.get("id")
     existing = next((b for b in batches if b["id"] == batch_id), None)
-
     if existing:
-        for optional_key in ["include_prompt", "response_path", "prompt_text"]:
+        for optional_key in ["include_prompt", "response_path", "prompt_text", "show_if_exists", "show_if_missing"]:
             if optional_key in existing and optional_key not in data:
                 del existing[optional_key]
         existing.update(data)

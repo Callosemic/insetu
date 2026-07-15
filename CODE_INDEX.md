@@ -41,6 +41,7 @@ insetu/
 │       ├── 2026-07-09-extension-sdk-blueprint.md # [comment required]
 │       ├── 2026-07-11-insetu-sub-bucket-strategy.md # [comment required]
 │       ├── 2026-07-14-event-sourced-vfs-ledger.md # [comment required]
+│       ├── 2026-07-14-proposed-sanic-migration.md # [comment required]
 │       └── 2026-07-14-yomama-bridge-evolution.md # [comment required]
 ├── insetu/                         # [comment required]
 │   ├── .gitkeep                    # [comment required]
