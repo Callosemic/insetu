@@ -337,7 +337,7 @@ window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
 // Auto-resize generic textareas (prompts, descriptions) as the user types, piercing Shadow DOM boundaries
 document.addEventListener('input', (e) => {
     const target = e.composedPath()[0];
-    if (target && target.tagName.toLowerCase() === 'textarea' && target.id !== 'payload' && !target.closest('.EasyMDEContainer')) {
+    if (target && target.tagName.toLowerCase() === 'textarea' && target.id !== 'payload' && !target.closest('.EasyMDEContainer') && !target.classList.contains('cell-textarea')) {
         target.style.height = 'auto';
         target.style.height = Math.min(target.scrollHeight + 2, 500) + 'px';
     }

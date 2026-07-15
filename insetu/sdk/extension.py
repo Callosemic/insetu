@@ -53,6 +53,10 @@ class SettingsManager:
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
 
+        from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+        _MUTATED_CONFIG_CACHE.clear()
+        _MUTATED_CONFIG_MTIME.clear()
+
     def get_all(self):
         from insetu.utils_core import load_json_file, get_workspace_physics
         import os
@@ -75,13 +79,17 @@ class SettingsManager:
         cfg_path, _, _ = get_workspace_physics(self.workspace_id)
         filepath = Path(os.path.dirname(cfg_path)).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
-
         valid_keys = {f.get('id') for f in self.schema} if self.schema else None
         for k, v in payload_dict.items():
             if valid_keys is None or k in valid_keys:
                 data[k] = v
 
         save_json_file(filepath, data, self.workspace_id)
+
+        # Cache invalidation: Updating extension settings might affect the OS config topology
+        from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+        _MUTATED_CONFIG_CACHE.clear()
+        _MUTATED_CONFIG_MTIME.clear()
 
 class StoreManager:
     def __init__(self, workspace_id):

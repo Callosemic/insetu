@@ -21,7 +21,10 @@ export class InSetuExtGather extends InSetuElement {
         manifestFiles: { type: Array },
         searchQuery: { type: String },
         chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String }
+        activeChunkFile: { type: String },
+        pinnedRepos: { type: Object },
+        allRepos: { type: Array },
+        _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles];
 
@@ -33,6 +36,20 @@ export class InSetuExtGather extends InSetuElement {
         this.searchQuery = '';
         this.chunkModalOpen = false;
         this.activeChunkFile = null;
+        this.pinnedRepos = new Set(['ALL']);
+        this.allRepos = [];
+        this._showFilters = false;
+        this._docClickListener = this._handleDocumentClick.bind(this);
+    }
+
+    _handleDocumentClick(e) {
+        if (!this._showFilters) return;
+        const path = e.composedPath();
+        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
+        if (!isFilterContent) {
+            this._showFilters = false;
+            this.requestUpdate();
+        }
     }
 
     onWorkspaceChanged(newWorkspaceId) {
@@ -41,28 +58,39 @@ export class InSetuExtGather extends InSetuElement {
 
     connectedCallback() {
         super.connectedCallback();
-
+        document.addEventListener('click', this._docClickListener);
         this.subscribe(GatherStore, state => {
             this.loading = state.loading;
             this.loadingMessage = state.loadingMessage;
             this.searchQuery = state.searchQuery;
         });
-
-        this.subscribe(AppStore, state => state.manifest, (m) => {
-            this.manifestFiles = Object.keys(m || {});
+        this.subscribe(AppStore, state => {
+            this.manifestFiles = Object.keys(state.manifest || {});
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.allRepos = state.allRepos || [];
+            this.requestUpdate();
         });
 
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext();
         });
 
-        this.manifestFiles = Object.keys(AppStore.getState().manifest || {});
+        const aState = AppStore.getState();
+        this.manifestFiles = Object.keys(aState.manifest || {});
+        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
+        this.allRepos = aState.allRepos || [];
 
         const gState = GatherStore.getState();
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
     }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        document.removeEventListener('click', this._docClickListener);
+    }
+
     async loadContext() {
         GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
@@ -124,6 +152,7 @@ export class InSetuExtGather extends InSetuElement {
                         const kb = Math.round(meta.size_bytes / 1024);
                         sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
                 }
+                let repoDir = meta.repo || null;
 
                 if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                         const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
@@ -133,7 +162,7 @@ export class InSetuExtGather extends InSetuElement {
                                 finalTitle = extMeta.displayName;
                         }
                 }
-                return { filename: file, finalCat, finalDesc, finalTitle, sizeStr };
+                return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
 
         if (this.loading) {
@@ -155,18 +184,42 @@ export class InSetuExtGather extends InSetuElement {
                 });
             }
         }
+        const repoFilteredFiles = enrichedFiles.filter(f => {
+            if (this.pinnedRepos.has('ALL')) return true;
+            if (f.repoDir && this.pinnedRepos.has(f.repoDir)) return true;
+            return Array.from(this.pinnedRepos).some(repo => f.filename.startsWith(repo + '_') || f.filename.includes('_' + repo + '_') || (f.finalTitle && f.finalTitle.toLowerCase().includes(repo.toLowerCase())));
+        });
 
         // 2. Apply Fuzzy Search
         const filteredFiles = this.searchQuery  
-                ? window.inSetu.utils.fuzzyFilterObjects(enrichedFiles, this.searchQuery, f => `${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
-                : enrichedFiles;
+                ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, this.searchQuery, f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
+                : repoFilteredFiles;
+
+        const activeFilters = [];
+        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
+        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
+
         return html`
-            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <insetu-search-bar 
-                    placeholder="🔍 Fuzzy search contexts..." 
-                    .value=${this.searchQuery} 
-                    @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}>
-                </insetu-search-bar>
+            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
+                    <insetu-search-bar 
+                        style="flex: 1;"
+                        placeholder="🔍 Fuzzy search contexts..." 
+                        .value=${this.searchQuery} 
+                        @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}>
+                    </insetu-search-bar>
+                    <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
+                        ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
+                    </button>
+                </div>
+                <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                    <insetu-repo-filter
+                        label="📌 Repos:"
+                        .repos=${this.allRepos}
+                        .activeRepos=${Array.from(this.pinnedRepos)}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </div>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px;">${this.loadingMessage}</div>` : ''}
 
@@ -181,7 +234,7 @@ export class InSetuExtGather extends InSetuElement {
                             .filename=${f.filename}
                             .titleText=${f.finalTitle || f.filename}
                             .descriptionText=${f.finalDesc || ''}
-                            .detailText=${f.sizeStr ? `${f.filename} | ${f.sizeStr}` : f.filename}
+                            .detailText=${f.sizeStr ? `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename} | ${f.sizeStr}` : `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename}`}
                             icon="📦"
                             intentColor="var(--intent-highlight)"
                             @card-clicked=${() => { if(!f.isSkeleton && window.viewAndCopy) window.viewAndCopy(f.filename); }}>

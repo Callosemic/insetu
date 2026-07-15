@@ -81,8 +81,8 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 #tab-term { padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
 .screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto;
 box-sizing: border-box; border-radius: 0; box-shadow: none; }
-/* Full-Bleed Chassis: Zero out layout padding and container scrollbars when the terminal view is active */
-.screen:has(#sub-term.active) { padding: 0 !important; overflow: hidden !important; }
+/* Full-Bleed Chassis: Zero out layout padding and container scrollbars when full-screen views are active */
+.screen:has(#sub-term.active), .screen:has(#sub-bridge.active) { padding: 0 !important; overflow: hidden !important; }
 .sticky-header { position: sticky; top: -20px; margin: -20px -20px 15px -20px; padding: 20px 20px 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: block; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }

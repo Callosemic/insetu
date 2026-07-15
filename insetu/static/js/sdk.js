@@ -40,7 +40,6 @@ export function createExtensionStore(name, initialState, persistKeys = []) {
                 appStore.subscribe(state => state.activeWorkspace, ws => hydrate(ws));
             }
         }, 100);
-
         store.subscribe((state, prevState) => {
             const ws = getWs();
             persistKeys.forEach(k => {
@@ -53,6 +52,13 @@ export function createExtensionStore(name, initialState, persistKeys = []) {
     }
 
     return store;
+}
+
+export function createIsolatedSlice(store, sliceKey) {
+    return {
+        get: () => store.getState()[sliceKey],
+        set: (val) => store.setState({ [sliceKey]: typeof val === 'object' && val !== null ? { ...val } : val })
+    };
 }
 
 export class InSetuElement extends LitElement {
@@ -88,7 +94,9 @@ export class InSetuElement extends LitElement {
             fuzzyFilterObjects: window.inSetu.utils.fuzzyFilterObjects,
             normalizeAccentText: window.inSetu.utils.normalizeAccentText,
             pollJob: window.inSetu.utils.pollJob,
-            slugify: window.inSetu.utils.slugify
+            slugify: window.inSetu.utils.slugify,
+            copyToClipboard: window.inSetu.utils.copyToClipboard,
+            copyRawText: window.inSetu.utils.copyRawText
         };
     }
 
@@ -274,6 +282,29 @@ window.inSetu.utils.slugify = function(str) {
     if (!str) return '';
     return window.inSetu.utils.normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 };
-
 window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
+
+window.inSetu.utils.copyToClipboard = async function(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (e) {
+        if (window.setGlobalStatus) window.setGlobalStatus("Clipboard access denied.", 3000, true);
+        throw new Error("Clipboard access denied");
+    }
+};
+
+window.inSetu.utils.copyRawText = async function(text, btnElement, successMsg = "✅ Copied!") {
+    const originalText = btnElement.innerText;
+    btnElement.innerText = "Copying...";
+    try {
+        await window.inSetu.utils.copyToClipboard(text);
+        btnElement.innerText = successMsg;
+    } catch (e) {
+        btnElement.innerText = "❌ Error";
+    }
+    setTimeout(() => {
+        btnElement.innerText = originalText;
+    }, 2000);
+};

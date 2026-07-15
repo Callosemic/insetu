@@ -630,10 +630,26 @@ export class InSetuVFSExplorer extends InSetuElement {
 }
 customElements.define('insetu-vfs-explorer', InSetuVFSExplorer);
 export class InSetuVFSExplorerActions extends InSetuElement {
+    static properties = {
+        globalBrowsePath: { type: Array }
+    };
     static styles = [sharedStyles];
 
+    constructor() {
+        super();
+        this.globalBrowsePath = [];
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(AppStore, state => {
+            this.globalBrowsePath = state.globalBrowsePath || [];
+        });
+        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
+    }
+
     get _menuItems() {
-        const currentPath = (window.inSetu.stores.App.getState().globalBrowsePath || []).join('/');
+        const currentPath = this.globalBrowsePath.join('/');
         const items = [];
 
         if (!currentPath) {

@@ -17,6 +17,7 @@ export class InSetuModal extends LitElement {
         :host([maxWidth="100vw"]) .backdrop,
         :host([fullscreen]) .backdrop {
             padding: 0 !important;
+            height: calc(100dvh - 30px) !important;
         }
         .panel {
             background: var(--bg);
@@ -26,8 +27,8 @@ export class InSetuModal extends LitElement {
         }
         :host([maxWidth="100vw"]) .panel,
         :host([fullscreen]) .panel {
-            max-height: 100dvh !important;
-            height: 100dvh !important;
+            max-height: 100% !important;
+            height: 100% !important;
             border-radius: 0 !important;
             border: none !important;
         }

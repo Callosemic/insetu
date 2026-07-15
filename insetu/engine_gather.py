@@ -140,7 +140,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
     manifest_entry = compile_context_payload(
         workspace_id, output_dir, base_filename, header_str, text_blocks, 
         [f"{repo_dir}/{f}" for f in filepaths], 
-        {"title": title, "domain": domain_str, "desc": f"Context payload for {title}."}, 
+        {"title": title, "domain": domain_str, "desc": f"Context payload for {title}.", "repo": repo_dir}, 
         max_kb=max_kb
     )
     return manifest_entry

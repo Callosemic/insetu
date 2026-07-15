@@ -126,6 +126,14 @@ def load_workspace_extensions():
             print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
         except AttributeError as e:
             print(f"⚠️  Blueprint Mount Failed [{ext}]: {str(e)}")
+
+    # Purge the config cache. Because the bootloader called load_config() 
+    # to discover extensions, the mutate_workspace_config hook fired into a void.
+    # Clearing the cache ensures the fully-mounted Extension DAG gets a chance to inject.
+    from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    _MUTATED_CONFIG_CACHE.clear()
+    _MUTATED_CONFIG_MTIME.clear()
+
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
 

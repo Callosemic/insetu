@@ -102,23 +102,16 @@ export class InSetuFilterGroup extends LitElement {
         label: { type: String },
         items: { type: Array }, // [{id, label}]
         activeItems: { type: Array },
-        allowAll: { type: Boolean },
-        collapsed: { type: Boolean }
+        allowAll: { type: Boolean }
     };
 
     static styles = [
         sharedStyles,
         css`
             .wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; cursor: pointer; user-select: none; }
-            .label:hover { opacity: 1; }
+            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
         `
     ];
-
-    constructor() {
-        super();
-        this.collapsed = true;
-    }
 
     _handleToggle(e) {
         const { id, active } = e.detail;
@@ -142,19 +135,13 @@ export class InSetuFilterGroup extends LitElement {
     }
     render() {
         const activeSet = new Set(this.activeItems);
-
-        const visibleItems = this.collapsed 
-            ? (this.items || []).filter(item => activeSet.has(item.id)) 
-            : (this.items || []);
-
-        const showAllPill = this.allowAll && (!this.collapsed || activeSet.has('ALL'));
+        const visibleItems = this.items || [];
+        const showAllPill = this.allowAll;
 
         return html`
             <div class="wrap" @pill-toggled=${this._handleToggle}>
-                ${this.label ?
-html`<span class="label" @click=${() => this.collapsed = !this.collapsed} title="Toggle expand/collapse">${this.label} ${this.collapsed ? '▸' : '▾'}</span>` : ''}
-                ${showAllPill ?
-html`<insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeSet.has('ALL')}></insetu-filter-pill>` : ''}
+                ${this.label ? html`<span class="label">${this.label}</span>` : ''}
+                ${showAllPill ? html`<insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeSet.has('ALL')}></insetu-filter-pill>` : ''}
                 ${visibleItems.map(item => html`
                     <insetu-filter-pill 
                         pillId=${item.id} 
@@ -171,29 +158,18 @@ export class InSetuRepoFilter extends LitElement {
         label: { type: String },
         repos: { type: Array },
         activeRepos: { type: Array },
-        extraRepos: { type: Array },
-        enableBuckets: { type: Boolean },
-        activeBuckets: { type: Array },
-        getBucketsFn: { type: Object }, // Function passed as property
-        collapsed: { type: Boolean }
+        extraRepos: { type: Array }
     };
 
     static styles = [
         sharedStyles,
         css`
             .wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; cursor: pointer; user-select: none; }
-            .label:hover { opacity: 1; }
-            .bucket-wrap { display: contents; }
-            .bucket-icon { font-size: 0.85rem; color: var(--text-muted); opacity: 0.7; font-weight: bold; margin-left: 2px; margin-right: 2px; }
+            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
         `
     ];
 
-    constructor() {
-        super();
-        this.collapsed = true;
-    }
-        _handleRepoToggle(e) {
+    _handleRepoToggle(e) {
             e.stopPropagation();
             const { id, active } = e.detail;
             let newSet = new Set(this.activeRepos);
@@ -216,70 +192,22 @@ export class InSetuRepoFilter extends LitElement {
             composed: true
         }));
     }
-
-    _handleBucketToggle(e, repo) {
-        e.stopPropagation();
-        const { id, active } = e.detail;
-        let newSet = new Set(this.activeBuckets);
-        
-        if (id === 'ALL') {
-            newSet.clear();
-            newSet.add('ALL');
-        } else {
-            newSet.delete('ALL');
-            if (active) newSet.add(id);
-            else newSet.delete(id);
-            if (newSet.size === 0) newSet.add('ALL');
-        }
-        
-        this.dispatchEvent(new CustomEvent('bucket-filter-changed', {
-            detail: { activeBuckets: Array.from(newSet), repo: repo },
-            bubbles: true,
-            composed: true
-        }));
-    }
     render() {
         const activeRepoSet = new Set(this.activeRepos);
-        const activeBucketSet = new Set(this.activeBuckets);
-
-        const visibleRepos = this.collapsed 
-            ? (this.repos || []).filter(r => activeRepoSet.has(r))
-            : (this.repos || []);
-
-        const visibleExtra = this.collapsed
-            ? (this.extraRepos || []).filter(ex => activeRepoSet.has(ex.id))
-            : (this.extraRepos || []);
-
-        const showAllRepoPill = !this.collapsed || activeRepoSet.has('ALL');
+        const visibleRepos = this.repos || [];
+        const visibleExtra = this.extraRepos || [];
 
         return html`
             <div class="wrap">
-                ${this.label ?
-html`<span class="label" @click=${() => this.collapsed = !this.collapsed} title="Toggle expand/collapse">${this.label} ${this.collapsed ? '▸' : '▾'}</span>` : ''}
+                ${this.label ? html`<span class="label">${this.label}</span>` : ''}
 
                 <div @pill-toggled=${this._handleRepoToggle} style="display: contents;">
-                    ${showAllRepoPill ? html`<insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></insetu-filter-pill>` : ''}
+                    <insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></insetu-filter-pill>
                     ${visibleExtra.map(ex => html`
                         <insetu-filter-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></insetu-filter-pill>
                     `)}
                     ${visibleRepos.map(repo => html`
-                        <span style="display: contents;">
-                            <insetu-filter-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></insetu-filter-pill>
-                            ${(this.enableBuckets && activeRepoSet.has(repo) && repo !== 'ALL') ? (() => {
-                                const buckets = this.getBucketsFn ? this.getBucketsFn(repo) : [];
-                                if (buckets.length === 0) return '';
-
-                                return html`
-                                    <span class="bucket-wrap" @pill-toggled=${(e) => this._handleBucketToggle(e, repo)}>
-                                        <span class="bucket-icon">→</span>
-                                        <insetu-filter-pill variant="text" pillId="ALL" labelText="All" ?active=${activeBucketSet.has('ALL')} ?small=${true}></insetu-filter-pill>
-                                        ${buckets.map(b => html`
-                                            <insetu-filter-pill variant="text" pillId=${b.id} labelText=${b.title} ?active=${activeBucketSet.has(b.id)} ?small=${true}></insetu-filter-pill>
-                                        `)}
-                                    </span>
-                                `;
-                            })() : ''}
-                        </span>
+                        <insetu-filter-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></insetu-filter-pill>
                     `)}
                 </div>
             </div>

@@ -17,6 +17,10 @@ export const AppStore = createStore(
             isConfigOpen: false,
 
             pinnedRepos: new Set(JSON.parse(localStorage.getItem('insetu_pinned_repos')) || ["ALL"]),
+            setPinnedRepos: (repos) => {
+                localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(repos)));
+                set({ pinnedRepos: repos });
+            },
             gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
 
             globalBrowsePath: [],

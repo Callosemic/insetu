@@ -26,7 +26,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename):
         self.filepath = filepath
         self.filename = filename
+        self.has_save_json = False
+        self.has_cache_clear = False
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == 'save_json_file':
+            self.has_save_json = True
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'clear':
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == '_MUTATED_CONFIG_CACHE':
+                self.has_cache_clear = True
+
         # SDK V2 Enforcement (Backend Extensions)
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
@@ -171,12 +179,15 @@ def check_python_files():
                 # Skip virtual environments or cache
                 if "venv" in str(filepath) or "__pycache__" in str(filepath):
                     continue
-
                 with open(filepath, "r", encoding="utf-8") as f:
                     try:
                         tree = ast.parse(f.read(), filename=str(filepath))
                         visitor = BackendFitnessVisitor(filepath, file)
                         visitor.visit(tree)
+
+                        if visitor.has_save_json and not visitor.has_cache_clear and file in ["routes_system.py", "extension.py", "app.py"]:
+                            report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_file for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
+
                         # 4. Extension DAG Compliance
                         is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
                         if is_ext:
@@ -226,6 +237,7 @@ def check_javascript_files():
     lit_element_class_pattern = re.compile(r'class\s+\w+\s+extends\s+LitElement\b')
     raw_register_tick_pattern = re.compile(r'\.registerTick\s*\(')
     zustand_reference_mutation_pattern = re.compile(r'\.setState\(\{\s*([a-zA-Z0-9_]+)\s*:\s*\1\s*\}\)')
+    subtab_leak_pattern = re.compile(r"localStorage\.getItem\([\'\"]insetu_subtab_")
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -311,9 +323,12 @@ def check_javascript_files():
                     if is_extension and raw_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
+                    # 15.5 CQRS Delta Synchronization Mandate
+                    if "api.workspace('manifest" in line or "api.workspace(\"manifest" in line or 'api.workspace(`manifest' in line:
+                        report_violation("MANIFEST_CQRS_BYPASS", filepath, line_num, "Blind manifest re-fetching detected. Rely on surgical backend delta payloads to mutate the AppStore.manifest instead of heavy N+1 polling.")
                     # 22. Core File Utility Centralization Mandate (DRY Enforcement)
-                    if is_extension and ("navigator.clipboard.writeText" in line or "window.URL.createObjectURL" in line):
-                        report_violation("DRY_UTILITY_VIOLATION", filepath, line_num, "Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy or fetchAndDownloadState) instead.")
+                    if is_extension and ("navigator.clipboard" in line or "window.URL.createObjectURL" in line):
+                        report_violation("DRY_UTILITY_VIOLATION", filepath, line_num, "Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy, this.utils.copyToClipboard, this.utils.copyRawText, or fetchAndDownloadState) instead.")
                     if is_extension and legacy_insetu_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
@@ -341,6 +356,10 @@ def check_javascript_files():
                     # 21. Zustand Reference Mutation Ban
                     if zustand_reference_mutation_pattern.search(line):
                         report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
+
+                    # 25. Shared Storage View State Leak Ban
+                    if is_extension and subtab_leak_pattern.search(line):
+                        report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")
 
                     # 24. Hardcoded Extension Demolition Ban (Inversion of Control Enforcement)
                     if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):
