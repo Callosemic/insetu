@@ -6,6 +6,22 @@ import {
     fetchAndCopy
 } from '../app.js';
 import { AppStore } from '../store.js';
+import { createExtensionStore } from '../sdk.js';
+
+export const GitStore = createExtensionStore('Git', {
+    reposStatus: {},
+    fetchStatus: async () => {
+        try {
+            const res = await window.inSetu.api.workspace('git/status');
+            if (res.ok) {
+                const data = await res.json();
+                GitStore.setState({ reposStatus: data.repos || {} });
+            }
+        } catch(e) { console.error("Failed to fetch git status", e); }
+    }
+});
+window.inSetu.stores.Git = GitStore;
+
 export async function generateDiffs(force = false) {
     const { cachedDiffFiles, dirtyDiffRepos } = AppStore.getState();
     const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
@@ -58,11 +74,20 @@ export async function generateDiffs(force = false) {
                     });
                 window.dispatchEvent(new CustomEvent('git-diffs-refreshed'));
 
-                setTimeout(() => {
-                    window.inSetu.api.workspace('manifest?t=' + Date.now())
-                        .then(mRes => mRes.ok ? mRes.json() : {})
-                        .then(manifest => AppStore.setState({ manifest }));
-                }, 500);
+                const deltas = statusData.artifact.manifest_deltas || {};
+                const currentManifest = { ...AppStore.getState().manifest };
+
+                Object.keys(currentManifest).forEach(k => {
+                    if (k.endsWith('_diffs.txt')) {
+                        const repo = currentManifest[k].meta?.repo;
+                        if (!targetReposRes || targetReposRes.includes(repo)) {
+                            delete currentManifest[k];
+                        }
+                    }
+                });
+
+                Object.assign(currentManifest, deltas);
+                AppStore.setState({ manifest: currentManifest });
             },
             onError: (err) => {
                 AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
@@ -128,18 +153,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
-        this._showFilters = false;
-        this._docClickListener = this._handleDocumentClick.bind(this);
-    }
-
-    _handleDocumentClick(e) {
-        if (!this._showFilters) return;
-        const path = e.composedPath();
-        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
-        if (!isFilterContent) {
-            this._showFilters = false;
-            this.requestUpdate();
-        }
     }
     async _downloadTarget(targetFile, btnComponent = null) {
         const explicitUrl = `/download/${targetFile}`;
@@ -170,6 +183,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
+        this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
+            this.requestUpdate();
+        });
         const state = AppStore.getState();
         this.cachedDiffFiles = state.cachedDiffFiles || [];
         this.activeDiffJobId = state.activeDiffJobId;
@@ -186,15 +202,13 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this._boundRefreshSweep = this._fetchSweepStatusSilent.bind(this);
         window.addEventListener('open-push-modal', this._boundHandleOpenPush);
         window.addEventListener('git-diffs-refreshed', this._boundRefreshSweep);
-        document.addEventListener('click', this._docClickListener);
-
         this._fetchSweepStatusSilent();
+        GitStore.getState().fetchStatus();
 }
 disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
         window.removeEventListener('git-diffs-refreshed', this._boundRefreshSweep);
-        document.removeEventListener('click', this._docClickListener);
 }
 
     async _handleOpenPush(e) {
@@ -382,7 +396,8 @@ disconnectedCallback() {
                 description: finalDesc,
                 detailText: sizeStr ? `${repoDir ? `[${repoDir}] ` : ''}${file} | ${sizeStr}` : `${repoDir ? `[${repoDir}] ` : ''}${file}`,
                 isFS: false,
-                repoDir: repoDir
+                repoDir: repoDir,
+                branch: repoDir ? GitStore.getState().reposStatus[repoDir]?.current : null
             });
         });
         const sortedCats = Object.keys(categories).sort((a, b) => {
@@ -407,17 +422,14 @@ disconnectedCallback() {
                         .value=${this.searchQuery} 
                         @search-changed=${e => this.searchQuery = e.detail.value}>
                     </insetu-search-bar>
-                    <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
-                        ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
-                    </button>
-                </div>
-                <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
-                    <insetu-repo-filter
-                        label="📌 Repos:"
-                        .repos=${this.allRepos}
-                        .activeRepos=${Array.from(this.pinnedRepos)}
-                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
+                    <insetu-filter-dropdown filterText=${filterBtnText}>
+                        <insetu-repo-filter
+                            label="📌 Repos:"
+                            .repos=${this.allRepos}
+                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                        </insetu-repo-filter>
+                    </insetu-filter-dropdown>
                 </div>
             </div>
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
@@ -444,6 +456,7 @@ disconnectedCallback() {
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
                                 @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                                ${f.branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${f.branch}</span>` : ''}
                                 <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
 ${(() => {
     const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
@@ -476,8 +489,9 @@ ${(() => {
                 ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
                     <insetu-category-section titleText="🧹 Sweepable State">
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
-
-                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => html`
+                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
+                            const branch = GitStore.getState().reposStatus[repo]?.current;
+                            return html`
                             <insetu-card
                             .filename=${repo}
                             .titleText=${repo}
@@ -490,6 +504,7 @@ ${(() => {
                                 this.sweepExpandedRepos = newSet;
                                 this.requestUpdate();
                             }}>
+                            ${branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${branch}</span>` : ''}
                             <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0; color: white; border: none; cursor: pointer;" 
                                 @click=${(e) => { e.stopPropagation(); this._executeRepoSweep(repo); }}>🚀 Sweep Repo</button>
                         </insetu-card>
@@ -514,7 +529,7 @@ ${(() => {
                                 `)}
                             </div>
                         ` : ''}
-                    `)}
+                    `;})}
                     </insetu-category-section>
                 ` : ''}
 
@@ -554,15 +569,251 @@ ${(() => {
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
                 </div>
             </insetu-modal>
+
+            <insetu-modal ?open=${this.previewModalOpen} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
+                </div>
+                <div slot="footer" style="display: flex; width: 100%;">
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${() => this.previewModalOpen = false}>Cancel</button>
+                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer; border-radius: 0;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
+                </div>
+            </insetu-modal>
         `;
     }
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
+export class InSetuExtGitCtrl extends InSetuElement {
+    static properties = {
+        reposStatus: { type: Object },
+        allRepos: { type: Array },
+        branchModalOpen: { type: Boolean },
+        activeRepo: { type: String },
+        newBranchName: { type: String },
+        activePullJobId: { type: String },
+        pullMessage: { type: String },
+        previewModalOpen: { type: Boolean },
+        previewRepo: { type: String },
+        previewMessage: { type: String }
+    };
+    static styles = [sharedStyles];
 
+    constructor() {
+        super();
+        this.reposStatus = {};
+        this.allRepos = [];
+        this.branchModalOpen = false;
+        this.activeRepo = '';
+        this.newBranchName = '';
+        this.activePullJobId = null;
+        this.pullMessage = '';
+        this.previewModalOpen = false;
+        this.previewRepo = '';
+        this.previewMessage = '';
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
+            this.reposStatus = reposStatus || {};
+            this.requestUpdate();
+        });
+        this.subscribe(AppStore, state => state.allRepos, (allRepos) => {
+            this.allRepos = allRepos || [];
+            this.requestUpdate();
+        });
+        this.allRepos = AppStore.getState().allRepos || [];
+        this.reposStatus = GitStore.getState().reposStatus || {};
+        GitStore.getState().fetchStatus();
+    }
+    async _previewPull(repo) {
+        try {
+            const res = await this.api.post('fetch_preview', { repo });
+            if (!res.ok) throw new Error((await res.json()).error || "Fetch failed");
+            const data = await res.json();
+
+            this.activePullJobId = data.job_id;
+            this.pullMessage = `Fetching remote for ${repo}...`;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => this.pullMessage = msg,
+                onComplete: (statusData) => {
+                    this.activePullJobId = null;
+                    if (statusData.artifact && statusData.artifact.has_changes) {
+                        this.previewRepo = repo;
+                        this.previewMessage = statusData.message;
+                        this.previewModalOpen = true;
+                    } else {
+                        alert(`ℹ️ ${repo}: ${statusData.message || 'Already up to date.'}`);
+                    }
+                },
+                onError: (err) => {
+                    this.activePullJobId = null;
+                    alert(`❌ Fetch failed for ${repo}\n\n${err.message}`);
+                }
+            });
+        } catch (err) {
+            alert(`Network error fetching ${repo}: ${err.message}`);
+        }
+    }
+    async _initRepo(repo) {
+        try {
+            const res = await this.api.post('init', { repo });
+            if (!res.ok) throw new Error((await res.json()).error || "Init failed");
+            const data = await res.json();
+
+            this.activePullJobId = data.job_id;
+            this.pullMessage = `Initializing ${repo}...`;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => this.pullMessage = msg,
+                onComplete: (statusData) => {
+                    this.activePullJobId = null;
+                    alert(`✅ ${statusData.message}`);
+                    GitStore.getState().fetchStatus();
+                },
+                onError: (err) => {
+                    this.activePullJobId = null;
+                    alert(`❌ Init failed for ${repo}\n\n${err.message}`);
+                }
+            });
+        } catch (err) {
+            alert(`Network error initializing ${repo}: ${err.message}`);
+        }
+    }
+
+    async _executePull() {
+        const repo = this.previewRepo;
+        this.previewModalOpen = false;
+        try {
+            const res = await this.api.post('pull', { repo });
+            if (!res.ok) throw new Error((await res.json()).error || "Pull failed");
+            const data = await res.json();
+            this.activePullJobId = data.job_id;
+            this.pullMessage = `Pulling ${repo}...`;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => this.pullMessage = msg,
+                onComplete: (statusData) => {
+                    this.activePullJobId = null;
+                    alert(`✅ Pull successful for ${repo}\n\n${statusData.message}`);
+                    GitStore.getState().fetchStatus();
+                },
+                onError: (err) => {
+                    this.activePullJobId = null;
+                    alert(`❌ Pull failed for ${repo}\n\n${err.message}`);
+                }
+            });
+        } catch (err) {
+            alert(`Network error pulling ${repo}: ${err.message}`);
+        }
+    }
+    async _checkoutBranch(repo, branch, createNew = false) {
+        try {
+            const res = await this.api.post('checkout', { repo, branch, create_new: createNew });
+            if (!res.ok) throw new Error((await res.json()).error || "Checkout failed");
+            const data = await res.json();
+
+            this.activePullJobId = data.job_id; // Reuse the loading spinner state variable
+            this.pullMessage = `Checking out ${branch}...`;
+
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => this.pullMessage = msg,
+                onComplete: (statusData) => {
+                    this.activePullJobId = null;
+                    alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
+                    this.branchModalOpen = false;
+                    GitStore.getState().fetchStatus();
+                },
+                onError: (err) => {
+                    this.activePullJobId = null;
+                    alert(`❌ Checkout failed for ${repo}\n\n${err.message}`);
+                }
+            });
+        } catch (err) {
+            alert(`Network error during checkout for ${repo}: ${err.message}`);
+        }
+    }
+
+    render() {
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 15px; padding: 15px;">
+                ${this.activePullJobId ? html`<div class="spinner" style="display: block;">${this.pullMessage || 'Pulling from remote...'}</div>` : ''}
+
+                ${this.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
+                ${this.allRepos.map(repo => {
+                    const status = this.reposStatus[repo] || {};
+
+                    if (status.is_git === false) {
+                        return html`
+                            <insetu-card titleText=${repo} descriptionText="Not a Git repository." icon="📁" intentColor="var(--intent-neutral)">
+                                <button slot="actions" class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this._initRepo(repo)}>✨ Initialize Git Repo</button>
+                            </insetu-card>
+                        `;
+                    }
+                    const currentBranch = status.current || 'unknown';
+                    const syncStatus = status.sync_status ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border); margin-left: 5px;">${status.sync_status}</span>` : '';
+
+                    return html`
+                        <insetu-card titleText=${repo} descriptionText="Current Branch: ${currentBranch}" icon="📦" intentColor="var(--intent-neutral)">
+                            <span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${currentBranch}</span>
+                            ${syncStatus}
+                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</button>
+                            <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => {
+                                this.activeRepo = repo;
+                                this.newBranchName = '';
+                                this.branchModalOpen = true;
+                            }}>🌿 Switch Branch</button>
+                        </insetu-card>
+                    `;
+                })}
+            </div>
+
+            <insetu-modal ?open=${this.branchModalOpen} titleText="Branch Management: ${this.activeRepo}" @modal-closed=${() => this.branchModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Switch to Existing Branch:</label>
+                        <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => {
+                            if (e.target.value) this._checkoutBranch(this.activeRepo, e.target.value, false);
+                            e.target.value = "";
+                        }}>
+                            <option value="">-- Select Branch --</option>
+                            ${(this.reposStatus[this.activeRepo]?.branches || []).map(b => html`<option value="${b}">${b}</option>`)}
+                        </select>
+                    </div>
+                    <hr style="border: 0; border-top: 1px solid var(--border); width: 100%;">
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Create New Branch:</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" placeholder="new-feature-branch" .value=${this.newBranchName} @input=${e => this.newBranchName = e.target.value} style="flex: 1; padding: 10px; font-weight: bold; box-sizing: border-box;">
+                            <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => {
+                                if(this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
+                            }}>➕ Create & Switch</button>
+                        </div>
+                    </div>
+                </div>
+            </insetu-modal>
+        `;
+    }
+}
+customElements.define('insetu-ext-git-ctrl', InSetuExtGitCtrl);
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",
     version: "2.0.0",
     layoutSlots: [
+        {
+            slot: "slots:primary-navigation",
+            id: "ctrl",
+            label: "Ctrl",
+            order: 6
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "ctrl",
+            id: "git",
+            label: "Git",
+            order: 2,
+            component: "insetu-ext-git-ctrl"
+        },
         {
             slot: "slots:sub-navigation",
             targetParent: "context",
@@ -599,6 +850,9 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
             generateDiffs();
         }
         return false;
+    });
+    window.inSetu.extensions.Registry.registerUIHook('zone:repo-config-options', ({ repo, updateCallback }) => {
+        return html`<label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_diffs} @change=${(e) => { repo.exclude_from_diffs = e.target.checked; updateCallback(); }}> Exclude from 'git' extension contexts</label>`;
     });
 }
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {

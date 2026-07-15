@@ -15,8 +15,7 @@ CITATIONS_SCHEMA = {
         "attachments": "TEXT DEFAULT '[]'"
     }
 }
-
-citations_bp = InSetuExtension('citations', __name__, schema=CITATIONS_SCHEMA, virtual_contexts=[{
+citations_bp = InSetuExtension('citations', __name__, title="Reference Library", description="Academic citation and bibliography records manager.", schema=CITATIONS_SCHEMA, virtual_contexts=[{
     "title": "Global Reference Library",
     "domain": "Reference Library",
     "description": "Academic citations and bibliography records.",

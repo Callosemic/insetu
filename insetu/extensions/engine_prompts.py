@@ -3,7 +3,7 @@ import re
 from flask import jsonify
 from insetu.sdk import InSetuExtension, ExtensionContext
 from insetu.hooks import hooks
-prompts_bp = InSetuExtension('prompts', __name__, target_repos=[{
+prompts_bp = InSetuExtension('prompts', __name__, title="Prompt Library", description="Prompt template management and embedding.", target_repos=[{
     "repo_dir": ".insetu",
     "title": "inSetu OS",
     "domain": "System Configuration",

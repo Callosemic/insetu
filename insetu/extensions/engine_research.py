@@ -42,8 +42,7 @@ RESEARCH_SETTINGS_SCHEMA = [
         "description": "Required for Google Search provider. Obtain a free key at serper.dev."
     }
 ]
-
-research_bp = InSetuExtension('research', __name__, schema=RESEARCH_SCHEMA, settings_schema=RESEARCH_SETTINGS_SCHEMA)
+research_bp = InSetuExtension('research', __name__, title="Research Inbox", description="Web search, scraping, and AI triage inbox.", schema=RESEARCH_SCHEMA, settings_schema=RESEARCH_SETTINGS_SCHEMA)
 __depends__ = ['ingest']
 
 # --- SEARCH STRATEGY PATTERN ---

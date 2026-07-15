@@ -8,8 +8,7 @@ from insetu.sdk import InSetuExtension
 from insetu.utils_core import get_workspace_physics
 from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-
-git_bp = InSetuExtension('git', __name__)
+git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.")
 __depends__ = []
 @hooks.on('compile_contexts')
 def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
@@ -52,8 +51,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k.startswith(st) for st in safe_targets))]
     for k in stale_keys:
         del working_manifest[k]
-
     diff_manifest = []
+    manifest_deltas = {}
     ws_root_path = Path(ws_root).resolve()
     for config in live_cfg.get("target_repos", []):
         if target_repos and config.get("repo_dir") not in target_repos: continue
@@ -210,22 +209,22 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     # Update central manifest explicitly so Gather/UI tools can find the diff chunks!
                     working_manifest[out_filename] = manifest_entry
                     diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
+                    manifest_deltas[out_filename] = manifest_entry
         except Exception as e:
             print(f"Skipping diff generation for {config['repo_dir']}: {e}")
     if is_standalone:
         ctx.save_manifest(working_manifest)
-
     # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
     from insetu.routes_fs import _VFS_WRITE_QUEUE
     _VFS_WRITE_QUEUE.join()
 
-    return diff_manifest
+    return diff_manifest, manifest_deltas
 def _background_generate_diffs(job_id, workspace_id, target_repos=None):
     try:
         msg = f"Analyzing Git trees for {', '.join(target_repos)}..." if target_repos else "Analyzing Git trees across sister repositories..."
         update_immediate_job_status(job_id, 'processing', msg, workspace_id=workspace_id)
-        files = generate_diff_context(workspace_id, target_repos)
-        update_immediate_job_status(job_id, 'completed', "Diff generation complete.", artifact={"files": files, "target_repos": target_repos}, workspace_id=workspace_id)
+        files, manifest_deltas = generate_diff_context(workspace_id, target_repos)
+        update_immediate_job_status(job_id, 'completed', "Diff generation complete.", artifact={"files": files, "target_repos": target_repos, "manifest_deltas": manifest_deltas}, workspace_id=workspace_id)
     except Exception as e:
         update_immediate_job_status(job_id, 'failed', f"Diff generation failed: {str(e)}", workspace_id=workspace_id)
 
@@ -325,7 +324,6 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
                 if c.get("repo_dir") == repo and c.get("physical_path"):
                     repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
                     break
-
             if not os.path.exists(repo_path): continue
 
             # Guarantee topology is perfectly mapped before staging
@@ -334,7 +332,18 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
 
             subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True)
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
-            subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+
+            try:
+                subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                err_out = e.stderr or e.stdout
+                err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else str(err_out)
+
+                if "has no upstream branch" in err_str or "setUpstream" in err_str:
+                    subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True)
+                else:
+                    raise e
+
             output_log += f"✅ {repo}: Pushed {len(files)} files.\n"
 
         update_immediate_job_status(job_id, 'completed', output_log, workspace_id=workspace_id)
@@ -448,8 +457,19 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
             committed = True
 
-        push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
-        output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+        try:
+            push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+            output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+        except subprocess.CalledProcessError as e:
+            err_out = e.stderr or e.stdout
+            err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
+
+            # Auto-heal missing upstream branches
+            if "has no upstream branch" in err_str or "setUpstream" in err_str:
+                push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True)
+                output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+            else:
+                raise e
 
         update_immediate_job_status(job_id, 'completed', output.strip(), workspace_id=workspace_id)
     except subprocess.CalledProcessError as e:
@@ -457,7 +477,7 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
         err_out = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
 
         if 'committed' in locals() and committed and hasattr(e, 'cmd') and 'push' in e.cmd:
-            update_immediate_job_status(job_id, 'failed', f"Local commit succeeded, but pushing to remote failed. The daemon likely lacks Git credentials.\n\nError: {err_out}", workspace_id=workspace_id)
+            update_immediate_job_status(job_id, 'failed', f"Local commit succeeded, but pushing to remote failed.\n\nError: {err_out}", workspace_id=workspace_id)
         else:
             update_immediate_job_status(job_id, 'failed', err_out, workspace_id=workspace_id)
 
@@ -513,5 +533,186 @@ def provide_available_diffs(workspace_id=None, **kwargs):
         for f in os.listdir(paths["diffs_dir"]):
             if f.endswith('_diffs.txt') or '_diffs_part' in f:
                 expected_diffs.add(f"diffs/{f}")
-
     return list(expected_diffs)
+@git_bp.route('status', methods=['GET'])
+def api_git_status(ctx):
+    import subprocess
+    from pathlib import Path
+    repos_status = {}
+    for c in ctx.config.get("target_repos", []):
+        repo_dir = c.get("repo_dir")
+        if not repo_dir: continue
+
+        physical_path = c.get("physical_path")
+        repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ctx.resolve_path(repo_dir))
+        if not repo_path.exists(): continue
+        try:
+            check_git = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], capture_output=True, text=True, cwd=repo_path)
+            if check_git.returncode == 0 and 'true' in check_git.stdout.lower():
+                curr_res = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True, cwd=repo_path)
+                current_branch = curr_res.stdout.strip()
+                br_res = subprocess.run(['git', 'branch', '--format=%(refname:short)'], capture_output=True, text=True, cwd=repo_path)
+                branches = [b.strip() for b in br_res.stdout.splitlines() if b.strip()]
+                ahead_behind = ""
+                try:
+                    # Compare HEAD against its configured upstream branch
+                    ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path, check=True)
+                    parts = ab_res.stdout.strip().split()
+                    if len(parts) == 2:
+                        ahead, behind = int(parts[0]), int(parts[1])
+                        if ahead > 0 or behind > 0:
+                            ahead_behind = f"{f'⬆️ {ahead}' if ahead > 0 else ''} {f'⬇️ {behind}' if behind > 0 else ''}".strip()
+                        else:
+                            ahead_behind = "✔️ Sync"
+                except Exception:
+                    ahead_behind = "☁️ Local Only" # No upstream configured or no commits yet
+
+                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind}
+            else:
+                repos_status[repo_dir] = {"is_git": False}
+        except Exception:
+            repos_status[repo_dir] = {"is_git": False}
+    return jsonify({"status": "success", "repos": repos_status})
+def _background_git_init(job_id, workspace_id, repo):
+    from insetu.sdk import ExtensionContext
+    import subprocess
+    import os
+
+    update_immediate_job_status(job_id, 'processing', f"Initializing Git repository for {repo}...", workspace_id=workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+
+    repo_path = ctx.resolve_path(repo)
+    for c in ctx.config.get("target_repos", []):
+        if c.get("repo_dir") == repo and c.get("physical_path"):
+            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+            break
+
+    try:
+        subprocess.run(['git', 'init'], cwd=repo_path, check=True, capture_output=True, text=True)
+        update_immediate_job_status(job_id, 'completed', f"Initialized Git repository.", workspace_id=workspace_id)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e.stdout
+        err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        update_immediate_job_status(job_id, 'failed', err_str, workspace_id=workspace_id)
+
+register_callback("git", "init_task", _background_git_init)
+
+@git_bp.route('init', methods=['POST'])
+def api_git_init(ctx):
+    repo = ctx.req.json.get('repo')
+    if not repo: return jsonify({"error": "Repo required"}), 400
+
+    job_id = ctx.jobs.submit("init_task", repo=repo)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+def _background_git_fetch_preview(job_id, workspace_id, repo):
+    from insetu.sdk import ExtensionContext
+    import subprocess
+    import os
+
+    update_immediate_job_status(job_id, 'processing', f"Fetching remote for {repo}...", workspace_id=workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+    repo_path = ctx.resolve_path(repo)
+
+    for c in ctx.config.get("target_repos", []):
+        if c.get("repo_dir") == repo and c.get("physical_path"):
+            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+            break
+    try:
+        # Fetch and prune dead tracking branches to prevent ghost upstream checks
+        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True)
+
+        # Check if an upstream branch is actually configured
+        up_res = subprocess.run(['git', 'rev-parse', '--verify', '@{u}'], cwd=repo_path, capture_output=True)
+        if up_res.returncode != 0:
+            update_immediate_job_status(job_id, 'completed', "No upstream branch configured for the current branch.", artifact={"has_changes": False}, workspace_id=workspace_id)
+            return
+
+        # Gather the incoming commits and file statistics
+        log_res = subprocess.run(['git', 'log', '..@{u}', '--oneline'], cwd=repo_path, capture_output=True, text=True)
+        stat_res = subprocess.run(['git', 'diff', '--stat', '..@{u}'], cwd=repo_path, capture_output=True, text=True)
+
+        incoming_log = log_res.stdout.strip()
+        if not incoming_log:
+            update_immediate_job_status(job_id, 'completed', "Already up to date.", artifact={"has_changes": False}, workspace_id=workspace_id)
+        else:
+            msg = f"Incoming Commits:\n{incoming_log}\n\nFiles Changed:\n{stat_res.stdout.strip()}"
+            update_immediate_job_status(job_id, 'completed', msg, artifact={"has_changes": True}, workspace_id=workspace_id)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e.stdout
+        err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        update_immediate_job_status(job_id, 'failed', err_str, workspace_id=workspace_id)
+
+register_callback("git", "fetch_preview_task", _background_git_fetch_preview)
+
+@git_bp.route('fetch_preview', methods=['POST'])
+def api_git_fetch_preview(ctx):
+    repo = ctx.req.json.get('repo')
+    if not repo: return jsonify({"error": "Repo required"}), 400
+    job_id = ctx.jobs.submit("fetch_preview_task", repo=repo)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+def _background_git_pull(job_id, workspace_id, repo):
+    from insetu.sdk import ExtensionContext
+    import subprocess
+    import os
+
+    update_immediate_job_status(job_id, 'processing', f"Pulling {repo}...", workspace_id=workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+    repo_path = ctx.resolve_path(repo)
+
+    for c in ctx.config.get("target_repos", []):
+        if c.get("repo_dir") == repo and c.get("physical_path"):
+            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+            break
+
+    try:
+        res = subprocess.run(['git', 'pull'], cwd=repo_path, check=True, capture_output=True, text=True)
+        update_immediate_job_status(job_id, 'completed', res.stdout.strip(), workspace_id=workspace_id)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e.stdout
+        err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        update_immediate_job_status(job_id, 'failed', err_str, workspace_id=workspace_id)
+
+register_callback("git", "pull_task", _background_git_pull)
+
+@git_bp.route('pull', methods=['POST'])
+def api_git_pull(ctx):
+    repo = ctx.req.json.get('repo')
+    if not repo: return jsonify({"error": "Repo required"}), 400
+    job_id = ctx.jobs.submit("pull_task", repo=repo)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+def _background_git_checkout(job_id, workspace_id, repo, branch, create_new):
+    from insetu.sdk import ExtensionContext
+    import subprocess
+    import os
+
+    update_immediate_job_status(job_id, 'processing', f"Checking out {branch} in {repo}...", workspace_id=workspace_id)
+    ctx = ExtensionContext('git', workspace_id)
+
+    repo_path = ctx.resolve_path(repo)
+    for c in ctx.config.get("target_repos", []):
+        if c.get("repo_dir") == repo and c.get("physical_path"):
+            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+            break
+
+    cmd = ['git', 'checkout', '-b', branch] if create_new else ['git', 'checkout', branch]
+    try:
+        res = subprocess.run(cmd, cwd=repo_path, check=True, capture_output=True, text=True)
+        update_immediate_job_status(job_id, 'completed', res.stdout + res.stderr, workspace_id=workspace_id)
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e.stdout
+        err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        update_immediate_job_status(job_id, 'failed', err_str, workspace_id=workspace_id)
+
+register_callback("git", "checkout_task", _background_git_checkout)
+
+@git_bp.route('checkout', methods=['POST'])
+def api_git_checkout(ctx):
+    repo = ctx.req.json.get('repo')
+    branch = ctx.req.json.get('branch')
+    create_new = ctx.req.json.get('create_new', False)
+    if not repo or not branch: return jsonify({"error": "Repo and branch required"}), 400
+
+    job_id = ctx.jobs.submit("checkout_task", repo=repo, branch=branch, create_new=create_new)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202

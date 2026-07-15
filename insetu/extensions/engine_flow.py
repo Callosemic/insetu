@@ -8,6 +8,8 @@ from insetu.hooks import hooks
 flow_bp = InSetuExtension(
     'flow', 
     __name__,
+    title="Workflows",
+    description="Workflow batch automation and UI prompts.",
     virtual_contexts=[{
         "title": "Workflow Batches",
         "domain": "Workflows",

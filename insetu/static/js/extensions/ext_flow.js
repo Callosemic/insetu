@@ -76,18 +76,6 @@ export class InSetuExtFlow extends InSetuElement {
         this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
-        this._showFilters = false;
-        this._docClickListener = this._handleDocumentClick.bind(this);
-    }
-
-    _handleDocumentClick(e) {
-        if (!this._showFilters) return;
-        const path = e.composedPath();
-        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
-        if (!isFilterContent) {
-            this._showFilters = false;
-            this.requestUpdate();
-        }
     }
 
     onWorkspaceChanged(newWorkspaceId) {
@@ -95,7 +83,6 @@ export class InSetuExtFlow extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        document.addEventListener('click', this._docClickListener);
         this.subscribe(FlowStore, state => {
             this.batches = state.batches;
             this.loading = state.loading;
@@ -112,10 +99,8 @@ export class InSetuExtFlow extends InSetuElement {
 
         FlowStore.getState().fetchBatches();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('click', this._docClickListener);
     }
 
     openEditBatchModal(batch = null) {
@@ -291,17 +276,14 @@ export class InSetuExtFlow extends InSetuElement {
                             .value=${this.searchQuery} 
                             @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}>
                         </insetu-search-bar>
-                        <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
-                            ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
-                        </button>
-                    </div>
-                    <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
-                        <insetu-repo-filter
-                            label="📌 Repos:"
-                            .repos=${this.allRepos}
-                            .activeRepos=${Array.from(this.pinnedRepos)}
-                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                        </insetu-repo-filter>
+                        <insetu-filter-dropdown filterText=${filterBtnText}>
+                            <insetu-repo-filter
+                                label="📌 Repos:"
+                                .repos=${this.allRepos}
+                                .activeRepos=${Array.from(this.pinnedRepos)}
+                                @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                            </insetu-repo-filter>
+                        </insetu-filter-dropdown>
                     </div>
                 </div>
 

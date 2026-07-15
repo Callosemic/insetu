@@ -36,10 +36,14 @@ export class InSetuExtTerm extends InSetuElement {
         if (this._ws) this._ws.close();
         if (this._term) this._term.dispose();
     }
-
     onWorkspaceChanged(newWorkspaceId) {
-        if (this._ws) this._ws.close();
-        if (this._term) this._term.clear();
+        if (this._ws) {
+            // Silently close: Nullify the onclose handler to prevent it from logging the error
+            this._ws.onclose = null;
+            this._ws.close();
+            this._ws = null;
+        }
+        if (this._term) this._term.reset();
         this._connectWebSocket();
     }
     _handleResize = () => {
@@ -141,6 +145,27 @@ export class InSetuExtTerm extends InSetuElement {
 }
 customElements.define('insetu-ext-term', InSetuExtTerm);
 
+export class InSetuExtTermActions extends InSetuElement {
+    static styles = [css`
+        button {
+            background: transparent; color: var(--text); border: 1px solid var(--border);
+            border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px;
+            display: flex; align-items: center; justify-content: center; padding: 0;
+            font-size: 1.1rem; transition: background 0.2s; margin: 0;
+        }
+        button:hover { background: var(--input-bg); }
+    `];
+    render() {
+        return html`
+            <button title="Restart Terminal" @click=${() => {
+                const termEl = document.querySelector('insetu-ext-term');
+                if (termEl) termEl.onWorkspaceChanged(termEl.workspaceId);
+            }}>🔄</button>
+        `;
+    }
+}
+customElements.define('insetu-ext-term-actions', InSetuExtTermActions);
+
 window.ExtensionRegistry.registerExtension('term', {
     name: "Terminal Interface",
     version: "2.0.0",
@@ -158,6 +183,13 @@ window.ExtensionRegistry.registerExtension('term', {
             label: "Terminal",
             order: 1,
             component: "insetu-ext-term"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "ctrl",
+            targetSub: "term",
+            component: "insetu-ext-term-actions",
+            order: 1
         }
     ],
     uiHooks: {
@@ -180,8 +212,14 @@ window.ExtensionRegistry.registerExtension('term', {
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'ctrl' && data.subId === 'term') {
                 const termEl = document.querySelector('insetu-ext-term');
-                if (termEl && termEl._handleResize) {
-                    setTimeout(() => termEl._handleResize(), 50);
+                if (termEl) {
+                    // Tap-to-restart behavior for active tabs
+                    if (data.forceRefresh) {
+                        termEl.onWorkspaceChanged(termEl.workspaceId);
+                    }
+                    if (termEl._handleResize) {
+                        setTimeout(() => termEl._handleResize(), 50);
+                    }
                 }
             }
         }

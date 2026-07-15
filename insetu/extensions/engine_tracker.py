@@ -36,8 +36,7 @@ TRACKER_SETTINGS_SCHEMA = [
     {"id": "domain_strategy", "label": "Domain Strategy", "type": "select", "options": [{"value": "default", "label": "Default"}, {"value": "repo", "label": "Match Repo Domain"}, {"value": "custom", "label": "Custom Domain"}], "default": "default"},
     {"id": "domain_custom_value", "label": "Custom Domain Value", "type": "text", "default": ""}
 ]
-
-tracker_bp = InSetuExtension('tracker', __name__, schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
+tracker_bp = InSetuExtension('tracker', __name__, title="Issue Tracker", description="Markdown-based Kanban issue tracking.", schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
 def _background_archive_stale_tickets(job_id=None, workspace_id="default", **kwargs):
     try:

@@ -28,7 +28,7 @@ try:
 except ImportError:
     SUPPORT_PTY = False
 TERM_SETTINGS_SCHEMA = []
-term_bp = InSetuExtension('term', __name__, settings_schema=TERM_SETTINGS_SCHEMA)
+term_bp = InSetuExtension('term', __name__, title="Terminal Interface", description="Native terminal emulator.", settings_schema=TERM_SETTINGS_SCHEMA)
 __depends__ = []
 
 sock = Sock()

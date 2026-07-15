@@ -15,8 +15,7 @@ FAVORITES_SCHEMA = {
         "created_at": "TEXT NOT NULL"
     }
 }
-
-favorites_bp = InSetuExtension('favorites', __name__, schema=FAVORITES_SCHEMA)
+favorites_bp = InSetuExtension('favorites', __name__, title="Favorites Bar", description="Pin files and folders for quick access.", schema=FAVORITES_SCHEMA)
 __depends__ = []
 @favorites_bp.route('list', methods=['GET'])
 def list_favorites(ctx):

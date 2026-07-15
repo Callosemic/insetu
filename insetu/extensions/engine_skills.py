@@ -47,8 +47,7 @@ SKILLS_SETTINGS_SCHEMA = [
         }
     }
 ]
-
-skills_bp = InSetuExtension('skills', __name__, schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
+skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", description="Spaced-repetition tracking for musical and technical skills.", schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
 __depends__ = []
 
 def _get_user_skills_dir(workspace_id=None):

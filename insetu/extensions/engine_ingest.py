@@ -5,8 +5,7 @@ import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-
-ingest_bp = InSetuExtension('ingest', __name__)
+ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
 
 def _background_ingest(job_id, workspace_id, url, method):

@@ -6,8 +6,7 @@ import uuid
 from flask import jsonify, send_file
 from insetu.sdk import InSetuExtension
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
-
-format_bp = InSetuExtension('format', __name__)
+format_bp = InSetuExtension('format', __name__, title="Document Formatting", description="Document compilation (Pandoc) and JavaScript code formatting.")
 __depends__ = []
 def _background_compile(job_id, workspace_id, filepath, target_format):
     import os
