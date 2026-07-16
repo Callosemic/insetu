@@ -154,19 +154,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
     }
-    async _downloadTarget(targetFile, btnComponent = null) {
+    async _downloadTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        if (btnComponent) {
-            await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
-        } else {
-            const dummyBtn = document.createElement('button');
-            await fetchAndDownloadState(targetFile, dummyBtn, explicitUrl);
-        }
+        await fetchAndDownloadState(targetFile, explicitUrl);
     }
 
-    async _copyTarget(targetFile, btnElement) {
+    async _copyTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, btnElement, explicitUrl);
+        await fetchAndCopy(targetFile, explicitUrl);
     }
 
     connectedCallback() {
@@ -455,9 +450,10 @@ disconnectedCallback() {
                                 .detailText=${f.detailText}
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
+                                entityType="file:diff"
+                                .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: f.isFS }}
                                 @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
                                 ${f.branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${f.branch}</span>` : ''}
-                                <insetu-file-actions slot="actions" .filepath=${f.filename} .repoDir=${f.repoDir} .isFS=${f.isFS}></insetu-file-actions>
 ${(() => {
     const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
     const hasChunks = chunks && chunks.length > 1;
@@ -472,14 +468,8 @@ ${(() => {
                 📦 View Parts
             </button>
         `;
-    } else {
-        return html`
-            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => {
-                e.stopPropagation();
-                this._downloadTarget(f.filename, e.target);
-            }}>⬇️ Download</button>
-        `;
     }
+    return '';
 })()}
                             </insetu-card>
                         `)}
@@ -498,6 +488,8 @@ ${(() => {
                             .descriptionText=${`${files.length} untracked or excluded files pending.`}
                             icon="📦"
                             intentColor="var(--intent-neutral)"
+                            entityType="repo"
+                            .entityData=${{ repoDir: repo }}
                             @card-clicked=${() => {
                                 const newSet = new Set(this.sweepExpandedRepos);
                                 newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);
@@ -505,8 +497,6 @@ ${(() => {
                                 this.requestUpdate();
                             }}>
                             ${branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${branch}</span>` : ''}
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0; color: white; border: none; cursor: pointer;" 
-                                @click=${(e) => { e.stopPropagation(); this._executeRepoSweep(repo); }}>🚀 Sweep Repo</button>
                         </insetu-card>
 
                         ${this.sweepExpandedRepos.has(repo) ? html`
@@ -547,8 +537,8 @@ ${(() => {
                         <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                             <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
                             <div style="display: flex; gap: 8px;">
-                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${(e) => this._copyTarget(chunk, e.target)}>📋 Copy</button>
-                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => this._downloadTarget(chunk, e.target)}>⬇️ Download</button>
+                                <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
+                                <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
                             </div>
                         </div>
                     `)}
@@ -799,6 +789,31 @@ customElements.define('insetu-ext-git-ctrl', InSetuExtGitCtrl);
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'diff',
+            id: 'git-push',
+            label: 'Push',
+            icon: '🚀',
+            intent: 'highlight',
+            order: 10,
+            onClick: (data, e) => {
+                window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
+            }
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-sweep',
+            label: 'Sweep Repo',
+            icon: '🚀',
+            intent: 'highlight',
+            order: 10,
+            onClick: (data, e) => {
+                const gitEl = document.querySelector('insetu-ext-git-diffs');
+                if (gitEl) gitEl._executeRepoSweep(data.repoDir);
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:primary-navigation",
@@ -855,16 +870,4 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return html`<label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_diffs} @change=${(e) => { repo.exclude_from_diffs = e.target.checked; updateCallback(); }}> Exclude from 'git' extension contexts</label>`;
     });
 }
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    window.inSetu.extensions.Registry.registerUIHook('zone:file-card-actions', (data) => {
-        if (data.filepath && data.filepath.endsWith('_diffs.txt')) {
-            return html`
-                <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0 5px 0 0;" @click=${(e) => {
-                    e.stopPropagation();
-                    window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
-                }}>🚀 Push</button>
-            `;
-        }
-        return null; 
-    });
-}
+// Legacy zone:file-card-actions hook for git removed in favor of entityActions

@@ -220,7 +220,6 @@ constructor() {
         const intentColor = t.isBug ? 'var(--intent-danger)' : (t.isQueue ? 'var(--intent-highlight)' : 'var(--intent-success)');
         const icon = t.isBug ? '🐛' : (t.isQueue ? '🔬' : '✨');
         const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
-
         return html`
             <insetu-card
                 data-task-id=${t.id}
@@ -229,7 +228,8 @@ constructor() {
                 .descriptionText=${descText}
                 .intentColor=${intentColor}
                 .icon=${icon}
-                ?overlayExcludesTitle=${true}
+                entityType="file:task"
+                .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
                 @card-clicked=${() => viewSourceFile(t.filepath, true)}>
 
                 <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
@@ -240,29 +240,6 @@ constructor() {
                     ` : ''}
                     ${t.tags && t.tags.length > 0 ? t.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
                 </div>
-
-                <insetu-file-actions slot="actions" .filepath=${t.filepath} .repoDir=${t.repo} .isFS=${true}></insetu-file-actions>
-                ${(t.status === 'open' && !t.isQueue) ? html`
-                    <insetu-async-btn slot="actions" label="▶️ Start" intent="warning" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'active'); }}></insetu-async-btn>
-                ` : ''}
-
-                ${(t.status === 'closed') ? html`
-                    <insetu-async-btn slot="actions" label="🔄 Re-open" intent="highlight" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open'); }}></insetu-async-btn>
-                ` : ''}
-
-                ${(t.status !== 'closed' && t.isQueue) ? html`
-                    <insetu-async-btn slot="actions" label="✅ Accept" intent="success" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open', 'todo'); }}></insetu-async-btn>
-                ` : ''}
-
-                ${(t.status === 'active' && !t.isQueue) ? html`
-                    <insetu-async-btn slot="actions" label="⏸️ Pause" intent="neutral" .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'open'); }}></insetu-async-btn>
-                ` : ''}
-
-                ${(t.status !== 'closed' && t.status !== 'archived') ? html`
-                    <insetu-async-btn slot="actions" label="${t.isQueue ? '✅ Resolve' : '✅ Close'}" intent="${t.isQueue ? 'neutral' : 'success'}" 
-                        .onClick=${(e) => { e.stopPropagation(); return this._transitionTask(t, 'closed'); }}>
-                    </insetu-async-btn>
-                ` : ''}
             </insetu-card>
         `;
     }
@@ -480,7 +457,7 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
     }
     async _openEditTaskModal(filepath) {
         try {
-            const res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filepath)}`);
+            const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filepath)}`);
             if (!res.ok) throw new Error("Failed to load task file.");
             const content = await res.text();
             const repo = filepath.split('/')[0];
@@ -654,15 +631,11 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
                     </div>
 
                     <div style="border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0; width: 100%;">
-
-                        <div @click=${() => { this._yamlExpanded = !this._yamlExpanded;
-this.requestUpdate(); }} 
-                            style="padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; font-size: 0.75rem; font-weight: bold; color: var(--text-muted); background: var(--input-bg);">
-                            <span style="display: flex; align-items: center; gap: 6px;">⚙️ Ticket Metadata</span>
-
-                            <span>${this._yamlExpanded ?
-'▲ Hide' : '▼ Show'}</span>
-                        </div>
+                        <div @click=${() => { this._yamlExpanded = !this._yamlExpanded; this.requestUpdate(); }} 
+                                    style="padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; font-size: 0.75rem; font-weight: bold; color: var(--text-muted); background: var(--input-bg);">
+                                    <span style="display: flex; align-items: center; gap: 6px;">⚙️ Ticket Metadata</span>
+                                    <span>${this._yamlExpanded ? '▲ Hide' : '▼ Show'}</span>
+                                </div>
                         ${this._yamlExpanded ? html`
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; padding: 4px 20px 16px 20px; border-top: 1px solid var(--border);">
                                 <div>
@@ -709,8 +682,8 @@ this.requestUpdate(); }}
                 </div>
                 <div slot="footer" style="display: flex; width: 100%;">
                     <button class="btn-sm" style="flex: 0 0 auto; padding: 15px 20px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndCopy(editTaskForm.filepath, e.target)}>📋 Copy</button>
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-neutral); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${(e) => fetchAndDownloadState(editTaskForm.filepath, e.target)}>⬇️ Download</button>
+                    <insetu-async-btn style="flex: 1; border-right: 1px solid var(--border);" label="📋 Copy" intent="success" .onClick=${() => fetchAndCopy(editTaskForm.filepath)}></insetu-async-btn>
+                    <insetu-async-btn style="flex: 1; border-right: 1px solid var(--border);" label="⬇️ Download" intent="neutral" .onClick=${() => fetchAndDownloadState(editTaskForm.filepath)}></insetu-async-btn>
                     <insetu-async-btn style="flex: 1; display: ${this._isDirty() ? 'block' : 'none'};" label="💾 Save & Sync Ticket" intent="primary" .onClick=${this._saveEditTask.bind(this)}></insetu-async-btn>
                 </div>
             </insetu-modal>
@@ -799,6 +772,73 @@ customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'task',
+            id: 'task-start',
+            label: 'Start',
+            icon: '▶️',
+            intent: 'warning',
+            order: 110,
+            match: (data) => data.status === 'open' && !data.isQueue,
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-tracker');
+                if (el) await el._transitionTask(data, 'active');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-reopen',
+            label: 'Re-open',
+            icon: '🔄',
+            intent: 'highlight',
+            order: 110,
+            match: (data) => data.status === 'closed',
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-tracker');
+                if (el) await el._transitionTask(data, 'open');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-accept',
+            label: 'Accept',
+            icon: '✅',
+            intent: 'success',
+            order: 110,
+            match: (data) => data.status !== 'closed' && data.isQueue,
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-tracker');
+                if (el) await el._transitionTask(data, 'open', 'todo');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-pause',
+            label: 'Pause',
+            icon: '⏸️',
+            intent: 'neutral',
+            order: 120,
+            match: (data) => data.status === 'active' && !data.isQueue,
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-tracker');
+                if (el) await el._transitionTask(data, 'open');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-close',
+            label: (data) => data.isQueue ? 'Resolve' : 'Close',
+            icon: '✅',
+            intent: (data) => data.isQueue ? 'neutral' : 'success',
+            order: 130,
+            match: (data) => data.status !== 'closed' && data.status !== 'archived',
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-tracker');
+                if (el) await el._transitionTask(data, 'closed');
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:primary-navigation",
@@ -887,6 +927,11 @@ window.ExtensionRegistry.registerExtension('tracker', {
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'tasks') {
+                KanbanStore.getState().fetchTasks();
+            }
+        },
+        'zone:subtab-changed': (data) => {
+            if (data.parentId === 'tasks' && data.forceRefresh) {
                 KanbanStore.getState().fetchTasks();
             }
         },

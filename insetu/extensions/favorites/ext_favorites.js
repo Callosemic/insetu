@@ -147,7 +147,12 @@ export class InSetuExtFavorites extends InSetuElement {
     }
     _navigateToFavorite(item) {
         if (item.type === 'file') {
-            if (window.viewSourceFile) window.viewSourceFile(item.path, true);
+            const isContext = item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
+            if (!isContext && window.viewSourceFile) {
+                window.viewSourceFile(item.path, true);
+            } else if (isContext && window.viewAndCopy) {
+                window.viewAndCopy(item.path);
+            }
         } else if (item.type === 'folder') {
             const parts = item.path.split('/').filter(p => p);
             AppStore.setState({ globalBrowsePath: parts });
@@ -162,17 +167,22 @@ export class InSetuExtFavorites extends InSetuElement {
 
         return html`
             <div style="display: flex; flex-direction: column; gap: 8px;">
-                ${this.items.map(item => html`
+                ${this.items.map(item => {
+                    const isContext = item.type === 'file' && (item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
+                    const eType = item.type === 'folder' ? 'repo' : (isContext ? 'file:context' : 'file');
+                    return html`
                     <insetu-card
                         .filename=${item.path}
                         .titleText=${item.name}
                         .descriptionText=${item.path}
-                        icon=${item.type === 'folder' ? '📁' : '📄'}
+                        icon=${item.type === 'folder' ? '📁' : (isContext ? '📦' : '📄')}
                         intentColor="var(--intent-highlight)"
+                        entityType=${eType}
+                        .entityData=${{ filepath: item.path, repoDir: item.path.split('/')[0], isFS: !isContext }}
                         @card-clicked=${() => this._navigateToFavorite(item)}>
-                        <insetu-file-actions slot="actions" .filepath=${item.path} .isFS=${true}></insetu-file-actions>
                     </insetu-card>
-                `)}
+                    `;
+                })}
             </div>
         `;
     }
@@ -183,6 +193,20 @@ customElements.define('insetu-ext-favorites', InSetuExtFavorites);
 window.ExtensionRegistry.registerExtension('favorites', {
     name: "Favorites Bar",
     version: "1.0.0",
+    entityActions: [
+        {
+            targetEntity: 'file',
+            id: 'fave_toggle_file',
+            order: -1, // Pinned to the far left
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`
+        },
+        {
+            targetEntity: 'repo',
+            id: 'fave_toggle_repo',
+            order: -1,
+            component: (data) => html`<insetu-fav-btn .filepath=${data.repoDir}></insetu-fav-btn>`
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
@@ -198,12 +222,6 @@ window.ExtensionRegistry.registerExtension('favorites', {
             if (data.parentId === 'edit' && data.subId === 'favorites') {
                 FavoritesStore.getState().fetchFavorites();
             }
-        },
-        'zone:file-card-actions': (data) => {
-            if (data.filepath) {
-                return html`<insetu-fav-btn slot="actions" data-ext="favorites" .filepath=${data.filepath}></insetu-fav-btn>`;
-            }
-            return null;
         },
         'zone:fs-dropdown-menu': (data) => {
             if (data.currentPath && !data.isPrompts) {

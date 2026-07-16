@@ -23,10 +23,19 @@ export class InSetuExtPrompts extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.fetchPrompts();
-
         // InSetuElement SDK automatically tracks and destroys this subscription on unmount
         this.subscribe(AppStore, state => state.promptsForceRefreshTick, (tick) => {
             if (tick) this.fetchPrompts();
+        });
+
+        this.subscribe(AppStore, state => state.gatherOptions?.prompts, (rawPrompts) => {
+            if (!rawPrompts) return;
+            // UDF & Spatial Boundary Enforcer: Strip absolute host paths leaking from backend VFS sweeps
+            this.prompts = rawPrompts.map(p => {
+                const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
+                return match ? match[1] : p.split('/').pop();
+            });
+            this.requestUpdate();
         });
     }
 
@@ -38,13 +47,6 @@ export class InSetuExtPrompts extends InSetuElement {
         this.loading = true;
         try {
             await syncPromptsState();
-            const gatherOptions = AppStore.getState().gatherOptions || {};
-            const rawPrompts = gatherOptions.prompts || [];
-            // UDF & Spatial Boundary Enforcer: Strip absolute host paths leaking from backend VFS sweeps
-            this.prompts = rawPrompts.map(p => {
-                const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
-                return match ? match[1] : p.split('/').pop();
-            });
         } catch (e) {
             console.error("Failed to fetch prompts:", e);
         } finally {
@@ -60,10 +62,11 @@ export class InSetuExtPrompts extends InSetuElement {
                 return;
             }
 
-            // Normalize absolute host paths into clean workspace-relative routing targets
+            // Ensure clean prefix structure relative to workspace root regardless of backend strip status
             const cleanPrompts = rawPrompts.map(p => {
-                const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
-                return match ? ".insetu/prompts/" + match[1] : p;
+                if (p.startsWith(".insetu/prompts/")) return p;
+                const corePath = p.replace(/^prompts\//, '');
+                return ".insetu/prompts/" + corePath;
             });
 
             window.openWorkspaceBrowser({
@@ -93,24 +96,7 @@ export class InSetuExtPrompts extends InSetuElement {
                         .enableSearch=${true}
                         searchPlaceholder="🔍 Fuzzy search prompts..."
                         .currentPath=${AppStore.getState().currentPromptsPath || []}
-                        .actions=${[
-                            { 
-                                label: '📋 Copy', style: 'neutral', 
-                                asyncAction: async (filepath) => {
-                                    const res = await this.api.get(`resolve?file=${encodeURIComponent(filepath)}`);
-                                    if (!res.ok) throw new Error("Failed to fetch");
-                                    const text = await res.text();
-                                    await this.utils.copyToClipboard(text);
-                                }
-                            },
-                            { 
-                                label: '⬇️ Download', style: 'primary',
-                                asyncAction: async (filepath, filename) => {
-                                    const activeWs = window.inSetu.stores.App.getState().activeWorkspace || 'default';
-                                    await downloadFile(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(filepath)}`, filename || filepath.split('/').pop());
-                                }
-                            }
-                        ]}
+                        entityType="file:prompt"
                         @path-changed=${(e) => AppStore.setState({ currentPromptsPath: e.detail.path })}>
                     </insetu-file-tree>
                 </div>
@@ -198,11 +184,12 @@ window.ExtensionRegistry.registerExtension('prompts', {
         },
         'zone:modal-ext-menu': (data) => {
             if (data.isMarkdown && data.filepath && data.filepath.includes('/prompts/')) {
-                data.menuItems.push({ label: 'Embed Prompt', icon: '🧩', onClick: InSetuExtPrompts.openPromptEmbedModal });
+                data.menuItems.push({ label: 'Embed Prompt', icon: '🧩', onClick: () => InSetuExtPrompts.openPromptEmbedModal() });
             }
         },
         'zone:file-fetch-url': (filepath) => {
-            if (filepath && filepath.includes('/prompts/')) {
+            // Guardrail: Strictly target the designated OS prompt vault to prevent source code mutation
+            if (filepath && (filepath.startsWith('.insetu/prompts/') || filepath.includes('/.insetu/prompts/'))) {
                 const activeWs = window.inSetu.stores.App.getState().activeWorkspace || 'default';
                 return `/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(filepath);
             }

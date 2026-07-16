@@ -95,10 +95,23 @@ export class InSetuExtFormatModals extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-format-modals', InSetuExtFormatModals);
-
 window.ExtensionRegistry.registerExtension('format', {
     name: "Document Formatting",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'file',
+            id: 'format-doc',
+            label: 'Publish',
+            icon: '📄',
+            intent: 'primary',
+            order: 40,
+            match: (data) => data.filepath && data.filepath.toLowerCase().endsWith('.md'),
+            onClick: (data, e) => {
+                FormatStore.setState({ formatModalOpen: true, currentFormatTarget: data.filepath, formatJobError: null, activeFormatJobId: null });
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:global",

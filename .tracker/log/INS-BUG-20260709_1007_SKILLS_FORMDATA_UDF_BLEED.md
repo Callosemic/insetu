@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260709_1007_SKILLS_FORMDATA_UDF_BLEED
 title: "Skills Extension Bypasses UDF via FormData"
 created_at: 2026-07-09T10:03:14

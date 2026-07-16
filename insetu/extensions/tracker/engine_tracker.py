@@ -30,6 +30,7 @@ TRACKER_SETTINGS_SCHEMA = [
     {"id": "exclude_from_diffs", "label": "Exclude Tracker from Git Diffs (Sends to Sweepable State)", "type": "boolean", "default": True},
     {"id": "include_closed", "label": "Include Closed in Context", "type": "select", "options": [{"value": "grace_period", "label": "Grace Period"}, {"value": "all", "label": "All"}, {"value": "none", "label": "None"}], "default": "grace_period"},
     {"id": "spawn_closed", "label": "Spawn Separate Closed Context", "type": "boolean", "default": False},
+    {"id": "include_archived_in_log", "label": "Include Archived in UI Log & Changelog", "type": "boolean", "default": False},
     {"id": "grace_period_days", "label": "Grace Period (Days)", "type": "number", "default": 7},
     {"id": "auto_archive", "label": "Auto-Archive", "type": "boolean", "default": True},
     {"id": "archive_days", "label": "Archive After (Days)", "type": "number", "default": 30},
@@ -167,10 +168,18 @@ def _sync_disk_to_db(workspace_id=None):
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     for repo in repos:
         tracker_path = f"{repo}/.tracker"
-        # SDK VFS Walk abstracts physical path resolution and spatial bounds
-        for ws_rel_path in ctx.vfs.walk(tracker_path, exts=['.md']):
-            abs_path = ctx.resolve_path(ws_rel_path)
-            _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
+        # SDK VFS Walk abstracts physical path resolution and spatial bounds.
+        # We explicitly step into log directories to bypass global ignore_dirs (like "log").
+        paths_to_walk = [tracker_path, f"{repo}/.tracker/log", f"{repo}/.tracker/log/archived"]
+        walked_files = set()
+
+        for path in paths_to_walk:
+            for ws_rel_path in ctx.vfs.walk(path, exts=['.md']):
+                if ws_rel_path in walked_files:
+                    continue
+                walked_files.add(ws_rel_path)
+                abs_path = ctx.resolve_path(ws_rel_path)
+                _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
 
     ctx.db.commit()
 @hooks.on('mutate_workspace_config')
@@ -200,12 +209,8 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     for repo_cfg in cfg.get("target_repos", []):
         if "sub_buckets" not in repo_cfg:
             repo_cfg["sub_buckets"] = []
-
-        # Ensure archived tickets are explicitly ignored by the VFS Cartographer globally
         if "repo_ignore_dirs" not in repo_cfg:
             repo_cfg["repo_ignore_dirs"] = []
-        if "archived" not in repo_cfg["repo_ignore_dirs"]:
-            repo_cfg["repo_ignore_dirs"].append("archived")
 
         safe_r_dir = get_safe_repo_id(repo_cfg.get("repo_dir", ""))
 
@@ -228,9 +233,9 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
         elif include_closed == "all":
             main_prefixes.extend(closed_prefixes)
             main_prefixes.extend(log_prefixes)
-
         # Clear existing dynamic sub-buckets to apply new logic
-        repo_cfg["sub_buckets"] = [b for b in repo_cfg["sub_buckets"] if b.get("id") not in ("tracker", "tracker_closed")]
+        repo_cfg["sub_buckets"] = [b for b in repo_cfg["sub_buckets"] if b.get("id") not in ("tracker", "tracker_closed", "tracker_omitted")]
+
         if isolate_context:
             repo_cfg["sub_buckets"].insert(0, {
                 "id": "tracker",
@@ -253,10 +258,29 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                     "exclude_from_diffs": exclude_from_diffs,
                     "is_system": True
                 })
-            else:
-                if "repo_ignore_patterns" not in repo_cfg:
-                    repo_cfg["repo_ignore_patterns"] = []
-                repo_cfg["repo_ignore_patterns"].extend(closed_prefixes + log_prefixes)
+
+        # Conditional Catch-all to prevent unmapped tracker files from bleeding into the default context
+        if isolate_context:
+            repo_cfg["sub_buckets"].append({
+                "id": "tracker_omitted",
+                "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
+                "domain": "Hidden Context",
+                "match_prefixes": [".tracker/"],
+                "out_file": f"{safe_r_dir}_tracker_omitted_context.txt",
+                "exclude_from_diffs": True,
+                "is_system": True
+            })
+        elif include_closed == "none" and not spawn_closed:
+            # If not isolated, but closed tickets should be omitted and aren't spawned
+            repo_cfg["sub_buckets"].append({
+                "id": "tracker_omitted",
+                "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
+                "domain": "Hidden Context",
+                "match_prefixes": closed_prefixes + log_prefixes,
+                "out_file": f"{safe_r_dir}_tracker_omitted_context.txt",
+                "exclude_from_diffs": True,
+                "is_system": True
+            })
 def get_tracker_path(repo, ticket_type, status):
     """Resolves the relative directory for a ticket based on your taxonomy."""
     base = f"{repo}/.tracker"
@@ -392,15 +416,22 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
             if b.get("id"): buckets.add(b["id"])
             if b.get("meta_map"): buckets.update(b["meta_map"].keys())
         valid_buckets_by_repo[r] = buckets
-
     target_files = []
     if specific_file:
         target_files.append((specific_file.split('/')[0], specific_file))
     else:
         for current_repo in repos:
             tracker_rel_base = f"{current_repo}/.tracker"
-            for ws_rel_path in ctx.vfs.walk(tracker_rel_base, exts=['.md']):
-                target_files.append((current_repo, ws_rel_path))
+            # Explicitly step into log directories to bypass global ignore_dirs (like "log")
+            paths_to_walk = [tracker_rel_base, f"{current_repo}/.tracker/log", f"{current_repo}/.tracker/log/archived"]
+            walked_files = set()
+
+            for path in paths_to_walk:
+                for ws_rel_path in ctx.vfs.walk(path, exts=['.md']):
+                    if ws_rel_path in walked_files:
+                        continue
+                    walked_files.add(ws_rel_path)
+                    target_files.append((current_repo, ws_rel_path))
 
     for current_repo, ws_rel_path in target_files:
         tracker_rel_base = f"{current_repo}/.tracker"
@@ -684,7 +715,17 @@ def api_tracker_files(ctx):
         count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
         if count_check == 0:
             _sync_disk_to_db(ctx.workspace_id)
-        cursor = conn.execute("SELECT * FROM tracker_tickets")
+        include_archived = ctx.settings.get("include_archived_in_log", False)
+
+        # Ensure proper boolean conversion in case the JSON config stored it as a string
+        if isinstance(include_archived, str):
+            include_archived = include_archived.lower() == 'true'
+
+        if include_archived:
+            cursor = conn.execute("SELECT * FROM tracker_tickets")
+        else:
+            cursor = conn.execute("SELECT * FROM tracker_tickets WHERE status != 'archived'")
+
         tasks = []
         for row in cursor.fetchall():
             tasks.append({
@@ -720,17 +761,27 @@ def api_tracker_transition(ctx):
         return jsonify({"status": "success", "new_filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @hooks.on('request_changelog_suggestions')
 def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
+    include_archived = ctx.settings.get("include_archived_in_log", False)
+
+    # Ensure proper boolean conversion in case the JSON config stored it as a string
+    if isinstance(include_archived, str):
+        include_archived = include_archived.lower() == 'true'
+
+    # We include 'logged' gracefully alongside 'closed' to capture recent grace-period tickets
+    status_filter = "status IN ('closed', 'logged', 'archived')" if include_archived else "status IN ('closed', 'logged')"
+
     changelogs = []
     try:
         conn = get_connection('tracker', workspace_id=workspace_id)
-        cursor = conn.execute("""
+        cursor = conn.execute(f"""
             SELECT title FROM tracker_tickets 
-            WHERE repo = ? AND status = 'closed' 
-            ORDER BY COALESCE(closed_at, created_at) DESC LIMIT 5
+            WHERE repo = ? AND {status_filter} 
+            ORDER BY COALESCE(closed_at, created_at) DESC LIMIT 10
         """, (repo,))
         for row in cursor.fetchall():
             changelogs.append({"title": row['title']})

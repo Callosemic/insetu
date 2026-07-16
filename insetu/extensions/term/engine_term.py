@@ -3,9 +3,9 @@ import subprocess
 import threading
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension
+from insetu.sdk import InSetuExtension, ExtensionContext
 from insetu.hooks import hooks
-from insetu.utils_core import get_all_workspace_ids, get_workspace_physics, load_config
+from insetu.utils_core import get_all_workspace_ids
 
 try:
     from flask_sock import Sock
@@ -51,12 +51,13 @@ def term_stream(ws, workspace_id):
     if not is_extension_enabled('term', workspace_id):
         ws.close(message="403 Forbidden: Terminal extension disabled.")
         return
-
     if not SUPPORT_PTY:
         ws.send("PTY is not supported on this host operating system (Windows natively requires pywinpty).\r\n")
         ws.close()
         return
-    _, ws_root, _ = get_workspace_physics(workspace_id)
+
+    ctx = ExtensionContext('term', workspace_id)
+    ws_root = ctx.paths['workspace_root']
 
     # Fork a new PTY natively
     master_fd, slave_fd = pty.openpty()

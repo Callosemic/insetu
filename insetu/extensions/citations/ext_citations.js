@@ -359,54 +359,27 @@ export class InSetuExtCitations extends InSetuElement {
         const authors = c.author ? c.author.map(a => a.family).join(', ') : 'Unknown';
         const year = c.issued && c.issued['date-parts'] && c.issued['date-parts'][0] ? c.issued['date-parts'][0][0] : 'n.d.';
         const isImporting = this.importingIds && this.importingIds.has(c.id);
-
-        const actionHtml = (() => {
-            if (isExplore) {
-                const alreadyExists = this.localLibrary.some(libItem => libItem.id === c.id || (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase()));
-                if (alreadyExists) {
-                    return html`
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ In Library</span>
-                            <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.75rem;"
-                                ?disabled=${isImporting}
-                                @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : 'Force Import'}</button>
-                        </div>
-                    `;
-                } else {
-                    return html`<button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 2px 8px;"
-                        ?disabled=${isImporting}
-                        @click=${() => this._importExploreCitation(c)}>${isImporting ? '⏳...' : '📥 Import'}</button>`;
-                }
-            } else {
-                return html`
-                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; margin-right: 5px; padding: 2px 8px;"
-                        @click=${() => this._openCitationNotes(c.id)}>📝 Notes</button>
-                    <button class="btn-sm" style="background: var(--intent-warning); margin: 0; margin-right: 5px; padding: 2px 8px;"
-                        @click=${() => this._openEditModal(c)}>✏️ Edit</button>
-                    <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 2px 8px;"
-                        @click=${() => this._openAttachModal(c)}>📌 Pin to Repo</button>
-                `;
-            }
-        })();
+        const alreadyExists = isExplore ? this.localLibrary.some(libItem => libItem.id === c.id || (libItem.URL && c.URL && libItem.URL.toLowerCase() === c.URL.toLowerCase())) : false;
 
         const attTags = !isExplore && c._attachments && c._attachments.length > 0
             ? c._attachments.map(a => html`<span class="task-tag" style="background: var(--border);">${a.repo}${a.bucket !== 'None' ? ':'+a.bucket : ''}</span>`)
             : '';
 
         return html`
-            <div class="file-card cit-card-wrapper" data-cit-id=${c.id}>
-                <div style="order: 1; display: flex; flex-direction: column;">
-                    <div class="file-card-header">
-                        <span class="file-title" style="color: var(--intent-highlight);">📄 ${c.title || 'Untitled'}</span>
-                    </div>
-                    <div class="file-desc" style="color: var(--text); font-weight: bold; margin-top: 5px;">${authors} (${year})</div>
-                    <div class="file-desc" style="font-size: 0.8rem; margin-top: 8px;">ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span> ${c.open_access ? '🔓 OA' : ''}</div>
-                    ${c.URL ? html`<div class="file-desc" style="font-size: 0.8rem; margin-top: 4px;">🌐 <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
-                    ${attTags ? html`<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${attTags}</div>` : ''}
+            <insetu-card
+                .filename=${c.id}
+                .titleText=${c.title || 'Untitled'}
+                .descriptionText=${`${authors} (${year})`}
+                icon="📄"
+                intentColor="var(--intent-highlight)"
+                entityType=${isExplore ? 'explore_citation' : 'citation'}
+                .entityData=${{ ...c, isImporting, isExplore, alreadyExists }}>
+                <div style="font-size: 0.8rem; margin-top: 4px; color: var(--text-muted);">
+                    ID: <span style="font-family: monospace; color: var(--intent-primary);">[@${c.id}]</span> ${c.open_access ? '🔓 OA' : ''}
                 </div>
-                <div class="cit-card-actions" style="position: absolute; right: 10px; top: 12px; background: var(--input-bg); padding-left: 10px; box-shadow: -15px 0 15px var(--input-bg); flex-shrink: 0; display: flex; gap: 8px; align-items: center; opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; transform: translateX(10px);">${actionHtml}</div>
-                <style> .cit-card-wrapper:hover .cit-card-actions { opacity: 1; pointer-events: auto; transform: translateX(0); } </style>
-            </div>
+                ${c.URL ? html`<div style="font-size: 0.8rem; margin-top: 4px;">🌐 <a href="${c.URL}" target="_blank" style="color: var(--intent-success); text-decoration: underline; word-break: break-all;">${c.URL}</a></div>` : ''}
+                ${attTags ? html`<div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">${attTags}</div>` : ''}
+            </insetu-card>
         `;
     }
     _renderMain() {
@@ -727,10 +700,60 @@ export class InSetuExtCitationsModals extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-citations-modals', InSetuExtCitationsModals);
-
 window.ExtensionRegistry.registerExtension('citations', {
     name: "Reference Manager",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'citation',
+            id: 'cit-notes',
+            label: 'Notes',
+            icon: '📝',
+            intent: 'highlight',
+            order: 10,
+            onClick: (data, e) => {
+                const el = document.querySelector('insetu-ext-citations');
+                if (el) el._openCitationNotes(data.id);
+            }
+        },
+        {
+            targetEntity: 'citation',
+            id: 'cit-edit',
+            label: 'Edit',
+            icon: '✏️',
+            intent: 'warning',
+            order: 20,
+            onClick: (data, e) => {
+                const el = document.querySelector('insetu-ext-citations');
+                if (el) el._openEditModal(data);
+            }
+        },
+        {
+            targetEntity: 'citation',
+            id: 'cit-pin',
+            label: 'Pin to Repo',
+            icon: '📌',
+            intent: 'primary',
+            order: 30,
+            onClick: (data, e) => {
+                const el = document.querySelector('insetu-ext-citations');
+                if (el) el._openAttachModal(data);
+            }
+        },
+        {
+            targetEntity: 'explore_citation',
+            id: 'cit-import',
+            label: (data) => data.alreadyExists ? 'Force Import' : 'Import',
+            icon: (data) => data.alreadyExists ? '⚠️' : '📥',
+            intent: (data) => data.alreadyExists ? 'warning' : 'success',
+            order: 10,
+            match: (data) => !data.isImporting,
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-citations');
+                if (el) await el._importExploreCitation(data);
+            }
+        }
+    ],
     layoutSlots: [
         { slot: "slots:primary-navigation", id: "library", label: "Library", order: 4 },
         { slot: "slots:sub-navigation", targetParent: "library", id: "lib-main", label: "Main", order: 1, component: "insetu-ext-citations" },

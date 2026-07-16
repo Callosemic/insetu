@@ -121,20 +121,16 @@ export class InSetuExtFlow extends InSetuElement {
         this._editModalOpen = true;
         this.requestUpdate();
     }
-    async _downloadTarget(targetFile, btnComponent = null) {
+    async _downloadTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        if (btnComponent) {
-            await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
-        } else {
-            const dummyBtn = document.createElement('button');
-            await fetchAndDownloadState(targetFile, dummyBtn, explicitUrl);
-        }
+        await fetchAndDownloadState(targetFile, explicitUrl);
     }
 
-    async _copyTarget(targetFile, btnElement) {
+    async _copyTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, btnElement, explicitUrl);
+        await fetchAndCopy(targetFile, explicitUrl);
     }
+    // Logic abstracted to window.shareFiles
     openBatchModal(batch) {
         this._viewingBatch = batch;
         this._viewingBatchPromptText = 'Loading prompt...';
@@ -224,13 +220,6 @@ export class InSetuExtFlow extends InSetuElement {
                 this._viewingBatch = null;
                 this._viewModalOpen = false;
                 this.requestUpdate();
-                // Surgical Update: Let the VFS worker handle physical disk mapping,
-                // just pull the resulting manifest state statelessly.
-                setTimeout(() => {
-                    window.inSetu.api.workspace('manifest?t=' + Date.now())
-                        .then(mRes => mRes.ok ? mRes.json() : {})
-                        .then(manifest => AppStore.setState({ manifest }));
-                }, 500);
             }
         });
     }
@@ -314,12 +303,9 @@ export class InSetuExtFlow extends InSetuElement {
                                         .detailText=${sizeStr ? `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename} | ${sizeStr}` : `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename}`}
                                         icon=""
                                         intentColor="var(--intent-primary)"
+                                        entityType="workflow_batch"
+                                        .entityData=${b}
                                         @card-clicked=${() => this.openBatchModal(b)}>
-
-                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer; padding: 6px 12px; font-size: 0.85rem; font-weight: bold;" 
-                                                @click=${(e) => { e.stopPropagation(); this.openEditBatchModal(b); }}>
-                                                ✏️ Edit
-                                        </button>
                                 </insetu-card>
                                 `;
                             }}>
@@ -479,6 +465,8 @@ export class InSetuExtFlow extends InSetuElement {
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
                                                                 const chunks = AppStore.getState().manifest[baseFile]?.meta?.chunks;
+                                                                const hasShare = !!navigator.share && !!navigator.canShare;
+
                                                                 if (chunks && chunks.length > 1) {
                                                                     return html`
                                                                         <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => {
@@ -487,11 +475,13 @@ export class InSetuExtFlow extends InSetuElement {
                                                                             this.chunkModalOpen = true;
                                                                             this.requestUpdate();
                                                                         }}>📦 View Parts</button>
+                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share All" intent="neutral" .onClick=${() => window.shareFiles(baseFile, chunks)}></insetu-async-btn>` : ''}
                                                                     `;
                                                                 } else {
                                                                     return html`
-                                                                        <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => this._copyTarget(baseFile, e.target)}>📋 Copy Context</button>
-                                                                        <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => this._downloadTarget(baseFile, e.target)}>⬇️ Download</button>
+                                                                        <insetu-async-btn label="📋 Copy Context" intent="success" .onClick=${() => this._copyTarget(baseFile)}></insetu-async-btn>
+                                                                        <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(baseFile)}></insetu-async-btn>
+                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share" intent="neutral" .onClick=${() => window.shareFiles(baseFile)}></insetu-async-btn>` : ''}
                                                                     `;
                                                                 }
                                                             })()}
@@ -502,7 +492,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
                                                             <textarea style="height: 150px; margin-bottom: 10px;" readonly>${this._viewingBatchPromptText}</textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                                                    <button class="btn-sm" style="background: var(--intent-success);" @click=${(e) => this.utils.copyRawText(this._viewingBatchPromptText, e.target)}>📋 Copy Prompt</button>
+                                                                    <insetu-async-btn label="📋 Copy Prompt" intent="success" .onClick=${() => this.utils.copyRawText(this._viewingBatchPromptText)}></insetu-async-btn>
                                                             </div>
                                                     </div>
                                             ` : 
@@ -524,8 +514,8 @@ export class InSetuExtFlow extends InSetuElement {
                                 <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                     <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
                                     <div style="display: flex; gap: 8px;">
-                                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${(e) => this._copyTarget(chunk, e.target)}>📋 Copy</button>
-                                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => this._downloadTarget(chunk, e.target)}>⬇️ Download</button>
+                                        <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
+                                        <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
                                     </div>
                                 </div>
                             `)}
@@ -554,10 +544,23 @@ export class InSetuExtFlowActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);
-
 window.ExtensionRegistry.registerExtension('flow', {
     name: "Workflows",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'workflow_batch',
+            id: 'flow-edit',
+            label: 'Edit',
+            icon: '✏️',
+            intent: 'primary',
+            order: 10,
+            onClick: (data, e) => {
+                const el = document.querySelector('insetu-ext-flow');
+                if (el) el.openEditBatchModal(data);
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",

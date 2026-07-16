@@ -394,12 +394,9 @@ export class InSetuExtSkills extends InSetuElement {
                                             intentColor="var(--intent-neutral)"
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
+                                            entityType="skill"
+                                            .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
-                                            <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
-                                            <div slot="actions" style="display: flex; gap: 6px;">
-                                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
-                                                <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
-                                            </div>
                                         </insetu-card>
                                     `;
                                 })}
@@ -442,12 +439,9 @@ export class InSetuExtSkills extends InSetuElement {
                                             intentColor="var(--intent-primary)"
                                             style="cursor: pointer;"
                                             @click=${() => SkillsStore.getState().selectItem(item, 'train')}
+                                            entityType="skill"
+                                            .entityData=${item}
                                             @card-clicked=${() => SkillsStore.getState().selectItem(item, 'train')}>
-                                            <insetu-file-actions slot="actions" .filepath=${item.filepath} .isFS=${true}></insetu-file-actions>
-                                            <div slot="actions" style="display: flex; gap: 6px;">
-                                                <button class="btn-sm" style="background: var(--intent-highlight);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'train'); }}>⏱️ Train</button>
-                                                <button class="btn-sm" style="background: var(--intent-neutral);" @click=${(e) => { e.stopPropagation(); SkillsStore.getState().selectItem(item, 'edit'); }}>✏️ Edit</button>
-                                            </div>
                                         </insetu-card>
                                     `;
                                 })}
@@ -673,10 +667,33 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
     }
 }
 customElements.define('insetu-ext-skills', InSetuExtSkills);
-
 window.ExtensionRegistry.registerExtension('skills', {
     name: "Skills Tracker",
     version: "1.0.0",
+    entityActions: [
+        {
+            targetEntity: 'skill',
+            id: 'skill-train',
+            label: 'Train',
+            icon: '⏱️',
+            intent: 'primary',
+            order: 10,
+            onClick: (data, e) => {
+                SkillsStore.getState().selectItem(data, 'train');
+            }
+        },
+        {
+            targetEntity: 'skill',
+            id: 'skill-edit',
+            label: 'Edit',
+            icon: '✏️',
+            intent: 'neutral',
+            order: 20,
+            onClick: (data, e) => {
+                SkillsStore.getState().selectItem(data, 'edit');
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:primary-navigation",
@@ -720,11 +737,6 @@ window.ExtensionRegistry.registerExtension('skills', {
             if (data.parentId === 'skills') {
                 SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
-            }
-        },
-        'zone:file-card-actions': (data) => {
-            if (data.filepath && data.filepath.includes('.skills/')) {
-                // Future capability extension hooks can bind downstream items here
             }
         },
         'zone:post-file-save': (filepath) => {

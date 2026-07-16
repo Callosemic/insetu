@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260708_1615_MARKDOWN_COMPONENT
 title: "Ecosystem Generalization: Abstract CodeMirror into <insetu-markdown-editor> Web Component"
 created_at: 2026-07-08T16:15:00

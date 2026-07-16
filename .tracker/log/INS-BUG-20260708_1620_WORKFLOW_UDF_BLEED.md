@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "closed"
+status: "logged"
 id: INS-BUG-20260708_1620_WORKFLOW_UDF_BLEED
 title: "Workflow & Gather UDF State Splice Failures"
 created_at: 2026-07-08T16:20:00

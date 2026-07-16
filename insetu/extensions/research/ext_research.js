@@ -241,7 +241,6 @@ export class InSetuExtResearch extends InSetuElement {
             throw new Error("An error occurred executing the batch triage.");
         }
     }
-
     _renderJobCard(job) {
         const meta = (() => { try { return JSON.parse(job.meta_json || '{}'); } catch(e) { return {}; } })();
         const statusColor = (() => {
@@ -259,32 +258,18 @@ export class InSetuExtResearch extends InSetuElement {
             : `(${job.processed_links}/${job.total_links} scraped)`;
 
         return html`
-            <div class="file-card" style="padding: 10px; cursor: pointer;"
-                @click=${(e) => { if (e.target.tagName !== 'BUTTON') ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null }); }}>
-                <div style="font-weight: bold; color: var(--text); font-size: 0.95rem; word-break: break-word;">
-                    🔍 ${job.query} <span style="font-weight: normal; font-size: 0.8rem; color: var(--text-muted);">(${meta.date_range || 'Any Time'})</span>
-                </div>
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">Created: ${safeDate}</div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 5px;">
-                    <span style="font-size: 0.8rem; color: ${statusColor};">Status: ${job.status.toUpperCase()} ${cardStatusExtra}</span>
-                    <div style="display: flex; gap: 5px;">
-                        ${job.status === 'gathering' ? html`<button class="btn-sm" style="background: var(--intent-danger); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'cancel')}>🗑️ Cancel</button>` : ''}
-                        ${job.status === 'running' ? html`
-                            <button class="btn-sm" style="background: var(--intent-warning); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'pause')}>⏸️ Pause</button>
-                            <button class="btn-sm" style="background: var(--intent-danger); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'cancel')}>🗑️ Cancel</button>
-                        ` : ''}
-                        ${job.status === 'paused' ? html`
-                            <button class="btn-sm" style="background: var(--intent-success); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'resume')}>▶️ Resume</button>
-                            <button class="btn-sm" style="background: var(--intent-danger); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'cancel')}>🗑️ Cancel</button>
-                        ` : ''}
-                        ${job.status === 'failed' ? html`
-                            <button class="btn-sm" style="background: var(--intent-highlight); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'retry')}>🔄 Retry</button>
-                            <button class="btn-sm" style="background: var(--intent-danger); margin:0; padding: 2px 8px;" @click=${() => this.handleJobAction(job.id, 'cancel')}>🗑️ Cancel</button>
-                        ` : ''}
-                    </div>
-                </div>
+            <insetu-card
+                .filename=${job.id}
+                .titleText=${`🔍 ${job.query}`}
+                .descriptionText=${`Status: ${job.status.toUpperCase()} ${cardStatusExtra}`}
+                .detailText=${`Created: ${safeDate} | Range: ${meta.date_range || 'Any Time'}`}
+                icon=""
+                intentColor=${statusColor}
+                entityType="research_job"
+                .entityData=${job}
+                @card-clicked=${() => ResearchStore.setState({ selectedJobId: job.id, selectedItemId: null })}>
                 ${(job.status === 'failed' && meta.error) ? html`<div style="font-size: 0.8rem; color: var(--intent-danger); background: var(--input-bg); padding: 6px 10px; border-radius: 4px; margin-top: 8px; border: 1px solid var(--intent-danger);">⚠️ <b>Error:</b> ${meta.error}</div>` : ''}
-            </div>
+            </insetu-card>
         `;
     }
 
@@ -312,8 +297,7 @@ export class InSetuExtResearch extends InSetuElement {
             <div id="rs-detail-header" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border);">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px;">
                     <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word;">🔍 ${job.query}</div>
-                    <button class="btn-sm" style="background: transparent; border: 1px solid var(--border); color: var(--text); padding: 2px 8px; margin: 0; font-size: 0.8rem; white-space: nowrap; flex-shrink: 0;"
-                        @click=${(e) => this.utils.copyRawText(job.query, e.target)}>📋 Copy</button>
+                    <insetu-async-btn style="flex-shrink: 0;" label="📋 Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></insetu-async-btn>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                     <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: ${statusColor}; font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
@@ -478,10 +462,63 @@ export class InSetuExtResearchActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-research-actions', InSetuExtResearchActions);
-
 window.ExtensionRegistry.registerExtension('research', {
     name: "Research Inbox",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'research_job',
+            id: 'rs-pause',
+            label: 'Pause',
+            icon: '⏸️',
+            intent: 'warning',
+            order: 10,
+            match: (data) => data.status === 'running',
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-research');
+                if (el) await el.handleJobAction(data.id, 'pause');
+            }
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-resume',
+            label: 'Resume',
+            icon: '▶️',
+            intent: 'success',
+            order: 10,
+            match: (data) => data.status === 'paused',
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-research');
+                if (el) await el.handleJobAction(data.id, 'resume');
+            }
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-retry',
+            label: 'Retry',
+            icon: '🔄',
+            intent: 'highlight',
+            order: 10,
+            match: (data) => data.status === 'failed',
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-research');
+                if (el) await el.handleJobAction(data.id, 'retry');
+            }
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-cancel',
+            label: 'Cancel',
+            icon: '🗑️',
+            intent: 'danger',
+            order: 20,
+            match: (data) => ['running', 'paused', 'gathering', 'failed'].includes(data.status),
+            asyncAction: async (data, e) => {
+                const el = document.querySelector('insetu-ext-research');
+                if (el) await el.handleJobAction(data.id, 'cancel');
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation-actions",
