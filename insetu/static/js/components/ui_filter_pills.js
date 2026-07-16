@@ -214,7 +214,63 @@ export class InSetuRepoFilter extends LitElement {
         `;
     }
 }
+export class InSetuFilterDropdown extends LitElement {
+    static properties = {
+        filterText: { type: String },
+        open: { type: Boolean, reflect: true }
+    };
+    static styles = [sharedStyles, css`
+        .container { position: relative; display: flex; align-items: center; }
+        .panel {
+            display: none; position: absolute; top: calc(100% + 5px); right: 0;
+            z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border);
+            border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            width: 300px; max-width: calc(100vw - 40px);
+        }
+        :host([open]) .panel { display: flex; flex-direction: column; }
+        .btn {
+            padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap;
+            max-width: 250px; overflow: hidden; text-overflow: ellipsis;
+            background: transparent; border: 1px solid transparent; color: var(--text);
+        }
+        :host([open]) .btn { background: var(--input-bg); border-color: var(--border); }
+    `];
+    constructor() {
+        super();
+        this.open = false;
+        this.filterText = 'Filters';
+        this._handleOutsideClick = this._handleOutsideClick.bind(this);
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        document.addEventListener('click', this._handleOutsideClick);
+    }
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        document.removeEventListener('click', this._handleOutsideClick);
+    }
+    _handleOutsideClick(e) {
+        if (!this.open) return;
+        const path = e.composedPath();
+        if (!path.includes(this)) {
+            this.open = false;
+        }
+    }
+    render() {
+        return html`
+            <div class="container">
+                <button class="btn-sm btn" title=${this.filterText} @click=${() => this.open = !this.open}>
+                    ${this.open ? '▼' : '▶'} ${this.filterText}
+                </button>
+                <div class="panel">
+                    <slot></slot>
+                </div>
+            </div>
+        `;
+    }
+}
 
 customElements.define('insetu-filter-pill', InSetuFilterPill);
 customElements.define('insetu-filter-group', InSetuFilterGroup);
 customElements.define('insetu-repo-filter', InSetuRepoFilter);
+customElements.define('insetu-filter-dropdown', InSetuFilterDropdown);

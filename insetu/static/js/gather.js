@@ -38,27 +38,13 @@ export class InSetuExtGather extends InSetuElement {
         this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
-        this._showFilters = false;
-        this._docClickListener = this._handleDocumentClick.bind(this);
-    }
-
-    _handleDocumentClick(e) {
-        if (!this._showFilters) return;
-        const path = e.composedPath();
-        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
-        if (!isFilterContent) {
-            this._showFilters = false;
-            this.requestUpdate();
-        }
     }
 
     onWorkspaceChanged(newWorkspaceId) {
         this.loadContext();
     }
-
     connectedCallback() {
         super.connectedCallback();
-        document.addEventListener('click', this._docClickListener);
         this.subscribe(GatherStore, state => {
             this.loading = state.loading;
             this.loadingMessage = state.loadingMessage;
@@ -85,10 +71,8 @@ export class InSetuExtGather extends InSetuElement {
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('click', this._docClickListener);
     }
 
     async loadContext() {
@@ -107,29 +91,14 @@ export class InSetuExtGather extends InSetuElement {
             GatherStore.setState({ loading: false });
         }
     }
-    async _downloadTarget(targetFile, btnComponent = null) {
+    async _downloadTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        if (btnComponent && btnComponent.tagName === 'INSETU-ASYNC-BTN') {
-            btnComponent._status = 'loading';
-            try {
-                await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
-                btnComponent._status = 'success';
-            } catch(e) {
-                btnComponent._status = 'error';
-            } finally {
-                setTimeout(() => { if (btnComponent._status !== 'loading') btnComponent._status = 'idle'; }, 2000);
-            }
-        } else if (btnComponent) {
-            await fetchAndDownloadState(targetFile, btnComponent, explicitUrl);
-        } else {
-            const dummyBtn = document.createElement('button');
-            await fetchAndDownloadState(targetFile, dummyBtn, explicitUrl);
-        }
+        await fetchAndDownloadState(targetFile, explicitUrl);
     }
 
-    async _copyTarget(targetFile, btnElement) {
+    async _copyTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, btnElement, explicitUrl);
+        await fetchAndCopy(targetFile, explicitUrl);
     }
 
     render() {
@@ -208,17 +177,14 @@ export class InSetuExtGather extends InSetuElement {
                         .value=${this.searchQuery} 
                         @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}>
                     </insetu-search-bar>
-                    <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
-                        ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
-                    </button>
-                </div>
-                <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
-                    <insetu-repo-filter
-                        label="📌 Repos:"
-                        .repos=${this.allRepos}
-                        .activeRepos=${Array.from(this.pinnedRepos)}
-                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                    </insetu-repo-filter>
+                    <insetu-filter-dropdown filterText=${filterBtnText}>
+                        <insetu-repo-filter
+                            label="📌 Repos:"
+                            .repos=${this.allRepos}
+                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                        </insetu-repo-filter>
+                    </insetu-filter-dropdown>
                 </div>
             </div>
             ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px;">${this.loadingMessage}</div>` : ''}
@@ -237,39 +203,13 @@ export class InSetuExtGather extends InSetuElement {
                             .detailText=${f.sizeStr ? `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename} | ${f.sizeStr}` : `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename}`}
                             icon="📦"
                             intentColor="var(--intent-highlight)"
+                            entityType="file:context"
+                            .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton }}
                             @card-clicked=${() => { if(!f.isSkeleton && window.viewAndCopy) window.viewAndCopy(f.filename); }}>
 
                             ${f.isSkeleton ? html`
                                 <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
-                            ` : html`
-                                <insetu-file-actions slot="actions" .filepath=${f.filename} .isFS=${false}></insetu-file-actions>
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-neutral); margin: 0 5px 0 0;"
-                                        @click=${(e) => { e.stopPropagation(); if (window.openBrowseModal) window.openBrowseModal(f.filename); }}>📁 Browse</button>
-                                ${(() => {
-                                    const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
-                                    const hasChunks = chunks && chunks.length > 1;
-
-                                    if (hasChunks) {
-                                        return html`
-                                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
-                                                @click=${(e) => {
-                                                    e.stopPropagation();
-                                                    this.activeChunkFile = f.filename;
-                                                    this.chunkModalOpen = true;
-                                                }}>
-                                                📦 View Parts
-                                            </button>
-                                        `;
-                                    } else {
-                                        return html`
-                                            <insetu-async-btn slot="actions" label="⬇️ Download" intent="primary" .onClick=${async (e) => {
-                                                e.stopPropagation();
-                                                await this._downloadTarget(f.filename, e.target);
-                                            }}></insetu-async-btn>
-                                        `;
-                                    }
-                                })()}
-                            `}
+                            ` : ''}
                         </insetu-card>
                     `}>
                 </insetu-categorized-list>
@@ -281,8 +221,8 @@ export class InSetuExtGather extends InSetuElement {
                         <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                             <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
                             <div style="display: flex; gap: 8px;">
-                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${(e) => this._copyTarget(chunk, e.target)}>📋 Copy</button>
-                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${() => this._downloadTarget(chunk)}>⬇️ Download</button>
+                                <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
+                                <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
                             </div>
                         </div>
                     `)}
@@ -296,6 +236,29 @@ document.addEventListener('DOMContentLoaded', () => {
     window.ExtensionRegistry.registerExtension('gather', {
         name: "Context Gatherer",
         version: "2.0.0",
+        entityActions: [
+            {
+                targetEntity: 'context',
+                id: 'context-view-parts',
+                label: 'View Parts',
+                icon: '📦',
+                intent: 'primary',
+                order: 100,
+                match: (data) => {
+                    if (data.isSkeleton) return false;
+                    const chunks = window.inSetu.stores.App.getState().manifest[data.filepath]?.meta?.chunks;
+                    return chunks && chunks.length > 1;
+                },
+                onClick: (data, e) => {
+                    const gatherEl = document.querySelector('insetu-ext-gather');
+                    if (gatherEl) {
+                        gatherEl.activeChunkFile = data.filepath;
+                        gatherEl.chunkModalOpen = true;
+                        gatherEl.requestUpdate();
+                    }
+                }
+            }
+        ],
         layoutSlots: [
             {
                 slot: "slots:sub-navigation",

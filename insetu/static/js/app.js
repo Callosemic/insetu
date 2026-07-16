@@ -14,6 +14,8 @@ import './components/ui_folder_browser.js';
 import './components/ui_modal.js';
 import './components/ui_system_settings.js';
 import './components/ui_filter_pills.js';
+import './components/ui_primitives.js';
+import './components/ui_editor.js';
 import './gather.js';
 import './config.js';
 
@@ -77,125 +79,6 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-import { EditorState, Compartment } from 'https://esm.sh/@codemirror/state';
-import { EditorView, basicSetup } from 'https://esm.sh/codemirror';
-import { markdown } from 'https://esm.sh/@codemirror/lang-markdown';
-import { python } from 'https://esm.sh/@codemirror/lang-python';
-import { javascript } from 'https://esm.sh/@codemirror/lang-javascript';
-
-const languageConf = new Compartment();
-const readOnlyConf = new Compartment();
-import { LitElement, css } from 'lit';
-import { createExtensionStore, InSetuElement } from './sdk.js';
-
-export class InSetuMarkdownEditor extends InSetuElement {
-    static properties = {
-        value: { type: String },
-        readOnly: { type: Boolean },
-        language: { type: String }
-    };
-
-    static styles = css`
-        :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
-        .cm-editor { height: 100%; flex: 1; display: flex; flex-direction: column; }
-        .cm-scroller { overflow: auto; flex: 1; font-family: var(--font-mono, monospace); }
-    `;
-
-    constructor() {
-        super();
-        this.value = '';
-        this.readOnly = false;
-        this.language = 'markdown';
-        this._view = null;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        setTimeout(() => this._initEditor(), 0);
-    }
-
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._view) {
-            this._view.destroy();
-            this._view = null;
-        }
-    }
-
-    updated(changedProperties) {
-        if (this._view) {
-            if (changedProperties.has('value')) {
-                const currentDoc = this._view.state.doc.toString();
-                if (currentDoc !== this.value) {
-                    this._view.dispatch({
-                        changes: { from: 0, to: currentDoc.length, insert: this.value || '' }
-                    });
-                }
-            }
-            if (changedProperties.has('readOnly')) {
-                this._view.dispatch({
-                    effects: readOnlyConf.reconfigure(EditorView.editable.of(!this.readOnly))
-                });
-            }
-            if (changedProperties.has('language')) {
-                let ext = [];
-                if (this.language === 'python') ext = python();
-                else if (this.language === 'javascript') ext = javascript();
-                else ext = markdown();
-                this._view.dispatch({
-                    effects: languageConf.reconfigure(ext)
-                });
-            }
-        }
-    }
-
-    _initEditor() {
-        if (this._view) return;
-
-        let langExt = [];
-        if (this.language === 'python') langExt = python();
-        else if (this.language === 'javascript') langExt = javascript();
-        else langExt = markdown();
-
-        this._view = new EditorView({
-            state: EditorState.create({
-                doc: this.value || '',
-                extensions: [
-                    basicSetup,
-                    languageConf.of(langExt),
-                    readOnlyConf.of(EditorView.editable.of(!this.readOnly)),
-                    EditorView.theme({
-                        "&": { backgroundColor: "transparent", color: "var(--text)" },
-                        ".cm-gutters": { backgroundColor: "var(--pane-bg)", color: "var(--text-muted)", borderRight: "1px solid var(--border)" },
-                        ".cm-content": { fontFamily: "var(--font-mono, monospace)", fontSize: "13px" },
-                        "&.cm-focused .cm-cursor": { borderLeftColor: "var(--text)" },
-                        "&.cm-focused .cm-selectionBackground, ::selection": { backgroundColor: "rgba(59, 130, 246, 0.3)" }
-                    }),
-                    EditorView.lineWrapping,
-                    EditorView.updateListener.of((update) => {
-                        if (update.docChanged) {
-                            const newVal = update.state.doc.toString();
-                            this.value = newVal;
-                            this.dispatchEvent(new CustomEvent('content-changed', {
-                                detail: { value: newVal },
-                                bubbles: true,
-                                composed: true
-                            }));
-                            this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-                        }
-                    })
-                ]
-            }),
-            parent: this.renderRoot,
-            root: this.renderRoot
-        });
-    }
-
-    getCursor() { return this._view ? this._view.state.selection.main.head : 0; }
-    setCursor(pos) { if(this._view) this._view.dispatch({selection: {anchor: pos}}); }
-    focus() { if(this._view) this._view.focus(); }
-}
-customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 window.addEventListener('keydown', (e) => {
@@ -357,8 +240,12 @@ export function autoWireSettingsSchemas() {
             ...Object.keys(window.inSetu.settingsSchemas),
             ...Object.keys(window.inSetu.serverSchemas || {})
         ]);
-
         allExts.forEach((extName) => {
+            const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
+            if (!isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
+                return;
+            }
+
             const manifest = window.ExtensionRegistry._manifests.get(extName) || { name: extName.charAt(0).toUpperCase() + extName.slice(1), settingsActions: [] };
             const schema = manifest.settingsSchema || window.inSetu.settingsSchemas[extName] || window.inSetu.serverSchemas?.[extName];
 
@@ -377,10 +264,13 @@ export function autoWireSettingsSchemas() {
                         }
                     };
                     manifest.settingsActions.push(action);
+                }
 
-                    // Push directly to the registry to ensure it renders in the DOM
-                    if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
-                        window.ExtensionRegistry.registerSettingsAction(action.id, action.label, action.icon, action.onClick);
+                // Push directly to the registry to ensure it renders in the DOM
+                if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
+                    const actionToRegister = manifest.settingsActions.find(a => a.id === `${extName}_generic_settings`);
+                    if (actionToRegister) {
+                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick);
                     }
                 }
             }
@@ -449,9 +339,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     try {
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
-            const config = await cRes.json();
+            const data = await cRes.json();
+            const config = data.config || {};
             window.ACTIVE_EXTENSIONS = config.extensions || [];
-            window.inSetu.serverSchemas = config._settings_schemas || {};
+            window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
             // Synchronize branding tokens while we have the config
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.getElementById('global-status-bar');
@@ -522,7 +413,8 @@ async function executeWorkspaceSwap(key, title) {
         if (store.getState().clearPayload) store.getState().clearPayload();
         if (store.getState().resetState) store.getState().resetState();
     });
-    AppStore.setState({ activeWorkspace: key });
+    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
+    AppStore.setState({ activeWorkspace: key, pinnedRepos: newPinned });
     await performSoftRefresh();
     loadWorkspaces();
 }
@@ -642,7 +534,8 @@ export function resolveEditorMode(filename) {
     const modeMap = {
         'md': 'markdown', 'py': 'python', 'js': 'javascript',
         'json': 'javascript', 'sh': 'shell', 'ts': 'javascript',
-        'rs': 'rust', 'go': 'go'
+        'rs': 'rust', 'go': 'go', 'yaml': 'yaml', 'yml': 'yaml',
+        'html': 'html', 'htm': 'html', 'css': 'css'
     };
     return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
 }
@@ -722,10 +615,14 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
             cleanPath = parts.slice(3).join('/'); // strips /api/<ws>/
         }
 
+        const isFormData = payload instanceof FormData;
+        const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
+        const body = isFormData ? payload : JSON.stringify(payload);
+
         const res = await window.inSetu.api.workspace(cleanPath, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            headers,
+            body
         });
         if (res.ok) {
             await onSuccess(res);
@@ -910,9 +807,10 @@ async function performSoftRefresh() {
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
-            const config = await cRes.json();
+            const data = await cRes.json();
+            const config = data.config || {};
             window.ACTIVE_EXTENSIONS = config.extensions || [];
-            window.inSetu.serverSchemas = config._settings_schemas || {};
+            window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
@@ -951,6 +849,28 @@ async function performSoftRefresh() {
                 const isActive = isCore || window.ACTIVE_EXTENSIONS.includes(extName);
                 tabEl.style.display = isActive ? '' : 'none';
             });
+
+            // Rebuild Settings Actions based strictly on active extensions
+            if (window.ExtensionRegistry) {
+                window.ExtensionRegistry._settingsActions = [];
+                window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
+                    const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
+                    if (isCore || window.ACTIVE_EXTENSIONS.includes(extName)) {
+                        if (manifest.settingsActions) {
+                            manifest.settingsActions.forEach(act => {
+                                // Skip generic settings, autoWireSettingsSchemas handles them below
+                                if (act.id === `${extName}_generic_settings`) return;
+                                let sectionName = 'Extensions';
+                                if (manifest.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'Workspace';
+                                else if (manifest.name === 'Issue Tracker') sectionName = 'Tracker';
+                                else if (manifest.name === 'Skills Tracker') sectionName = 'Practice';
+                                window.ExtensionRegistry.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
+                            });
+                        }
+                    }
+                });
+            }
+
             autoWireSettingsSchemas();
 
             // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
@@ -1041,9 +961,7 @@ if (d.config_missing) {
     document.body.appendChild(banner);
 }
 });
-export async function fetchAndCopy(filePath, btnElement, explicitUrl = null) {
-    const originalText = btnElement.innerText;
-    btnElement.innerText = "Fetching...";
+export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
         let res;
         if (explicitUrl) {
@@ -1055,30 +973,26 @@ export async function fetchAndCopy(filePath, btnElement, explicitUrl = null) {
             }
 
             if (!res) {
-                res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filePath)}`);
+                res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filePath)}`);
             }
         }
 
         if (!res.ok) throw new Error("File not found on disk.");
         const text = await res.text();
         await navigator.clipboard.writeText(text);
-        btnElement.innerText = "✅ Copied!";
+        window.setGlobalStatus("✅ Copied!", 2000);
     } catch (e) {
-        btnElement.innerText = "❌ Error: " + e.message;
+        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
+        throw e;
     }
-    setTimeout(() => {
-        btnElement.innerText = originalText;
-    }, 3000);
 }
-export async function fetchAndDownloadState(filePath, btnElement, explicitUrl = null) {
-    const originalText = btnElement.innerText;
-    btnElement.innerText = "Downloading...";
+export async function fetchAndDownloadState(filePath, explicitUrl = null) {
     try {
         let fetchUrl = explicitUrl;
 
         if (!fetchUrl) {
             const activeWs = AppStore.getState().activeWorkspace || 'default';
-            fetchUrl = `/api/${activeWs}/bridge/fetch?file=` + encodeURIComponent(filePath);
+            fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
 
             if (window.inSetu?.extensions?.Registry?.executeUIHook) {
                 const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
@@ -1087,13 +1001,58 @@ export async function fetchAndDownloadState(filePath, btnElement, explicitUrl = 
         }
 
         await downloadFile(fetchUrl, filePath.split('/').pop());
-        btnElement.innerText = "✅ Downloaded!";
+        window.setGlobalStatus("✅ Downloaded!", 2000);
     } catch (e) {
-        btnElement.innerText = "❌ Error: " + e.message;
+        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
+        throw e;
     }
-    setTimeout(() => {
-        btnElement.innerText = originalText;
-    }, 3000);
+}
+export async function shareFiles(baseFile, chunks = null, isFS = false) {
+    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
+    const shareFilesArray = [];
+
+    try {
+        for (const filepath of filesToFetch) {
+            let fetchUrl = null;
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
+            }
+
+            if (!fetchUrl) {
+                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+                fetchUrl = fileIsFS 
+                    ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
+                    : `/download/${encodeURIComponent(filepath)}`;
+            }
+
+            const res = await fetch(fetchUrl, { headers: window.inSetu.api._getHeaders(true) });
+            if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
+
+            const blob = await res.blob();
+            const filename = filepath.split('/').pop();
+            const ext = filename.split('.').pop().toLowerCase();
+
+            let mime = blob.type;
+            if (ext === 'md') mime = 'text/markdown';
+            else if (ext === 'txt') mime = 'text/plain';
+            else if (ext === 'json') mime = 'application/json';
+            else if (ext === 'py') mime = 'text/x-python';
+            else if (ext === 'js') mime = 'text/javascript';
+            else if (!mime || mime === 'application/octet-stream') mime = 'text/plain';
+            shareFilesArray.push(new File([blob], filename, { type: mime }));
+        }
+
+        if (navigator.canShare({ files: shareFilesArray })) {
+            await navigator.share({ files: shareFilesArray });
+        } else {
+            throw new Error("File sharing not supported by this browser.");
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            window.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
+        }
+    }
 }
 /* ==========================================================================
     TRACKER LOGIC (Extracted to kanban.js)
@@ -1140,6 +1099,8 @@ window.normalizeAccentText = normalizeAccentText;
 window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
+window.performSoftRefresh = performSoftRefresh;
 window.simulatePanic = simulatePanic;
 window.resolveEditorMode = resolveEditorMode;
+window.shareFiles = shareFiles;
 

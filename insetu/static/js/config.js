@@ -6,13 +6,21 @@ import { sharedStyles } from './shared_styles.js';
 export class InSetuExtConfig extends InSetuElement {
     static properties = {
         configForm: { type: Object },
-        _isOpen: { type: Boolean }
+        configMeta: { type: Object },
+        _isOpen: { type: Boolean },
+        _generalExpanded: { type: Boolean },
+        _extExpanded: { type: Boolean },
+        _reposExpanded: { type: Boolean }
     };
     static styles = [sharedStyles];
     constructor() {
         super();
         this.configForm = null;
+        this.configMeta = null;
         this._isOpen = false;
+        this._generalExpanded = true;
+        this._extExpanded = true;
+        this._reposExpanded = true;
     }
 
     connectedCallback() {
@@ -38,39 +46,54 @@ export class InSetuExtConfig extends InSetuElement {
         try {
             const res = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
-                this.configForm = await res.json();
+                const data = await res.json();
+                this.configForm = data.config || {};
+                this.configMeta = data.meta || {};
             }
         } catch (e) {
             console.error("Failed to fetch config", e);
         }
     }
-
     renderExtensions() {
         if (!this.configForm) return '';
-        const knownExtensions = this.configForm._available_extensions || [];
+        const knownExtensions = this.configMeta?.available_extensions || [];
         const activeExtensions = this.configForm.extensions || ['config'];
-        const allExtensions = Array.from(new Set([...knownExtensions, ...activeExtensions])).sort();
+
+        // Merge known objects with raw active strings (for missing/deleted extensions)
+        const extMap = new Map();
+        knownExtensions.forEach(ext => extMap.set(ext.id, ext));
+        activeExtensions.forEach(extId => {
+            if (!extMap.has(extId)) {
+                if (extId === 'config') {
+                    extMap.set(extId, { id: extId, title: 'Workspace Configuration', description: 'Core system settings and repository management UI.' });
+                } else {
+                    extMap.set(extId, { id: extId, title: extId, description: "Unknown or missing extension." });
+                }
+            }
+        });
+
+        const allExtensions = Array.from(extMap.values()).sort((a, b) => a.title.localeCompare(b.title));
 
         return html`
-            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <div style="display: flex; flex-direction: column; gap: 10px;">
                 ${allExtensions.map(ext => {
-                    const isConfig = ext === 'config';
-                    const isChecked = activeExtensions.includes(ext) || isConfig;
+                    const isConfig = ext.id === 'config';
+                    const isChecked = activeExtensions.includes(ext.id) || isConfig;
                     return html`
-                        <label style="display: flex; align-items: center; gap: 8px; background: var(--bg); padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer;">
-                            <input type="checkbox" .checked=${isChecked} ?disabled=${isConfig} @change=${(e) => {
+                        <div style="display: flex; flex-direction: column; gap: 4px; background: var(--bg); padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="ext_chk_${ext.id}" .checked=${isChecked} ?disabled=${isConfig} @change=${(e) => {
+                                    const current = this.configForm.extensions || [];
+                                    const newExts = e.target.checked 
+                                        ? (current.includes(ext.id) ? current : [...current, ext.id])
+                                        : current.filter(x => x !== ext.id);
 
-                                if (e.target.checked) {
-                                    if (!this.configForm.extensions) this.configForm.extensions = [];
-                                    if (!this.configForm.extensions.includes(ext)) this.configForm.extensions.push(ext);
-                                } else {
-                                    if (!this.configForm.extensions) this.configForm.extensions = [];
-                                    this.configForm.extensions = this.configForm.extensions.filter(x => x !== ext);
-                                }
-                                this.requestUpdate();
-                            }}>
-                            <span style="font-weight: bold; font-size: 0.9rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'};">${ext}</span>
-                        </label>
+                                    this.configForm = { ...this.configForm, extensions: newExts };
+                                }}>
+                                <label for="ext_chk_${ext.id}" style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; cursor: pointer;"><b>${ext.id}</b>: ${ext.title}</label>
+                            </div>
+                            ${ext.description ? html`<div style="font-size: 0.8rem; color: var(--text-muted); margin-left: 26px;">${ext.description}</div>` : ''}
+                        </div>
                     `;
                 })}
             </div>
@@ -93,7 +116,7 @@ export class InSetuExtConfig extends InSetuElement {
                                 if (e.target.value === 'implicit') {
                                     this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { dynamic_split_prefix: '.', meta_map: {} };
                                 } else {
-                                    this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: 'new_bucket', title: '', match_prefixes: [] };
+                                    this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { title: '', match_prefixes: [] };
                                 }
                                 this.requestUpdate();
                             }}>
@@ -106,10 +129,8 @@ export class InSetuExtConfig extends InSetuElement {
                                 this.requestUpdate();
                             }}>🗑️</button>
                     </div>
-                    
                     ${!isImplicit ? html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">ID</label><input type="text" .value=${b.id || ''} placeholder="my_bucket" @input=${(e) => { b.id = e.target.value; this.requestUpdate(); }}></div>
                             <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" .value=${b.title || ''} placeholder="Display Name" @input=${(e) => { b.title = e.target.value; this.requestUpdate(); }}></div>
                             <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" .value=${b.domain || ''} placeholder="Category" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}></div>
                         </div>
@@ -237,19 +258,25 @@ export class InSetuExtConfig extends InSetuElement {
                         <input type="text" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @input=${(e) => { repo.repo_ignore_files = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
                     </div>
                 </div>
-
-                <div style="display: flex; gap: 15px; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
-                    <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_context} @change=${(e) => { repo.exclude_from_context = e.target.checked; this.requestUpdate(); }}> Exclude from Context</label>
-                    <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_diffs} @change=${(e) => { repo.exclude_from_diffs = e.target.checked; this.requestUpdate(); }}> Exclude from Diffs</label>
-                    <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_tracker} @change=${(e) => { repo.exclude_from_tracker = e.target.checked; this.requestUpdate(); }}> Exclude from Tracker</label>
+                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
+                    <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_context} @change=${(e) => { repo.exclude_from_context = e.target.checked; this.requestUpdate(); }}> Exclude from Context Compilation</label>
+                    ${(() => {
+                        const templates = [];
+                        if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
+                            for (let cb of window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
+                                const res = cb({ repo, updateCallback: () => this.requestUpdate() });
+                                if (res) templates.push(res);
+                            }
+                        }
+                        return templates;
+                    })()}
                 </div>
-
                 <div style="background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                         <label style="font-size: 0.85rem; font-weight: bold; color: var(--intent-highlight);">Sub-Buckets</label>
                         <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 2px 8px; font-size: 0.75rem;" @click=${() => {
                             if (!repo.sub_buckets) repo.sub_buckets = [];
-                            repo.sub_buckets.push({ id: 'new_bucket', title: '', match_prefixes: [] });
+                            repo.sub_buckets.push({ title: '', match_prefixes: [] });
                             this.requestUpdate();
                         }}>➕ Add Bucket</button>
                     </div>
@@ -264,35 +291,103 @@ export class InSetuExtConfig extends InSetuElement {
         const bodyContent = !this.configForm 
             ? html`<div class="spinner" style="display:block;">Loading configuration...</div>`
             : html`
-                <div style="display: flex; flex-direction: column; gap: 20px;">
-                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 
-0.95rem; color: var(--intent-highlight);">Active Extensions</label>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Enable or disable system extensions.
-The 'config' extension is locked.</p>
-                        ${this.renderExtensions()}
+                <div style="display: flex; flex-direction: column;">
+                    <div style="display: flex; flex-direction: column;">
+                        <div @click=${() => this._generalExpanded = !this._generalExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: -20px -20px ${this._generalExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
+                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-success);">General Settings</span>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._generalExpanded ? '▼' : '▶'}</span>
+                        </div>
+                        <div style="display: ${this._generalExpanded ? 'flex' : 'none'}; flex-direction: column; gap: 12px; padding-bottom: 20px;">
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 2; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Workspace Title</label>
+                                    <input type="text" .value=${this.configForm.instance_title || ''} placeholder="e.g., My Project OS" @input=${(e) => { this.configForm = { ...this.configForm, instance_title: e.target.value }; }}>
+                                </div>
+                                <div style="flex: 1; min-width: 80px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Menu Emoji</label>
+                                    <input type="text" .value=${this.configForm.instance_emoji || ''} placeholder="⚙️" @input=${(e) => { this.configForm = { ...this.configForm, instance_emoji: e.target.value }; }}>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 200px;">
+                                    <div style="margin-bottom: 4px;">
+                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Directories</label>
+                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Completely ignored by the VFS (e.g. node_modules).</span>
+                                    </div>
+                                    <input type="text" .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, build" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_dirs: arr }; }}>
+                                </div>
+                                <div style="flex: 1; min-width: 200px;">
+                                    <div style="margin-bottom: 4px;">
+                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Files</label>
+                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Exact filenames to completely ignore.</span>
+                                    </div>
+                                    <input type="text" .value=${(this.configForm.ignore_files || []).join(', ')} placeholder=".DS_Store" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_files: arr }; }}>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div style="margin-bottom: 4px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Patterns</label>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Wildcard substring matches to completely ignore (e.g. *.log).</span>
+                                </div>
+                                <input type="text" .value=${(this.configForm.ignore_patterns || []).join(', ')} placeholder="*.log, cache_*" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_patterns: arr }; }}>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 200px;">
+                                    <div style="margin-bottom: 4px;">
+                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Allowed Extensions</label>
+                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Merged with repo-specific extensions across all repos.</span>
+                                    </div>
+                                    <input type="text" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, include_extensions: arr }; }}>
+                                </div>
+                                <div style="flex: 1; min-width: 200px;">
+                                    <div style="margin-bottom: 4px;">
+                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Exempted Managed Directories</label>
+                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">System folders to exclude from context payloads and diffs.</span>
+                                    </div>
+                                    <input type="text" .value=${(this.configForm.managed_dirs || []).join(', ')} placeholder=".tracker" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, managed_dirs: arr }; }}>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
-                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border);">
-                        <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.95rem; color: var(--intent-primary);">Target Repositories</label>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
-                        <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
-                            ${this.renderRepos()}
+                    <div style="display: flex; flex-direction: column;">
+                        <div @click=${() => this._extExpanded = !this._extExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: 0 -20px ${this._extExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
+                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-highlight);">Active Extensions</span>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._extExpanded ? '▼' : '▶'}</span>
                         </div>
-                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-                            @click=${() => {
-                                if (!this.configForm.target_repos) this.configForm.target_repos = [];
-                                this.configForm.target_repos.push({  
-                                    repo_dir: '', title: '', domain: 'Workspaces', 
-                                    exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
-                                });
-                                this.requestUpdate();
-                                setTimeout(() => {
-                                    const modal = this.shadowRoot.querySelector('insetu-modal');
-                                    const container = modal?.shadowRoot?.querySelector('.body');
-                                    if (container) container.scrollTo(0, container.scrollHeight);
-                                }, 50);
-                            }}>➕ Add Repository</button>
+                        <div style="display: ${this._extExpanded ? 'block' : 'none'}; padding-bottom: 20px;">
+                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Enable or disable system extensions. The 'config' extension is locked.</p>
+                            ${this.renderExtensions()}
+                        </div>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column;">
+                        <div @click=${() => this._reposExpanded = !this._reposExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: 0 -20px ${this._reposExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
+                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-primary);">Target Repositories</span>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._reposExpanded ? '▼' : '▶'}</span>
+                        </div>
+                        <div style="display: ${this._reposExpanded ? 'block' : 'none'};">
+                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
+                            <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
+                                ${this.renderRepos()}
+                            </div>
+                            <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
+                                @click=${() => {
+                                    if (!this.configForm.target_repos) this.configForm.target_repos = [];
+                                    this.configForm.target_repos.push({  
+                                        repo_dir: '', title: '', domain: 'Workspaces', 
+                                        exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
+                                    });
+                                    this.requestUpdate();
+                                    setTimeout(() => {
+                                        const modal = this.shadowRoot.querySelector('insetu-modal');
+                                        const container = modal?.shadowRoot?.querySelector('.body');
+                                        if (container) container.scrollTo(0, container.scrollHeight);
+                                    }, 50);
+                                }}>➕ Add Repository</button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -300,7 +395,7 @@ The 'config' extension is locked.</p>
             <insetu-modal 
                 ?open=${this._isOpen} 
                 titleText="Workspace Configuration" 
-                maxWidth="800px" 
+                maxWidth="100vw" 
                 @modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
 
                 <div slot="body">${bodyContent}</div>
@@ -325,16 +420,32 @@ The 'config' extension is locked.</p>
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(this.configForm)
             });
+
             if (res.ok) {
+                const data = await res.json();
                 btn.innerText = '⏳ Re-indexing...';
                 if (window.executeSystemCompile) {
                     await window.executeSystemCompile(null, true);
                 }
-                btn.innerText = '⏳ Rebooting...';
-                try {
-                    await window.inSetu.api.system('reboot', { method: 'POST' });
-                } catch(err) {}
-                setTimeout(() => window.location.reload(), 2000);
+
+                if (data.requires_reboot) {
+                    btn.innerText = '⏳ Rebooting...';
+                    try {
+                        await window.inSetu.api.system('reboot', { method: 'POST' });
+                    } catch(err) {}
+                    setTimeout(() => window.location.reload(), 2000);
+                } else {
+                    btn.innerText = '⏳ Refreshing UI...';
+                    this._isOpen = false;
+                    AppStore.setState({ isConfigOpen: false });
+
+                    if (window.performSoftRefresh) {
+                        await window.performSoftRefresh();
+                    } else {
+                        window.location.reload();
+                    }
+                    btn.innerText = origText;
+                }
             } else {
                 const data = await res.json();
                 alert("Failed to save: " + data.error);
@@ -365,8 +476,7 @@ window.ExtensionRegistry.registerExtension('config', {
             label: 'Add / Remove Workspaces',
             icon: '🗃️',
             onClick: () => {
-                const editor = document.querySelector('insetu-workspace-editor');
-                if (editor) editor.open = true;
+                AppStore.setState({ isWorkspaceEditorOpen: true });
             }
         },
         {
@@ -403,8 +513,17 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         this._newWsRoot = '';
     }
 
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(AppStore, state => {
+            if (state.isWorkspaceEditorOpen !== this.open) {
+                this.open = !!state.isWorkspaceEditorOpen;
+            }
+        });
+    }
+
     async _openHostBrowser() {
-        const currentVal = this.shadowRoot.querySelector('#new-ws-root').value.trim();
+        const currentVal = this._newWsRoot.trim();
         this._showHostBrowser = true;
         await this._loadHostDirs(currentVal);
     }
@@ -415,7 +534,6 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                 const data = await res.json();
                 this._hostCurrentPath = data.current;
                 this._hostDirs = data.dirs || [];
-                this.requestUpdate();
             }
         } catch (e) {
             console.error("Host file system walking sequence broken", e);
@@ -437,7 +555,6 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     _confirmHostDir() {
         this._newWsRoot = this._hostCurrentPath;
         this._showHostBrowser = false;
-        this.requestUpdate();
     }
 
     updated(changedProperties) {
@@ -460,7 +577,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     async _handleCreateWorkspace(e) {
         e.preventDefault();
-        const wsId = this._newWsId.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+        const wsId = this.utils.slugify(this._newWsId);
         const wsRoot = this._newWsRoot.trim();
         if (!wsId) return;
         try {
@@ -510,7 +627,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         if (!this.open) return '';
 
         return html`
-            <insetu-modal ?open=${this.open} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${() => this.open = false}>
+            <insetu-modal ?open=${this.open} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${() => { this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <div>

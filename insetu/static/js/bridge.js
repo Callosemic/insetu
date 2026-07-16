@@ -117,13 +117,6 @@ export class InSetuExtBridge extends InSetuElement {
 
     _handleDocumentClick(e) {
         const path = e.composedPath();
-        if (this._showFilters) {
-            const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
-            if (!isFilterContent) {
-                this._showFilters = false;
-                this.requestUpdate();
-            }
-        }
         if (this._dropdownOpen) {
             const isDropdownContent = path.some(node => node.dataset && node.dataset.customDropdown === 'true');
             if (!isDropdownContent) {
@@ -254,21 +247,10 @@ export class InSetuExtBridge extends InSetuElement {
                     if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
                         const savedFiles = BridgeStore.getState().getActiveFiles();
                         BridgeStore.setState({ cells: [] });
-
                         // Alert listening extensions (like the Tracker) that files have been modified
                         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
                             savedFiles.forEach(f => window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', f));
                         }
-
-                        // Silently hydrate manifest to instantly capture any newly created files in the VFS Explorer
-                        setTimeout(async () => {
-                            try {
-                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-                                if (mRes.ok) {
-                                    window.inSetu.stores.App.setState({ manifest: await mRes.json() });
-                                }
-                            } catch(e) {}
-                        }, 500);
                     }
                 },
                 onError: (err) => {
@@ -298,11 +280,11 @@ export class InSetuExtBridge extends InSetuElement {
             if (window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', decodedDiff);
         } else if (action === 'copy-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            window.inSetu.utils.copyRawText(decodedDiff, btn);
+            window.inSetu.utils.copyRawText(decodedDiff);
         } else if (action === 'copy-state') {
-            fetchAndCopy(btn.dataset.file, btn);
+            fetchAndCopy(btn.dataset.file);
         } else if (action === 'download-state') {
-            fetchAndDownloadState(btn.dataset.file, btn);
+            fetchAndDownloadState(btn.dataset.file);
         } else if (action === 'force-sync') {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._sync(isDryRun, true);
@@ -330,36 +312,31 @@ export class InSetuExtBridge extends InSetuElement {
                                     ${this._activeCellId ? (() => {
                                         const cell = this.cells.find(c => c.id === this._activeCellId);
                                         if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`;
-                                        const chunkIndex = this.cells.filter(c => c.file === cell.file).findIndex(c => c.id === cell.id) + 1;
-                                        const totalChunks = this.cells.filter(c => c.file === cell.file).length;
+                                        const chunkIndex = this.cells.findIndex(c => c.id === cell.id) + 1;
+                                        const totalChunks = this.cells.length;
                                         const shortFile = cell.file.length > 40 ? '...' + cell.file.slice(-37) : cell.file;
                                         return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px;">${shortFile} <span style="color: var(--text-muted); flex-shrink: 0; font-family: sans-serif; font-weight: normal;">(${chunkIndex}/${totalChunks})</span> <span style="color: var(--text-muted); font-size: 0.6rem; flex-shrink: 0; margin-left: 2px;">${this._dropdownOpen ? '▲' : '▼'}</span></span>`;
                                     })() : html`<span style="color: var(--text-muted); opacity: 0.6; display: flex; align-items: center; gap: 8px; font-family: sans-serif; font-weight: normal;">Select a patch... <span style="font-size: 0.6rem;">${this._dropdownOpen ? '▲' : '▼'}</span></span>`}
                                 </span>
                             </div>
-
-                            <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
-                                ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
-                            </button>
-
-                            <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); right: 0; width: 300px; max-width: calc(100vw - 40px); z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
+                            <insetu-filter-dropdown filterText=${filterBtnText}>
                                 <insetu-repo-filter
                                     label="📌 Repos:"
                                     .repos=${this.allRepos}
                                     .activeRepos=${Array.from(this.pinnedRepos)}
                                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                                 </insetu-repo-filter>
-                            </div>
+                            </insetu-filter-dropdown>
                             <div data-custom-dropdown="true" style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 0; width: 100%; max-width: calc(100vw - 40px); max-height: 50vh; overflow-y: auto; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); flex-direction: column; z-index: 200;">
                                 ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}
                                 ${Object.entries(groupedCells).map(([file, groupCells]) => {
                                     return html`
                                         <div style="display: flex; flex-direction: column; border-bottom: 2px solid var(--bg);">
                                             ${groupCells.map((c, i) => {
-                                                const chunkIndex = i + 1;
-                                                const totalChunks = groupCells.length;
+                                                const chunkIndex = this.cells.findIndex(cell => cell.id === c.id) + 1;
+                                                const totalChunks = this.cells.length;
                                                 return html`
-                                                    <div style="display: flex; align-items: center; gap: 12px; padding: 10px 15px; cursor: pointer; background: ${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}; transition: background 0.2s;" 
+                                                    <div style="display: flex; align-items: center; gap: 12px; padding: 10px 15px; cursor: pointer; background: ${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}; transition: background 0.2s;"  
                                                         @click=${() => { this._activeCellId = c.id; this._dropdownOpen = false; }}
                                                         onmouseover="this.style.background='var(--input-bg)'"
                                                         onmouseout="this.style.background='${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}'">
@@ -383,10 +360,10 @@ export class InSetuExtBridge extends InSetuElement {
                                                             }
                                                         });
                                                     }
-                                                }}>📁 Pick File</button>
+                                                }}>📁 Change Target</button>
                                                 ${this._fileVerificationCache[file] === true ? html`
                                                     <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${(e) => { e.preventDefault(); window.viewSourceFile(file, true); this._dropdownOpen = false; }}>📋 View</button>
-                                                    <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${(e) => { e.preventDefault(); fetchAndDownloadState(file, e.target); }}>⬇️ Download</button>
+                                                    <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => fetchAndDownloadState(file)}></insetu-async-btn>
                                                 ` : html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold; margin-left: 5px;">❓ Unknown Target</span>`}
                                             </div>
                                         </div>

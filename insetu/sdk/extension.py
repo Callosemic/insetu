@@ -25,13 +25,11 @@ class SettingsManager:
         self.workspace_id = workspace_id
         self.filename = f"{ext_name}.settings.json"
         self.schema = schema or []
-
     def get(self, key, default=None):
-        from insetu.utils_core import load_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(self.filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
 
         if key in data:
@@ -42,13 +40,11 @@ class SettingsManager:
                 return field['default']
 
         return default
-
     def set(self, key, value):
-        from insetu.utils_core import load_json_file, save_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(self.filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
@@ -56,13 +52,11 @@ class SettingsManager:
         from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         _MUTATED_CONFIG_CACHE.clear()
         _MUTATED_CONFIG_MTIME.clear()
-
     def get_all(self):
-        from insetu.utils_core import load_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(self.filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
 
         for field in self.schema:
@@ -71,13 +65,11 @@ class SettingsManager:
                 data[fid] = field['default']
 
         return data
-
     def update(self, payload_dict):
-        from insetu.utils_core import load_json_file, save_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(self.filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
         valid_keys = {f.get('id') for f in self.schema} if self.schema else None
         for k, v in payload_dict.items():
@@ -90,26 +82,23 @@ class SettingsManager:
         from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         _MUTATED_CONFIG_CACHE.clear()
         _MUTATED_CONFIG_MTIME.clear()
-
 class StoreManager:
     def __init__(self, workspace_id):
         self.workspace_id = workspace_id
 
     def get(self, filename, key, default=None):
-        from insetu.utils_core import load_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(filename).as_posix()
         data = load_json_file(filepath, {})
         return data.get(key, default)
 
     def set(self, filename, key, value):
-        from insetu.utils_core import load_json_file, save_json_file, get_workspace_physics
-        import os
+        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
         from pathlib import Path
-        cfg_path, _, _ = get_workspace_physics(self.workspace_id)
-        filepath = Path(os.path.dirname(cfg_path)).joinpath(filename).as_posix()
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        filepath = Path(control_dir).joinpath(filename).as_posix()
         data = load_json_file(filepath, {})
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
@@ -205,8 +194,10 @@ class InSetuExtension:
     Blueprint wrapper that strictly enforces ADR 0002 and ADR 0016 API contracts,
     abstracting away tenant tracking, authorization, and SQLite schema migrations.
     """
-    def __init__(self, name, module_name, schema=None, virtual_contexts=None, target_repos=None, core=False, settings_schema=None):
+    def __init__(self, name, module_name, title=None, description="", schema=None, virtual_contexts=None, target_repos=None, core=False, settings_schema=None):
         self.name = name
+        self.title = title or name.replace('_', ' ').title()
+        self.description = description
         self.bp = Blueprint(name, module_name)
         self.schema = schema or {}
         self.virtual_contexts = virtual_contexts or []

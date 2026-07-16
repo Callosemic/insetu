@@ -1,7 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { buildFileTree } from '../app.js';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuCard extends LitElement {
     static properties = {
         filename: { type: String },
@@ -10,7 +9,8 @@ export class InSetuCard extends LitElement {
         detailText: { type: String },
         icon: { type: String },
         intentColor: { type: String },
-        overlayExcludesTitle: { type: Boolean },
+        entityType: { type: String },
+        entityData: { type: Object },
         _overlayActive: { type: Boolean, reflect: true },
         _hasActions: { type: Boolean, reflect: true, attribute: 'has-actions' }
     };
@@ -94,23 +94,33 @@ export class InSetuCard extends LitElement {
         }
         .action-overlay {
             position: absolute;
-            left: 0;
-            right: 14px;
-            bottom: 0;
-            top: 0;
-            background: transparent;
+            right: 36px;
+            bottom: 8px;
+            max-width: calc(100% - 46px);
+            top: auto;
+            background: rgba(0, 0, 0, 0.25);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            border-radius: 8px;
             display: flex;
             justify-content: flex-end;
-            align-items: center;
+            align-items: flex-end;
+            flex-wrap: wrap;
             gap: 8px;
-            padding: 10px 15px;
+            padding: 8px;
             opacity: 0;
             pointer-events: none;
             transition: opacity 0.2s ease-in-out;
             z-index: 10;
         }
         :host-context([data-theme="light"]) .action-overlay {
-            background: transparent;
+            background: rgba(255, 255, 255, 0.6);
+        }
+        :host-context([data-theme="e-ink"]) .action-overlay {
+            background: #ffffff;
+            border: 1px solid #14b8a6;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
         }
         :host-context([data-theme="e-ink"]) .card-wrapper {
             border: 2px solid #8b5cf6;
@@ -138,12 +148,7 @@ export class InSetuCard extends LitElement {
         .action-overlay.active ::slotted(*), .action-overlay.active > * {
             pointer-events: auto;
         }
-        .action-overlay.exclude-title {
-            top: 45px;
-border-top: 1px solid var(--border, #444);
-        }
     `];
-
     constructor() {
         super();
         this.filename = '';
@@ -152,7 +157,8 @@ border-top: 1px solid var(--border, #444);
         this.detailText = '';
         this.icon = '📄';
         this.intentColor = '';
-        this.overlayExcludesTitle = false;
+        this.entityType = '';
+        this.entityData = {};
         this._overlayActive = false;
         this._hasActions = false;
         this._touchStartX = 0;
@@ -233,17 +239,42 @@ border-top: 1px solid var(--border, #444);
 if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false; }}>
                     <span class="trigger-icon">‹</span>
                 </div>
-                <div class="action-overlay ${this._overlayActive ? 'active' : ''} ${this.overlayExcludesTitle ? 'exclude-title' : ''}"
+                <div class="action-overlay ${this._overlayActive ? 'active' : ''}"
                     @click=${(e) => { if(e.target.tagName === 'BUTTON' || e.target.closest('button')) this._overlayActive = false; }}>
+                    ${this._renderDynamicActions()}
                     <slot name="actions" @slotchange=${this._handleSlotChange}></slot>
                 </div>
             </div>
         `;
-    }
-    _handleSlotChange(e) {
-        const nodes = e.target.assignedNodes({ flatten: true });
-        this._hasActions = nodes.some(n => n.nodeType === Node.ELEMENT_NODE);
-    }
+        }
+        _renderDynamicActions() {
+            if (!this.entityType || !window.ExtensionRegistry || !window.ExtensionRegistry.getEntityActions) return '';
+            const actions = window.ExtensionRegistry.getEntityActions(this.entityType, this.entityData || {});
+            if (actions.length > 0) this._hasActions = true;
+
+            return actions.map(act => {
+                // Escape hatch for highly reactive state-bound components
+                if (act.component) {
+                    return html`<div style="display: contents; order: ${act.order || 99};">${act.component(this.entityData)}</div>`;
+                }
+
+                const label = typeof act.label === 'function' ? act.label(this.entityData) : act.label;
+                const icon = typeof act.icon === 'function' ? act.icon(this.entityData) : (act.icon || '');
+                const intent = typeof act.intent === 'function' ? act.intent(this.entityData) : (act.intent || 'primary');
+
+                if (act.asyncAction) {
+                    return html`<insetu-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${(e) => act.asyncAction(this.entityData, e)}></insetu-async-btn>`;
+                }
+                return html`<button class="btn-sm" style="background: var(--intent-${intent}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 99};" @click=${(e) => act.onClick(this.entityData, e)}>${icon} ${label}</button>`;
+            });
+        }
+
+        _handleSlotChange(e) {
+            const nodes = e.target.assignedNodes({ flatten: true });
+            if (nodes.some(n => n.nodeType === Node.ELEMENT_NODE)) {
+                this._hasActions = true;
+            }
+        }
     _handleMainClick(e) {
         this._overlayActive = false;
         this.dispatchEvent(new CustomEvent('card-clicked', {
@@ -336,11 +367,11 @@ export class InSetuFileTree extends LitElement {
         files: { type: Array },
         stripPrefix: { type: String },
         basePath: { type: String },
-        actions: { type: Array },
         hideFiles: { type: Boolean },
         hidePath: { type: Boolean },
         enableSearch: { type: Boolean },
         searchPlaceholder: { type: String },
+        entityType: { type: String },
         _searchQuery: { type: String }
     };
 static styles = [sharedStyles];
@@ -350,7 +381,6 @@ constructor() {
         this.files = [];
         this.stripPrefix = '';
         this.basePath = '';
-        this.actions = [];
         this.currentPath = [];
         this.hideFiles = false;
         this.hidePath = false;
@@ -375,16 +405,6 @@ constructor() {
             composed: true
         }));
     }
-
-    _handleAction(e, actionId, filepath, filename) {
-        e.stopPropagation();
-        this.dispatchEvent(new CustomEvent(`action-${actionId}`, {
-            detail: { filepath, filename, event: e },
-            bubbles: true,
-            composed: true
-        }));
-    }
-
     render() {
         if (this.files.length === 0) {
             return html`<p style="color: var(--text-muted); font-style: italic;">No files found.</p>`;
@@ -451,20 +471,9 @@ constructor() {
                             .titleText=${key}
                             descriptionText=""
                             intentColor="var(--intent-primary)"
-                            icon="📄">
-
-                            <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                            ${this.actions.map(act => {
-                                if (act.asyncAction) {
-                                    return html`<insetu-async-btn slot="actions" style="order: ${act.order || 0};" .label=${act.label} .intent=${act.style || 'primary'} .onClick=${(e) => act.asyncAction(filepath, key, e)}></insetu-async-btn>`;
-                                }
-                                return html`
-                                    <button slot="actions" class="btn-sm" style="background: var(--intent-${act.style || 'primary'}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 0};" 
-                                        @click=${(e) => this._handleAction(e, act.id, filepath, key)}>
-                                        ${act.label}
-                                    </button>
-                                `;
-                            })}
+                            icon="📄"
+                            .entityType=${this.entityType || 'file'}
+                            .entityData=${{ filepath, isFS: true }}>
                         </insetu-card>
                     `;
                 })}
@@ -472,160 +481,9 @@ constructor() {
         `;
     }
 }
-export class InSetuFileActions extends LitElement {
-    static properties = { filepath: { type: String }, repoDir: { type: String }, isFS: { type: Boolean } };
-    createRenderRoot() { return this; } // Render in light DOM so slots naturally project into the parent asset card
+// InSetuFileActions has been deprecated in favor of the Polymorphic Entity-Action Registry.
 
-    connectedCallback() {
-        super.connectedCallback();
-        this.style.display = 'contents';
-    }
-
-    render() {
-        const templates = [];
-        if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:file-card-actions']) {
-            for (let cb of window.ExtensionRegistry.uiHooks['zone:file-card-actions']) {
-                const res = cb({ filepath: this.filepath, repoDir: this.repoDir, isFS: this.isFS });
-                if (res) templates.push(res);
-            }
-        }
-        return templates;
-    }
-}
-export class InSetuAsyncBtn extends LitElement {
-    static properties = {
-        label: { type: String },
-        loadingLabel: { type: String },
-        successLabel: { type: String },
-        errorLabel: { type: String },
-        intent: { type: String },
-        onClick: { type: Object },
-        _status: { type: String }
-    };
-    static styles = [sharedStyles, css`
-        button { margin: 0; white-space: nowrap; }
-    `];
-    constructor() {
-        super();
-        this.label = 'Submit';
-        this.loadingLabel = '⏳...';
-        this.successLabel = '✅';
-        this.errorLabel = '❌';
-        this.intent = 'primary';
-        this._status = 'idle';
-    }
-    async _handleClick(e) {
-        e.stopPropagation();
-        if (this._status === 'loading' || !this.onClick) return;
-        this._status = 'loading';
-        try {
-            await this.onClick(e);
-            this._status = 'success';
-        } catch (err) {
-            console.error(err);
-            this._status = 'error';
-        } finally {
-            setTimeout(() => { if (this._status !== 'loading') this._status = 'idle'; }, 2000);
-        }
-    }
-    render() {
-        let text = this.label;
-        if (this._status === 'loading') text = this.loadingLabel;
-        if (this._status === 'success') text = this.successLabel;
-        if (this._status === 'error') text = this.errorLabel;
-        return html`<button class="btn-sm" style="background: var(--intent-${this.intent});" @click=${this._handleClick}>${text}</button>`;
-    }
-}
-import { InSetuElement } from '../sdk.js';
-
-export class InSetuSearchBar extends LitElement {
-    static properties = {
-        placeholder: { type: String },
-        value: { type: String }
-    };
-    static styles = [sharedStyles];
-    constructor() { super(); this.placeholder = 'Search...'; this.value = ''; }
-    render() {
-        return html`
-            <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
-                <input type="text" placeholder=${this.placeholder} .value=${this.value} 
-                    style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                    @input=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: e.target.value }, bubbles: true, composed: true }))}>
-                ${this.value ? html`<button class="fuzzy-search-clear" @click=${() => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: '' }, bubbles: true, composed: true }))}>Clear</button>` : ''}
-            </div>
-        `;
-    }
-}
-
-export class InSetuJobTracker extends InSetuElement {
-    static properties = {
-        jobId: { type: String },
-        interval: { type: Number },
-        _status: { type: String },
-        _message: { type: String },
-        _error: { type: String }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.jobId = null;
-        this.interval = 1000;
-        this._status = 'idle';
-        this._message = '';
-        this._error = '';
-    }
-
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        if (changedProperties.has('jobId')) {
-            if (this.jobId && this.jobId !== 'starting') {
-                this._startPolling();
-            } else if (this.jobId === 'starting') {
-                this._status = 'polling';
-                this._message = 'Initializing...';
-                this._error = '';
-            } else {
-                this._status = 'idle';
-                this._message = '';
-                this._error = '';
-            }
-        }
-    }
-
-    _startPolling() {
-        this._status = 'polling';
-        this._error = '';
-        this.api.pollJob(this.jobId, {
-            interval: this.interval,
-            onProgress: (msg) => {
-                this._message = msg;
-                this.dispatchEvent(new CustomEvent('job-progress', { detail: { message: msg }, bubbles: true, composed: true }));
-            },
-            onComplete: (data) => {
-                this._status = 'completed';
-                this.dispatchEvent(new CustomEvent('job-complete', { detail: data, bubbles: true, composed: true }));
-            },
-            onError: (err) => {
-                this._status = 'failed';
-                this._error = err.message;
-                this.dispatchEvent(new CustomEvent('job-error', { detail: { error: err.message }, bubbles: true, composed: true }));
-            }
-        });
-    }
-
-    render() {
-        if (this._status === 'idle' || this._status === 'completed') return html``;
-        if (this._status === 'failed') return html`<div style="color: var(--intent-danger); font-weight: bold; margin-top: 10px;">❌ Error: ${this._error}</div>`;
-        return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
-    }
-}
-
-customElements.define('insetu-search-bar', InSetuSearchBar);
-customElements.define('insetu-job-tracker', InSetuJobTracker);
-customElements.define('insetu-async-btn', InSetuAsyncBtn);
 customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-categorized-list', InSetuCategorizedList);
 customElements.define('insetu-category-section', InSetuCategorySection);
 customElements.define('insetu-file-tree', InSetuFileTree);
-customElements.define('insetu-file-actions', InSetuFileActions);

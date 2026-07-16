@@ -248,13 +248,22 @@ def check_javascript_files():
                     lines = f.readlines()
 
                 is_lit_component = any(re.search(r'from\s+[\'"]lit[\'"]', l) for l in lines)
-
                 # Enforce Declarative Purity and DOM Read Ban within graduated components
                 full_content = "".join(lines)
                 if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
                     report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
                 if "innerHTML =" in full_content and file != "ext_citations.js" and is_extension:
                     report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
+
+                # Guardrail against manual document/window click listeners intercepting dropdown events
+                if "addEventListener('click'" in full_content or 'addEventListener("click"' in full_content:
+                    if "dropdown" in full_content.lower() or "filter" in full_content.lower():
+                        if "insetu-filter-dropdown" not in full_content:
+                            report_violation("DROPDOWN_CLICK_OUTSIDE_VIOLATION", filepath, 1, "Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.")
+
+                # Guardrail against un-suffixed global multi-tenant storage pollution
+                if "localStorage.setItem('insetu_pinned_repos'" in full_content or 'localStorage.setItem("insetu_pinned_repos"' in full_content:
+                    report_violation("GLOBAL_LOCALSTORAGE_TENANT_LEAK", filepath, 1, "Un-suffixed localStorage write pattern detected. Force workspace-scoping (e.g., insetu_pinned_repos_\${ws}).")
 
                 for i, line in enumerate(lines):
                     line_num = i + 1
@@ -356,6 +365,10 @@ def check_javascript_files():
                     # 21. Zustand Reference Mutation Ban
                     if zustand_reference_mutation_pattern.search(line):
                         report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
+
+                    # 26. Deprecated UI Hook Registration Guardrail
+                    if is_extension and "zone:file-card-actions" in line:
+                        report_violation("DEPRECATED_UI_HOOK_VIOLATION", filepath, line_num, "Legacy 'zone:file-card-actions' hook detected. Migrate component buttons to the declarative polymorphic 'entityActions' registry.")
 
                     # 25. Shared Storage View State Leak Ban
                     if is_extension and subtab_leak_pattern.search(line):

@@ -134,6 +134,17 @@ def api_fs_delete(workspace_id):
             return jsonify({"error": "Filepath required"}), 400
     res, code = execute_vfs_delete(workspace_id, filepath)
     return jsonify(res), code
+@fs_bp.route('/api/<workspace_id>/fs/fetch', methods=['GET'])
+def api_fs_fetch(workspace_id):
+    filename = request.args.get('file', '').strip()
+    is_absolute_artifact = request.args.get('is_absolute_artifact', 'false').lower() == 'true'
+    from insetu.context import VFSTransaction
+    with VFSTransaction(workspace_id) as vfs:
+        content = vfs.read(filename, is_absolute_artifact=is_absolute_artifact)
+    if content is not None:
+        return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    return "File not found.", 404
+
 @fs_bp.route('/api/<workspace_id>/fs/exists', methods=['GET'])
 def api_fs_exists(workspace_id):
     """Silent validation route that returns 200 OK to keep the browser console clean."""
@@ -268,6 +279,49 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         cfg_path, _, _ = get_workspace_physics(workspace_id)
                         utils_core.save_json_file(cfg_path, cfg)
         hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
+@fs_bp.route('/api/<workspace_id>/fs/upload', methods=['POST'])
+def api_fs_upload(workspace_id):
+        """Native multipart/form-data uploader for robust binary handling."""
+        if 'file' not in request.files:
+                return jsonify({"error": "No files provided"}), 400
+
+        files = request.files.getlist('file')
+        dest_dir = request.form.get('dest_dir', '').strip()
+
+        import werkzeug.utils
+        import time
+        from insetu.db import get_connection
+        db_conn = get_connection("workers", workspace_id=workspace_id)
+
+        uploaded_paths = []
+        for file in files:
+                if file.filename == '':
+                        continue
+
+                filename = werkzeug.utils.secure_filename(file.filename)
+                filepath = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
+                resolved_path = resolve_workspace_path(filepath, workspace_id)
+
+                is_new = not os.path.exists(resolved_path)
+                os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+
+                file.save(resolved_path)
+                uploaded_paths.append(filepath)
+
+                # Trigger VFS Event Ledger sync
+                db_conn.execute(
+                        "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                        (filepath, 'modified' if not is_new else 'added', time.time())
+                )
+                hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
+
+        db_conn.commit()
+
+        if not uploaded_paths:
+                return jsonify({"error": "No valid files uploaded"}), 400
+
+        return jsonify({"status": "success", "message": f"{len(uploaded_paths)} file(s) uploaded successfully.", "filepaths": uploaded_paths})
+
 @fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])
 def api_fs_save(workspace_id):
         """Universal save-back endpoint with explicit path routing guardrails."""

@@ -49,34 +49,84 @@ def get_system_config(workspace_id):
         data = load_config(workspace_id)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     core_engines = {"bridge", "gather"}
+    available_ids = set()
     available = []
     extensions_dir = Path(script_dir).joinpath("extensions").as_posix()
     if os.path.exists(extensions_dir):
-        for item in os.listdir(extensions_dir):
-            item_path = Path(extensions_dir).joinpath(item).as_posix()
+            for item in os.listdir(extensions_dir):
+                    item_path = Path(extensions_dir).joinpath(item).as_posix()
 
-            if os.path.isdir(item_path):
-                # Bundled topology (ADR 0012)
-                if os.path.exists(Path(item_path).joinpath(f"engine_{item}.py").as_posix()):
-                    if item not in core_engines:
-                        available.append(item)
-            elif item.startswith("engine_") and item.endswith(".py"):
-                # Legacy flat topology
-                ext_name = item.replace("engine_", "").replace(".py", "")
-                if ext_name not in core_engines and ext_name not in available:
-                    available.append(ext_name)
+                    ext_name = None
+                    if os.path.isdir(item_path):
+                            # Bundled topology (ADR 0012)
+                            if os.path.exists(Path(item_path).joinpath(f"engine_{item}.py").as_posix()):
+                                    ext_name = item
+                    elif item.startswith("engine_") and item.endswith(".py"):
+                            # Legacy flat topology
+                            ext_name = item.replace("engine_", "").replace(".py", "")
 
+                    if ext_name and ext_name not in core_engines and ext_name not in available_ids:
+                            available_ids.add(ext_name)
+                            title = ext_name.replace('_', ' ').title()
+                            desc = ""
+
+                            # Extract metadata from the mounted extension
+                            import sys
+                            mod = sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}") or \
+                                        sys.modules.get(f"insetu.extensions.engine_{ext_name}") or \
+                                        sys.modules.get(f"insetu.engine_{ext_name}")
+
+                            if not mod:
+                                    import importlib
+                                    try: mod = importlib.import_module(f"insetu.extensions.{ext_name}.engine_{ext_name}")
+                                    except ImportError:
+                                            try: mod = importlib.import_module(f"insetu.extensions.engine_{ext_name}")
+                                            except ImportError:
+                                                    try: mod = importlib.import_module(f"insetu.engine_{ext_name}")
+                                                    except ImportError: pass
+
+                            if mod:
+                                    bp_obj = getattr(mod, f"{ext_name}_bp", None)
+                                    if bp_obj:
+                                            title = getattr(bp_obj, 'title', title)
+                                            desc = getattr(bp_obj, 'description', desc)
+
+                            available.append({"id": ext_name, "title": title, "description": desc})
     from insetu.sdk.extension import _REGISTERED_SETTINGS_SCHEMAS
 
-    data["_available_extensions"] = sorted(available)
-    data["_settings_schemas"] = _REGISTERED_SETTINGS_SCHEMAS
-    return data
-
+    return {
+            "config": data,
+            "meta": {
+                    "available_extensions": sorted(available, key=lambda x: x['title']),
+                    "settings_schemas": _REGISTERED_SETTINGS_SCHEMAS
+            }
+    }
 def save_system_config(workspace_id, payload):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
-    if "_available_extensions" in payload:
-        del payload["_available_extensions"]
+
+    # Security Guardrail: Enforce the core config UI is never locked out
+    if "extensions" in payload and "config" not in payload["extensions"]:
+        payload["extensions"].insert(0, "config")
+    from insetu.utils_core import slugify
+
+    valid_repos = []
+    for repo in payload.get("target_repos", []):
+        if not repo.get("repo_dir"):
+            continue
+        for b in repo.get("sub_buckets", []):
+            if not b.get("dynamic_split_prefix"):
+                if not b.get("id"):
+                    title = b.get("title", "").strip()
+                    b["id"] = slugify(title) if title else "untitled_bucket"
+        valid_repos.append(repo)
+    payload["target_repos"] = valid_repos
+
     save_json_file(cfg_path, payload, workspace_id)
+
+    # Invalidate the mutated config cache so backend physics immediately see changes
+    from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    _MUTATED_CONFIG_CACHE.clear()
+    _MUTATED_CONFIG_MTIME.clear()
 
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])
 @system_bp.route('/api/<workspace_id>/system/config', methods=['GET', 'POST'])
@@ -88,8 +138,19 @@ def api_system_config(workspace_id=None):
     else:
         try:
             payload = request.json
+
+            from flask import current_app
+            requires_reboot = False
+            for ext in payload.get("extensions", []):
+                if ext != "config" and ext not in current_app.blueprints:
+                    requires_reboot = True
+
             save_system_config(workspace_id, payload)
-            return jsonify({"status": "success", "message": "Configuration saved successfully."})
+            return jsonify({
+                "status": "success", 
+                "message": "Configuration saved successfully.", 
+                "requires_reboot": requires_reboot
+            })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
@@ -110,13 +171,12 @@ def api_create_workspace():
 
     if ws_id in w_data.get("workspaces", {}):
         return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
-
     custom_root = data.get('workspace_root', '').strip()
     if not custom_root:
         return jsonify({"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}), 400
     resolved_root = os.path.abspath(os.path.expanduser(custom_root))
 
-    ws_insetu_dir = Path(resolved_root).joinpath("insetu")
+    ws_insetu_dir = Path(resolved_root).joinpath(".insetu")
     try:
         os.makedirs(ws_insetu_dir.joinpath("data").as_posix(), exist_ok=True)
     except Exception as e:
@@ -124,18 +184,18 @@ def api_create_workspace():
     
     config_abs_path = ws_insetu_dir.joinpath("config.json").as_posix()
     config_rel_path = config_abs_path
-    
     starter_config = {
         "instance_title": f"inSetu Workspace: {ws_id}",
         "workspace_root": resolved_root,
         "extensions": ["config"],
         "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
     }
-    
+
     os.makedirs(starter_config["workspace_root"], exist_ok=True)
 
     from insetu.routes_fs import execute_vfs_save
-    execute_vfs_save("default", config_abs_path, json.dumps(starter_config, indent=2), data={"is_absolute_artifact": True})
+    # Track the configuration write explicitly within the context of the newly registered workspace ID
+    execute_vfs_save(ws_id, config_abs_path, json.dumps(starter_config, indent=2), data={"is_absolute_artifact": True})
 
     if "workspaces" not in w_data:
         w_data["workspaces"] = {}

@@ -108,7 +108,9 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
     cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
     all_configs = cfg.get("target_repos", [])
     for config in all_configs:
-        repo_dir = config["repo_dir"]
+        repo_dir = config.get("repo_dir")
+        if not repo_dir:
+            continue
         if target_repos and repo_dir not in target_repos:
             continue
         from pathlib import Path

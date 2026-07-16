@@ -214,19 +214,9 @@ function updateManifestState(oldPath, newPath = null) {
             }
         }
     });
-
     if (changed) {
         AppStore.setState({ manifest: newManifest });
     }
-    // Silently pull the true Cartographer-validated manifest to heal new path additions
-    setTimeout(async () => {
-        try {
-            const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-            if (mRes.ok) {
-                AppStore.setState({ manifest: await mRes.json() });
-            }
-        } catch(e) {}
-    }, 500); // 500ms delay ensures the async VFS queue has fully drained to disk
 
     if (FsStore.getState().modals.browser?.open) {
         const mState = FsStore.getState().modals.browser;
@@ -366,7 +356,7 @@ async function downloadFromModal() {
             window.URL.revokeObjectURL(url);
             a.remove();
         } else {
-            let fetchUrl = state.isFS ? `bridge/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
+            let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
             if (window.inSetu?.extensions?.Registry?.executeUIHook) {
                 const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
                 if (overrideUrl) fetchUrl = overrideUrl;
@@ -401,99 +391,22 @@ export function createFileCard(fileInfo, container) {
     card.icon = fileInfo.isSource ? '📄' : '📦';
     card.intentColor = fileInfo.isSource ? 'var(--intent-primary)' : 'var(--intent-highlight)';
 
+    card.entityType = fileInfo.isSource ? 'file' : 'file:context';
+    card.entityData = { filepath: fileInfo.filename, repoDir: fileInfo.repoDir, isFS: fileInfo.isFS };
+
     card.addEventListener('card-clicked', () => {
         if (fileInfo.isSource) viewSourceFile(fileInfo.filename, fileInfo.isFS);
         else viewAndCopy(fileInfo.filename);
     });
-    const { manifest } = AppStore.getState();
-    if (!fileInfo.isSource && manifest[fileInfo.filename]) {
-        const browseBtn = document.createElement('button');
-        browseBtn.className = 'btn-sm';
-        browseBtn.style.background = 'var(--intent-neutral)';
-        browseBtn.style.margin = '0 5px 0 0';
-        browseBtn.style.order = '99';
-        browseBtn.innerText = '📁 Browse';
-        browseBtn.slot = 'actions';
-        browseBtn.onclick = (e) => { e.stopPropagation(); openBrowseModal(fileInfo.filename); };
-        card.appendChild(browseBtn);
-    }
-    const actionsNode = document.createElement('insetu-file-actions');
-    actionsNode.slot = 'actions';
-    actionsNode.filepath = fileInfo.filename;
-    actionsNode.repoDir = fileInfo.repoDir;
-    actionsNode.isFS = fileInfo.isFS;
-    card.appendChild(actionsNode);
-    let dlFetchUrl = fileInfo.isSource ? `bridge/fetch?file=${encodeURIComponent(fileInfo.filename)}` : `/download/${fileInfo.filename}`;
-    if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-        const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', fileInfo.filename);
-        if (overrideUrl) dlFetchUrl = overrideUrl;
-    }
-    const safeName = fileInfo.isSource ? fileInfo.filename.split('/').pop() : fileInfo.filename;
-    const chunks = (!fileInfo.isSource && manifest[fileInfo.filename]?.meta?.chunks) ? manifest[fileInfo.filename].meta.chunks : null;
-
-    const dlBtn = document.createElement('button');
-    dlBtn.className = 'btn-sm';
-    dlBtn.style.background = 'var(--intent-primary)';
-    dlBtn.style.margin = '0';
-    dlBtn.style.order = '100';
-    dlBtn.innerText = chunks && chunks.length > 1 ? '⬇️ Download Parts ▾' : '⬇️ Download';
-    dlBtn.slot = 'actions';
-
-    const performDownload = async (url, targetName, btn) => {
-        const orig = btn.innerText;
-        btn.innerText = 'Downloading...';
-        try {
-            let res;
-            if (url.startsWith('/') || url.startsWith('http')) {
-                res = await fetch(url, { headers: window.inSetu.api._getHeaders(true) });
-            } else {
-                res = await window.inSetu.api.workspace(url);
-            }
-            if (!res.ok) throw new Error("Failed to fetch");
-            const text = await res.text();
-            const blob = new Blob([text], { type: res.headers.get('content-type') || 'text/plain' });
-            const objUrl = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = objUrl;
-            a.download = targetName;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(objUrl);
-            a.remove();
-        } catch (err) {
-            alert("Error downloading file: " + err.message);
-        } finally {
-            btn.innerText = orig;
-        }
-    };
-    if (chunks && chunks.length > 1) {
-        const dropdown = document.createElement('insetu-dropdown');
-        dropdown.align = 'right';
-        dropdown.slot = 'actions';
-        dropdown.style.order = '100';
-
-        dlBtn.slot = 'trigger';
-        dropdown.appendChild(dlBtn);
-
-        dropdown.items = chunks.map((chunk, idx) => ({
-            label: `📄 Part ${idx + 1}`,
-            icon: '⬇️',
-            onClick: () => performDownload(`/download/${chunk}`, chunk, dlBtn)
-        }));
-
-        card.appendChild(dropdown);
-    } else {
-        dlBtn.onclick = async (e) => {
-            e.stopPropagation();
-            await performDownload(dlFetchUrl, safeName, dlBtn);
-        };
-        card.appendChild(dlBtn);
-    }
 
     container.appendChild(card);
 }
-export const getGlobalManifest = () => Array.from(new Set(Object.values(AppStore.getState().manifest || {}).flatMap(obj => obj.files || [])));
+export const getGlobalManifest = () => {
+    const state = AppStore.getState();
+    const validPrefixes = (state.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+    const allFiles = Array.from(new Set(Object.values(state.manifest || {}).flatMap(obj => obj.files || [])));
+    return allFiles.filter(f => validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix)));
+};
 export class InSetuVFSExplorer extends InSetuElement {
         static properties = {
                 searchQuery: { type: String },
@@ -512,8 +425,19 @@ export class InSetuVFSExplorer extends InSetuElement {
         }
         _updateState(state) {
                 const allFiles = new Set();
+
+                // UDF Guardrail: Only show files that belong to explicitly tracked repository targets
+                // This prevents OS artifact directories (contexts/, diffs/) from leaking into the visual root
+                const validPrefixes = (state.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+
                 Object.values(state.manifest || {}).forEach(obj => {
-                        if (obj.files) obj.files.forEach(f => allFiles.add(f));
+                        if (obj.files) {
+                            obj.files.forEach(f => {
+                                if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
+                                    allFiles.add(f);
+                                }
+                            });
+                        }
                 });
                 if (state.targetConfigs) {
                         state.targetConfigs.forEach(cfg => {
@@ -554,7 +478,6 @@ export class InSetuVFSExplorer extends InSetuElement {
             const availableFiles = currentPrefix ? this.manifestFiles.filter(f => f.startsWith(currentPrefix)) : this.manifestFiles;
 
             let contentUI;
-
             if (!q) {
                 contentUI = html`
                     <div @card-clicked="${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
@@ -563,9 +486,8 @@ export class InSetuVFSExplorer extends InSetuElement {
                             .files=${this.manifestFiles}
                             .currentPath=${this.globalBrowsePath}
                             .hidePath=${true}
-                            .actions=${[{ id: 'download', label: '⬇️ Download', style: 'primary', order: 100 }]}
-                            @path-changed="${this._handlePathChange}"
-                            @action-download="${(e) => fetchAndDownloadState(e.detail.filepath, e.detail.event.target)}">
+                            entityType="file"
+                            @path-changed="${this._handlePathChange}">
                         </insetu-file-tree>
                     </div>
                 `;
@@ -586,13 +508,9 @@ export class InSetuVFSExplorer extends InSetuElement {
                                         .descriptionText=${filepath}
                                         icon="📄"
                                         intentColor="var(--intent-success)"
+                                        entityType="file"
+                                        .entityData=${{ filepath, isFS: true }}
                                         @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
-                                        <insetu-file-actions slot="actions" .filepath=${filepath}></insetu-file-actions>
-                                        <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer; order: 100;"
-                                            @click=${(e) => {
-                                                e.stopPropagation();
-                                                fetchAndDownloadState(filepath, e.currentTarget);
-                                            }}>⬇️ Download</button>
                                     </insetu-card>
                                 `;
                             })}
@@ -651,13 +569,13 @@ export class InSetuVFSExplorerActions extends InSetuElement {
     get _menuItems() {
         const currentPath = this.globalBrowsePath.join('/');
         const items = [];
-
         if (!currentPath) {
             items.push({ label: 'New Repository', icon: '📦', onClick: () => window.openNewFolderModal() });
         } else {
             const prefix = currentPath + '/';
             items.push({ label: 'New Folder', icon: '📁', onClick: () => window.openNewFolderModal(prefix) });
             items.push({ label: 'New File', icon: '📄', onClick: () => window.openNewFileModal(prefix) });
+            items.push({ label: 'Upload File', icon: '📤', onClick: () => window.uploadFileToWorkspace(currentPath) });
             items.push({ divider: true });
             items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
             items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
@@ -680,10 +598,101 @@ export class InSetuVFSExplorerActions extends InSetuElement {
     }
 }
 customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
-
 window.ExtensionRegistry.registerExtension('files', {
     name: "Virtual File System",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'file',
+            id: 'file-copy',
+            label: 'Copy',
+            icon: '📋',
+            intent: 'success',
+            order: 90,
+            match: (data) => {
+                if (data.suppressCopy) return false;
+                if (data.isSkeleton) return false;
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                return !chunks || chunks.length <= 1;
+            },
+            asyncAction: async (data, e) => {
+                let fetchUrl = null;
+                if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                    fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', data.filepath);
+                }
+
+                // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
+                if (!fetchUrl) {
+                    const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+                    fetchUrl = data.isFS 
+                        ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
+                        : `/download/${encodeURIComponent(data.filepath)}`;
+                }
+                await fetchAndCopy(data.filepath, fetchUrl);
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-browse',
+            label: 'Browse',
+            icon: '📁',
+            intent: 'neutral',
+            order: 80,
+            match: (data) => !data.isFS && !data.isSkeleton,
+            onClick: (data, e) => {
+                if (window.openBrowseModal) window.openBrowseModal(data.filepath);
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-share',
+            label: 'Share',
+            icon: '📤',
+            intent: 'primary',
+            order: 95,
+            match: (data) => {
+                if (data.suppressDownload) return false;
+                if (data.isSkeleton) return false;
+
+                // Only render if the device natively supports Web Sharing
+                return !!navigator.share && !!navigator.canShare;
+            },
+            asyncAction: async (data, e) => {
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                await shareFiles(data.filepath, chunks, data.isFS);
+            }
+        },
+        {
+            targetEntity: 'file',
+            id: 'file-download',
+            label: 'Download',
+            icon: '⬇️',
+            intent: 'primary',
+            order: 100,
+            match: (data) => {
+                if (data.suppressDownload) return false;
+                if (data.isSkeleton) return false;
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                // If it has multiple chunks, the 'context' subclass takes over download responsibilities
+                return !chunks || chunks.length <= 1;
+            },
+            asyncAction: async (data, e) => {
+                let fetchUrl = null;
+                if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                    fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', data.filepath);
+                }
+
+                // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
+                if (!fetchUrl) {
+                    const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+                    fetchUrl = data.isFS 
+                        ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
+                        : `/download/${encodeURIComponent(data.filepath)}`;
+                }
+                await fetchAndDownloadState(data.filepath, fetchUrl);
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
@@ -876,7 +885,6 @@ export function insertTextAtCursor(textToInsert) {
     const state = FsStore.getState().fileModal;
     FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
 }
-
 export async function viewSourceFile(filepath, isFS = false) {
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
         if (window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', filepath)) return;
@@ -902,7 +910,7 @@ export async function viewSourceFile(filepath, isFS = false) {
 
     closeBrowseModal();
     try {
-        const res = await window.inSetu.api.workspace(`bridge/fetch?file=${encodeURIComponent(filepath)}`);
+        const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filepath)}`);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
@@ -1131,10 +1139,9 @@ export class InSetuFileModal extends InSetuElement {
                             </textarea>
                         `}
                     </div>
-
                     <div class="modal-footer" style="padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0;">
                         <button class="ui-draggable-export" draggable="true" @dragstart=${(e) => {
-                            let fetchUrl = m.isFS ? `bridge/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
+                            let fetchUrl = m.isFS ? `fs/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
                             if (window.inSetu?.extensions?.Registry?.executeUIHook) {
                                 const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', m.filename);
                                 if (override) fetchUrl = override;
@@ -1171,6 +1178,30 @@ window.confirmFolderSelection = confirmFolderSelection;
 window.openWorkspaceBrowser = openWorkspaceBrowser;
 window.openBrowseModal = openBrowseModal;
 window.viewAndCopy = viewAndCopy;
+export async function uploadFileToWorkspace(targetDir) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async (e) => {
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        const formData = new FormData();
+        for (let i = 0; i < files.length; i++) {
+            formData.append('file', files[i]);
+        }
+        formData.append('dest_dir', targetDir || '');
+
+        const loadingMsg = files.length > 1 ? `Uploading ${files.length} files...` : `Uploading ${files[0].name}...`;
+        await executeWorkspaceMutation('fs/upload', formData, {
+            loadingText: loadingMsg,
+            onSuccess: () => {}
+        });
+    };
+    input.click();
+}
+window.uploadFileToWorkspace = uploadFileToWorkspace;
+
 export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
     setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
     try {
@@ -1205,14 +1236,8 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
                 }
             }
         }
-
         // Open the physical file that was just written to disk natively
         viewAndCopy(filename);
-        // Silently re-hydrate the manifest state to reactively update the UI without hitting the heavy `/submit` compiler
-        const mRes = await window.inSetu.api.workspace(`manifest?t=${Date.now()}`);
-        if (mRes.ok) {
-            AppStore.setState({ manifest: await mRes.json() });
-        }
 
         setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
     } catch (e) {
@@ -1257,11 +1282,6 @@ export async function clearQuickPacks() {
     try {
         const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
         if (!res.ok) throw new Error("Failed to clear quick-packs.");
-
-        const mRes = await window.inSetu.api.workspace(`manifest?t=${Date.now()}`);
-        if (mRes.ok) {
-            AppStore.setState({ manifest: await mRes.json() });
-        }
 
         setGlobalStatus("✅ Clipboard cleared!", 2000);
     } catch (e) {
@@ -1548,8 +1568,8 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
             </insetu-modal>
-<insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} maxWidth="100vw" @modal-closed=${window.closeBrowseModal}>
-                <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
+<insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} maxWidth="100vw" zIndex="3100" @modal-closed=${window.closeBrowseModal}>
+    <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
                     <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
                         ${this.browserConfig?.mode !== 'folder' ? html`
                             <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${this.currentBrowsePath?.length > 0 ? '1px solid var(--border)' : 'none'};">

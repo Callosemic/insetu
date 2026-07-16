@@ -294,17 +294,12 @@ window.inSetu.utils.copyToClipboard = async function(text) {
         throw new Error("Clipboard access denied");
     }
 };
-
-window.inSetu.utils.copyRawText = async function(text, btnElement, successMsg = "✅ Copied!") {
-    const originalText = btnElement.innerText;
-    btnElement.innerText = "Copying...";
+window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!") {
     try {
         await window.inSetu.utils.copyToClipboard(text);
-        btnElement.innerText = successMsg;
+        if (window.setGlobalStatus) window.setGlobalStatus(successMsg, 2000);
     } catch (e) {
-        btnElement.innerText = "❌ Error";
+        if (window.setGlobalStatus) window.setGlobalStatus("❌ Error copying text", 3000, true);
+        throw e;
     }
-    setTimeout(() => {
-        btnElement.innerText = originalText;
-    }, 2000);
 };

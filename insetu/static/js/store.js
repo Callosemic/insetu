@@ -5,7 +5,7 @@ import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middlewa
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const AppStore = createStore(
     devtools(
-        subscribeWithSelector((set) => ({
+        subscribeWithSelector((set, get) => ({
             activeWorkspace: sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default',
             manifest: {},
             allRepos: [],
@@ -15,10 +15,12 @@ export const AppStore = createStore(
             tabOrder: [],
             hiddenOutputs: [],
             isConfigOpen: false,
+            isWorkspaceEditorOpen: false,
 
-            pinnedRepos: new Set(JSON.parse(localStorage.getItem('insetu_pinned_repos')) || ["ALL"]),
+            pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default'}`)) || ["ALL"]),
             setPinnedRepos: (repos) => {
-                localStorage.setItem('insetu_pinned_repos', JSON.stringify(Array.from(repos)));
+                const ws = get().activeWorkspace || 'default';
+                localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));
                 set({ pinnedRepos: repos });
             },
             gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
@@ -51,7 +53,8 @@ export const AppStore = createStore(
                 activeDiffJobId: null,
                 dirtyDiffRepos: new Set(["ALL"]),
                 cachedDiffFiles: null,
-                isConfigOpen: false
+                isConfigOpen: false,
+                isWorkspaceEditorOpen: false
             })
         })),
         { name: 'AppStore' }
@@ -64,6 +67,27 @@ window.inSetu.extensions.Registry = {
     _manifests: new Map(),
     uiHooks: {},
     shortcuts: {},
+    _entityActions: new Map(),
+
+    getEntityActions: function(compoundType, data) {
+        if (!compoundType) return [];
+        const types = compoundType.split(':');
+        const combined = [];
+        types.forEach(type => {
+            if (this._entityActions.has(type)) {
+                combined.push(...this._entityActions.get(type));
+            }
+        });
+        const activeActions = combined.filter(act => {
+            if (act.extName && !['bridge', 'gather', 'config', 'files'].includes(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
+                return false;
+            }
+            if (act.match && !act.match(data)) return false;
+            return true;
+        });
+        return activeActions.sort((a, b) => (a.order || 99) - (b.order || 99));
+    },
+
     utils: {
         _timers: {},
         debounce: function(key, callback, delay = 300) {
@@ -97,20 +121,31 @@ window.inSetu.extensions.Registry = {
         document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext], .sub-tab-content[data-ext]').forEach(el => el.remove());
         document.querySelectorAll('.sub-tabs-actions').forEach(track => track.replaceChildren());
 
+        const activeConfigs = [];
         this._manifests.forEach((config, extName) => {
-            const isCore = ['bridge', 'gather', 'files'].includes(extName);
-            if (!isCore && (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes(extName))) return;
+            const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
+            if (isCore || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(extName))) {
+                activeConfigs.push({ extName, config });
+            }
+        });
 
+        // Pass 1: Primary Navigation Tabs (Ensures parent containers exist before sub-tabs mount)
+        activeConfigs.forEach(({ extName, config }) => {
             if (config.layoutSlots) {
-                const sortedSlots = [...config.layoutSlots].sort((a, b) => {
-                    if (a.slot === 'slots:primary-navigation' && b.slot !== 'slots:primary-navigation') return -1;
-                    if (a.slot !== 'slots:primary-navigation' && b.slot === 'slots:primary-navigation') return 1;
-                    return (a.order || 99) - (b.order || 99);
-                });
-                sortedSlots.forEach(slotDef => {
+                config.layoutSlots.forEach(slotDef => {
                     if (slotDef.slot === 'slots:primary-navigation') {
                         this.registerTab(slotDef.id, slotDef.label, extName, slotDef.component);
-                    } else if (slotDef.slot === 'slots:sub-navigation') {
+                    }
+                });
+            }
+        });
+
+        // Pass 2: Sub-Tabs, Actions, and Globals (Now guaranteed to find their parents)
+        activeConfigs.forEach(({ extName, config }) => {
+            if (config.layoutSlots) {
+                const sortedSlots = [...config.layoutSlots].sort((a, b) => (a.order || 99) - (b.order || 99));
+                sortedSlots.forEach(slotDef => {
+                    if (slotDef.slot === 'slots:sub-navigation') {
                         this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
                     } else if (slotDef.slot === 'slots:sub-navigation-actions') {
                         this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
@@ -135,6 +170,14 @@ window.inSetu.extensions.Registry = {
     },
     registerExtension: function(extName, config) {
         this._manifests.set(extName, config);
+        if (config.entityActions) {
+            config.entityActions.forEach(act => {
+                act.extName = extName;
+                const target = act.targetEntity;
+                if (!this._entityActions.has(target)) this._entityActions.set(target, []);
+                this._entityActions.get(target).push(act);
+            });
+        }
         if (config.uiHooks) {
             Object.entries(config.uiHooks).forEach(([zone, callback]) => {
                 this.registerUIHook(zone, callback);

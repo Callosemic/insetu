@@ -42,16 +42,24 @@ def generate_ascii_tree(file_paths):
     return ".\n" + "\n".join(print_tree(tree))
 def resolve_file_bucket(filepath, sub_buckets):
     """DRY Helper to map a filepath to its configured sub-bucket."""
+    import re
+    # Strip potential Git status decorators (e.g. '[??] ', '[ M] ', '?? ', 'D  ') to ensure clean path matching
+    clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
+
+    # Handle Git rename syntax 'old -> new'
+    if ' -> ' in clean_filepath:
+        clean_filepath = clean_filepath.split(' -> ')[-1].strip()
+
     for b in sub_buckets:
         prefix = b.get("dynamic_split_prefix")
         if prefix:
-            if prefix == "." or filepath.startswith(prefix):
-                parts = filepath.split("/")
+            if prefix == "." or clean_filepath.startswith(prefix):
+                parts = clean_filepath.split("/")
                 module_idx = len([p for p in prefix.split('/') if p and p != '.'])
                 if len(parts) > module_idx + 1:
                     return b, parts[module_idx]
                 continue # Let boundary files fall through to explicit buckets or the catch-all
-        elif b.get("match_prefixes") and any(filepath.startswith(p) for p in b["match_prefixes"]):
+        elif b.get("match_prefixes") and any(clean_filepath.startswith(p) for p in b["match_prefixes"]):
             return b, None
 
     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)

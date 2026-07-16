@@ -1,10 +1,14 @@
 import { LitElement, html, css } from 'lit';
+import { sharedStyles } from '../shared_styles.js';
+import { InSetuElement } from '../sdk.js';
+
 export class InSetuModal extends LitElement {
     static properties = {
         titleText: { type: String },
         open: { type: Boolean, reflect: true },
         maxWidth: { type: String },
-        fullscreen: { type: Boolean, reflect: true }
+        fullscreen: { type: Boolean, reflect: true },
+        zIndex: { type: Number }
     };
     static styles = css`
         .backdrop {
@@ -55,10 +59,9 @@ constructor() {
         this.open = false;
         this.dispatchEvent(new CustomEvent('modal-closed', { bubbles: true, composed: true }));
     }
-
     render() {
         return html`
-            <div class="backdrop" @mousedown=${(e) => { if(e.target.classList.contains('backdrop')) this.close(); }}>
+            <div class="backdrop" style="z-index: ${this.zIndex || 1000};" @mousedown=${(e) => { if(e.target.classList.contains('backdrop')) this.close(); }}>
                 <div class="panel" style="max-width: ${this.maxWidth || '600px'}">
                     <div class="header">
                         <h3>${this.titleText}</h3>
@@ -76,3 +79,51 @@ constructor() {
     }
 }
 customElements.define('insetu-modal', InSetuModal);
+
+export class InSetuSelectorModal extends InSetuElement {
+    static properties = {
+        open: { type: Boolean, reflect: true },
+        titleText: { type: String },
+        items: { type: Array },
+        _searchQuery: { type: String }
+    };
+    static styles = [sharedStyles];
+    constructor() {
+        super();
+        this.open = false;
+        this.titleText = "Select Item";
+        this.items = [];
+        this._searchQuery = '';
+    }
+    render() {
+        const filtered = this._searchQuery 
+            ? this.utils.fuzzyFilterObjects(this.items, this._searchQuery).slice(0, 50) 
+            : this.items.slice(0, 50);
+
+        return html`
+            <insetu-modal ?open=${this.open} titleText=${this.titleText} @modal-closed=${() => { this.open = false; this.dispatchEvent(new CustomEvent('selector-closed')); }}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; overflow: hidden; min-height: 300px;">
+                    <input type="text" placeholder="Search..." .value=${this._searchQuery} @input=${e => this._searchQuery = e.target.value} style="width: 100%; padding: 10px; font-weight: bold; box-sizing: border-box; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 10px; flex-shrink: 0;">
+
+                    <div style="display: flex; flex-direction: column; gap: 5px; flex: 1; overflow-y: auto; padding-bottom: 15px;">
+                        ${filtered.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">No matches found.</span>` : filtered.map(item => {
+                            const displayText = typeof item === 'string' && item.startsWith('prompts/') ? item.substring(8) : (item.label || item);
+                            return html`
+                                <button class="btn-sm" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); text-align: left; padding: 12px 15px; font-size: 1.05rem; font-family: monospace; font-weight: bold; margin: 0; cursor: pointer; border-radius: 4px; transition: background 0.2s;"
+                                    onmouseover="this.style.background='var(--input-bg)'"
+                                    onmouseout="this.style.background='var(--bg)'"
+                                    @click=${() => {
+                                        this.open = false;
+                                        this.dispatchEvent(new CustomEvent('item-selected', { detail: { item }, bubbles: true, composed: true }));
+                                    }}>
+                                    📄 ${displayText}
+                                </button>
+                            `;
+                        })}
+                    </div>
+                </div>
+            </insetu-modal>
+        `;
+    }
+}
+customElements.define('insetu-selector-modal', InSetuSelectorModal);

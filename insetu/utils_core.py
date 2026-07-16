@@ -24,6 +24,11 @@ def get_physics_for(workspace_id):
     """
     return get_workspace_physics(workspace_id)
 
+def get_tenant_control_dir(workspace_id=None):
+    """Universal helper to return the absolute path of the tenant's .insetu configuration directory."""
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    return os.path.dirname(cfg_path)
+
 def get_workspace_physics(workspace_id=None):
     """
     STATELESS ROUTING CORE
@@ -76,7 +81,6 @@ def get_workspace_physics(workspace_id=None):
     # so the frontend receives an empty state, rather than serving the default workspace's data.
     if not os.path.exists(resolved_cfg) and target_ws == "default":
         resolved_cfg = default_config
-
     # 3. Resolve Workspace Root
     workflows_path = Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
     if os.path.exists(resolved_cfg):
@@ -89,15 +93,20 @@ def get_workspace_physics(workspace_id=None):
 
         return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
 
+    # Security Guardrail: Never let a secondary workspace bleed into the host daemon's 
+    # Current Working Directory if its configuration file is missing or corrupted.
+    if target_ws != "default":
+        return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
+
     return resolved_cfg, _cwd, workflows_path
 def get_gather_paths(workspace_id=None):
     """Dynamically calculates artifact physics for the requested tenant."""
     cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
     workspace_dir = os.path.dirname(cfg_path)
     artifacts_base = Path(workspace_dir).joinpath("data").as_posix()
-
     paths = {
         "config_path": cfg_path,
+        "control_dir": workspace_dir,
         "workspace_root": ws_root,
         "workflows_path": wf_path,
         "artifacts_base": artifacts_base,
@@ -181,7 +190,6 @@ def save_json_file(filepath, data, workspace_id=None):
     _JSON_MTIME[filepath] = 0  # Explicitly force mtime invalidation to bypass cache collisions
 _MUTATED_CONFIG_CACHE = {}
 _MUTATED_CONFIG_MTIME = {}
-
 def load_config(workspace_id=None):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
 
@@ -261,13 +269,16 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
         target_f = repo_p / norm_path
         if not target_f.is_file(): continue
         if target_f.name.lower() in ignore_files: continue
-
         if config.get("apply_ignore"):
             if any(norm_path.startswith(exc) for exc in config.get("ignore_exceptions", [])):
                     pass
             else:
                     if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
                     if any(pattern in norm_path for pattern in ignore_patterns): continue
+
+        # Explicitly ignore ephemeral data if .insetu is tracked as a repository
+        if repo_p.name == '.insetu' and (norm_path.startswith('data/') or '/data/' in norm_path):
+            continue
 
         # Always allow standard empty-directory anchors
         if target_f.name.lower() in (".gitkeep", ".keep"):
@@ -416,10 +427,14 @@ def resolve_system_artifact_path(filepath, workspace_id):
     from pathlib import Path
     import os
 
-    insetu_base = Path(_cwd).joinpath(".insetu").resolve()
+    # Dynamically resolve the active tenant's control plane boundary
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    active_insetu_base = Path(cfg_path).parent.resolve()
+
+    default_insetu_base = Path(_cwd).joinpath(".insetu").resolve()
     resolved_abs = Path(filepath).resolve()
 
-    if str(resolved_abs).startswith(str(insetu_base)):
+    if str(resolved_abs).startswith(str(active_insetu_base)) or str(resolved_abs).startswith(str(default_insetu_base)):
         return resolved_abs.as_posix()
     else:
         return resolve_workspace_path(filepath, workspace_id)
