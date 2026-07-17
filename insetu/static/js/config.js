@@ -397,15 +397,11 @@ export class InSetuExtConfig extends InSetuElement {
                 titleText="Workspace Configuration" 
                 maxWidth="100vw" 
                 @modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
-
                 <div slot="body">${bodyContent}</div>
 
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
-                        @click=${this.saveConfig}>
-                        💾 Save & Reload
-                    </button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveConfig}>
+                    💾 Save & Reload
+                </button>
             </insetu-modal>
         `;
     }
@@ -662,9 +658,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                                 `)}
                             </div>
                         </div>
-                        <div slot="footer">
-                            <button type="button" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px;" @click=${this._confirmHostDir}>✅ Select This Path</button>
-                        </div>
+                        <button slot="footer" type="button" style="background: var(--intent-success); color: white;" @click=${this._confirmHostDir}>✅ Select This Path</button>
                     </insetu-modal>
 
                     <div>
@@ -815,12 +809,9 @@ export class InSetuGenericSettingsModal extends InSetuElement {
                         `;
                     })}
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
-                        @click=${this.saveSettings}>
-                        💾 Save Settings
-                    </button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveSettings}>
+                    💾 Save Settings
+                </button>
             </insetu-modal>
         `;
     }

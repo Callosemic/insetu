@@ -94,11 +94,19 @@ def get_system_config(workspace_id):
                             available.append({"id": ext_name, "title": title, "description": desc})
     from insetu.sdk.extension import _REGISTERED_SETTINGS_SCHEMAS
 
+    evaluated_schemas = {}
+    for ext_id, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
+        if callable(schema_spec):
+            try: evaluated_schemas[ext_id] = schema_spec(workspace_id)
+            except Exception: evaluated_schemas[ext_id] = []
+        else:
+            evaluated_schemas[ext_id] = schema_spec
+
     return {
             "config": data,
             "meta": {
                     "available_extensions": sorted(available, key=lambda x: x['title']),
-                    "settings_schemas": _REGISTERED_SETTINGS_SCHEMAS
+                    "settings_schemas": evaluated_schemas
             }
     }
 def save_system_config(workspace_id, payload):

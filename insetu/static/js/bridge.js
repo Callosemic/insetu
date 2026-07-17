@@ -221,6 +221,17 @@ export class InSetuExtBridge extends InSetuElement {
                     const rawData = statusData.message || "";
                     let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+                    // Format raw log text into elegant inSetu cards
+                    safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE (.*?) ===/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
+                    safeData = safeData.replace(/^Targeting: (.*?)$/gm, '<div class="file-card" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;"><div style="font-weight: bold; color: var(--intent-primary); font-family: var(--font-mono); font-size: 1.05rem; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">🎯 $1</div><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6;">');
+                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.$/gm, '</div></div>');
+                    safeData = safeData.replace(/^=== PULSE .*? COMPLETE ===/gm, '');
+
+                    // Embellish semantic tags
+                    safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
+                    safeData = safeData.replace(/\[!\]/g, '<span style="color: var(--intent-danger); font-weight: bold;">[!]</span>');
+                    safeData = safeData.replace(/\[🚀\]/g, '<span style="color: var(--intent-highlight); font-weight: bold;">[🚀]</span>');
+
                     safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
                         const safeP1 = p1.trim().replace(/\\/g, '\\\\');
                         const safeP2 = p2.trim().replace(/\\/g, '\\\\');
@@ -300,26 +311,29 @@ export class InSetuExtBridge extends InSetuElement {
             acc[cell.file].push(cell);
             return acc;
         }, {});
+
         return html`
             <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden; background: var(--bg); height: 100%;">
-                <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
-                    <div style="padding: 8px 20px; display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg); z-index: 10; flex-shrink: 0;">
 
-                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; position: relative;">
-                            <div data-custom-dropdown="true" class="fuzzy-search-wrapper" style="flex: 1; margin: 0; border: none; border-radius: 0; background: transparent; cursor: pointer; display: flex; align-items: center; padding: 4px 0;" @click=${() => this._dropdownOpen = !this._dropdownOpen}>
-                                <span style="font-family: var(--font-mono); font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0;">
-                                    <span style="color: var(--text-muted); opacity: 0.6; font-size: 1rem; transform: rotate(45deg); flex-shrink: 0;">🧩</span>
-                                    ${this._activeCellId ? (() => {
-                                        const cell = this.cells.find(c => c.id === this._activeCellId);
-                                        if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`;
-                                        const chunkIndex = this.cells.findIndex(c => c.id === cell.id) + 1;
-                                        const totalChunks = this.cells.length;
-                                        const shortFile = cell.file.length > 40 ? '...' + cell.file.slice(-37) : cell.file;
-                                        return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px;">${shortFile} <span style="color: var(--text-muted); flex-shrink: 0; font-family: sans-serif; font-weight: normal;">(${chunkIndex}/${totalChunks})</span> <span style="color: var(--text-muted); font-size: 0.6rem; flex-shrink: 0; margin-left: 2px;">${this._dropdownOpen ? '▲' : '▼'}</span></span>`;
-                                    })() : html`<span style="color: var(--text-muted); opacity: 0.6; display: flex; align-items: center; gap: 8px; font-family: sans-serif; font-weight: normal;">Select a patch... <span style="font-size: 0.6rem;">${this._dropdownOpen ? '▲' : '▼'}</span></span>`}
-                                </span>
-                            </div>
-                            <insetu-filter-dropdown filterText=${filterBtnText}>
+                <!-- INPUT VIEW -->
+                <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
+
+                    <!-- THE COMBOBOX HEADER -->
+                    <div data-custom-dropdown="true" style="display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; position: relative; z-index: 10; flex-shrink: 0; background: ${this._dropdownOpen ? 'var(--pane-bg)' : 'var(--bg)'}; border-bottom: ${this._dropdownOpen ? 'none' : '1px solid var(--border)'}; transition: background 0.2s;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
+                            <span style="font-family: var(--font-mono); font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                                <span style="color: var(--text-muted); opacity: 0.6; font-size: 1rem; transform: rotate(45deg); flex-shrink: 0;">🧩</span>
+                                ${this._activeCellId ? (() => {
+                                    const cell = this.cells.find(c => c.id === this._activeCellId);
+                                    if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`;
+                                    const chunkIndex = this.cells.findIndex(c => c.id === cell.id) + 1;
+                                    const totalChunks = this.cells.length;
+                                    const shortFile = cell.file.length > 40 ? '...' + cell.file.slice(-37) : cell.file;
+                                    return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;">&lrm;${shortFile}&lrm; <span style="color: var(--text-muted); font-family: sans-serif; font-weight: normal; margin-left: 5px;">(${chunkIndex}/${totalChunks})</span></span>`;
+                                })() : html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`}
+                                <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0; margin-left: 5px;">${this._dropdownOpen ? '▲' : '▼'}</span>
+                            </span>
+                            <insetu-filter-dropdown filterText=${filterBtnText} @click=${e => e.stopPropagation()}>
                                 <insetu-repo-filter
                                     label="📌 Repos:"
                                     .repos=${this.allRepos}
@@ -327,30 +341,61 @@ export class InSetuExtBridge extends InSetuElement {
                                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                                 </insetu-repo-filter>
                             </insetu-filter-dropdown>
-                            <div data-custom-dropdown="true" style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 0; width: 100%; max-width: calc(100vw - 40px); max-height: 50vh; overflow-y: auto; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); flex-direction: column; z-index: 200;">
-                                ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}
-                                ${Object.entries(groupedCells).map(([file, groupCells]) => {
+                        </div>
+
+                        <div style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: 100%; left: 0; right: 0; max-height: 50vh; overflow-y: auto; background: var(--pane-bg); border-bottom: 1px solid var(--border); border-top: 1px dashed var(--border); padding: 12px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-direction: column;">
+                            ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}
+                            ${Object.entries(groupedCells).map(([file, groupCells]) => {
+                                    const allChecked = groupCells.every(c => c.active);
+                                    const someChecked = groupCells.some(c => c.active);
+
                                     return html`
-                                        <div style="display: flex; flex-direction: column; border-bottom: 2px solid var(--bg);">
-                                            ${groupCells.map((c, i) => {
-                                                const chunkIndex = this.cells.findIndex(cell => cell.id === c.id) + 1;
-                                                const totalChunks = this.cells.length;
-                                                return html`
-                                                    <div style="display: flex; align-items: center; gap: 12px; padding: 10px 15px; cursor: pointer; background: ${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}; transition: background 0.2s;"  
-                                                        @click=${() => { this._activeCellId = c.id; this._dropdownOpen = false; }}
-                                                        onmouseover="this.style.background='var(--input-bg)'"
-                                                        onmouseout="this.style.background='${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}'">
-                                                        <input type="checkbox" style="transform: scale(1.3); margin: 0; cursor: pointer;" 
-                                                            .checked=${c.active} 
-                                                            @click=${(e) => e.stopPropagation()}
-                                                            @change=${(e) => { e.stopPropagation(); BridgeStore.getState().toggleCellActive(c.id); }}>
-                                                        <span style="font-family: var(--font-mono); font-size: 0.9rem; color: ${c.active ? 'var(--text)' : 'var(--text-muted)'}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1;">&lrm;${c.file}&lrm;</span>
-                                                        <span style="color: var(--text-muted); font-size: 0.8rem; font-weight: bold; flex-shrink: 0; font-family: sans-serif;">(${chunkIndex}/${totalChunks})</span>
-                                                    </div>
-                                                `;
-                                            })}
-                                            <div style="display: flex; gap: 8px; padding: 8px 15px; background: rgba(0,0,0,0.1); align-items: center;" @click=${(e) => e.stopPropagation()}>
-                                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => {
+                                        <insetu-card
+                                            .filename=${file}
+                                            .titleText=${""}
+                                            icon=""
+                                            intentColor=${allChecked ? "var(--intent-success)" : (someChecked ? "var(--intent-warning)" : "var(--intent-neutral)")}
+                                            style="margin-bottom: 12px; display: block;">
+                                            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: -12px;">
+                                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                                                    <input type="checkbox" style="transform: scale(1.2); margin: 0; cursor: pointer; margin-left: 2px;"
+                                                        .checked=${allChecked}
+                                                        .indeterminate=${someChecked && !allChecked}
+                                                        @click=${(e) => e.stopPropagation()}
+                                                        @change=${(e) => {
+                                                            e.stopPropagation();
+                                                            const newState = e.target.checked;
+                                                            groupCells.forEach(c => {
+                                                                if (c.active !== newState) BridgeStore.getState().toggleCellActive(c.id);
+                                                            });
+                                                        }}>
+                                                    <span style="font-family: var(--font-mono); font-size: 0.95rem; font-weight: bold; color: var(--intent-primary); word-break: break-all; direction: rtl; text-align: left; flex: 1;">&lrm;${file}&lrm;</span>
+                                                </div>
+
+                                                ${groupCells.map((c, i) => {
+                                                    const chunkIndex = this.cells.findIndex(cell => cell.id === c.id) + 1;
+                                                    const totalChunks = this.cells.length;
+                                                    return html`
+                                                        <div style="display: flex; align-items: center; gap: 10px;">
+                                                            <input type="checkbox" style="transform: scale(1.2); margin: 0; cursor: pointer; margin-left: 2px;" 
+                                                                .checked=${c.active} 
+                                                                @click=${(e) => e.stopPropagation()}
+                                                                @change=${(e) => { e.stopPropagation(); BridgeStore.getState().toggleCellActive(c.id); }}>
+                                                            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; cursor: pointer; background: ${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}; border-radius: 4px; transition: background 0.2s; border: 1px solid ${this._activeCellId === c.id ? 'var(--border)' : 'transparent'}; flex: 1;"
+                                                                @click=${() => { this._activeCellId = c.id; this._dropdownOpen = false; }}
+                                                                onmouseover="this.style.background='var(--input-bg)'"
+                                                                onmouseout="this.style.background='${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}'">
+                                                                <span style="font-family: var(--font-mono); font-size: 0.85rem; color: ${c.active ? 'var(--text)' : 'var(--text-muted)'}; flex: 1;">Chunk ${i + 1} &gt;&gt; Select</span>
+                                                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); font-weight: bold;">(${chunkIndex}/${totalChunks})</span>
+                                                            </div>
+                                                        </div>
+                                                    `;
+                                                })}
+                                            </div>
+
+                                            <div slot="actions" style="display: flex; gap: 8px;">
+                                                <button class="btn-sm" style="background: var(--intent-primary);" title="Change Target" @click=${(e) => {
+                                                    e.stopPropagation();
                                                     if (window.openWorkspaceBrowser) {
                                                         window.openWorkspaceBrowser({
                                                             mode: 'file',
@@ -360,18 +405,22 @@ export class InSetuExtBridge extends InSetuElement {
                                                             }
                                                         });
                                                     }
-                                                }}>📁 Change Target</button>
+                                                }}>📁 Change</button>
+
                                                 ${this._fileVerificationCache[file] === true ? html`
-                                                    <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${(e) => { e.preventDefault(); window.viewSourceFile(file, true); this._dropdownOpen = false; }}>📋 View</button>
-                                                    <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => fetchAndDownloadState(file)}></insetu-async-btn>
-                                                ` : html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold; margin-left: 5px;">❓ Unknown Target</span>`}
+                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); window.viewSourceFile(file, true); this._dropdownOpen = false; }}>📋 View</button>
+                                                    <button class="btn-sm" style="background: var(--intent-highlight);" title="Download Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); fetchAndDownloadState(file); }}>⬇️ Download</button>
+                                                ` : html`
+                                                    <div title="Unknown Target" style="font-size: 1.2rem; cursor: help; padding: 4px; opacity: 0.6; text-align: center;">❓</div>
+                                                `}
                                             </div>
-                                        </div>
+                                        </insetu-card>
                                     `;
                                 })}
-                            </div>
                         </div>
                     </div>
+
+                    <!-- TEXTAREA CONTAINER -->
                     ${this.cells.length === 0 ? html`
                         <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--border); border-radius: 8px; margin: 20px; background: var(--input-bg); min-height: 300px; position: relative;"
                             @dragover=${e => e.preventDefault()}
@@ -383,18 +432,6 @@ export class InSetuExtBridge extends InSetuElement {
                             <div style="font-size: 3rem; margin-bottom: 10px;">🌉</div>
                             <h3 style="margin: 0 0 10px 0; color: var(--text);">Yomama Sync Bridge</h3>
                             <p style="color: var(--text-muted); margin-bottom: 20px; text-align: center; max-width: 400px;">Paste a patch sandwich from your LLM to begin parsing individual file blocks.</p>
-                            <button class="btn-sm" style="background: var(--intent-primary); font-weight: bold; padding: 12px 24px; font-size: 1.1rem; border-radius: 6px; z-index: 10;" @click=${async () => {
-                                if (!navigator.clipboard || !navigator.clipboard.readText) {
-                                    alert("Clipboard API requires a secure context (HTTPS or localhost).\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.");
-                                    return;
-                                }
-                                try {
-                                    const t = await navigator.clipboard.readText();
-                                    BridgeStore.getState().parseAndAppendCells(t);
-                                } catch(e) { 
-                                    alert('Clipboard access denied.\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.'); 
-                                }
-                            }}>📋 Paste from Clipboard</button>
                             <textarea style="opacity: 0.01; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; resize: none;" autofocus @paste=${e => {
                                 const text = e.clipboardData.getData('text');
                                 if (text) { e.preventDefault(); BridgeStore.getState().parseAndAppendCells(text); }
@@ -415,20 +452,38 @@ export class InSetuExtBridge extends InSetuElement {
                                     }}></textarea>
                             `)}
                         </div>
-                        <div style="padding: 15px 20px; background: var(--bg); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; z-index: 10; flex-shrink: 0;">
-                            <button class="btn-sm" style="background: var(--intent-danger); margin: 0;" @click=${() => BridgeStore.getState().clearPayload()}>🗑️ Clear All</button>
-                            <div style="display: flex; gap: 10px;">
-                                <insetu-async-btn label="🧪 Dry Run" intent="warning" .onClick=${() => this._sync(true)}></insetu-async-btn>
-                                <insetu-async-btn label="⚡ Execute Patch" intent="success" .onClick=${() => this._sync(false)}></insetu-async-btn>
-                            </div>
-                        </div>
                     `}
                 </div>
-                <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px;">
+
+                <!-- CONSOLE VIEW -->
+                <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px; overflow-y: auto; background: var(--bg);">
                     <div id="status-box" 
                         @click=${this._handleConsoleClick}
-                        style="flex: 1; width: 100%; padding: 15px; background: var(--console-bg); color: var(--console-text); border-radius: 4px; font-family: monospace; white-space: pre-wrap; border: 1px solid var(--border); overflow-y: auto; box-sizing: border-box;"
+                        style="width: 100%; max-width: 800px; margin: 0 auto; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);"
                         .innerHTML=${this.consoleOutput}></div>
+                </div>
+                <!-- FOOTER -->
+                <div style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
+                    ${this.cells.length === 0 && this.viewMode === 'input' ? html`
+                        <button @click=${async () => {
+                            if (!navigator.clipboard || !navigator.clipboard.readText) {
+                                alert("Clipboard API requires a secure context (HTTPS or localhost).\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.");
+                                return;
+                            }
+                            try {
+                                const t = await navigator.clipboard.readText();
+                                BridgeStore.getState().parseAndAppendCells(t);
+                            } catch(e) { 
+                                alert('Clipboard access denied.\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.'); 
+                            }
+                        }} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-primary); color: white;">📋 Paste from Clipboard</button>
+                    ` : this.viewMode === 'input' ? html`
+                        <button @click=${() => BridgeStore.getState().clearPayload()} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-danger); color: white;">🗑️ Clear</button>
+                        <button @click=${() => this._sync(true)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-warning); color: #000;">🧪 Dry Run</button>
+                        <button @click=${() => this._sync(false)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-success); color: white;">⚡ Patch</button>
+                    ` : html`
+                        <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
+                    `}
                 </div>
             </div>
         `;
@@ -436,23 +491,8 @@ export class InSetuExtBridge extends InSetuElement {
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuExtBridgeActions extends InSetuElement {
-    static properties = { viewMode: { type: String } };
-    static styles = [sharedStyles, css`
-        .bridge-action-btn { background: var(--btn); color: white; border: none; padding: 0 12px; font-size: 0.85rem; border-radius: 4px; cursor: pointer; font-weight: bold; margin: 0; height: 34px; display: flex; align-items: center; }
-        .bridge-action-btn:hover { background: var(--btn-hover); }
-        .bridge-action-btn.back-btn { background: var(--intent-neutral); }
-    `];
-    constructor() { super(); this.viewMode = 'input'; }
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(BridgeStore, state => { this.viewMode = state.viewMode; });
-        this.viewMode = BridgeStore.getState().viewMode;
-    }
-    _back() { BridgeStore.setState({ viewMode: 'input' }); }
     render() {
-        return this.viewMode === 'input' 
-            ? html`` 
-            : html`<button class="bridge-action-btn back-btn" @click=${this._back}>🔙 Back to Edit</button>`;
+        return html``;
     }
 }
 customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);

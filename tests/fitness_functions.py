@@ -80,6 +80,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     elif self.filename not in SUBPROCESS_WHITELIST:
                         report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, f"Subprocess call outside of designated engines.")
 
+                    if node.func.attr == 'run':
+                        is_pull = False
+                        if len(node.args) > 0 and isinstance(node.args[0], ast.List):
+                            for elt in node.args[0].elts:
+                                if isinstance(elt, ast.Constant) and 'pull' in str(elt.value):
+                                    is_pull = True
+                        if is_pull:
+                            has_timeout = any(kw.arg == 'timeout' for kw in node.keywords)
+                            if not has_timeout:
+                                report_violation("PULL_TIMEOUT_CIRCUIT_BREAKER", self.filepath, node.lineno, "Subprocess 'git pull' invoked without an explicit timeout circuit breaker.")
+
                 # Catch os.system / os.popen bypasses
                 if node.func.value.id == 'os' and node.func.attr in ('system', 'popen'):
                     if self.filename.startswith("routes_"):

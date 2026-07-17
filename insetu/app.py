@@ -175,7 +175,7 @@ def manifest():
     instance_title = cfg.get("instance_title", "inSetu Developer OS")
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
-    manifest_data["short_name"] = instance_title.split()[0] if instance_title else "Axoneme"
+    manifest_data["short_name"] = instance_title.split()[0] if instance_title else "inSetu"
 
     # Establish complete PWA isolation using local instance scopes
     pwa_scope = cfg.get("instance_pwa_scope", "default")
@@ -234,7 +234,7 @@ def api_repos(workspace_id):
     import os
     cfg = load_config(workspace_id)
     targets = cfg.get("target_repos", [])
-    cfg_path, ws_root, _ = get_workspace_physics()
+    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
 
     # Dynamically inject discovered directories into meta_map for the frontend
     for c in targets:
@@ -249,9 +249,8 @@ def api_repos(workspace_id):
                         if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                             if module not in b["meta_map"]:
                                 b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-
     return jsonify({
-        "repos": get_sister_repos(),
+        "repos": get_sister_repos(workspace_id),
         "term_port": cfg.get("term_port", 8181),
         "targets": targets,
         "virtual_contexts": cfg.get("virtual_contexts", []),

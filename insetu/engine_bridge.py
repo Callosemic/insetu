@@ -380,10 +380,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
     for target_file, blocks in parsed_structure.items():
         if target_file not in active_files or not blocks: continue
-
         # Hardware Lock: Protect Bootloader and Lifeboat
         norm_target = target_file
-        if norm_target.endswith('cli.py') or norm_target.endswith('fallback_bridge.py'):
+        if norm_target.endswith('insetu/cli.py') or norm_target.endswith('fallback_bridge.py'):
             print(f"  [!] TRANSACTION ABORTED: '{target_file}' is hardware-locked.\nThe bootloader and lifeboat must be edited manually.")
             print("." * 30)
             continue
@@ -494,14 +493,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
 
         original_content = working_content
         file_success = True
-
         for idx, b in enumerate(blocks):
             success, updated_content = apply_block_in_memory(working_content, b)
             if success: 
                 working_content = updated_content
+                print(f"  [✓] Chunk {idx + 1}/{len(blocks)} integrated successfully.")
             else:
                 if not dry_run:
-                    print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1} failed.")
+                    print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1}/{len(blocks)} failed.")
                     print(f"  [ACTION_REQUIRED: COPY_STATE |\n{target_file} ]")
                 file_success = False
                 break

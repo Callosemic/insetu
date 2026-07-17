@@ -140,9 +140,19 @@ export class InSetuMarkdownEditor extends InSetuElement {
 
         this._initializingEditor = false;
     }
-
     getCursor() { return this._view ? this._view.state.selection.main.head : 0; }
     setCursor(pos) { if(this._view) this._view.dispatch({selection: {anchor: pos}}); }
     focus() { if(this._view) this._view.focus(); }
+
+    insertAtCursor(text) {
+        if (this._view) {
+            const pos = this.getCursor();
+            this._view.dispatch({
+                changes: { from: pos, insert: text },
+                selection: { anchor: pos + text.length },
+                scrollIntoView: true
+            });
+        }
+    }
 }
 customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);

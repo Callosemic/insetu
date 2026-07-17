@@ -42,8 +42,20 @@ export class InSetuModal extends LitElement {
         }
         .header h3 { margin: 0; font-size: 1.2rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .body { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 15px; }
-        .footer { padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; }
-::slotted([slot="footer"]) { display: flex; width: 100%;
+        .footer { padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; }
+::slotted(button[slot="footer"]) { 
+    flex: 1; 
+    margin: 0 !important; 
+    padding: 15px !important; 
+    border-radius: 0 !important; 
+    font-size: 1.1rem !important; 
+    font-weight: bold !important; 
+    border: none !important; 
+    border-right: 1px solid var(--border) !important; 
+    cursor: pointer; 
+}
+::slotted(button[slot="footer"]:last-child) { 
+    border-right: none !important; 
 }
 .btn-sm { background: var(--intent-neutral); color: white; border: none; padding: 0 14px;
 font-size: 14px; border-radius: 4px; cursor: pointer; margin: 0; height: 34px; display: flex; align-items: center; justify-content: center; font-weight: bold; }

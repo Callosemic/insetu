@@ -876,13 +876,38 @@ async function saveNewFolder() {
 export function getEditorContent() {
     return FsStore.getState().fileModal.content;
 }
-
 export function setEditorContent(text) {
     FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: text } }));
 }
-
 export function insertTextAtCursor(textToInsert) {
     const state = FsStore.getState().fileModal;
+    const modalEl = document.querySelector('insetu-file-modal');
+
+    if (modalEl && modalEl.shadowRoot) {
+        const cmEditor = modalEl.shadowRoot.querySelector('insetu-markdown-editor');
+        const textarea = modalEl.shadowRoot.querySelector('textarea');
+
+        if (state.isSupportedEditor && cmEditor) {
+            // Apply the injection natively so CodeMirror preserves scroll state.
+            // The editor's native updateListener will sync the new string back to the FsStore automatically.
+            cmEditor.insertAtCursor(textToInsert);
+            return; 
+        } else if (textarea) {
+            // Manually preserve layout positions for standard textareas
+            const insertPos = textarea.selectionStart;
+            const newContent = state.content.substring(0, insertPos) + textToInsert + state.content.substring(insertPos);
+            const st = textarea.scrollTop;
+
+            textarea.value = newContent;
+            textarea.selectionStart = textarea.selectionEnd = insertPos + textToInsert.length;
+            textarea.scrollTop = st;
+
+            FsStore.setState({ fileModal: { ...state, content: newContent } });
+            return;
+        }
+    }
+
+    // Fallback if no modal is active
     FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
 }
 export async function viewSourceFile(filepath, isFS = false) {
@@ -1041,19 +1066,23 @@ export function openVirtualFile(filename, content) {
     closeBrowseModal();
     injectTextToModal(content, true, true, false, true);
 }
-
 export class InSetuFileModal extends InSetuElement {
     static properties = {
-        fileModal: { type: Object }
+        fileModal: { type: Object },
+        _isDownloading: { type: Boolean },
+        _isCopying: { type: Boolean },
+        _isSaving: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         .fullscreen-modal { position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh; }
         .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
     `];
-
     constructor() {
         super();
         this.fileModal = {};
+        this._isDownloading = false;
+        this._isCopying = false;
+        this._isSaving = false;
     }
 
     connectedCallback() {
@@ -1083,10 +1112,7 @@ export class InSetuFileModal extends InSetuElement {
                 <div class="fullscreen-wrapper">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
                         <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
-                        <div style="display: flex; gap: 10px;">
-                            <button @click=${() => window.saveModalFile()} class="btn-sm" style="background: #f59e0b; display: ${this.isDirty ? 'block' : 'none'}; margin: 0;">💾 Save</button>
-                            <button @click=${() => window.closeFileModal()} class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
-                        </div>
+                        <button @click=${() => window.closeFileModal()} class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
                     </div>
 
                     ${m.isFS ? html`
@@ -1147,8 +1173,24 @@ export class InSetuFileModal extends InSetuElement {
                                 if (override) fetchUrl = override;
                             }
                             window.bindDownloadDrag(e, m.filename, fetchUrl);
-                        }} @click=${() => window.downloadFromModal()} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: 1px solid var(--border); cursor: pointer; background: #0284c7; color: white;">⬇️ Download</button>
-                        <button @click=${() => window.copyFromModal()} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; background: #10b981; color: white;">📋 Copy</button>
+                        }} @click=${async () => {
+                            this._isDownloading = true;
+                            try { await window.downloadFromModal(); } catch(e) {}
+                            setTimeout(() => this._isDownloading = false, 2000);
+                        }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: 1px solid var(--border); cursor: pointer; background: #0284c7; color: white;">${this._isDownloading ? '✅ Downloaded' : '⬇️ Download'}</button>
+                        <button @click=${async () => {
+                            this._isCopying = true;
+                            try { await window.copyFromModal(); } catch(e) {}
+                            setTimeout(() => this._isCopying = false, 2000);
+                        }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: ${this.isDirty ? '1px solid var(--border)' : 'none'}; cursor: pointer; background: #10b981; color: white;">${this._isCopying ? '✅ Copied!' : '📋 Copy'}</button>
+
+                        ${this.isDirty ? html`
+                            <button @click=${async () => {
+                                this._isSaving = true;
+                                try { await window.saveModalFile(); } catch(e) {}
+                                this._isSaving = false;
+                            }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; background: #f59e0b; color: #000;">${this._isSaving ? '⏳...' : '💾 Save'}</button>
+                        ` : ''}
                     </div>
                 </div>
             </div>
@@ -1466,9 +1508,7 @@ export class InSetuVFSModals extends InSetuElement {
                         }}></insetu-folder-browser>
                     </div>
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${executeMove}>🚚 Move File</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${executeMove}>🚚 Move File</button>
             </insetu-modal>
 
             <insetu-modal ?open=${m.newFile?.open} titleText="Create New Workspace File" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
@@ -1477,12 +1517,9 @@ export class InSetuVFSModals extends InSetuElement {
                     <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.checkFileExtension) window.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
                     <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
                     ${window.inSetu.extensions.Registry?.executeUIHook('zone:new-file-options-lit', null) || ''}
-
                     <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-width: 0; min-height: 200px; resize: vertical;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${saveNewFile}>💾 Create & Save File</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>
             </insetu-modal>
 
             <insetu-modal ?open=${m.newFolder?.open} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
@@ -1512,11 +1549,9 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                     ` : ''}
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${saveNewFolder}>
-                        ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
-                    </button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFolder}>
+                    ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
+                </button>
             </insetu-modal>
 
             <insetu-modal ?open=${m.linkInsert?.open} titleText="Insert Link" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
@@ -1618,9 +1653,7 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
                 ${this.browserConfig?.mode === 'folder' ? html`
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-success); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${window.confirmFolderSelection}>✅ Select This Folder</button>
-                </div>
+                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${window.confirmFolderSelection}>✅ Select This Folder</button>
                 ` : ''}
             </insetu-modal>
 
@@ -1646,9 +1679,7 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                     `)}
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${window.executeQuickPackSelected}>📦 Pack Selected</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${window.executeQuickPackSelected}>📦 Pack Selected</button>
             </insetu-modal>
         `;
     }

@@ -18,13 +18,12 @@ class JobManager:
         submit_immediate_job(job_id, self.ext_name, task_name, args_json, self.workspace_id)
         return job_id
 _REGISTERED_SETTINGS_SCHEMAS = {}
-
 class SettingsManager:
     def __init__(self, ext_name, workspace_id, schema=None):
         self.ext_name = ext_name
         self.workspace_id = workspace_id
         self.filename = f"{ext_name}.settings.json"
-        self.schema = schema or []
+        self.schema = schema(workspace_id) if callable(schema) else (schema or [])
     def get(self, key, default=None):
         from insetu.utils_core import load_json_file, get_tenant_control_dir
         from pathlib import Path
