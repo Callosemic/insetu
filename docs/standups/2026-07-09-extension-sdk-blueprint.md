@@ -103,7 +103,7 @@ Before an extension is considered fully migrated to the V2 SDK, it must pass the
 | `prompts` | **Gold Standard (SDK V2)** | **Gold Standard (SDK V2)** |
 | `favorites` | **Gold Standard (SDK V2)** | **Gold Standard (SDK V2)** |
 | `ingest` | **Gold Standard (SDK V2)** | **Gold Standard (SDK V2)** |
-| `term` | **Migrated** | N/A |
+| `term` | **Migrated** | **Gold Standard (SDK V2)** |
 
 ## 9.5. Learnings from Phase 1 V2 SDK Migrations (July 10, 2026)
 In graduating the `prompts`, `favorites`, and `ingest` extensions to full SDK compliance, we established the following critical guardrails to prevent regressions:

@@ -33,8 +33,14 @@ MY_SETTINGS = [
         "description": "Global API key for this extension."
     }
 ]
-
-my_ext_bp = InSetuExtension('my_ext', __name__, schema=MY_SCHEMA, settings_schema=MY_SETTINGS)
+my_ext_bp = InSetuExtension(
+    'my_ext', 
+    __name__, 
+    title="My Custom Extension", 
+    description="Provides streamlined custom feature capabilities to the workspace context.", 
+    schema=MY_SCHEMA, 
+    settings_schema=MY_SETTINGS
+)
 ```
 
 ### The Extension Context (`ctx`)
@@ -68,12 +74,11 @@ When subscribing to OS lifecycle events via `@hooks.on()`, always cross-referenc
 
 ## 3. Frontend: The `InSetuElement` Contract
 All UI components must extend the `InSetuElement` Lit wrapper. 
-
 ### Unidirectional Data Flow (UDF) & State
-Never import `createStore` from `zustand` directly. Use `createExtensionStore`, which automatically scopes `localStorage` keys by `workspace_id` to prevent cross-tenant bleeding.
+Never import `createStore` from `zustand` directly. Use `createExtensionStore`, which automatically scopes `localStorage` keys by `workspace_id` to prevent cross-tenant bleeding. To create scoped, reactive boundaries for individual store keys without binding entire data structures, utilize the `createIsolatedSlice(store, sliceKey)` utility.
 
 ```javascript
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, createIsolatedSlice, InSetuElement } from '../sdk.js';
 
 export const MyStore = createExtensionStore('MyExt', {
     items: [],

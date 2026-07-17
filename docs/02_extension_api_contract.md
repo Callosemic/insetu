@@ -34,16 +34,26 @@ Extensions must expose a static configuration payload using the Declarative Sche
 window.ExtensionRegistry.registerExtension('ext_name', {
     name: "Extension Title",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'file',
+            id: 'ext-action-id',
+            label: 'Action Label',
+            icon: '🔧',
+            intent: 'primary',
+            order: 20,
+            match: (data) => data.filepath && data.filepath.endsWith('.ext'),
+            onClick: (data, e) => { ... },
+            asyncAction: async (data, e) => { ... }
+        }
+    ],
     layoutSlots: [
         { slot: "primary-navigation", id: "my_tab", label: "My Tab", order: 5 },
         { slot: "sub-navigation", targetParent: "my_tab", id: "my_subtab", label: "Sub Tab", order: 1, component: "insetu-ext-component" }
     ],
     settingsActions: [
         { id: 'config_id', label: 'Settings Label', icon: '⚙️', onClick: () => { ... } }
-    ],
-    uiHooks: {
-        'zone:file-card-actions': (data) => { ... }
-    }
+    ]
 });
 
 ```
@@ -57,7 +67,6 @@ window.ExtensionRegistry.registerExtension('ext_name', {
 
 When triggered, the hook passes an \`ExecutionContext\` payload to the callback.
         * **Defined Zones:** 
-            * `zone:file-card-actions`: Callback receives `{ filepath, repo, isFS }`. Must return a declarative Lit `html` template string (or `null`), replacing legacy imperative `document.createElement` node injections.
             * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
             * `zone:new-file-modal`: Callback receives `{ basePath }`.
             * `zone:settings-menu`: Callback receives `{ currentConfig, saveConfigFn }`, allowing extensions to mount configuration inputs (e.g., API keys, default behaviors) directly into the OS Settings modal.

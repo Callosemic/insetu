@@ -40,6 +40,9 @@ To prevent DOM bloat and spaghetti code, the creation of UI elements must strict
 * **Rule 2: Extension Canvases (JS Template Strings):** Extensions (e.g., Research, Tracker) must inject their primary fullscreen layouts into the OS Skeleton using static `innerHTML` template strings during their registration phase (`ExtensionRegistry.registerTab`). This keeps `index.html` strictly agnostic to domain-specific tools.
 * **Rule 3: Transient & Data-Driven Elements (Declarative Templates & UI Factory):** Anything that appears temporarily, layers over the screen, or iterates based on dynamic data (Modals, Dropdowns, Toast notifications, File/Task Cards) MUST be rendered declaratively within LitElement `html` templates or built via the stateless `UIFactory`.
 Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation, as is using imperative `document.createElement()` calls within graduated LitElement extensions.
+* **The Centralized Filter Dropdown Primitive (`<insetu-filter-dropdown>`):** To enforce the DRY centralization principle and guarantee uniform click-outside handling across the interface, all horizontal toolbar filters must wrap their option pills inside the `<insetu-filter-dropdown>` component rather than wiring discrete window click interception events.
+
+* **Slotted Modal Action Uniformity (`slot="footer"`):** To prevent structural layout padding drift, view panels must pass footer action controls directly into the `<button slot="footer">` configuration track rather than enclosing rows within custom layout `div` blocks. The modal shadow DOM isolates button grid alignment, uniform text transformations, and lateral dividing borders automatically.
 
 ## 7. The Component Graduation Checklist (Compliance Guardrails)
 Before a Web Component is considered fully compliant and "Graduated", it must pass the following strict constraints:

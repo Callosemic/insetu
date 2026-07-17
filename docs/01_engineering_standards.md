@@ -7,7 +7,8 @@
 
 ## 1. Single Source of Truth (SSOT) & Spatial Physics
 Logic, schemas, and configurations must exist in exactly one place. Redundancy breeds silent desynchronization across the local-first ecosystem.
-* **The Configuration SSOT**: The `.insetu/profiles/*/config.json` is the absolute authority on workspace topologies, routing targets, and ignore rules. The OS kernel must never assume default namespaces or hardcode repository paths; it must read dynamically from the active profile.
+* **The Configuration SSOT**: The `.insetu/profiles/*/config.json` is the absolute authority on workspace topologies, routing targets, and ignore rules. The OS kernel must never assume default namespaces or hardcode repository paths; it must read dynamically from the active profile. Any operations mutating or re-indexing workspace environments must explicitly invalidate centralized configuration caches (`_MUTATED_CONFIG_CACHE`) to prevent stale memory reads.
+* **Cache Invalidation Mandate**: Any service, extension manager, or route handler that alters application settings or writes configuration structures to disk must systematically clear internal memory caches to prevent desynchronization between active data stores and spatial realities.
 * **The Cartography Contract**: The codebase is not a database. `insetu/cartographer.py` determines file inclusion dynamically via a Single Source of Truth (`get_valid_workspace_files()`). Duplicating `os.walk` exclusion logic (e.g., ignoring `.git` or `node_modules`) inline in secondary scripts is strictly forbidden.
     * *The Omniscient Exception (Yomama):* The Sync Bridge inherently bypasses strict Cartography filters to retain its ability to patch arbitrary filetypes not yet mapped to the configuration (e.g., Genesis patches). However, its sweeping logic must still be centralized in `utils_core.py` (e.g., via a dedicated `get_omniscient_workspace_files()` method) to enforce global system bans (like protecting `.git`) without duplicating raw `os.walk` loops inside route handlers.
 * **DRY Utility Centralization**: Any structural logic required by multiple engines (e.g., resolving absolute workspace paths, sanitizing directory names into `dot_` prefixes, parsing JSON safely) MUST be centralized in `insetu/utils_core.py`.
@@ -51,20 +52,29 @@ The frontend UI must be highly resilient, reactive, and entirely decoupled from 
 * **The "Full Refresh" Anti-Pattern**: UI state desynchronization (ghost tickets, orphaned modals) indicates a failure of the UDF contract. The system must natively heal its own state tree asynchronously without requiring the user to execute manual browser reloads.
 * **The Low Memory Footprint Mandate**: The client layer must remain low-overhead to protect performance on low-spec and mobile platforms. The frontend is strictly banned from executing memory-intensive text chunking, holding massive multi-megabyte string buffers, or iterating over large regex arrays on raw text. All parsing, slicing, and segmentation operations must be offloaded to backend pipeline processes.
 
-### 4.1 Strict State Immutability & Reference Cloning
+### 4.1 Polymorphic Presentation Purity (The Card Action Mandate)
+Custom dashboard extensions are strictly prohibited from writing custom contextual button rows or injecting free-form template strings directly into file list elements. All contextual entity interactions must register as structured `entityActions` configurations within the global registry to guarantee unified visual alignment and preserve layout integrity across workspace profiles.
+### 4.2 Strict State Immutability & Reference Cloning
 When pulling complex objects or arrays from a Zustand slice via `getState()`, the raw object references must be treated as completely read-only. Modifying a nested key on an existing reference and feeding it back to `setState()` preserves identity parity and silences store broadcasts. 
 
 You MUST always enforce pristine cloning before executing mutations:
 * **Correct:** `const updatedManifest = { ...manifest };`
 * **Incorrect:** `manifest[bucket].files.push(filepath); AppStore.setState({ manifest });`
 
+### 4.3 Multi-Pass UI Layout Assembly (Hoisting Guardrail)
+To prevent runtime render omissions inside the zero-bundler Single Page Application layout engine, the layout compilation routine must execute across a segmented multi-pass sequence. The layout assembly layer must first process and guarantee the physical mounting of all top-level Primary Navigation tab shells before attempting to register or mount dependent sub-navigation tracks, slot components, or action dropdown buttons. Extensions must never assume immediate sibling presence during script evaluation.
+
 ### 4.5 Component & Communication Isolation
-All newly introduced system capabilities must implement the `InSetuExtension` framework on the backend and extend `InSetuElement` on the frontend[span_0](start_span)[span_0](end_span). Direct manipulation of the HTTP event loop for long-running processes or raw `fetch` interactions outside the `this.api` boundary is strictly prohibited[span_1](start_span)[span_1](end_span).
+All newly introduced system capabilities must implement the `InSetuExtension` framework on the backend and extend `InSetuElement` on the frontend. Direct manipulation of the HTTP event loop for long-running processes or raw `fetch` interactions outside the `this.api` boundary is strictly prohibited.
+* **Stateless Shell Demolition & Namespacing Rule**: Frontend extension views and dashboard components must adhere strictly to the `insetu-ext-` tag prefix convention. The core workspace router executes an agnostic prefix sweep to evict elements during a tenant hot-swap. Hardcoding specific extension element tags or class definitions inside core micro-kernel reload scripts is strictly banned to preserve absolute Inversion of Control.
+
+* **Dynamic Code-Splitting and Lazy-Loading**: Complex third-party asset libraries or language extensions (e.g., CodeMirror language grammars) must be imported dynamically (`await import(...)`) inside component lifecycles rather than bundled statically into top-level layout frameworks, keeping initial presentation pathways lean and responsive.
 
 ## 5. Asynchronous I/O & The Event Loop
 inSetu runs via a local Python web server (Flask/Uvicorn). You must never paralyze the local event loop.
 * **The I/O Block Ban**: Heavy workspace sweeps (e.g., parsing 500 files for Context Generation, executing blocking Git diff aggregations, spinning up cartography maps) MUST NOT block the main HTTP thread. All physical disk modifications, deletions, and massive multi-file collections must be executed through asynchronous off-thread background worker queues or pipelines.
 * **Streaming Over Polling**: Offload these heavy generators into asynchronous background task queues. The frontend should connect via WebSockets or Server-Sent Events (SSE) to receive non-blocking, real-time status pulses (`"Compressing payload..."`, `"Mapping context..."`) rather than hanging on a 15-second HTTP request.
+* **Full-Duplex Socket Isolation**: Extensions introducing persistent bi-directional streams (e.g., interactive PTY shells or real-time logs) must hook natively into the `flask-sock` interface exposed by the micro-kernel. WebSockets are strictly prohibited from spawning unmanaged long-running loops outside the ASGI thread coordinator, protecting the HTTP event loop from socket starvation.
 
 ## 6. The Yomama Patch Protocol (LLM Guardrails)
 When collaborating with LLMs on the inSetu codebase, all file modifications MUST use the strict Genesis/Sync Bridge protocol. JSON patches are banned.

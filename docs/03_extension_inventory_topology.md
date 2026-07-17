@@ -12,20 +12,20 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`app.py` / `engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine.
 * **`utils_core.py` (The Cartographer):** The Single Source of Truth for resolving spatial physics, file indexing, and system paths.
 * **`insetu/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
-* **`insetu.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps.
+* **`insetu.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps. It incorporates an integrated native filesystem watcher (`watchdog`) to automatically record unmanaged non-Git directory mutations into an SQLite fixture ledger for differential context compilation.
 
 ---
 ## 2. Active Extensions (V1 Finalized)
 These are fully built and compliant extensions currently operating within the system. Note that all domain extensions now reside physically in the `insetu/extensions/` and `insetu/static/js/extensions/` directories to preserve the micro-kernel boundary.
-
 ### A. Git Operations (`engine_git.py`)
-* **Status:** Active Extension (Fully Decoupled from Core Kernel space via lifecycle subscribers).
-* **Role:** Version control, diff generation, and repository synchronization.
+* **Status:** Active Extension (Decoupled from Core Kernel, Upgraded with Dynamic Settings).
+* **Role:** Version control, diff generation, repository reconciliation strategies, and workspace sweeping.
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** Ephemeral (reads direct `.git/` history).
+* **Data Containment:** Ephemeral (direct `.git/` inspection) with configuration states bound to tenant settings databases.
 * **Injection Surfaces:**
-    * UI Hooks: `zone:file-card-actions` to display diff statuses.
-    * Core Hooks: `@hooks.on('pre_compile')` to handle JIT background diff cache assembly.
+    * Polymorphic Cards: Registers `git-push` and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
+    * Core Hooks: `@hooks.on('compile_contexts')` to trigger JIT background diff asset compilation.
+    * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`).
 ### B. Citations (`engine_citations.py`)
 * **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Manages the academic reference library, bibliography parsing, and citation generation.
@@ -74,9 +74,10 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
 ### I. Terminal Interface (`engine_term.py`)
-* **Status:** Active (UI-Only Scaffold, Upgraded to SDK V2).
-* **Role:** Manages the isolated `ttyd` interactive terminal canvas.
+* **Status:** Active Extension (Fully Graduated to SDK V2).
+* **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js.
 * **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Ephemeral stream contexts.
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
 
