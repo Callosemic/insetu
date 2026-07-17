@@ -8,7 +8,39 @@ from insetu.sdk import InSetuExtension
 from insetu.utils_core import get_workspace_physics
 from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.")
+
+def get_headless_git_env():
+    """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
+    import os
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    return env
+
+def get_git_settings_schema(workspace_id):
+    """Dynamically generates distinct setting configuration slots for every tracked repository."""
+    from insetu.utils_core import load_config
+    cfg = load_config(workspace_id)
+    schema = []
+    for repo in cfg.get("target_repos", []):
+        repo_dir = repo.get("repo_dir")
+        if not repo_dir or repo.get("exclude_from_diffs") or repo.get("archive_type") == "media-vault":
+            continue
+        schema.append({
+            "id": f"strategy_{repo_dir}",
+            "title": f"Pull Strategy: {repo.get('title', repo_dir)}",
+            "type": "select",
+            "options": [
+                {"value": "rebase", "label": "Rebase (--rebase)"},
+                {"value": "merge", "label": "Merge (--no-rebase)"},
+                {"value": "ff_only", "label": "Fast-Forward Only (--ff-only)"},
+                {"value": "runtime", "label": "🤔 Decide at Runtime"}
+            ],
+            "default": "rebase",
+            "description": f"Reconciliation strategy for branch divergence inside the '{repo_dir}' workspace target."
+        })
+    return schema
+
+git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=get_git_settings_schema)
 __depends__ = []
 @hooks.on('compile_contexts')
 def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
@@ -329,18 +361,18 @@ def _background_sweep_push(job_id, workspace_id, selections, message):
             # Guarantee topology is perfectly mapped before staging
             from insetu.cartographer import map_repositories
             map_repositories(workspace_id)
-
             subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True)
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
+            git_env = get_headless_git_env()
 
             try:
-                subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+                subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
             except subprocess.CalledProcessError as e:
                 err_out = e.stderr or e.stdout
                 err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else str(err_out)
 
                 if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                    subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True)
+                    subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
                 else:
                     raise e
 
@@ -434,19 +466,19 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
             else:
                 # Fallback to sweeping the whole repo if no specific diff bucket was targeted
                 files_to_stage.add(filepath)
-
     if not files_to_stage:
         update_immediate_job_status(job_id, 'failed', "No files found to commit. Working tree is clean.", workspace_id=workspace_id)
+        return
+
+    # Pre-flight check: verify a remote actually exists before attempting to push
+    remote_check = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+    if not remote_check.stdout.strip():
+        update_immediate_job_status(job_id, 'failed', f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.", workspace_id=workspace_id)
         return
 
     try:
         from insetu.cartographer import map_repositories
         map_repositories(workspace_id)
-
-        if os.path.exists(Path(repo_path).joinpath("CODE_INDEX.md").as_posix()): files_to_stage.add("CODE_INDEX.md")
-        if os.path.exists(Path(repo_path).joinpath("docs", "CODE_INDEX.md").as_posix()): files_to_stage.add("docs/CODE_INDEX.md")
-        for m_dir in cfg.get("managed_dirs", []):
-            if os.path.exists(Path(repo_path).joinpath(m_dir).as_posix()): files_to_stage.add(f"{m_dir}/")
 
         update_immediate_job_status(job_id, 'processing', f"Committing and pushing {repo}...", workspace_id=workspace_id)
         subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
@@ -456,9 +488,10 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
         if status_res.stdout.strip():
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
             committed = True
+        git_env = get_headless_git_env()
 
         try:
-            push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True)
+            push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
             output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
         except subprocess.CalledProcessError as e:
             err_out = e.stderr or e.stdout
@@ -466,7 +499,7 @@ def _background_git_push(job_id, workspace_id, repo, message, diff_file):
 
             # Auto-heal missing upstream branches
             if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True)
+                push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
                 output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
             else:
                 raise e
@@ -567,7 +600,14 @@ def api_git_status(ctx):
                 except Exception:
                     ahead_behind = "☁️ Local Only" # No upstream configured or no commits yet
 
-                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind}
+                try:
+                    status_res = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=repo_path)
+                    # Detect unmerged states: DD, AU, UD, UA, DU, AA, UU
+                    conflicts = [line[3:] for line in status_res.stdout.splitlines() if len(line) >= 2 and line[:2] in ('DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU')]
+                except Exception:
+                    conflicts = []
+
+                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind, "conflicts": conflicts}
             else:
                 repos_status[repo_dir] = {"is_git": False}
         except Exception:
@@ -613,30 +653,63 @@ def _background_git_fetch_preview(job_id, workspace_id, repo):
     update_immediate_job_status(job_id, 'processing', f"Fetching remote for {repo}...", workspace_id=workspace_id)
     ctx = ExtensionContext('git', workspace_id)
     repo_path = ctx.resolve_path(repo)
-
     for c in ctx.config.get("target_repos", []):
         if c.get("repo_dir") == repo and c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
             break
     try:
-        # Fetch and prune dead tracking branches to prevent ghost upstream checks
-        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True)
+        # Pre-flight check: intercept active rebase indicators
+        from pathlib import Path
+        git_dir = Path(repo_path) / '.git'
+        if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
+            update_immediate_job_status(job_id, 'failed', f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.", workspace_id=workspace_id)
+            return
 
+        # Pre-flight check: verify a remote actually exists
+        remote_check = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+        if not remote_check.stdout.strip():
+            update_immediate_job_status(job_id, 'failed', f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.", workspace_id=workspace_id)
+            return
+        # Prevent SSH prompts from hanging the background process indefinitely
+        git_env = get_headless_git_env()
+
+        # Fetch and prune dead tracking branches to prevent ghost upstream checks
+        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
         # Check if an upstream branch is actually configured
         up_res = subprocess.run(['git', 'rev-parse', '--verify', '@{u}'], cwd=repo_path, capture_output=True)
         if up_res.returncode != 0:
-            update_immediate_job_status(job_id, 'completed', "No upstream branch configured for the current branch.", artifact={"has_changes": False}, workspace_id=workspace_id)
+            curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+            if curr_branch:
+                err_msg = f"No upstream tracking branch configured for '{curr_branch}'.\nPlease run this in your terminal:\n\ngit branch --set-upstream-to=origin/{curr_branch} {curr_branch}"
+            else:
+                err_msg = "You are in a detached HEAD state. Cannot pull."
+            update_immediate_job_status(job_id, 'failed', err_msg, workspace_id=workspace_id)
             return
+        # Gather the incoming commits and file statistics using the robust branch reference name
+        curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+        remote_target = f"origin/{curr_branch}" if curr_branch else "@{u}"
 
-        # Gather the incoming commits and file statistics
-        log_res = subprocess.run(['git', 'log', '..@{u}', '--oneline'], cwd=repo_path, capture_output=True, text=True)
-        stat_res = subprocess.run(['git', 'diff', '--stat', '..@{u}'], cwd=repo_path, capture_output=True, text=True)
+        log_res = subprocess.run(['git', 'log', f'HEAD..{remote_target}', '--oneline'], cwd=repo_path, capture_output=True, text=True)
+        stat_res = subprocess.run(['git', 'diff', '--stat', f'HEAD..{remote_target}'], cwd=repo_path, capture_output=True, text=True)
 
         incoming_log = log_res.stdout.strip()
         if not incoming_log:
+            # Fallback to an outright verification if git tracking is desynced but upstream reports commits
+            ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path)
+            parts = ab_res.stdout.strip().split()
+            behind_count = int(parts[1]) if len(parts) == 2 else 0
+
+            if behind_count > 0:
+                incoming_log = f"[{behind_count} Incoming commits detected via tracking ref mismatch]"
+                stat_res_text = "[Run pull to reconcile divergence]"
+            else:
+                stat_res_text = ""
+
+        if not incoming_log:
             update_immediate_job_status(job_id, 'completed', "Already up to date.", artifact={"has_changes": False}, workspace_id=workspace_id)
         else:
-            msg = f"Incoming Commits:\n{incoming_log}\n\nFiles Changed:\n{stat_res.stdout.strip()}"
+            stat_out = stat_res.stdout.strip() if 'stat_res_text' not in locals() else stat_res_text
+            msg = f"Incoming Commits:\n{incoming_log}\n\nFiles Changed:\n{stat_out}"
             update_immediate_job_status(job_id, 'completed', msg, artifact={"has_changes": True}, workspace_id=workspace_id)
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
@@ -651,8 +724,7 @@ def api_git_fetch_preview(ctx):
     if not repo: return jsonify({"error": "Repo required"}), 400
     job_id = ctx.jobs.submit("fetch_preview_task", repo=repo)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-def _background_git_pull(job_id, workspace_id, repo):
+def _background_git_pull(job_id, workspace_id, repo, strategy=None):
     from insetu.sdk import ExtensionContext
     import subprocess
     import os
@@ -660,27 +732,64 @@ def _background_git_pull(job_id, workspace_id, repo):
     update_immediate_job_status(job_id, 'processing', f"Pulling {repo}...", workspace_id=workspace_id)
     ctx = ExtensionContext('git', workspace_id)
     repo_path = ctx.resolve_path(repo)
-
     for c in ctx.config.get("target_repos", []):
         if c.get("repo_dir") == repo and c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
             break
+    # Query the repository-namespaced setting from the dynamic schema
+    configured_strategy = ctx.settings.get(f"strategy_{repo}", "rebase")
+
+    if configured_strategy == "runtime":
+        # If set to runtime, allow the interactive UI choice parameter to take precedence
+        if not strategy or strategy == "runtime":
+            strategy = "rebase" # Fall back to safe baseline if modal selection was skipped
+    else:
+        strategy = configured_strategy
+    # Absolute Guardrail: Ensure a valid reconciliation flag is always present,
+    # catching any nulls or empty strings leaking from the settings JSON.
+    if strategy not in ["rebase", "merge", "ff_only"]:
+        strategy = "rebase"
+
+    # Pre-flight check: intercept active rebase indicators
+    from pathlib import Path
+    git_dir = Path(repo_path) / '.git'
+    if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
+        update_immediate_job_status(job_id, 'failed', f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.", workspace_id=workspace_id)
+        return
+
+    curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+    remote = subprocess.run(['git', 'config', f'branch.{curr_branch}.remote'], cwd=repo_path, capture_output=True, text=True).stdout.strip() or 'origin'
+    merge = subprocess.run(['git', 'config', f'branch.{curr_branch}.merge'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+    remote_branch = merge.replace('refs/heads/', '') if merge.startswith('refs/heads/') else curr_branch
+
+    cmd = ['git', 'pull']
+    if strategy == "rebase": cmd.append('--rebase')
+    elif strategy == "merge": cmd.append('--no-rebase')
+    elif strategy == "ff_only": cmd.append('--ff-only')
+    # Explicitly target the remote and branch to prevent ambiguous configuration failures
+    if remote and remote_branch:
+        cmd.extend([remote, remote_branch])
+    git_env = get_headless_git_env()
 
     try:
-        res = subprocess.run(['git', 'pull'], cwd=repo_path, check=True, capture_output=True, text=True)
-        update_immediate_job_status(job_id, 'completed', res.stdout.strip(), workspace_id=workspace_id)
+        # Enforce a strict 30-second circuit breaker to prevent zombie network deadlocks
+        res = subprocess.run(cmd, cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
+        # Combine stdout and stderr to capture fetch logs and rebase outputs
+        output = res.stdout.strip() + "\n" + res.stderr.strip()
+        update_immediate_job_status(job_id, 'completed', output.strip(), workspace_id=workspace_id)
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         update_immediate_job_status(job_id, 'failed', err_str, workspace_id=workspace_id)
 
 register_callback("git", "pull_task", _background_git_pull)
-
 @git_bp.route('pull', methods=['POST'])
 def api_git_pull(ctx):
-    repo = ctx.req.json.get('repo')
+    data = ctx.req.json or {}
+    repo = data.get('repo')
+    strategy = data.get('strategy')
     if not repo: return jsonify({"error": "Repo required"}), 400
-    job_id = ctx.jobs.submit("pull_task", repo=repo)
+    job_id = ctx.jobs.submit("pull_task", repo=repo, strategy=strategy)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def _background_git_checkout(job_id, workspace_id, repo, branch, create_new):
     from insetu.sdk import ExtensionContext

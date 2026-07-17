@@ -70,7 +70,10 @@ export class InSetuExtTracker extends InSetuElement {
         searchQuery: { type: String },
         _modals: { type: Object },
         _yamlExpanded: { type: Boolean },
-        _showFilters: { type: Boolean }
+        _showFilters: { type: Boolean },
+        _isSaving: { type: Boolean },
+        _isCopying: { type: Boolean },
+        _isDownloading: { type: Boolean }
     };
 static styles = [
 sharedStyles,
@@ -126,6 +129,9 @@ constructor() {
         this._modals = { new: false, edit: false };
         this._yamlExpanded = false;
         this._showFilters = false;
+        this._isSaving = false;
+        this._isCopying = false;
+        this._isDownloading = false;
         this._docClickListener = this._handleDocumentClick.bind(this);
 }
     connectedCallback() {
@@ -360,9 +366,11 @@ if (this.allRepos.includes(pinnedRepo)) {
                     ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { placeholder: 'Tags (comma separated, e.g. frontend, critical)', style: 'margin-bottom: 10px;' })}
                     ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; margin-bottom: 10px; min-height: 150px;' })}
                 </div>
-                <div slot="footer" style="display: flex; width: 100%;">
-                    <insetu-async-btn style="flex: 1; display: block; width: 100%;" label="💾 Create Ticket" intent="primary" .onClick=${this._saveNewTask.bind(this)}></insetu-async-btn>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${async (e) => {
+                    this._isSaving = true;
+                    try { await this._saveNewTask(); } catch(err) {}
+                    this._isSaving = false;
+                }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
             </insetu-modal>
         `;
     }
@@ -680,12 +688,24 @@ ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
                         </insetu-markdown-editor>
                     </div>
                 </div>
-                <div slot="footer" style="display: flex; width: 100%;">
-                    <button class="btn-sm" style="flex: 0 0 auto; padding: 15px 20px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
-                    <insetu-async-btn style="flex: 1; border-right: 1px solid var(--border);" label="📋 Copy" intent="success" .onClick=${() => fetchAndCopy(editTaskForm.filepath)}></insetu-async-btn>
-                    <insetu-async-btn style="flex: 1; border-right: 1px solid var(--border);" label="⬇️ Download" intent="neutral" .onClick=${() => fetchAndDownloadState(editTaskForm.filepath)}></insetu-async-btn>
-                    <insetu-async-btn style="flex: 1; display: ${this._isDirty() ? 'block' : 'none'};" label="💾 Save & Sync Ticket" intent="primary" .onClick=${this._saveEditTask.bind(this)}></insetu-async-btn>
-                </div>
+                <button slot="footer" style="flex: 0 0 auto; background: var(--intent-danger); color: white;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
+                <button slot="footer" style="background: var(--intent-success); color: white;" @click=${async () => {
+                    this._isCopying = true;
+                    try { await fetchAndCopy(editTaskForm.filepath); } catch(err) {}
+                    setTimeout(() => this._isCopying = false, 2000);
+                }}>${this._isCopying ? '✅ Copied!' : '📋 Copy'}</button>
+                <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${async () => {
+                    this._isDownloading = true;
+                    try { await fetchAndDownloadState(editTaskForm.filepath); } catch(err) {}
+                    setTimeout(() => this._isDownloading = false, 2000);
+                }}>${this._isDownloading ? '✅ Downloaded' : '⬇️ Download'}</button>
+                ${this._isDirty() ? html`
+                    <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${async () => {
+                        this._isSaving = true;
+                        try { await this._saveEditTask(); } catch(err) {}
+                        this._isSaving = false;
+                    }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
+                ` : ''}
             </insetu-modal>
 `;
 }

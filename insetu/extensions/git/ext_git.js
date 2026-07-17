@@ -206,6 +206,11 @@ disconnectedCallback() {
         window.removeEventListener('git-diffs-refreshed', this._boundRefreshSweep);
 }
 
+    onWorkspaceChanged(newWorkspaceId) {
+        this._fetchSweepStatusSilent();
+        GitStore.getState().fetchStatus();
+    }
+
     async _handleOpenPush(e) {
         const { diffFile, repo } = e.detail;
         this.currentPushDiffFile = diffFile;
@@ -559,16 +564,6 @@ ${(() => {
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${this.previewModalOpen} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
-                    <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
-                </div>
-                <div slot="footer" style="display: flex; width: 100%;">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer; border-right: 1px solid var(--border); border-radius: 0;" @click=${() => this.previewModalOpen = false}>Cancel</button>
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer; border-radius: 0;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
-                </div>
-            </insetu-modal>
         `;
     }
 }
@@ -584,7 +579,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
         pullMessage: { type: String },
         previewModalOpen: { type: Boolean },
         previewRepo: { type: String },
-        previewMessage: { type: String }
+        previewMessage: { type: String },
+        _runtimeStrategy: { type: String },
+        _repoStrategies: { type: Object }
     };
     static styles = [sharedStyles];
 
@@ -600,6 +597,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
         this.previewModalOpen = false;
         this.previewRepo = '';
         this.previewMessage = '';
+        this._runtimeStrategy = 'rebase';
+        this._repoStrategies = {};
     }
     connectedCallback() {
         super.connectedCallback();
@@ -614,27 +613,55 @@ export class InSetuExtGitCtrl extends InSetuElement {
         this.allRepos = AppStore.getState().allRepos || [];
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
+        this._loadSettings();
+    }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        GitStore.getState().fetchStatus();
+        this._loadSettings();
+    }
+    async _loadSettings() {
+        try {
+            const res = await this.api.get('settings');
+            if (res.ok) {
+                const data = await res.json();
+                const strategies = {};
+                Object.keys(data).forEach(key => {
+                    if (key.startsWith('strategy_')) {
+                        const repo = key.replace('strategy_', '');
+                        strategies[repo] = data[key];
+                    }
+                });
+                this._repoStrategies = strategies;
+            }
+        } catch(e) { console.error("Failed to load extension settings", e); }
     }
     async _previewPull(repo) {
         try {
+            this.pullMessage = `Initializing fetch for ${repo}...`;
+            this.activePullJobId = 'starting';
+
             const res = await this.api.post('fetch_preview', { repo });
-            if (!res.ok) throw new Error((await res.json()).error || "Fetch failed");
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Fetch failed");
+            }
             const data = await res.json();
 
             this.activePullJobId = data.job_id;
             this.pullMessage = `Fetching remote for ${repo}...`;
-
             this.api.pollJob(data.job_id, {
-                onProgress: (msg) => this.pullMessage = msg,
+                onProgress: (msg) => {
+                    this.pullMessage = msg;
+                    if (window.setGlobalStatus) window.setGlobalStatus(`⏳ ${msg}`, null);
+                },
                 onComplete: (statusData) => {
                     this.activePullJobId = null;
-                    if (statusData.artifact && statusData.artifact.has_changes) {
-                        this.previewRepo = repo;
-                        this.previewMessage = statusData.message;
-                        this.previewModalOpen = true;
-                    } else {
-                        alert(`ℹ️ ${repo}: ${statusData.message || 'Already up to date.'}`);
-                    }
+                    if (window.setGlobalStatus) window.setGlobalStatus(`✅ Fetch complete.`, 2000);
+
+                    this.previewRepo = repo;
+                    this.previewMessage = statusData.message || 'Already up to date.';
+                    this.previewModalOpen = true;
                 },
                 onError: (err) => {
                     this.activePullJobId = null;
@@ -642,13 +669,17 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 }
             });
         } catch (err) {
+            this.activePullJobId = null;
             alert(`Network error fetching ${repo}: ${err.message}`);
         }
     }
     async _initRepo(repo) {
         try {
             const res = await this.api.post('init', { repo });
-            if (!res.ok) throw new Error((await res.json()).error || "Init failed");
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Init failed");
+            }
             const data = await res.json();
 
             this.activePullJobId = data.job_id;
@@ -670,21 +701,32 @@ export class InSetuExtGitCtrl extends InSetuElement {
             alert(`Network error initializing ${repo}: ${err.message}`);
         }
     }
-
     async _executePull() {
         const repo = this.previewRepo;
         this.previewModalOpen = false;
+
+        const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
+        const strategy = (currentStrategy === 'runtime') ? this._runtimeStrategy : currentStrategy;
         try {
-            const res = await this.api.post('pull', { repo });
-            if (!res.ok) throw new Error((await res.json()).error || "Pull failed");
+            this.pullMessage = `Initializing pull for ${repo}...`;
+            this.activePullJobId = 'starting';
+
+            const res = await this.api.post('pull', { repo, strategy });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Pull failed");
+            }
             const data = await res.json();
             this.activePullJobId = data.job_id;
             this.pullMessage = `Pulling ${repo}...`;
-
             this.api.pollJob(data.job_id, {
-                onProgress: (msg) => this.pullMessage = msg,
+                onProgress: (msg) => {
+                    this.pullMessage = msg;
+                    if (window.setGlobalStatus) window.setGlobalStatus(`⏳ ${msg}`, null);
+                },
                 onComplete: (statusData) => {
                     this.activePullJobId = null;
+                    if (window.setGlobalStatus) window.setGlobalStatus(`✅ Pull complete.`, 2000);
                     alert(`✅ Pull successful for ${repo}\n\n${statusData.message}`);
                     GitStore.getState().fetchStatus();
                 },
@@ -700,7 +742,10 @@ export class InSetuExtGitCtrl extends InSetuElement {
     async _checkoutBranch(repo, branch, createNew = false) {
         try {
             const res = await this.api.post('checkout', { repo, branch, create_new: createNew });
-            if (!res.ok) throw new Error((await res.json()).error || "Checkout failed");
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Checkout failed");
+            }
             const data = await res.json();
 
             this.activePullJobId = data.job_id; // Reuse the loading spinner state variable
@@ -742,11 +787,16 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     }
                     const currentBranch = status.current || 'unknown';
                     const syncStatus = status.sync_status ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border); margin-left: 5px;">${status.sync_status}</span>` : '';
+                    const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
+                    const conflicts = status.conflicts || [];
+                    const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">⚠️ ${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
 
                     return html`
-                        <insetu-card titleText=${repo} descriptionText="Current Branch: ${currentBranch}" icon="📦" intentColor="var(--intent-neutral)">
+                        <insetu-card titleText=${repo} descriptionText="Current Branch: ${currentBranch}" icon="📦" intentColor="${conflicts.length > 0 ? 'var(--intent-danger)' : 'var(--intent-neutral)'}">
                             <span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${currentBranch}</span>
                             ${syncStatus}
+                            ${conflictBadge}
+
                             <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</button>
                             <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => {
                                 this.activeRepo = repo;
@@ -782,6 +832,33 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     </div>
                 </div>
             </insetu-modal>
+
+            <insetu-modal ?open=${this.previewModalOpen} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
+
+                    ${(() => {
+                        const currentStrategy = this._repoStrategies?.[this.previewRepo] || 'rebase';
+                        if (currentStrategy === 'runtime') {
+                            return html`
+                                <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
+                                    <label style="font-size: 0.85rem; color: var(--text); font-weight: bold;">Reconciliation Strategy:</label>
+                                    <select style="padding: 4px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 0.8rem;"
+                                        .value=${this._runtimeStrategy}
+                                        @change=${(e) => this._runtimeStrategy = e.target.value}>
+                                        <option value="rebase">Rebase (--rebase)</option>
+                                        <option value="merge">Merge (--no-rebase)</option>
+                                        <option value="ff_only">Fast-Forward Only (--ff-only)</option>
+                                    </select>
+                                </div>
+                            `;
+                        }
+                        return '';
+                    })()}
+                </div>
+                <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
+            </insetu-modal>
         `;
     }
 }
@@ -811,6 +888,27 @@ window.ExtensionRegistry.registerExtension('git', {
             onClick: (data, e) => {
                 const gitEl = document.querySelector('insetu-ext-git-diffs');
                 if (gitEl) gitEl._executeRepoSweep(data.repoDir);
+            }
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-resolve-conflicts',
+            label: 'Resolve Conflicts',
+            icon: '⚠️',
+            intent: 'danger',
+            order: 5,
+            match: (data) => {
+                const status = window.inSetu.stores.Git.getState().reposStatus[data.repoDir];
+                return status && status.conflicts && status.conflicts.length > 0;
+            },
+            onClick: (data, e) => {
+                const status = window.inSetu.stores.Git.getState().reposStatus[data.repoDir];
+                if (status && status.conflicts && status.conflicts.length > 0) {
+                    const firstConflict = status.conflicts[0];
+                    if (window.viewSourceFile) {
+                        window.viewSourceFile(`${data.repoDir}/${firstConflict}`, true);
+                    }
+                }
             }
         }
     ],
@@ -861,13 +959,11 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return false;
     });
     window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
-        if (tabId === 'context' && localStorage.getItem('insetu_subtab_context') === 'diffs') {
+        const diffsTab = document.getElementById('sub-diffs');
+        if (tabId === 'context' && diffsTab && diffsTab.classList.contains('active')) {
             generateDiffs();
         }
         return false;
-    });
-    window.inSetu.extensions.Registry.registerUIHook('zone:repo-config-options', ({ repo, updateCallback }) => {
-        return html`<label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_diffs} @change=${(e) => { repo.exclude_from_diffs = e.target.checked; updateCallback(); }}> Exclude from 'git' extension contexts</label>`;
     });
 }
 // Legacy zone:file-card-actions hook for git removed in favor of entityActions
