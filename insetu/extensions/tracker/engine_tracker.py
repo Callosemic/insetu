@@ -90,7 +90,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
             return
         yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
 
-        filename = os.path.basename(rel_path)
+        filename = Path(rel_path).name
         title = filename
         t_id = "UNKNOWN"
         created_at = "0000-00-00T00:00:00"
@@ -350,11 +350,10 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     abs_current = ctx.resolve_path(current_rel_path)
     if not os.path.exists(abs_current):
         raise FileNotFoundError(f"Ticket not found: {abs_current}")
-
     ticket_type = "bug" if "/bugs/" in current_rel_path else "queue" if "/queue/" in current_rel_path else "todo"
     if new_type: ticket_type = new_type
 
-    filename = os.path.basename(current_rel_path)
+    filename = Path(current_rel_path).name
     content = ctx.vfs.read(current_rel_path)
     yaml_data, body, _ = parse_frontmatter(content)
 
@@ -429,14 +428,14 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                         continue
                     walked_files.add(ws_rel_path)
                     target_files.append((current_repo, ws_rel_path))
-
     for current_repo, ws_rel_path in target_files:
         tracker_rel_base = f"{current_repo}/.tracker"
 
         if True:
-            filename = os.path.basename(ws_rel_path)
+            filename = Path(ws_rel_path).name
             filepath = ctx.resolve_path(ws_rel_path)
-            rel_dir = os.path.dirname(ws_rel_path[len(tracker_rel_base)+1:])
+            rel_dir = Path(ws_rel_path[len(tracker_rel_base)+1:]).parent.as_posix()
+            if rel_dir == '.': rel_dir = ''
             rel_dir_lower = rel_dir.lower()
             # Infer current state from path as fallback, defaulting to todo
             inferred_type = "todo"
@@ -653,7 +652,7 @@ def archive_stale_tickets(workspace_id=None):
         for folder_type in ["todos", "bugs", "queue"]:
             closed_dir_rel = f"{repo}/.tracker/{folder_type}/closed"
             for ws_rel_path in ctx.vfs.walk(closed_dir_rel, exts=['.md']):
-                filename = os.path.basename(ws_rel_path)
+                filename = Path(ws_rel_path).name
                 content = ctx.vfs.read(ws_rel_path)
                 if content:
                     closed_date = _extract_closed_date(content)
@@ -667,7 +666,7 @@ def archive_stale_tickets(workspace_id=None):
         if auto_archive:
             log_dir_rel = f"{repo}/.tracker/log"
             for ws_rel_path in ctx.vfs.walk(log_dir_rel, exts=['.md']):
-                filename = os.path.basename(ws_rel_path)
+                filename = Path(ws_rel_path).name
                 # Skip archived folder contents
                 if "archived" in ws_rel_path:
                     continue

@@ -53,7 +53,7 @@ def api_prompts_list(ctx):
     prompts = provide_available_prompts(workspace_id=ctx.workspace_id)
     return jsonify({
         "prompts": prompts,
-        "profile_dir": os.path.dirname(ctx.paths["config_path"])
+        "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
     })
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):

@@ -15,11 +15,11 @@ def get_headless_git_env():
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     return env
-
 def get_git_settings_schema(workspace_id):
     """Dynamically generates distinct setting configuration slots for every tracked repository."""
-    from insetu.utils_core import load_config
-    cfg = load_config(workspace_id)
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('git', workspace_id)
+    cfg = ctx.config
     schema = []
     for repo in cfg.get("target_repos", []):
         repo_dir = repo.get("repo_dir")

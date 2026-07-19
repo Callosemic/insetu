@@ -93,7 +93,7 @@ def compile_document_payload(workspace_id, filepath, target_format):
 
         mem_file = io.BytesIO(file_data)
         mem_file.seek(0)
-        safe_basename = os.path.basename(resolved_path).rsplit('.', 1)[0]
+        safe_basename = Path(resolved_path).name.rsplit('.', 1)[0]
 
         return mem_file, f"{safe_basename}.{target_format}"
 
@@ -114,7 +114,7 @@ def run_formatter():
     opts.end_with_newline = True
 
     # Resolve workspace root dynamically via utils_core
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.append(Path(__file__).resolve().parent.as_posix())
     try:
         import insetu.utils_core as utils_core
         paths = utils_core.get_gather_paths()

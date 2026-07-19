@@ -40,12 +40,11 @@ def compile_flow_batches(manifest, workspace_id=None, **kwargs):
                 includes = batch.get("includes", [])
                 if any(any(inc.startswith(r + '/') for r in is_full_sweep) for inc in includes):
                     current_repo_forced = True
-
             if not current_repo_forced:
                 includes = batch.get("includes", [])
                 needs_compile = False
                 for inc in includes:
-                    basename = os.path.basename(inc)
+                    basename = Path(inc).name
                     if basename in touched_buckets:
                         needs_compile = True
                         break
