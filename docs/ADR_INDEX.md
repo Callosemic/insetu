@@ -4,7 +4,7 @@ This index serves as the centralized mapping for all active architectural decisi
 ## Core Architecture & Multi-Tenancy
 * **[ADR 0001: inSetu Genesis and Extension Architecture](adrs/archived/0001-insetu-genesis-and-extension-architecture.md)** - Extracted the Developer OS into the independent `inSetu` package and introduced the dynamic Extension Architecture.
 * **[ADR 0002: Spatial Physics & Extension Architecture](adrs/0002-workspace-physics-and-extensions.md)** - Anchored execution to `.insetu/config.json` via a global switchboard, formalizing domain-specific capabilities as extensions.
-* **[ADR 0003: Stateless Request-Scoped Multi-Tenant REST Routing](adrs/0003-stateless-multi-tenant-routing.md)** - Replaced heavy `os.execv` reboots with stateless API routing using the `X-Workspace-ID` header[span_3](start_span)[span_3](end_span).
+* **[ADR 0003: Stateless Request-Scoped Multi-Tenant REST Routing](adrs/archived/0003-stateless-multi-tenant-routing.md)** - Replaced heavy `os.execv` reboots with stateless API routing using the `X-Workspace-ID` header[span_3](start_span)[span_3](end_span).
 * **[ADR 0014: Event Bus Tenant Authorization](adrs/0014-event-bus-tenant-authorization.md)** - Implemented strict `_is_authorized` boundary filters in the Event Bus to prevent disabled extensions from hijacking tenant lifecycles[span_4](start_span)[span_4](end_span).
 
 ## Virtual File System (VFS) & I/O Pipelines
@@ -18,9 +18,8 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0007: Stateless UI Factory and Component Decoupling](adrs/0007-stateless-ui-factory-and-component-decoupling.md)** - Centralized generic UI primitives (Modals, Dropdowns) into a `UIFactory` to eradicate imperative DOM generation[span_9](start_span)[span_9](end_span).
 * **[ADR 0015: CodeMirror 6 Migration & Native ES Modules](adrs/0015-codemirror6-migration.md)** - Replaced EasyMDE with CodeMirror 6 imported natively via `esm.sh` to advance the zero-bundler architecture[span_10](start_span)[span_10](end_span).
 * **[ADR 0021: Standardized Extension State Isolation & Lifecycle Governance](adrs/0021_standardized_state_isolation.md)** - Standardized frontend state into `createExtensionStore` Zustand slices that namespace properly and garbage-collect memory on workspace swaps[span_11](start_span)[span_11](end_span).
-
 ## Extension SDK & Network Gateway
-* **[ADR 0005: Transport Shell Decoupling & Pure Logic Extraction](adrs/0005-transport-shell-decoupling.md)** - Separated HTTP REST controllers from pure domain logic functions to allow extension invocation without HTTP overhead.
+* **[ADR 0005: Transport Shell Decoupling & Pure Logic Extraction](adrs/archived/0005-transport-shell-decoupling.md)** - Separated HTTP REST controllers from pure domain logic functions to allow extension invocation without HTTP overhead.
 * **[ADR 0012: Extension Subdirectory Extraction](adrs/archived/0012-extension-subdirectory-extraction.md)** - Isolated optional extension modules strictly into `insetu/extensions/` and `insetu/static/js/extensions/` to preserve core Micro-Kernel boundaries.
 * **[ADR 0016: Explicit API Client and Fetch Rewriter Deprecation](adrs/0016-explicit-api-client-and-fetch-deprecation.md)** - Deprecated global URL rewriting in favor of explicitly routed `window.inSetu.api.workspace` and `window.inSetu.api.system` clients[span_14](start_span)[span_14](end_span).
 * **[ADR 0017: Extension SDK & The "Pit of Success" Architecture](adrs/0017-extension-sdk-and-pit-of-success.md)** - Established `InSetuExtension` and `InSetuElement` base classes to natively handle multi-tenant routing, SQLite declarative schemas, and frontend teardown hygiene[span_15](start_span)[span_15](end_span).

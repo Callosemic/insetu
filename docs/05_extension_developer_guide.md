@@ -60,6 +60,18 @@ def save_data(ctx):
     ctx.db.execute("INSERT INTO my_table (id, name) VALUES (?, ?)", (data['id'], data['name']))
     ctx.db.commit()
     return {"status": "success"}
+
+### Asynchronous Background Workers (`@worker`)
+Extensions executing long-running asynchronous background operations (e.g., polling, web scraping, tree sweeping) must declare them via the blueprint-level `@worker` decorator rather than raw standalone functions or unmanaged threads.
+
+Progress must be reported explicitly through the `ctx.jobs.update_progress()` interface; using Python generator `yield` statements for progress reporting is strictly banned.
+
+```python
+@my_ext_bp.worker("sync_task")
+def background_sync(ctx, force_all=False):
+    ctx.jobs.update_progress("Initializing remote synchronization loop...")
+    # Execute off-thread operations safely using context boundaries
+    return {"status": "completed", "message": "Synchronization complete."}
 ```
 
 ### 2.5 Multi-Track Event Parity

@@ -75,6 +75,7 @@ inSetu runs via a local Python web server (Flask/Uvicorn). You must never paraly
 * **The I/O Block Ban**: Heavy workspace sweeps (e.g., parsing 500 files for Context Generation, executing blocking Git diff aggregations, spinning up cartography maps) MUST NOT block the main HTTP thread. All physical disk modifications, deletions, and massive multi-file collections must be executed through asynchronous off-thread background worker queues or pipelines.
 * **Streaming Over Polling**: Offload these heavy generators into asynchronous background task queues. The frontend should connect via WebSockets or Server-Sent Events (SSE) to receive non-blocking, real-time status pulses (`"Compressing payload..."`, `"Mapping context..."`) rather than hanging on a 15-second HTTP request.
 * **Full-Duplex Socket Isolation**: Extensions introducing persistent bi-directional streams (e.g., interactive PTY shells or real-time logs) must hook natively into the `flask-sock` interface exposed by the micro-kernel. WebSockets are strictly prohibited from spawning unmanaged long-running loops outside the ASGI thread coordinator, protecting the HTTP event loop from socket starvation.
+* **Abortable Synchronization Barriers**: Long-running background workers or thread pools waiting on asynchronous VFS queues must avoid indefinite blocking calls (like raw `queue.join()`). They must execute abortable polling checks that actively evaluate shutdown signals (`_VFS_SHUTDOWN_SIGNAL`) or process termination event loops to ensure quick, safe teardowns during workspace switches.
 
 ## 6. The Yomama Patch Protocol (LLM Guardrails)
 When collaborating with LLMs on the inSetu codebase, all file modifications MUST use the strict Genesis/Sync Bridge protocol. JSON patches are banned.
@@ -87,7 +88,12 @@ When collaborating with LLMs on the inSetu codebase, all file modifications MUST
 >>>>>>> REPLACE
 
 ```
-
 * **The Patch Sandwich**: Always include 1-2 unchanged lines of code at the top AND bottom of the SEARCH block to anchor the spatial match and prevent duplicate patching.
 * **No Stealth Directives**: If a feature requires new LLM instructions, do not hardcode the prompt string inside Python. Define it explicitly in `.insetu/profiles/*/prompts/` and map it through the declarative UI workflows.
 * **Chassis Agnosticism**: The OS is blind to the user's specific project. Do not hardcode specific repository names inside `engine_gather.py` or `engine_bridge.py`. Assume dynamic workspaces infinitely.
+
+## 8. Extension Coupling & Boundaries (Pragmatic Coupling)
+While the inSetu architecture highly values decoupled, stateless operations, enforcing dogmatic decoupling for every interaction creates hard-to-trace architecture and breaks static analysis. Extensions must adhere to the "Pragmatic Coupling" model:
+* **Loose Coupling (The Event Bus):** Use this for broadcasts, opportunistic data sharing, or optional enhancements (e.g., "A file was saved, does anyone want to format it?"). This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing. Use `hooks.emit()` or `hooks.emit_background()`.
+* **Tight Coupling (Standard Python \`import\`):** Use this when one extension fundamentally cannot function without another and needs to share complex data structures, type hints, or classes (e.g., the `research` extension inherently relying on the `ingest` extension to parse web pages). This preserves IDE autocomplete, static analysis, and jump-to-definition capabilities.
+* **The Anti-Pattern:** Do not build "stringly-typed" dynamic SDK RPC macros (e.g., `ctx.invoke('ext_name', 'function')`) just to avoid an `import` statement. If an extension needs direct, synchronous functional access to another, it should explicitly import it natively and declare it in its `__depends__` array to maintain the topological DAG.

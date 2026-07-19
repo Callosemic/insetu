@@ -81,6 +81,15 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
 
+### J. Freshdesk Support (`engine_freshdesk.py`)
+* **Status:** Active Extension (SDK V2).
+* **Role:** Support ticket synchronization, reply management, and agent triaging.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `~/.insetu/data/freshdesk.db`
+* **Injection Surfaces:**
+    * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets.
+    * UI Hooks: Primary Edit Sub-navigation Tab injection.
+
 ---
 
 ## 3. Pending Decoupling (The V2 Extractions)
