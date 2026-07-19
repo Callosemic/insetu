@@ -69,7 +69,7 @@ def scaffold_profiles(cwd):
     is_new_hub = not os.path.exists(base_dir)
     os.makedirs(base_dir, exist_ok=True)
   
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = Path(__file__).resolve().parent.as_posix()
     defaults_dir = Path(script_dir).joinpath("defaults").as_posix()
     
     # Scaffold the default config

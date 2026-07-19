@@ -2,8 +2,7 @@ from pathlib import Path
 import os
 import json
 import subprocess
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 # Shift spatial physics to the terminal's Current Working Directory,
 # but enforce the universal sibling-repo architecture (repos are one level up).
 
@@ -23,11 +22,10 @@ def get_physics_for(workspace_id):
     Resolves spatial physics dynamically for the specified request tenant ID.
     """
     return get_workspace_physics(workspace_id)
-
 def get_tenant_control_dir(workspace_id=None):
     """Universal helper to return the absolute path of the tenant's .insetu configuration directory."""
     cfg_path, _, _ = get_workspace_physics(workspace_id)
-    return os.path.dirname(cfg_path)
+    return Path(cfg_path).parent.as_posix()
 
 def get_workspace_physics(workspace_id=None):
     """
@@ -102,7 +100,7 @@ def get_workspace_physics(workspace_id=None):
 def get_gather_paths(workspace_id=None):
     """Dynamically calculates artifact physics for the requested tenant."""
     cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
-    workspace_dir = os.path.dirname(cfg_path)
+    workspace_dir = Path(cfg_path).parent.as_posix()
     artifacts_base = Path(workspace_dir).joinpath("data").as_posix()
     paths = {
         "config_path": cfg_path,

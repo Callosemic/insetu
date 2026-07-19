@@ -274,8 +274,8 @@ def bridge_sync():
                 break
                 
         if success:
-            if os.path.dirname(abs_path):
-                os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            if Path(abs_path).parent:
+                os.makedirs(Path(abs_path).parent, exist_ok=True)
             with open(abs_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             log.append(f"  [✓] Successfully patched {target_file}")
@@ -325,7 +325,7 @@ def api_emergency_dump():
     from datetime import datetime
     try:
         # Hardcoded to the current file's directory (insetu/insetu)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_dir = Path(__file__).resolve().parent.as_posix()
         
         # Drop it in the localized CWD so the dumb-terminal download route doesn't trip on absolute path slashes
         out_file = "emergency_core_context.txt"

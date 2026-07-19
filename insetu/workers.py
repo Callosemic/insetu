@@ -299,10 +299,9 @@ class NonGitDirectoryWatcher:
     def __init__(self, workspace_id, repo_dir):
         self.workspace_id = workspace_id
         self.repo_dir = repo_dir
-
     def dispatch(self, event):
         if event.is_directory: return
-        filename = os.path.basename(event.src_path)
+        filename = Path(event.src_path).name
         if filename.startswith('.') or filename.endswith('~'): return
 
         from insetu.utils_core import get_workspace_physics
@@ -395,7 +394,7 @@ def start_workers():
                     if repo_cfg.get("archive_type", "repo") != "repo":
                         r_dir = repo_cfg.get("repo_dir")
                         p_path = repo_cfg.get("physical_path")
-                        target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else os.path.abspath(os.path.join(ws_root, r_dir))
+                        target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else Path(ws_root).joinpath(r_dir).resolve().as_posix()
 
                         if os.path.exists(target_path):
                             handler = FileSystemEventHandler()

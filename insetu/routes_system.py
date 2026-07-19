@@ -47,7 +47,7 @@ def get_system_config(workspace_id):
             data = json.load(f)
     except Exception:
         data = load_config(workspace_id)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = Path(__file__).resolve().parent.as_posix()
     core_engines = {"bridge", "gather"}
     available_ids = set()
     available = []

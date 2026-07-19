@@ -8,7 +8,7 @@ from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 def _background_map(job_id, workspace_id, target_repos=None):
     try:
         update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
@@ -142,10 +142,9 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             continue
 
         tree_dict = build_tree_dict(filtered_files)
-
         # Ensure the docs directory exists if writing to the core chassis
         if config.get("is_core_chassis"):
-            os.makedirs(os.path.dirname(index_path), exist_ok=True)
+            os.makedirs(Path(index_path).parent, exist_ok=True)
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
         # Extract declarative managed list from config
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])

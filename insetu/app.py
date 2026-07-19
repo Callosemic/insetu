@@ -217,10 +217,10 @@ def intercept_local_static_assets():
 
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
-        filename = os.path.basename(path)
+        filename = Path(path).name
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
         cfg_path, _, _ = get_workspace_physics()
-        instance_dir = os.path.dirname(cfg_path)
+        instance_dir = Path(cfg_path).parent.as_posix()
         local_path = Path(instance_dir).joinpath("static", filename).as_posix()
         if os.path.exists(local_path):
             return send_file(local_path, mimetype='image/png')
@@ -233,7 +233,7 @@ def favicon():
 
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
     cfg_path, _, _ = get_workspace_physics()
-    instance_dir = os.path.dirname(cfg_path)
+    instance_dir = Path(cfg_path).parent.as_posix()
     local_icon_path = Path(instance_dir).joinpath("static", custom_icon_name).as_posix()
 
     if os.path.exists(local_icon_path):
@@ -454,7 +454,7 @@ def download_file(filename):
     paths = get_gather_paths(workspace_id)
 
     # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
-    safe_basename = os.path.basename(filename)
+    safe_basename = Path(filename).name
     search_paths = [Path(d).joinpath(safe_basename).as_posix() for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
     file_path = next((p for p in search_paths if os.path.exists(p)), None)
     # Fallback to resolving against the workspace root for media-vault files

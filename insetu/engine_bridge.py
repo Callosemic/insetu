@@ -415,7 +415,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 continue
         # Smart Resolution Engine
         if not is_genesis:
-            basename = os.path.basename(target_file)
+            basename = Path(target_file).name
             if omniscient_cache is None:
                 omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
             candidates = [cand_rel for f, cand_rel in omniscient_cache if f == basename]

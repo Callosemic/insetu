@@ -47,7 +47,7 @@ def _vfs_commit_worker():
                     resolved_src = resolve_workspace_path(filepath, workspace_id)
                     resolved_dest = resolve_workspace_path(dest_path, workspace_id)
                     if os.path.exists(resolved_src):
-                        os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
+                        os.makedirs(Path(resolved_dest).parent, exist_ok=True)
                         import shutil
                         shutil.move(resolved_src, resolved_dest)
                     _trigger_post_mutation_hooks(workspace_id, filepath, dest_path)
@@ -207,10 +207,10 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 resolved_archive = resolve_workspace_path(archive_path, workspace_id)
                 os.makedirs(resolved_archive, exist_ok=True)
 
-                basename = os.path.basename(original_response_path)
+                basename = Path(original_response_path).name
                 prefix = basename.split("{date}")[0]
 
-                resolved_target_dir = os.path.dirname(resolved_path)
+                resolved_target_dir = Path(resolved_path).parent.as_posix()
                 if os.path.exists(resolved_target_dir):
                         import shutil
                         for f in os.listdir(resolved_target_dir):
@@ -218,7 +218,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                                         shutil.move(Path(resolved_target_dir).joinpath(f).as_posix(), Path(resolved_archive).joinpath(f).as_posix())
         is_new = not os.path.exists(resolved_path)
 
-        target_dir = os.path.dirname(resolved_path)
+        target_dir = Path(resolved_path).parent.as_posix()
         if target_dir:
                 os.makedirs(target_dir, exist_ok=True)
         with open(resolved_path, 'w', encoding='utf-8') as f:
@@ -243,11 +243,11 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         hooks.emit_background('post_file_delete', filepath=delete_source, workspace_id=workspace_id)
                         # Clean up empty ghost directories left behind
                         try:
-                            parent_dir = os.path.dirname(old_abs_path)
+                            parent_dir = Path(old_abs_path).parent.as_posix()
                             # Prune upwards until a directory is not empty
                             while parent_dir and os.path.isdir(parent_dir) and not os.listdir(parent_dir):
                                 os.rmdir(parent_dir)
-                                parent_dir = os.path.dirname(parent_dir)
+                                parent_dir = Path(parent_dir).parent.as_posix()
                         except OSError:
                             pass
                         if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
@@ -303,7 +303,7 @@ def api_fs_upload(workspace_id):
                 resolved_path = resolve_workspace_path(filepath, workspace_id)
 
                 is_new = not os.path.exists(resolved_path)
-                os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+                os.makedirs(Path(resolved_path).parent, exist_ok=True)
 
                 file.save(resolved_path)
                 uploaded_paths.append(filepath)

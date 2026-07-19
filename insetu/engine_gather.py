@@ -7,7 +7,7 @@ import shutil
 from flask import jsonify
 from insetu.utils_core import get_valid_workspace_files, get_workspace_physics
 from insetu.sdk import InSetuExtension
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
 GATHER_SETTINGS_SCHEMA = [
     {
@@ -143,8 +143,8 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
             print(f"Skipping {filepath}: {e}")
 
 
-    output_dir = os.path.dirname(output_path)
-    base_filename = os.path.basename(output_path)
+    output_dir = Path(output_path).parent.as_posix()
+    base_filename = Path(output_path).name
     manifest_entry = compile_context_payload(
         workspace_id, output_dir, base_filename, header_str, text_blocks, 
         [f"{repo_dir}/{f}" for f in filepaths], 
@@ -429,10 +429,9 @@ def generate_context_file(workspace_id=None, target_repos=None):
     for data in manifest.values():
         for chunk in data.get("meta", {}).get("chunks", []):
             valid_basenames.add(chunk)
-
     for ws_rel_path in vfs.walk(paths["contexts_dir"]):
         f_path = ctx.resolve_path(ws_rel_path)
-        f_basename = os.path.basename(f_path)
+        f_basename = Path(f_path).name
 
         if f_path not in active_ephemerals and f_basename not in valid_basenames and f_basename != "manifest.json":
             try:
@@ -440,11 +439,10 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 execute_vfs_delete(workspace_id, ws_rel_path)
             except Exception:
                 pass
-
     # Re-inject surviving Ephemeral Artifacts into the manifest so they persist through background compiles
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]):
-            f_name = os.path.basename(f_path)
+            f_name = Path(f_path).name
             size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
             # Ensure it aligns with the new schema
             manifest[f_name] = {
@@ -583,7 +581,7 @@ def api_gather_quick_pack_clear(ctx):
                 except ValueError:
                     rel_path = row['filepath']
                 execute_vfs_delete(ctx.workspace_id, rel_path)
-            ephemeral_basenames.append(os.path.basename(row['filepath']))
+            ephemeral_basenames.append(Path(row['filepath']).name)
             conn.execute("DELETE FROM ephemeral_artifacts WHERE id=?", (row['id'],))
             count += 1
         except Exception: 

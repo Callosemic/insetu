@@ -81,7 +81,7 @@ def get_connection(db_name, workspace_id=None):
         except Exception: pass
         del _local.connections[oldest_key]
 
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    os.makedirs(Path(db_path).parent, exist_ok=True)
     # Bypassing same_thread check is safe here because we guarantee thread-local storage
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
