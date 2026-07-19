@@ -1,5 +1,4 @@
-import { executeWorkspaceMutation } from '../app.js';
-import { downloadFile } from '../fs.js';
+import { executeWorkspaceMutation, fetchAndDownloadState, fetchAndCopy } from '../app.js';
 import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
@@ -15,6 +14,7 @@ export const ResearchStore = createExtensionStore('Research', {
     targetDir: 'research/',
     aiTriageMode: false,
     isTabActive: false,
+    newJobModalOpen: false,
     searchForm: { query: '', provider: 'serper', parser: 'jina', dateRange: '', dateStart: '', dateEnd: '', yearStart: '', yearEnd: '', maxResults: '50', maxCustom: '' },
     setSearchForm: (field, val) => ResearchStore.setState(state => ({ searchForm: { ...state.searchForm, [field]: val } }))
 });
@@ -28,10 +28,14 @@ export class InSetuExtResearch extends InSetuElement {
         selectedItemId: { type: String },
         targetDir: { type: String },
         aiTriageMode: { type: Boolean },
+        newJobModalOpen: { type: Boolean },
         searchForm: { type: Object },
         _aiJsonInput: { type: String }
     };
-    static styles = [        css`
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
             .rs-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
             .rs-view { display: none; flex-direction: column; height: 100%; overflow: hidden; }
             .rs-view.active { display: flex; }
@@ -45,6 +49,7 @@ export class InSetuExtResearch extends InSetuElement {
         this.selectedItemId = null;
         this.targetDir = 'research/';
         this.aiTriageMode = false;
+        this.newJobModalOpen = false;
         this.searchForm = {};
         this._aiJsonInput = '';
     }
@@ -58,6 +63,7 @@ export class InSetuExtResearch extends InSetuElement {
             this.selectedItemId = state.selectedItemId;
             this.targetDir = state.targetDir;
             this.aiTriageMode = state.aiTriageMode;
+            this.newJobModalOpen = state.newJobModalOpen;
             this.searchForm = state.searchForm;
         });
 
@@ -69,11 +75,13 @@ export class InSetuExtResearch extends InSetuElement {
         this.selectedItemId = state.selectedItemId;
         this.targetDir = state.targetDir;
         this.aiTriageMode = state.aiTriageMode;
+        this.newJobModalOpen = state.newJobModalOpen;
         this.searchForm = state.searchForm;
         this.fetchState();
     }
     disconnectedCallback() {
         super.disconnectedCallback();
+        if (this._pollTimer) clearTimeout(this._pollTimer);
     }
     async fetchState() {
         try {
@@ -81,25 +89,25 @@ export class InSetuExtResearch extends InSetuElement {
                 this.api.get('jobs'),
                 this.api.get('inbox?status=pending,duplicate,in_library')
             ]);
+
             if (jRes.ok && iRes.ok) {
                 const jData = await jRes.json();
                 const iData = await iRes.json();
-                ResearchStore.setState({ jobs: jData.jobs, inbox: iData.items });
+
+                // Pre-parse meta_json to avoid heavy O(N) operations inside the Lit render loop
+                const parsedJobs = (jData.jobs || []).map(j => ({
+                    ...j,
+                    meta: (() => { try { return JSON.parse(j.meta_json || '{}'); } catch(e) { return {}; } })()
+                }));
+
+                ResearchStore.setState({ jobs: parsedJobs, inbox: iData.items || [] });
 
                 // Native component polling to replace the banned global tick
-                const activeJobs = jData.jobs.filter(j => j.status === 'running' || j.status === 'gathering');
-                activeJobs.forEach(job => {
-                    if (!this._activePolls) this._activePolls = new Set();
-                    if (!this._activePolls.has(job.id)) {
-                        this._activePolls.add(job.id);
-                        this.api.pollJob(job.id, {
-                            interval: 3000,
-                            onProgress: () => this.fetchState(),
-                            onComplete: () => { this._activePolls.delete(job.id); this.fetchState(); },
-                            onError: () => { this._activePolls.delete(job.id); this.fetchState(); }
-                        });
-                    }
-                });
+                const activeJobs = (jData.jobs || []).filter(j => j.status === 'running' || j.status === 'gathering');
+                if (activeJobs.length > 0) {
+                    if (this._pollTimer) clearTimeout(this._pollTimer);
+                    this._pollTimer = setTimeout(() => this.fetchState(), 3000);
+                }
             }
         } catch (e) {
             console.error("Failed to fetch research state:", e);
@@ -109,9 +117,7 @@ export class InSetuExtResearch extends InSetuElement {
     onWorkspaceChanged(newWorkspaceId) {
         this.fetchState();
     }
-
     async startJob(e) {
-        const btn = e.target;
         const { query, provider, parser, dateStart, dateEnd, yearStart, yearEnd, maxResults: formMax, maxCustom, dateRange: rawDateRange } = this.searchForm;
         const targetDir = this.targetDir || 'research/';
 
@@ -125,14 +131,14 @@ export class InSetuExtResearch extends InSetuElement {
             }
             return rawDateRange;
         })();
-        if (dateRange === null) return alert("Valid date configuration required for custom ranges.");
-        if (!query) return alert("Query required.");
+        if (dateRange === null) throw new Error("Valid date configuration required for custom ranges.");
+        if (!query) throw new Error("Query required.");
 
         const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
         const res = await this.api.post('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
 
         if (res.ok) {
-            ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' } }));
+            ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' }, newJobModalOpen: false }));
             await this.fetchState();
         } else {
             const data = await res.json();
@@ -194,9 +200,7 @@ export class InSetuExtResearch extends InSetuElement {
                 onComplete: async (statusData) => {
                     const files = statusData.artifact.files || [];
                     for (const f of files) {
-                        if (window.downloadFile) {
-                            await window.downloadFile(f.download_url, f.filename);
-                        }
+                        await fetchAndDownloadState(f.filename, f.download_url);
                     }
                 },
                 onError: (err) => alert("Failed to generate context files: " + err.message)
@@ -233,7 +237,6 @@ export class InSetuExtResearch extends InSetuElement {
             for (const id of rescanIds) if (id) await this.handleDisposition(id, 'force_scrape');
 
             this._aiJsonInput = '';
-            this.requestUpdate();
             await this.fetchState();
             alert(`✅ Triage complete:\n- ${acceptIds.length} Accepted to Workspace\n- ${rejectIds.length} Rejected\n- ${rescanIds.length} Queued for Rescan`);
             ResearchStore.setState({ aiTriageMode: false, selectedItemId: null });
@@ -242,7 +245,7 @@ export class InSetuExtResearch extends InSetuElement {
         }
     }
     _renderJobCard(job) {
-        const meta = (() => { try { return JSON.parse(job.meta_json || '{}'); } catch(e) { return {}; } })();
+        const meta = job.meta || {};
         const statusColor = (() => {
             if (job.status === 'running') return 'var(--intent-primary)';
             if (job.status === 'gathering') return 'var(--intent-highlight)';
@@ -272,12 +275,11 @@ export class InSetuExtResearch extends InSetuElement {
             </insetu-card>
         `;
     }
-
     _renderJobDetailView() {
         const job = this.jobs.find(j => j.id === this.selectedJobId);
         if (!job) return '';
 
-        const meta = (() => { try { return JSON.parse(job.meta_json || '{}'); } catch(e) { return {}; } })();
+        const meta = job.meta || {};
         const statusColor = (() => {
             if (job.status === 'running') return 'var(--intent-primary)';
             if (job.status === 'gathering') return 'var(--intent-highlight)';
@@ -364,48 +366,12 @@ export class InSetuExtResearch extends InSetuElement {
             <div class="rs-layout">
                 ${!this.selectedJobId ? html`
                     <div class="rs-view active" style="overflow-y: auto; padding-right: 5px;">
-                        <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 20px;">
-                            <h3 style="margin-top: 0; color: var(--intent-primary);">New Research Job</h3>
-                            ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;' })}
-                            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                                ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
-                                ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
-                            </div>
-                            <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px; margin-bottom: 10px;">
-                                ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                                ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                            </div>
-                            <div style="display: ${this.searchForm.dateRange === 'custom_year' ? 'flex' : 'none'}; gap: 10px; margin-bottom: 10px;">
-                                ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                                ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                            </div>
-                            <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: flex-end;">
-                                <div style="flex: 1;">
-                                    <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Extraction Parser</label>
-                                    ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { type: 'select', style: 'width: 100%; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
-                                </div>
-                                <div style="flex: 1;">
-                                    <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Default Output Folder</label>
-                                    <div style="display: flex; gap: 8px;">
-                                        ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { placeholder: 'e.g. research/', style: 'flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;' })}
-                                        <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(window.openFolderBrowser) window.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div style="margin-bottom: 15px;">
-                                <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Max Results</label>
-                                <div style="display: flex; gap: 8px;">
-                                    ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
-                                    ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
-                                </div>
-                            </div>
-                            <insetu-async-btn style="width: 100%; display: block;" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
-                        </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
                             <h4 style="margin: 0; color: var(--text);">Active & Past Jobs</h4>
+                            <button class="btn-sm" style="background: var(--intent-success); font-weight: bold;" @click=${() => ResearchStore.setState({ newJobModalOpen: true })}>➕ New Job</button>
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 10px;">
-                            ${this.jobs.map(job => this._renderJobCard(job))}
+                            ${(this.jobs || []).map(job => this._renderJobCard(job))}
                         </div>
                     </div>
                 ` : html`
@@ -436,6 +402,47 @@ export class InSetuExtResearch extends InSetuElement {
                         </div>
                         <div tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;" .innerHTML=${activeItem.raw_markdown ? marked.parse(activeItem.raw_markdown) : '<span style="color: var(--intent-warning); font-style: italic;">Awaiting extraction...</span>'}></div>
                     ` : ''}
+                </div>
+            </insetu-modal>
+
+            <insetu-modal ?open=${this.newJobModalOpen} titleText="New Research Job" @modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; box-sizing: border-box;' })}
+                    <div style="display: flex; gap: 10px;">
+                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
+                    </div>
+                    <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px;">
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                    </div>
+                    <div style="display: ${this.searchForm.dateRange === 'custom_year' ? 'flex' : 'none'}; gap: 10px;">
+                        ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: flex-end;">
+                        <div style="flex: 1;">
+                            <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Extraction Parser</label>
+                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { type: 'select', style: 'width: 100%; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Default Output Folder</label>
+                            <div style="display: flex; gap: 8px;">
+                                ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { placeholder: 'e.g. research/', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;' })}
+                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(window.openFolderBrowser) window.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Max Results</label>
+                        <div style="display: flex; gap: 8px;">
+                            ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
+                        </div>
+                    </div>
+                </div>
+                <div slot="footer">
+                    <insetu-async-btn style="width: 100%; display: block;" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
                 </div>
             </insetu-modal>
         `;
@@ -547,10 +554,39 @@ window.ExtensionRegistry.registerExtension('research', {
             if (data.parentId === 'edit' && data.subId === 'research') {
                 ResearchStore.setState({ isTabActive: true });
                 const el = document.querySelector('insetu-ext-research');
-                if (el && data.forceRefresh) el.fetchState();
+                if (el) el.fetchState();
             } else {
                 ResearchStore.setState({ isTabActive: false });
             }
+        },
+        'zone:soft-refresh': (ws) => {
+            ResearchStore.setState({ jobs: [], inbox: [] });
+            const el = document.querySelector('insetu-ext-research');
+            if (el) el.fetchState();
+            return false;
         }
     }
 });
+
+// --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
+// Executes independently of the UI component to ensure the inbox is pre-hydrated.
+async function syncResearchState() {
+    try {
+        const [jRes, iRes] = await Promise.all([
+            window.inSetu.api.workspace('research/jobs'),
+            window.inSetu.api.workspace('research/inbox?status=pending,duplicate,in_library')
+        ]);
+        if (jRes.ok && iRes.ok) {
+            const jData = await jRes.json();
+            const iData = await iRes.json();
+            const parsedJobs = (jData.jobs || []).map(j => ({
+                ...j,
+                meta: (() => { try { return JSON.parse(j.meta_json || '{}'); } catch(e) { return {}; } })()
+            }));
+            ResearchStore.setState({ jobs: parsedJobs, inbox: iData.items || [] });
+        }
+    } catch(e) {
+        console.warn("Headless research sync failed:", e);
+    }
+}
+syncResearchState();

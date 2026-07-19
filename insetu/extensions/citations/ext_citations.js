@@ -1,4 +1,3 @@
-import { currentModalIsFS } from '../fs.js';
 import { AppStore } from '../store.js';
 import { getFlattenedBuckets } from '../app.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';

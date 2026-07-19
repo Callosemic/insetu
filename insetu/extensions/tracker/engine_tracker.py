@@ -39,14 +39,11 @@ TRACKER_SETTINGS_SCHEMA = [
 ]
 tracker_bp = InSetuExtension('tracker', __name__, title="Issue Tracker", description="Markdown-based Kanban issue tracking.", schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
-def _background_archive_stale_tickets(job_id=None, workspace_id="default", **kwargs):
-    try:
-        archive_stale_tickets(workspace_id=workspace_id)
-    except Exception:
-        pass
-
-from insetu.workers import register_callback
-register_callback("tracker", "archive_stale_task", _background_archive_stale_tickets)
+@tracker_bp.worker("archive_stale_task")
+def _background_archive_stale_tickets(ctx):
+    ctx.jobs.update_progress("Sweeping for stale entries...")
+    count = archive_stale_tickets(workspace_id=ctx.workspace_id)
+    return f"Archived {count} stale tickets."
 
 @hooks.on('system_boot')
 def init_tracker_db():

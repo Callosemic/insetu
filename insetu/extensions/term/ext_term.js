@@ -23,7 +23,7 @@ export class InSetuExtTerm extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        setTimeout(() => this._initTerminal(), 0);
+        this._initTimer = setTimeout(() => this._initTerminal(), 0);
         window.addEventListener('resize', this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
@@ -31,10 +31,19 @@ export class InSetuExtTerm extends InSetuElement {
 
     disconnectedCallback() {
         super.disconnectedCallback();
+        clearTimeout(this._initTimer);
+        clearTimeout(this._wsTimer);
         window.removeEventListener('resize', this._handleResize);
         if (this._themeObserver) this._themeObserver.disconnect();
-        if (this._ws) this._ws.close();
-        if (this._term) this._term.dispose();
+        if (this._ws) {
+            this._ws.onclose = null;
+            this._ws.close();
+            this._ws = null;
+        }
+        if (this._term) {
+            this._term.dispose();
+            this._term = null;
+        }
     }
     onWorkspaceChanged(newWorkspaceId) {
         if (this._ws) {
@@ -44,11 +53,11 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws = null;
         }
         if (this._term) this._term.reset();
-        this._connectWebSocket();
+        if (this.isConnected) this._connectWebSocket();
     }
     _handleResize = () => {
         // Only calculate geometry if the component is actively visible on the screen
-        if (this._fitAddon && this.offsetParent !== null) {
+        if (this._fitAddon && this.offsetParent !== null && this.isConnected) {
             this._fitAddon.fit();
             if (this._ws && this._ws.readyState === WebSocket.OPEN) {
                 this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
@@ -56,6 +65,7 @@ export class InSetuExtTerm extends InSetuElement {
         }
     };
     _initTerminal() {
+        if (!this.isConnected) return;
         const container = this.shadowRoot.getElementById('terminal-container');
         if (!container) return;
 
@@ -70,7 +80,8 @@ export class InSetuExtTerm extends InSetuElement {
         this._term.loadAddon(this._fitAddon);
         this._term.open(container);
         // Wait slightly for DOM to settle before fitting
-        setTimeout(() => {
+        this._wsTimer = setTimeout(() => {
+            if (!this.isConnected) return;
             this._handleResize();
             this._connectWebSocket();
         }, 50);
@@ -82,6 +93,7 @@ export class InSetuExtTerm extends InSetuElement {
         });
     }
     _connectWebSocket() {
+        if (!this.isConnected) return;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/api/${this.workspaceId}/term/stream`;
 

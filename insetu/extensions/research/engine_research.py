@@ -7,7 +7,7 @@ import urllib.parse
 import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
-from insetu.extensions.engine_ingest import extract_markdown_from_url
+from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
 from insetu.db import get_connection
 from insetu.workers import submit_job, register_callback
 from insetu.hooks import hooks
@@ -507,9 +507,7 @@ def job_action(ctx, job_id):
     return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
 @research_bp.route('jobs', methods=['GET'])
 def list_jobs(ctx):
-    conn = ctx.db
-    cursor = conn.execute("SELECT * FROM research_jobs ORDER BY created_at DESC")
-    jobs = [dict(row) for row in cursor.fetchall()]
+    jobs = ctx.db.get_all("research_jobs", order_by="created_at DESC")
     return jsonify({"jobs": jobs})
 @research_bp.route('inbox', methods=['GET'])
 def list_inbox(ctx):
@@ -520,13 +518,12 @@ def list_inbox(ctx):
     cursor = conn.execute(f"SELECT * FROM research_inbox WHERE status IN ({placeholders})", statuses)
     items = [dict(row) for row in cursor.fetchall()]
     return jsonify({"items": items})
-def _background_export_context(job_id, workspace_id, research_job_id):
-    from insetu.sdk import ExtensionContext
+@research_bp.worker("export_context_task")
+def _background_export_context(ctx, research_job_id):
     from insetu.workers import register_ephemeral_artifact
     from pathlib import Path
 
-    update_immediate_job_status(job_id, 'processing', "Compiling research context...", workspace_id=workspace_id)
-    ctx = ExtensionContext('research', workspace_id)
+    ctx.jobs.update_progress("Compiling research context...")
     conn = ctx.db
     cursor = conn.execute("SELECT id, title, raw_markdown FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NOT NULL", (research_job_id,))
     items = cursor.fetchall()
@@ -549,20 +546,17 @@ def _background_export_context(job_id, workspace_id, research_job_id):
         chunks.append(current_chunk)
 
     if not chunks:
-        update_immediate_job_status(job_id, 'failed', "No fully scraped pending links available to pack.", workspace_id=workspace_id)
-        return
+        raise ValueError("No fully scraped pending links available to pack.")
 
     artifacts = []
     for i, chunk in enumerate(chunks):
         filename = f"context_{research_job_id[:8]}_part_{i+1}.txt"
         out_path = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
         Path(out_path).write_text(chunk, encoding='utf-8')
-        register_ephemeral_artifact(out_path, "research", 3600, workspace_id=workspace_id)
+        register_ephemeral_artifact(out_path, "research", 3600, workspace_id=ctx.workspace_id)
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
-    update_immediate_job_status(job_id, 'completed', "Context packed.", artifact={"files": artifacts}, workspace_id=workspace_id)
-
-register_callback("research", "export_context_task", _background_export_context)
+    return {"message": "Context packed.", "artifact": {"files": artifacts}}
 
 @research_bp.route('<job_id>/export_context', methods=['POST'])
 def export_context(ctx, job_id):

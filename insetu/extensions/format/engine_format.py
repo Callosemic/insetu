@@ -5,29 +5,24 @@ import json
 import uuid
 from flask import jsonify, send_file
 from insetu.sdk import InSetuExtension
-from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
+from insetu.workers import submit_immediate_job, register_ephemeral_artifact
 format_bp = InSetuExtension('format', __name__, title="Document Formatting", description="Document compilation (Pandoc) and JavaScript code formatting.")
 __depends__ = []
-def _background_compile(job_id, workspace_id, filepath, target_format):
+@format_bp.worker("compile_task")
+def _background_compile(ctx, filepath, target_format, job_id=None):
     import os
-    from insetu.sdk import ExtensionContext
-    try:
-        update_immediate_job_status(job_id, 'processing', f"Compiling document to {target_format.upper()}...", workspace_id=workspace_id)
-        mem_file, download_name = compile_document_payload(workspace_id, filepath, target_format)
+    ctx.jobs.update_progress(f"Compiling document to {target_format.upper()}...")
+    mem_file, download_name = compile_document_payload(ctx.workspace_id, filepath, target_format)
 
-        ctx = ExtensionContext('format', workspace_id)
-        paths = ctx.paths
-        safe_name = f"{job_id}_{download_name}"
-        out_path = Path(paths["artifacts_base"]).joinpath(safe_name).as_posix()
-        Path(out_path).write_bytes(mem_file.read())
+    paths = ctx.paths
+    safe_name = f"{job_id}_{download_name}" if job_id else download_name
+    out_path = Path(paths["artifacts_base"]).joinpath(safe_name).as_posix()
+    Path(out_path).write_bytes(mem_file.read())
 
-        register_ephemeral_artifact(out_path, "format", 3600, workspace_id=workspace_id)
+    register_ephemeral_artifact(out_path, "format", 3600, workspace_id=ctx.workspace_id)
 
-        update_immediate_job_status(job_id, 'completed', "Compilation successful.", artifact={"download_url": f"/download/{safe_name}", "filename": download_name}, workspace_id=workspace_id)
-    except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Compilation failed: {str(e)}", workspace_id=workspace_id)
+    return {"message": "Compilation successful.", "artifact": {"download_url": f"/download/{safe_name}", "filename": download_name}}
 
-register_callback("format", "compile_task", _background_compile)
 @format_bp.route('compile-document', methods=['POST'])
 def api_format_compile_document(ctx):
     data = ctx.req.json

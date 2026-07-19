@@ -435,16 +435,6 @@ disconnectedCallback() {
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column; margin-top: 15px;">
-                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 ? html`
-                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 25px 15px; text-align: center; margin-bottom: 15px;">
-                        <div style="font-size: 2rem; margin-bottom: 10px;">✨</div>
-                        <h3 style="margin: 0 0 10px 0; color: var(--text);">Working Tree Clean</h3>
-                        <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0 0 20px 0;">All major tracked code diffs have been committed or none were found.</p>
-                        <button class="btn-sm" style="background: var(--intent-primary); font-weight: bold; padding: 10px 20px; font-size: 1rem;" @click=${() => window.dispatchEvent(new CustomEvent('open-sweep-modal'))}>
-                            🧹 Sweep Remaining State Files
-                        </button>
-                    </div>
-                ` : ''}
                 ${sortedCats.map(catName => html`
                     <insetu-category-section titleText=${catName}>
                         ${categories[catName].map(f => html`
