@@ -258,6 +258,15 @@ export class InSetuExtBridge extends InSetuElement {
                     if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
                         const savedFiles = BridgeStore.getState().getActiveFiles();
                         BridgeStore.setState({ cells: [] });
+
+                        // Optimistically inject any Genesis Patch files directly into the UI manifest
+                        const appStoreState = AppStore.getState();
+                        savedFiles.forEach(f => {
+                            if (appStoreState.optimisticallyAddFileToManifest) {
+                                appStoreState.optimisticallyAddFileToManifest(f);
+                            }
+                        });
+
                         // Alert listening extensions (like the Tracker) that files have been modified
                         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
                             savedFiles.forEach(f => window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', f));
@@ -342,8 +351,7 @@ export class InSetuExtBridge extends InSetuElement {
                                 </insetu-repo-filter>
                             </insetu-filter-dropdown>
                         </div>
-
-                        <div style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: 100%; left: 0; right: 0; max-height: 50vh; overflow-y: auto; background: var(--pane-bg); border-bottom: 1px solid var(--border); border-top: 1px dashed var(--border); padding: 12px 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-direction: column;">
+                        <div style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: 100%; left: 0; right: 0; height: calc(100dvh - 170px); overflow-y: auto; background: var(--pane-bg); border-bottom: 1px solid var(--border); border-top: 1px dashed var(--border); padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-direction: column;">
                             ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}
                             ${Object.entries(groupedCells).map(([file, groupCells]) => {
                                     const allChecked = groupCells.every(c => c.active);
@@ -356,7 +364,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             icon=""
                                             intentColor=${allChecked ? "var(--intent-success)" : (someChecked ? "var(--intent-warning)" : "var(--intent-neutral)")}
                                             style="margin-bottom: 12px; display: block;">
-                                            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: -12px;">
+                                            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: -5px;">
                                                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
                                                     <input type="checkbox" style="transform: scale(1.2); margin: 0; cursor: pointer; margin-left: 2px;"
                                                         .checked=${allChecked}

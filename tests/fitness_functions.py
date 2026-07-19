@@ -138,6 +138,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
+        is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
+
         # CQRS Hook Parity Check
         hook_events = []
         for dec in node.decorator_list:
@@ -145,10 +147,20 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
                     if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
                         hook_events.append(dec.args[0].value)
-
         if 'vfs_transaction_committed' in hook_events:
             if 'post_file_save' not in hook_events or 'post_file_delete' not in hook_events:
                 report_violation("CQRS_EVENT_PARITY", self.filepath, node.lineno, "Function subscribes to 'vfs_transaction_committed' but is missing 'post_file_save' and/or 'post_file_delete'.")
+
+        # Check for BANNED_MAGIC_GENERATOR in worker tasks
+        if is_ext:
+            is_worker = any(
+                isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'worker'
+                for dec in node.decorator_list
+            )
+            if is_worker:
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Yield):
+                        report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
 
         self.generic_visit(node)
     def visit_ImportFrom(self, node):

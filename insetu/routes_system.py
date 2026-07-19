@@ -69,29 +69,48 @@ def get_system_config(workspace_id):
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
-
                             # Extract metadata from the mounted extension
                             import sys
+                            err = None
                             mod = sys.modules.get(f"insetu.extensions.{ext_name}.engine_{ext_name}") or \
                                         sys.modules.get(f"insetu.extensions.engine_{ext_name}") or \
                                         sys.modules.get(f"insetu.engine_{ext_name}")
 
                             if not mod:
                                     import importlib
-                                    try: mod = importlib.import_module(f"insetu.extensions.{ext_name}.engine_{ext_name}")
-                                    except ImportError:
-                                            try: mod = importlib.import_module(f"insetu.extensions.engine_{ext_name}")
-                                            except ImportError:
-                                                    try: mod = importlib.import_module(f"insetu.engine_{ext_name}")
-                                                    except ImportError: pass
+                                    def safe_import(target):
+                                            try:
+                                                    return importlib.import_module(target), None
+                                            except ModuleNotFoundError as e:
+                                                    if e.name == target.split('.')[-1] or e.name == target:
+                                                            return None, None
+                                                    return None, f"Missing dependency: {e.name}"
+                                            except Exception as e:
+                                                    return None, str(e)
 
-                            if mod:
+                                    for target in [
+                                            f"insetu.extensions.{ext_name}.engine_{ext_name}",
+                                            f"insetu.extensions.engine_{ext_name}",
+                                            f"insetu.engine_{ext_name}"
+                                    ]:
+                                            mod, err = safe_import(target)
+                                            if mod or err: break
+                            missing_exts = []
+                            if err:
+                                    title = f"⚠️ {title} (Broken)"
+                                    desc = f"Failed to load: {err}"
+                            elif mod:
                                     bp_obj = getattr(mod, f"{ext_name}_bp", None)
                                     if bp_obj:
                                             title = getattr(bp_obj, 'title', title)
                                             desc = getattr(bp_obj, 'description', desc)
 
-                            available.append({"id": ext_name, "title": title, "description": desc})
+                                    for dep in getattr(mod, '__external_depends__', []):
+                                            import importlib.util
+                                            if importlib.util.find_spec(dep) is None:
+                                                    missing_exts.append(dep)
+
+                            available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts})
     from insetu.sdk.extension import _REGISTERED_SETTINGS_SCHEMAS
 
     evaluated_schemas = {}

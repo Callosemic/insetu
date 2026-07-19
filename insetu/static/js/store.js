@@ -39,6 +39,27 @@ export const AppStore = createStore(
             dirtyDiffRepos: new Set(["ALL"]),
             cachedDiffFiles: null,
 
+            optimisticallyAddFileToManifest: (filepath) => {
+                const { manifest } = get();
+                const updatedManifest = { ...manifest };
+                const repoDir = filepath.split('/')[0];
+                const defaultBucket = `${repoDir}_context.txt`;
+
+                if (updatedManifest[defaultBucket]) {
+                    const bucketCopy = { ...updatedManifest[defaultBucket], files: [...updatedManifest[defaultBucket].files] };
+                    if (!bucketCopy.files.includes(filepath)) {
+                        bucketCopy.files.push(filepath);
+                    }
+                    updatedManifest[defaultBucket] = bucketCopy;
+                } else {
+                    updatedManifest[defaultBucket] = {
+                        files: [filepath],
+                        meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
+                    };
+                }
+                set({ manifest: updatedManifest });
+            },
+
             resetState: () => set({
                 globalBrowsePath: [],
                 currentBrowsePath: [],

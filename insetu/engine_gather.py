@@ -296,12 +296,11 @@ def _process_vfs_ledger(workspace_id="default"):
     row = cursor.fetchone()
     if not row or not row['last_mut']:
         return
-
     last_mut = row['last_mut']
     now = time.time()
 
-    # Macro Slew Limiter: 5-second silence window
-    if now - last_mut < 5.0:
+    # Macro Slew Limiter: 1.5-second silence window to balance batching with UI responsiveness
+    if now - last_mut < 1.5:
         return
 
     events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()

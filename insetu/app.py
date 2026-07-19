@@ -71,15 +71,27 @@ def load_workspace_extensions():
         if ext == "config": continue # Pure frontend UI extension
         try:
             # Try the extensions folder first, fallback to core chassis
-            try:
-                # ADR 0012: Bundled Subdirectory Extraction
-                modules[ext] = importlib.import_module(f"insetu.extensions.{ext}.engine_{ext}")
-            except ImportError:
+            def safe_import(target):
                 try:
-                    # Legacy flat topology
-                    modules[ext] = importlib.import_module(f"insetu.extensions.engine_{ext}")
-                except ImportError:
-                    modules[ext] = importlib.import_module(f"insetu.engine_{ext}")
+                    return importlib.import_module(target), None
+                except ModuleNotFoundError as e:
+                    if e.name == target.split('.')[-1] or e.name == target:
+                        return None, None
+                    return None, e
+                except Exception as e:
+                    return None, e
+
+            for target in [
+                f"insetu.extensions.{ext}.engine_{ext}",
+                f"insetu.extensions.engine_{ext}",
+                f"insetu.engine_{ext}"
+            ]:
+                mod, err = safe_import(target)
+                if err:
+                    raise err
+                if mod:
+                    modules[ext] = mod
+                    break
         except Exception as e:
             print(f"⚠️  Extension Load Failed [{ext}]: {type(e).__name__} - {str(e)}")
 

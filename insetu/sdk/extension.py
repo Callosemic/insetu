@@ -5,9 +5,10 @@ from insetu.db import get_connection, register_schema
 from insetu.utils_core import extension_auth, get_gather_paths, load_config, resolve_workspace_path
 from insetu.context import VFSTransaction
 class JobManager:
-    def __init__(self, ext_name, workspace_id):
+    def __init__(self, ext_name, workspace_id, job_id=None):
         self.ext_name = ext_name
         self.workspace_id = workspace_id
+        self.current_job_id = job_id
 
     def submit(self, task_name, **kwargs):
         import uuid, json
@@ -17,6 +18,11 @@ class JobManager:
         args_json = json.dumps(kwargs)
         submit_immediate_job(job_id, self.ext_name, task_name, args_json, self.workspace_id)
         return job_id
+
+    def update_progress(self, message, artifact=None):
+        if self.current_job_id:
+            from insetu.workers import update_immediate_job_status
+            update_immediate_job_status(self.current_job_id, 'processing', message, artifact, workspace_id=self.workspace_id)
 _REGISTERED_SETTINGS_SCHEMAS = {}
 class SettingsManager:
     def __init__(self, ext_name, workspace_id, schema=None):
@@ -127,16 +133,14 @@ class DatabaseWrapper:
     def delete(self, table, where_col, where_val):
         self._conn.execute(f"DELETE FROM {table} WHERE {where_col} = ?", (where_val,))
         self._conn.commit()
-
-
 class ExtensionContext:
     """Pre-scoped context object injected into all SDK routes."""
-    def __init__(self, ext_name, workspace_id, settings_schema=None):
+    def __init__(self, ext_name, workspace_id, settings_schema=None, job_id=None):
         self.ext_name = ext_name
         self.workspace_id = workspace_id
         self.vfs = VFSTransaction(workspace_id)
         self.req = request
-        self.jobs = JobManager(ext_name, workspace_id)
+        self.jobs = JobManager(ext_name, workspace_id, job_id=job_id)
         self.store = StoreManager(workspace_id)
         self.settings = SettingsManager(ext_name, workspace_id, schema=settings_schema)
     @property
@@ -223,6 +227,62 @@ class InSetuExtension:
         @self.route('settings/schema', methods=['GET'])
         def get_settings_schema(ctx):
             return jsonify(self.settings_schema)
+    def worker(self, task_name):
+        """
+        SDK Decorator: Automatically wraps a background worker in a safe execution block.
+        Injects the ExtensionContext, catches exceptions, and updates the immediate_jobs ledger.
+        """
+        def decorator(f):
+            from insetu.workers import register_callback, update_immediate_job_status
+            import inspect
+
+            # Do not use functools.wraps here. The metronome relies on inspect.signature
+            # to dynamically inject job_id and workspace_id based on the wrapper's exact kwargs.
+            def wrapper(job_id=None, workspace_id=None, **kwargs):
+                ctx = ExtensionContext(self.name, workspace_id, settings_schema=self.settings_schema, job_id=job_id)
+                update_immediate_job_status(job_id, 'processing', "Initializing task...", workspace_id=workspace_id)
+
+                try:
+                    # Execute the domain logic
+                    if 'job_id' in inspect.signature(f).parameters:
+                        kwargs['job_id'] = job_id
+                    result = f(ctx, **kwargs)
+
+                    # Handle generator yields for progress updates
+                    if inspect.isgenerator(result):
+                        last_yield = None
+                        while True:
+                            try:
+                                progress_msg = next(result)
+                                if isinstance(progress_msg, str):
+                                    update_immediate_job_status(job_id, 'processing', progress_msg, workspace_id=workspace_id)
+                                    last_yield = progress_msg
+                                elif isinstance(progress_msg, dict):
+                                    update_immediate_job_status(job_id, 'processing', progress_msg.get('message'), artifact=progress_msg.get('artifact'), workspace_id=workspace_id)
+                                    last_yield = progress_msg
+                            except StopIteration as e:
+                                result = e.value if e.value is not None else last_yield
+                                break
+
+                    # Evaluate final completion payload
+                    msg = "Task complete."
+                    artifact = {}
+                    if isinstance(result, str):
+                        msg = result
+                    elif isinstance(result, dict):
+                        msg = result.get('message', msg)
+                        artifact = result.get('artifact', {})
+
+                    update_immediate_job_status(job_id, 'completed', msg, artifact=artifact, workspace_id=workspace_id)
+                except Exception as e:
+                    import traceback
+                    err_trace = traceback.format_exc()
+                    print(f"❌ [Worker: {self.name}:{task_name}] Failed:\n{err_trace}")
+                    update_immediate_job_status(job_id, 'failed', str(e), workspace_id=workspace_id)
+
+            register_callback(self.name, task_name, wrapper)
+            return wrapper
+        return decorator
 
         if self.virtual_contexts or self.target_repos:
             from insetu.hooks import hooks

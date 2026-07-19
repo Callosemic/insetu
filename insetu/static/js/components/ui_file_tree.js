@@ -12,6 +12,7 @@ export class InSetuCard extends LitElement {
         entityType: { type: String },
         entityData: { type: Object },
         _overlayActive: { type: Boolean, reflect: true },
+        _openUpwards: { type: Boolean, reflect: true },
         _hasActions: { type: Boolean, reflect: true, attribute: 'has-actions' }
     };
     static styles = [
@@ -21,14 +22,37 @@ export class InSetuCard extends LitElement {
             display: block;
             margin-bottom: 12px;
         }
+        :host([_overlayactive]) {
+            position: relative;
+            z-index: 1000;
+        }
+        .backdrop {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: transparent;
+            z-index: -1;
+            cursor: default;
+        }
+        :host([_overlayactive]) .backdrop { display: block; pointer-events: auto; }
+
         .card-wrapper {
             position: relative;
+            z-index: 1; /* Establishes a local stacking context to trap the drawer above the backdrop */
             background: var(--input-bg, #2d2d2d);
             border: 1px solid var(--border, #444);
             border-radius: 6px;
             display: flex;
-            overflow: hidden;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            transition: border-color 0.2s;
+        }
+        :host([_overlayactive]) .card-wrapper {
+            border-color: var(--intent-primary, #3b82f6);
+            border-bottom-left-radius: 0;
+        }
+        :host([_overlayactive][_openupwards]) .card-wrapper {
+            border-bottom-left-radius: 6px;
+            border-top-left-radius: 0;
         }
         .main-content {
             flex: 1;
@@ -38,6 +62,7 @@ export class InSetuCard extends LitElement {
             padding-right: 15px;
             cursor: pointer;
             min-width: 0;
+            border-radius: 6px 0 0 6px;
         }
         .card-header {
             display: flex;
@@ -94,34 +119,56 @@ export class InSetuCard extends LitElement {
         }
         .action-overlay {
             position: absolute;
-            right: 36px;
-            bottom: 8px;
-            max-width: calc(100% - 46px);
-            top: auto;
-            background: rgba(0, 0, 0, 0.25);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
-            border-radius: 8px;
+            left: -1px;
+            right: 21px; /* Keeps the drawer perfectly out of the trigger bar's vertical path */
+            background: var(--input-bg, #2d2d2d);
+            border: 1px solid var(--intent-primary, #3b82f6);
             display: flex;
             justify-content: flex-end;
             align-items: flex-end;
             flex-wrap: wrap;
             gap: 8px;
-            padding: 8px;
+            padding: 12px 15px;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.2s ease-in-out;
-            z-index: 10;
+            transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
+            z-index: 1; /* Elevated above the backdrop to maintain hover events */
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+        }
+        .action-overlay:not(.open-up) {
+            top: calc(100% - 1px); /* Sub-pixel overlap kills any hover dead zones */
+            border-top: none;
+            border-radius: 0 0 6px 6px;
+            transform: translateY(-10px);
+        }
+        .action-overlay.open-up {
+            bottom: calc(100% - 1px);
+            border-bottom: none;
+            border-radius: 6px 6px 0 0;
+            transform: translateY(10px);
+            box-shadow: 0 -10px 20px rgba(0,0,0,0.3);
+        }
+        .action-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
         }
         :host-context([data-theme="light"]) .action-overlay {
-            background: rgba(255, 255, 255, 0.6);
+            background: #ffffff;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
         }
         :host-context([data-theme="e-ink"]) .action-overlay {
             background: #ffffff;
-            border: 1px solid #14b8a6;
-            backdrop-filter: none;
-            -webkit-backdrop-filter: none;
+            border: 2px solid #8b5cf6;
+            border-top: none;
+            box-shadow: 4px 4px 0 #14b8a6;
         }
+        :host-context([data-theme="e-ink"]) .action-overlay.open-up {
+            border-top: 2px solid #8b5cf6;
+            border-bottom: none;
+            box-shadow: 4px -4px 0 #14b8a6;
+        }
+
         :host-context([data-theme="e-ink"]) .card-wrapper {
             border: 2px solid #8b5cf6;
             box-shadow: 4px 4px 0 #14b8a6;
@@ -140,13 +187,6 @@ export class InSetuCard extends LitElement {
         }
         :host-context([data-theme="e-ink"]) .trigger-bar {
             border-left: 2px solid #000;
-        }
-        .action-overlay.active {
-            opacity: 1;
-            pointer-events: none;
-        }
-        .action-overlay.active ::slotted(*), .action-overlay.active > * {
-            pointer-events: auto;
         }
     `];
     constructor() {
@@ -190,9 +230,18 @@ export class InSetuCard extends LitElement {
             this._overlayActive = false;
         }
     }
-
     _openOverlay() {
         this._overlayActive = true;
+
+        // Smart Collision Detection: Calculate if the drawer needs to open upwards
+        const rect = this.getBoundingClientRect();
+        // Estimate the drawer requires ~80px of vertical space
+        if (rect.bottom + 80 > window.innerHeight && rect.top - 80 > 0) {
+            this._openUpwards = true;
+        } else {
+            this._openUpwards = false;
+        }
+
         window.dispatchEvent(new CustomEvent('insetu-card-opened', { detail: { card: this } }));
     }
 
@@ -216,6 +265,7 @@ export class InSetuCard extends LitElement {
     }
     render() {
         return html`
+            <div class="backdrop" @click=${() => this._overlayActive = false}></div>
             <div class="card-wrapper"
                 @mouseleave=${() => this._overlayActive = false}
                 @touchstart=${this._handleTouchStart}
@@ -233,14 +283,13 @@ export class InSetuCard extends LitElement {
                     <slot></slot>
                 </div>
                 <div class="trigger-bar" 
-                    @pointerenter=${(e) => { if (e.pointerType === 'mouse') this._openOverlay();
-                    }}
+                    @pointerenter=${(e) => { if (e.pointerType === 'mouse') this._openOverlay(); }}
                     @click=${(e) => { e.stopPropagation();
 if (!this._overlayActive) this._openOverlay(); else this._overlayActive = false; }}>
                     <span class="trigger-icon">‹</span>
                 </div>
                 <div class="action-overlay ${this._overlayActive ? 'active' : ''}"
-                    @click=${(e) => { if(e.target.tagName === 'BUTTON' || e.target.closest('button')) this._overlayActive = false; }}>
+                    @click=${(e) => { if(e.target.classList.contains('action-overlay') || e.target.tagName === 'BUTTON' || e.target.closest('button')) this._overlayActive = false; }}>
                     ${this._renderDynamicActions()}
                     <slot name="actions" @slotchange=${this._handleSlotChange}></slot>
                 </div>

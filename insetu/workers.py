@@ -213,10 +213,11 @@ def _metronome_loop():
                         workspace_ids.append("default")
                 except Exception:
                     pass
-
             now = time.time()
             for ws_id in workspace_ids:
                 try:
+                    # JIT initialization: instantly prep schemas for newly mounted workspaces
+                    _init_worker_schema(ws_id)
                     conn = get_connection("workers", workspace_id=ws_id)
                     cursor = conn.execute("SELECT * FROM jobs WHERE status='pending' AND next_run_at <= ?", (now,))
                     ready_jobs = cursor.fetchall()

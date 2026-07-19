@@ -93,6 +93,11 @@ export class InSetuExtConfig extends InSetuElement {
                                 <label for="ext_chk_${ext.id}" style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; cursor: pointer;"><b>${ext.id}</b>: ${ext.title}</label>
                             </div>
                             ${ext.description ? html`<div style="font-size: 0.8rem; color: var(--text-muted); margin-left: 26px;">${ext.description}</div>` : ''}
+                            ${(ext.missing_externals && ext.missing_externals.length > 0) ? html`
+                                <div style="font-size: 0.8rem; color: var(--intent-warning); font-weight: bold; margin-left: 26px; margin-top: 4px;">
+                                    ⚠️ Missing dependencies. Run: <code style="background: var(--bg); padding: 2px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--text);">pip install ${ext.missing_externals.join(' ')}</code>
+                                </div>
+                            ` : ''}
                         </div>
                     `;
                 })}
