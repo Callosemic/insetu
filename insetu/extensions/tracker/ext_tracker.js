@@ -13,6 +13,7 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const KanbanStore = createExtensionStore('Kanban', {
     tasks: [],
     pinnedTags: new Set(["ALL"]),
+    pinnedBuckets: new Set(["ALL"]),
     tagsExpanded: false,
     modals: { new: false, edit: false },
     newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
@@ -37,7 +38,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
             KanbanStore.setState({ tasks: data.tasks || [] });
         }
     }
-}, ['pinnedTags']);
+}, ['pinnedTags', 'pinnedBuckets']);
 window.inSetu.stores.Kanban = KanbanStore;
 // UI Hooks for real-time reactivity
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
@@ -65,12 +66,15 @@ export class InSetuExtTracker extends InSetuElement {
         tasks: { type: Array },
         pinnedRepos: { type: Object },
         pinnedTags: { type: Object },
+        pinnedBuckets: { type: Object },
         allRepos: { type: Array },
         activeTab: { type: String },
         searchQuery: { type: String },
         _modals: { type: Object },
         _yamlExpanded: { type: Boolean },
-        _showFilters: { type: Boolean },
+        _reposExpanded: { type: Boolean },
+        _bucketsExpanded: { type: Boolean },
+        _tagsExpanded: { type: Boolean },
         _isSaving: { type: Boolean },
         _isCopying: { type: Boolean },
         _isDownloading: { type: Boolean }
@@ -78,6 +82,9 @@ export class InSetuExtTracker extends InSetuElement {
 static styles = [
 sharedStyles,
 css`
+    :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    .tracker-body { flex: 1; overflow-y: auto; padding: 20px; }
+
     .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; display: inline-block; }
     :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
     :host-context([data-theme="light"]) .task-tag { background: #e2e8f0; color: #0f172a; }
@@ -87,8 +94,6 @@ css`
     }
     .column { flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px; }
     .column h3 { margin-top: 0; font-size: 1.1rem; }
-    .filter-container { display: flex;
-    flex-direction: column; gap: 10px; margin-bottom: 15px; }
 
     insetu-modal {
         position: fixed;
@@ -123,16 +128,18 @@ constructor() {
         this.tasks = [];
         this.pinnedRepos = new Set(['ALL']);
         this.pinnedTags = new Set(['ALL']);
+        this.pinnedBuckets = new Set(['ALL']);
         this.allRepos = [];
         this.activeTab = 'todos';
         this.searchQuery = '';
         this._modals = { new: false, edit: false };
         this._yamlExpanded = false;
-        this._showFilters = false;
+        this._reposExpanded = true;
+        this._bucketsExpanded = true;
+        this._tagsExpanded = true;
         this._isSaving = false;
         this._isCopying = false;
         this._isDownloading = false;
-        this._docClickListener = this._handleDocumentClick.bind(this);
 }
     connectedCallback() {
         super.connectedCallback();
@@ -144,18 +151,18 @@ constructor() {
         });
         this.allRepos = AppStore.getState().allRepos || [];
         this.pinnedRepos = AppStore.getState().pinnedRepos || new Set(['ALL']);
-
         this.subscribe(KanbanStore, (state) => {
             this.tasks = state.tasks || [];
             this.pinnedTags = state.pinnedTags;
+            this.pinnedBuckets = state.pinnedBuckets;
             this._modals = state.modals;
             this.requestUpdate();
         });
         const kState = KanbanStore.getState();
         this.tasks = kState.tasks || [];
         this.pinnedTags = kState.pinnedTags;
+        this.pinnedBuckets = kState.pinnedBuckets;
         this._modals = kState.modals;
-        document.addEventListener('click', this._docClickListener);
         KanbanStore.getState().fetchTasks();
     }
 
@@ -165,17 +172,8 @@ constructor() {
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('click', this._docClickListener);
     }
-    _handleDocumentClick(e) {
-        if (!this._showFilters) return;
-        const path = e.composedPath();
-        const isFilterContent = path.some(node => node.classList && (node.classList.contains('filter-container') || node.classList.contains('filter-toggle-btn')));
-        if (!isFilterContent) {
-            this._showFilters = false;
-            this.requestUpdate();
-        }
-    }
+
     updated(changedProperties) {
         super.updated(changedProperties);
         // Ensure the title textarea expands dynamically on initial render
@@ -216,7 +214,6 @@ constructor() {
             throw new Error(err.error || "Failed to transition task.");
         }
     }
-
     _renderTaskCard(t) {
         const shortDate = t.timestamp ? t.timestamp.split('T')[0] : 'Unknown Date';
         const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
@@ -403,63 +400,122 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
             }
         });
         const tagsArray = Array.from(allTags).sort();
-
         // Apply filters to tasks
         const filteredTasks = this.tasks.filter(t => {
             const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
             const matchesTag = this.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => this.pinnedTags.has(tag)));
-            return matchesRepo && matchesTag;
+
+            let matchesBucket = true;
+            if (!this.pinnedBuckets.has('ALL')) {
+                const repoBucketsPinned = Array.from(this.pinnedBuckets).some(pb => pb.startsWith(t.repo + '::'));
+                if (repoBucketsPinned) {
+                    matchesBucket = this.pinnedBuckets.has(t.repo + '::' + t.subBucket);
+                }
+            }
+            return matchesRepo && matchesTag && matchesBucket;
         });
         const textFilteredTasks = this.searchQuery 
             ? window.inSetu.utils.fuzzyFilterObjects(filteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
             : filteredTasks;
 
-        const activeFilters = [];
-        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        this.pinnedTags.forEach(t => { if (t !== 'ALL') activeFilters.push('#' + t); });
-        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
+        const hasFilters = !this.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
 
         return html`
             ${this._renderNewTaskModal()}
-            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
-                    <insetu-search-bar 
-                        style="flex: 1;"
-                        placeholder="🔍 Fuzzy search tickets..." 
-                        .value=${this.searchQuery} 
-                        @search-changed=${(e) => this.searchQuery = e.detail.value}>
-                    </insetu-search-bar>
-                    <button class="btn-sm filter-toggle-btn" style="background: ${this._showFilters ? 'var(--input-bg)' : 'transparent'}; border: 1px solid ${this._showFilters ? 'var(--border)' : 'transparent'}; color: var(--text); padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap; max-width: 250px; overflow: hidden; text-overflow: ellipsis;" @click=${() => this._showFilters = !this._showFilters} title="${activeFilters.join(', ')}">
-                        ${this._showFilters ? '▼ ' + filterBtnText : '▶ ' + filterBtnText}
-                    </button>
-                </div>
+            <insetu-standard-toolbar
+                searchPlaceholder="🔍 Fuzzy search tickets..."
+                .searchQuery=${this.searchQuery}
+                @search-changed=${(e) => this.searchQuery = e.detail.value}
+                .enableFilterDropdown=${true}
+                .filterText=${"Filters"}
+                .hasFiltersOverride=${hasFilters}>
+                <div slot="filters" style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
+                    <div style="display: flex; align-items: flex-start; gap: 5px;">
+                        <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._reposExpanded = !this._reposExpanded}>
+                            📌 Repos ${this._reposExpanded ? '▼' : '▶'}
+                        </span>
+                        <insetu-repo-filter
+                            label=""
+                            .repos=${this._reposExpanded ? this.allRepos : Array.from(this.pinnedRepos).filter(r => r !== 'ALL')}
+                            .activeRepos=${Array.from(this.pinnedRepos)}
+                            @repo-filter-changed=${(e) => {
+                                AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos));
+                                KanbanStore.setState({ pinnedBuckets: new Set(['ALL']) });
+                            }}>
+                        </insetu-repo-filter>
+                    </div>
+                        ${!this.pinnedRepos.has('ALL') ? html`
+                            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
+                                ${Array.from(this.pinnedRepos).map(repo => {
+                                    const buckets = getFlattenedBuckets(repo);
+                                    if (buckets.length === 0) return '';
 
-                <div class="filter-container" style="display: ${this._showFilters ? 'flex' : 'none'}; position: absolute; top: calc(100% + 5px); left: 15px; right: 15px; z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; margin: 0; box-shadow: 0 10px 30px rgba(0,0,0,0.4);">
-                    <insetu-repo-filter
-                    label="📌 Repos:"
-                    .repos=${this.allRepos}
-                    .activeRepos=${Array.from(this.pinnedRepos)}
-                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
+                                    const repoBucketsActive = buckets.some(b => this.pinnedBuckets.has(repo + '::' + b.id));
+                                    const repoAllActive = this.pinnedBuckets.has('ALL') || !repoBucketsActive;
 
-                ${tagsArray.length > 0 ? html`
-                    <insetu-filter-group
-                        label="🏷️ Tags:"
-                        .allowAll=${true}
-                        .items=${tagsArray.map(t => ({id: t, label: '#' + t}))}
-                        .activeItems=${Array.from(this.pinnedTags)}
-                        @filter-changed=${(e) => {
-                            KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
-                        }}>
-                    </insetu-filter-group>
-                ` : ''}
+                                    const visibleBuckets = this._bucketsExpanded 
+                                        ? buckets 
+                                        : buckets.filter(b => this.pinnedBuckets.has(repo + '::' + b.id));
+
+                                    if (!this._bucketsExpanded && !repoBucketsActive) return '';
+
+                                    return html`
+                                        <div style="display: flex; align-items: flex-start; gap: 5px;">
+                                            <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._bucketsExpanded = !this._bucketsExpanded}>
+                                                🗂️ ${repo} ${this._bucketsExpanded ? '▼' : '▶'}
+                                            </span>
+                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @pill-toggled=${(e) => {
+                                                e.stopPropagation();
+                                                const { id, active } = e.detail;
+                                                let newSet = new Set(this.pinnedBuckets);
+
+                                                if (id === repo + '::ALL') {
+                                                    buckets.forEach(b => newSet.delete(repo + '::' + b.id));
+                                                    if (newSet.size === 0) newSet.add('ALL');
+                                                } else {
+                                                    newSet.delete('ALL');
+                                                    if (active) newSet.add(id);
+                                                    else newSet.delete(id);
+                                                    if (newSet.size === 0) newSet.add('ALL');
+                                                }
+                                                KanbanStore.setState({ pinnedBuckets: newSet });
+                                            }}>
+                                                <insetu-filter-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></insetu-filter-pill>
+                                                ${visibleBuckets.map(b => html`
+                                                    <insetu-filter-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></insetu-filter-pill>
+                                                `)}
+                                            </div>
+                                        </div>
+                                    `;
+                                })}
+                            </div>
+                        ` : ''}
+                        ${tagsArray.length > 0 ? html`
+                            <div style="display: flex; align-items: flex-start; gap: 5px; margin-top: 10px;">
+                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._tagsExpanded = !this._tagsExpanded}>
+                                    🏷️ Tags ${this._tagsExpanded ? '▼' : '▶'}
+                                </span>
+                                <insetu-filter-group
+                                    label=""
+                                    .allowAll=${true}
+                                    .items=${(this._tagsExpanded ? tagsArray : Array.from(this.pinnedTags).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
+                                    .activeItems=${Array.from(this.pinnedTags)}
+                                    @filter-changed=${(e) => {
+                                        KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
+                                    }}>
+                                </insetu-filter-group>
+                            </div>
+                        ` : ''}
                 </div>
+            </insetu-standard-toolbar>
+
+            <div class="tracker-body">
+                ${this.activeTab === 'todos' ? this._renderColumns('todos', textFilteredTasks) : ''}
+                ${this.activeTab === 'bugs' ? this._renderColumns('bugs', textFilteredTasks) : ''}
+                ${this.activeTab === 'queue' ? this._renderColumns('queue', textFilteredTasks) : ''}
+                ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             </div>
 
-            ${this.activeTab === 'todos' ? this._renderColumns('todos', textFilteredTasks) : ''}
-${this.activeTab === 'bugs' ? this._renderColumns('bugs', textFilteredTasks) : ''}
-${this.activeTab === 'queue' ? this._renderColumns('queue', textFilteredTasks) : ''}
-${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             ${this._renderEditTaskModal()}
         `;
     }

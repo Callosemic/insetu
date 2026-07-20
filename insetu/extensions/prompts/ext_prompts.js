@@ -11,8 +11,10 @@ export class InSetuExtPrompts extends InSetuElement {
         prompts: { type: Array },
         _isMenuOpen: { type: Boolean }
     };
-
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        .prompts-body { flex: 1; overflow-y: auto; padding: 20px; }
+    `];
 
     constructor() {
         super();
@@ -88,8 +90,8 @@ export class InSetuExtPrompts extends InSetuElement {
     render() {
         return html`
             ${this.loading ? html`<div class="spinner" style="display:block; margin-top: 0;">Loading prompts...</div>` : html`
-                <div @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}>
-                    <insetu-file-tree 
+                <div class="prompts-body" @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}>
+                    <insetu-file-tree  
                         .files=${this.prompts} 
                         stripPrefix=".insetu/prompts/"
                         basePath=".insetu/prompts/"

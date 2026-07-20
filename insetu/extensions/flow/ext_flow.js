@@ -57,7 +57,10 @@ export class InSetuExtFlow extends InSetuElement {
         allRepos: { type: Array },
         _showFilters: { type: Boolean }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        .flow-body { flex: 1; overflow-y: auto; padding: 20px; }
+    `];
     constructor() {
         super();
         this.batches = [];
@@ -249,33 +252,25 @@ export class InSetuExtFlow extends InSetuElement {
             const filteredBatches = this.searchQuery 
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
                 : repoFilteredBatches;
-
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
-            const activeFilters = [];
-            this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-            const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
-
             return html`
-                <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                    <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
-                        <insetu-search-bar 
-                            style="flex: 1;"
-                            placeholder="🔍 Fuzzy search workflows..." 
-                            .value=${this.searchQuery} 
-                            @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}>
-                        </insetu-search-bar>
-                        <insetu-filter-dropdown filterText=${filterBtnText}>
-                            <insetu-repo-filter
-                                label="📌 Repos:"
-                                .repos=${this.allRepos}
-                                .activeRepos=${Array.from(this.pinnedRepos)}
-                                @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                            </insetu-repo-filter>
-                        </insetu-filter-dropdown>
-                    </div>
-                </div>
+                <insetu-standard-toolbar
+                    searchPlaceholder="🔍 Fuzzy search workflows..."
+                    .searchQuery=${this.searchQuery}
+                    @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
+                    .enableFilterDropdown=${true}
+                    .activeFilters=${Array.from(this.pinnedRepos)}>
+                    <insetu-repo-filter
+                        slot="filters"
+                        label="📌 Repos:"
+                        .repos=${this.allRepos}
+                        .activeRepos=${Array.from(this.pinnedRepos)}
+                        @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </insetu-standard-toolbar>
 
+            <div class="flow-body">
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
                         ${this.batches.length === 0 ? html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
@@ -311,7 +306,8 @@ export class InSetuExtFlow extends InSetuElement {
                             }}>
                         </insetu-categorized-list>
                     </div>
-                    <insetu-modal 
+            </div>
+                    <insetu-modal  
                             ?open=${this._editModalOpen} 
                             fullscreen
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}

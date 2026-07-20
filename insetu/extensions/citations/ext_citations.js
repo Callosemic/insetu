@@ -393,25 +393,23 @@ export class InSetuExtCitations extends InSetuElement {
         const filtered = this.mainSearchQuery 
             ? window.inSetu.utils.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
             : pinnedSet;
-
         return html`
-            <div class="sticky-header" style="padding: 0; border-bottom: 1px solid var(--border); background: var(--bg); display: flex; flex-direction: column;">
-                <insetu-search-bar 
-                    style="border-bottom: 1px solid var(--border);"
-                    placeholder="🔍 Fuzzy search personal library..." 
-                    .value=${this.mainSearchQuery} 
-                    @search-changed=${e => this.mainSearchQuery = e.detail.value}>
-                </insetu-search-bar>
-                <div style="padding: 10px 12px; background: var(--input-bg);">
+            <insetu-standard-toolbar
+                searchPlaceholder="🔍 Fuzzy search personal library..."
+                .searchQuery=${this.mainSearchQuery}
+                @search-changed=${(e) => { this.mainSearchQuery = e.detail.value; }}
+                .noPadding=${true}
+                .bottomBorder=${true}>
+                <div slot="bottom-row" style="padding: 5px 20px; background: var(--input-bg);">
                     <insetu-repo-filter
-                    label="📌 Repos:"
-                    .repos=${this.allRepos}
-                    .activeRepos=${Array.from(this.pinnedRepos)}
-                    .extraRepos=${[{id: "ORPHANS", label: "👻 Orphans"}]}
-                    @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
-                </insetu-repo-filter>
+                        label="📌 Repos:"
+                        .repos=${this.allRepos}
+                        .activeRepos=${Array.from(this.pinnedRepos)}
+                        .extraRepos=${[{id: "ORPHANS", label: "👻 Orphans"}]}
+                        @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
+                    </insetu-repo-filter>
                 </div>
-            </div>
+            </insetu-standard-toolbar>
             <div>
                 ${this.mainLoading ? html`<div class="spinner" style="display: block;">Loading library...</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 10px;">

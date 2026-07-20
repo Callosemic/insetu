@@ -128,7 +128,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
         allRepos: { type: Array },
         _showFilters: { type: Boolean }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        .git-body { flex: 1; overflow-y: auto; padding: 20px; }
+    `];
 
     constructor() {
         super();
@@ -408,33 +411,26 @@ disconnectedCallback() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-
-        const activeFilters = [];
-        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
-
         return html`
-            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
-                    <insetu-search-bar 
-                        style="flex: 1;"
-                        placeholder="🔍 Fuzzy search pending diffs..." 
-                        .value=${this.searchQuery} 
-                        @search-changed=${e => this.searchQuery = e.detail.value}>
-                    </insetu-search-bar>
-                    <insetu-filter-dropdown filterText=${filterBtnText}>
-                        <insetu-repo-filter
-                            label="📌 Repos:"
-                            .repos=${this.allRepos}
-                            .activeRepos=${Array.from(this.pinnedRepos)}
-                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                        </insetu-repo-filter>
-                    </insetu-filter-dropdown>
-                </div>
-            </div>
+            <insetu-standard-toolbar
+                searchPlaceholder="🔍 Fuzzy search pending diffs..."
+                .searchQuery=${this.searchQuery}
+                @search-changed=${(e) => this.searchQuery = e.detail.value}
+                .enableFilterDropdown=${true}
+                .activeFilters=${Array.from(this.pinnedRepos)}>
+                <insetu-repo-filter
+                    slot="filters"
+                    label="📌 Repos:"
+                    .repos=${this.allRepos}
+                    .activeRepos=${Array.from(this.pinnedRepos)}
+                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                </insetu-repo-filter>
+            </insetu-standard-toolbar>
+
+            <div class="git-body">
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-            <div style="display: flex; flex-direction: column; margin-top: 15px;">
+            <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
                     <insetu-category-section titleText=${catName}>
                         ${categories[catName].map(f => html`
@@ -525,6 +521,7 @@ ${(() => {
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>
                     </div>
                 ` : ''}
+            </div>
             </div>
             <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
