@@ -346,7 +346,10 @@ window.addEventListener('DOMContentLoaded', async () => {
             // Synchronize branding tokens while we have the config
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.getElementById('global-status-bar');
-            if (statusBar) statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
+            if (statusBar) {
+                statusBar.setAttribute('data-base-title', config.instance_title || "inSetu Developer OS");
+                updateDefaultStatus();
+            }
         }
     } catch (e) {
         console.warn("Failed to fetch tenant configuration on boot.", e);
@@ -547,17 +550,38 @@ export function generateSafeSlug(str) {
     if (!str) return '';
     return normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
+export function updateDefaultStatus() {
+    const bar = document.getElementById('global-status-bar');
+    if (!bar) return;
+    const baseTitle = bar.getAttribute('data-base-title') || bar.getAttribute('data-default') || "inSetu Developer OS";
+    const repos = AppStore.getState().pinnedRepos;
 
+    let defaultText = baseTitle;
+    if (repos && repos.size > 0 && !repos.has('ALL')) {
+        defaultText = `${baseTitle} | [${Array.from(repos).join(', ')}]`;
+    }
+
+    bar.setAttribute('data-default', defaultText);
+    if (!bar.getAttribute('data-is-temp')) {
+        bar.innerText = defaultText;
+        bar.title = defaultText;
+        bar.style.color = 'var(--text)';
+    }
+}
+
+AppStore.subscribe(state => state.pinnedRepos, () => updateDefaultStatus());
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     const bar = document.getElementById('global-status-bar');
     if (!bar) return;
+    bar.setAttribute('data-is-temp', 'true');
     bar.innerText = msg;
+    bar.title = msg;
     bar.style.color = isError ? 'var(--intent-danger)' : 'var(--text)';
     if (timeout) {
         setTimeout(() => {
             if (bar.innerText === msg) {
-                bar.innerText = bar.getAttribute('data-default');
-                bar.style.color = 'var(--text)';
+                bar.removeAttribute('data-is-temp');
+                updateDefaultStatus();
             }
         }, timeout);
     }
@@ -816,7 +840,8 @@ async function performSoftRefresh() {
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
             const statusBar = document.getElementById('global-status-bar');
             if (statusBar) {
-                statusBar.setAttribute('data-default', config.instance_title || "inSetu Developer OS");
+                statusBar.setAttribute('data-base-title', config.instance_title || "inSetu Developer OS");
+                updateDefaultStatus();
             }
             // Clear out dynamic sub-tab navigation tracks and extension views to prepare for a clean redraw
             document.querySelectorAll('.sub-tabs').forEach(track => track.replaceChildren());

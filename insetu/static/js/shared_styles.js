@@ -58,9 +58,9 @@ export const sharedStyles = css`
     .sub-tab:hover { color: var(--text); }
 .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
 }
-.sticky-header { position: sticky; top: -20px; margin: -20px -20px 10px -20px; padding: 6px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
+.sticky-header { position: sticky; top: 0; margin: -20px -20px 10px -20px; padding: 5px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
 @media (max-width: 1024px), (max-aspect-ratio: 1/1) {
-    .sticky-header { top: -15px; margin: -15px -5px 10px -5px; padding: 6px 5px; }
+    .sticky-header { top: 0; margin: -15px -5px 10px -5px; padding: 5px 15px; }
 }
 .fuzzy-search-wrapper {
     display: flex;

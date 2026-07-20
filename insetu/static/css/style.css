@@ -36,8 +36,7 @@ body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg);
 .top-bar { position: fixed; top: 0; left: 0; right: 0; height: 54px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 20px; z-index: 100; display: flex; align-items: center; justify-content: space-between; }
 .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
 .system-action-btn:hover { background: var(--input-bg); }
-
-.bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; background: var(--bg); border-top: 1px solid var(--border); z-index: 1000; display: flex; align-items: center; padding: 0 15px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); font-weight: bold; }
+.bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; background: var(--bg); border-top: 1px solid var(--border); z-index: 1000; padding: 0 15px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); font-weight: bold; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 /* Tabs */
 .tabs { display: flex; gap: 8px; padding: 0; margin: 0; overflow-x: auto; width: 100%; max-width: 100%; align-items: center; height: 100%; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
@@ -82,7 +81,7 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 .screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto;
 box-sizing: border-box; border-radius: 0; box-shadow: none; }
 /* Full-Bleed Chassis: Zero out layout padding and container scrollbars when full-screen views are active */
-.screen:has(#sub-term.active), .screen:has(#sub-bridge.active) { padding: 0 !important; overflow: hidden !important; }
+.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { padding: 0 !important; overflow: hidden !important; }
 .sticky-header { position: sticky; top: -20px; margin: -20px -20px 15px -20px; padding: 20px 20px 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: block; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }

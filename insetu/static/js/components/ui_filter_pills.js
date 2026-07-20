@@ -217,15 +217,17 @@ export class InSetuRepoFilter extends LitElement {
 export class InSetuFilterDropdown extends LitElement {
     static properties = {
         filterText: { type: String },
-        open: { type: Boolean, reflect: true }
+        open: { type: Boolean, reflect: true },
+        hasFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        .container { position: relative; display: flex; align-items: center; }
+        :host { display: block; position: static; }
+        .container { display: flex; align-items: center; }
         .panel {
-            display: none; position: absolute; top: calc(100% + 5px); right: 0;
-            z-index: 100; padding: 15px; background: var(--pane-bg); border: 1px solid var(--border);
-            border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-            width: 300px; max-width: calc(100vw - 40px);
+            display: none; position: absolute; top: 100%; left: 0; right: 0;
+            z-index: 100; padding: 15px 20px; background: var(--pane-bg); border-bottom: 1px solid var(--border);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            max-height: 50vh; overflow-y: auto;
         }
         :host([open]) .panel { display: flex; flex-direction: column; }
         .btn {
@@ -239,6 +241,7 @@ export class InSetuFilterDropdown extends LitElement {
         super();
         this.open = false;
         this.filterText = 'Filters';
+        this.hasFilters = false;
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
     }
     connectedCallback() {
@@ -259,8 +262,8 @@ export class InSetuFilterDropdown extends LitElement {
     render() {
         return html`
             <div class="container">
-                <button class="btn-sm btn" title=${this.filterText} @click=${() => this.open = !this.open}>
-                    ${this.open ? '▼' : '▶'} ${this.filterText}
+                <button class="system-action-btn" title=${this.filterText} @click=${() => this.open = !this.open} style="opacity: ${this.hasFilters ? '1' : '0.5'};">
+                    ${this.hasFilters ? '🔻' : '▽'}
                 </button>
                 <div class="panel">
                     <slot></slot>

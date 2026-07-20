@@ -260,6 +260,7 @@ def check_javascript_files():
     raw_register_tick_pattern = re.compile(r'\.registerTick\s*\(')
     zustand_reference_mutation_pattern = re.compile(r'\.setState\(\{\s*([a-zA-Z0-9_]+)\s*:\s*\1\s*\}\)')
     subtab_leak_pattern = re.compile(r"localStorage\.getItem\([\'\"]insetu_subtab_")
+    sticky_header_pattern = re.compile(r'class=[\'"]sticky-header[\'"]')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -386,10 +387,13 @@ def check_javascript_files():
                     # 26. Deprecated UI Hook Registration Guardrail
                     if is_extension and "zone:file-card-actions" in line:
                         report_violation("DEPRECATED_UI_HOOK_VIOLATION", filepath, line_num, "Legacy 'zone:file-card-actions' hook detected. Migrate component buttons to the declarative polymorphic 'entityActions' registry.")
-
                     # 25. Shared Storage View State Leak Ban
                     if is_extension and subtab_leak_pattern.search(line):
                         report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")
+
+                    # 26. Standard Toolbar Mandate
+                    if is_extension and is_lit_component and sticky_header_pattern.search(line):
+                        report_violation("STANDARD_TOOLBAR_MANDATE", filepath, line_num, "Legacy 'sticky-header' container detected. Migrate to <insetu-standard-toolbar> for standard UI layouts.")
 
                     # 24. Hardcoded Extension Demolition Ban (Inversion of Control Enforcement)
                     if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):

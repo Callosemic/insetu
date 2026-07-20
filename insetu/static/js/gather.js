@@ -26,7 +26,13 @@ export class InSetuExtGather extends InSetuElement {
         allRepos: { type: Array },
         _showFilters: { type: Boolean }
     };
-    static styles = [sharedStyles];
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+            .gather-body { flex: 1; overflow-y: auto; padding: 20px; }
+        `
+    ];
 
     constructor() {
         super();
@@ -163,34 +169,27 @@ export class InSetuExtGather extends InSetuElement {
         const filteredFiles = this.searchQuery  
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, this.searchQuery, f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
                 : repoFilteredFiles;
-
-        const activeFilters = [];
-        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
-
         return html`
-            <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                <div style="display: flex; align-items: center; gap: 10px; padding-right: 12px;">
-                    <insetu-search-bar 
-                        style="flex: 1;"
-                        placeholder="🔍 Fuzzy search contexts..." 
-                        .value=${this.searchQuery} 
-                        @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}>
-                    </insetu-search-bar>
-                    <insetu-filter-dropdown filterText=${filterBtnText}>
-                        <insetu-repo-filter
-                            label="📌 Repos:"
-                            .repos=${this.allRepos}
-                            .activeRepos=${Array.from(this.pinnedRepos)}
-                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                        </insetu-repo-filter>
-                    </insetu-filter-dropdown>
-                </div>
-            </div>
-            ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px;">${this.loadingMessage}</div>` : ''}
+            <insetu-standard-toolbar
+                searchPlaceholder="🔍 Fuzzy search contexts..."
+                .searchQuery=${this.searchQuery}
+                @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
+                .enableFilterDropdown=${true}
+                .activeFilters=${Array.from(this.pinnedRepos)}>
+                <insetu-repo-filter
+                    slot="filters"
+                    label="📌 Repos:"
+                    .repos=${this.allRepos}
+                    .activeRepos=${Array.from(this.pinnedRepos)}
+                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                </insetu-repo-filter>
+            </insetu-standard-toolbar>
 
-            <div style="display: ${this.loading ? 'none' : 'block'};">
-                <insetu-categorized-list
+            <div class="gather-body">
+                ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
+
+                <div style="display: ${this.loading ? 'none' : 'block'};">
+                    <insetu-categorized-list
                     .items=${filteredFiles}
                     categoryKey="finalCat"
                     .categoryOrder=${categoryOrder}
@@ -213,6 +212,7 @@ export class InSetuExtGather extends InSetuElement {
                         </insetu-card>
                     `}>
                 </insetu-categorized-list>
+                </div>
             </div>
 
             <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>

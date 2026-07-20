@@ -414,7 +414,8 @@ export class InSetuVFSExplorer extends InSetuElement {
                 globalBrowsePath: { type: Array }
         };
         static styles = [sharedStyles, css`
-                :host { display: flex; flex-direction: column; flex: 1; }
+                :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+                .vfs-body { flex: 1; overflow-y: auto; padding: 20px; }
         `];
 
         constructor() {
@@ -519,29 +520,26 @@ export class InSetuVFSExplorer extends InSetuElement {
                 }
             }
             return html`
-                <div style="display: flex; flex-direction: column; flex: 1;">
-                    <div class="sticky-header" style="flex-shrink: 0; padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                        <insetu-search-bar 
-                            style="border-bottom: ${this.globalBrowsePath.length > 0 ? '1px solid var(--border)' : 'none'};"
-                            placeholder="🔍 Fuzzy search files..." 
-                            .value=${this.searchQuery} 
-                            @search-changed=${(e) => {
-                                const val = e.detail.value;
-                                window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
-                                    window.inSetu.stores.Fs.getState().setSearchQuery(val);
-                                }, 200);
-                            }}>
-                        </insetu-search-bar>
-                        ${this.globalBrowsePath.length > 0 ? html`
-                            <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
-                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ globalBrowsePath: this.globalBrowsePath.slice(0, -1) })}>⬆️ Up</button>
-                                <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.globalBrowsePath.join('/')}</span>
-                            </div>
-                        ` : ''}
-                    </div>
-                    <div style="padding-top: 15px;">
-                        ${contentUI}
-                    </div>
+                <insetu-standard-toolbar
+                    searchPlaceholder="🔍 Fuzzy search files..."
+                    .searchQuery=${this.searchQuery}
+                    @search-changed=${(e) => {
+                        const val = e.detail.value;
+                        window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
+                            window.inSetu.stores.Fs.getState().setSearchQuery(val);
+                        }, 200);
+                    }}
+                    .noPadding=${true}
+                    .bottomBorder=${this.globalBrowsePath.length > 0}>
+                    ${this.globalBrowsePath.length > 0 ? html`
+                        <div slot="bottom-row" style="display: flex; gap: 10px; padding: 5px 20px; align-items: center; background: var(--input-bg);">
+                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ globalBrowsePath: this.globalBrowsePath.slice(0, -1) })}>⬆️ Up</button>
+                            <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.globalBrowsePath.join('/')}</span>
+                        </div>
+                    ` : ''}
+                </insetu-standard-toolbar>
+                <div class="vfs-body">
+                    ${contentUI}
                 </div>
             `;
         }

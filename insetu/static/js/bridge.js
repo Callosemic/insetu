@@ -25,7 +25,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
             const rawContent = (fileParts[i + 1] || '').trim();
             if (file) {
                 // Break apart multiple patches under the same FILE header
-                const chunkMatches = Array.from(rawContent.matchAll(/<<<<<<< SEARCH[\s\S]*?>>>>>>> REPLACE/g));
+                const chunkMatches = Array.from(rawContent.matchAll(/^<<<<<<< SEARCH[\s\S]*?^>>>>>>> REPLACE\s*$/gm));
                 if (chunkMatches.length > 0) {
                     chunkMatches.forEach(match => {
                         newCells.push({ id: `cell_${Date.now()}_${cellIdx++}`, file, content: match[0].trim(), active: true });
@@ -114,9 +114,17 @@ export class InSetuExtBridge extends InSetuElement {
         this._dropdownOpen = false;
         this._docClickListener = this._handleDocumentClick.bind(this);
     }
-
     _handleDocumentClick(e) {
+        if (!e.isTrusted) return; // Ignore synthetic clicks like auto-downloads
         const path = e.composedPath();
+
+        // Prevent interactions inside fullscreen modals from closing background UI
+        const isInsideModal = path.some(node => 
+            (node.tagName && node.tagName.includes('MODAL')) || 
+            (node.classList && node.classList.contains('fullscreen-modal'))
+        );
+        if (isInsideModal) return;
+
         if (this._dropdownOpen) {
             const isDropdownContent = path.some(node => node.dataset && node.dataset.customDropdown === 'true');
             if (!isDropdownContent) {
@@ -326,23 +334,21 @@ export class InSetuExtBridge extends InSetuElement {
 
                 <!-- INPUT VIEW -->
                 <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
-
                     <!-- THE COMBOBOX HEADER -->
                     <div data-custom-dropdown="true" style="display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; position: relative; z-index: 10; flex-shrink: 0; background: ${this._dropdownOpen ? 'var(--pane-bg)' : 'var(--bg)'}; border-bottom: ${this._dropdownOpen ? 'none' : '1px solid var(--border)'}; transition: background 0.2s;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
-                            <span style="font-family: var(--font-mono); font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-                                <span style="color: var(--text-muted); opacity: 0.6; font-size: 1rem; transform: rotate(45deg); flex-shrink: 0;">🧩</span>
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 0; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
+                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+                                <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0;">${this._dropdownOpen ? '▲' : '▼'}</span>
                                 ${this._activeCellId ? (() => {
                                     const cell = this.cells.find(c => c.id === this._activeCellId);
-                                    if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`;
+                                    if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-weight: normal;">Select a patch...</span>`;
                                     const chunkIndex = this.cells.findIndex(c => c.id === cell.id) + 1;
                                     const totalChunks = this.cells.length;
                                     const shortFile = cell.file.length > 40 ? '...' + cell.file.slice(-37) : cell.file;
-                                    return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;">&lrm;${shortFile}&lrm; <span style="color: var(--text-muted); font-family: sans-serif; font-weight: normal; margin-left: 5px;">(${chunkIndex}/${totalChunks})</span></span>`;
-                                })() : html`<span style="color: var(--text-muted); opacity: 0.6; font-family: sans-serif; font-weight: normal;">Select a patch...</span>`}
-                                <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0; margin-left: 5px;">${this._dropdownOpen ? '▲' : '▼'}</span>
+                                    return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;">&lrm;${shortFile}&lrm; <span style="color: var(--text-muted); font-weight: normal; margin-left: 5px;">(${chunkIndex}/${totalChunks})</span></span>`;
+                                })() : html`<span style="color: var(--text-muted); opacity: 0.6; font-weight: normal;">Select a patch...</span>`}
                             </span>
-                            <insetu-filter-dropdown filterText=${filterBtnText} @click=${e => e.stopPropagation()}>
+                            <insetu-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0} @click=${e => e.stopPropagation()}>
                                 <insetu-repo-filter
                                     label="📌 Repos:"
                                     .repos=${this.allRepos}
@@ -377,7 +383,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                                 if (c.active !== newState) BridgeStore.getState().toggleCellActive(c.id);
                                                             });
                                                         }}>
-                                                    <span style="font-family: var(--font-mono); font-size: 0.95rem; font-weight: bold; color: var(--intent-primary); word-break: break-all; direction: rtl; text-align: left; flex: 1;">&lrm;${file}&lrm;</span>
+                                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--intent-primary); word-break: break-all; direction: rtl; text-align: left; flex: 1;">&lrm;${file}&lrm;</span>
                                                 </div>
 
                                                 ${groupCells.map((c, i) => {
@@ -393,15 +399,14 @@ export class InSetuExtBridge extends InSetuElement {
                                                                 @click=${() => { this._activeCellId = c.id; this._dropdownOpen = false; }}
                                                                 onmouseover="this.style.background='var(--input-bg)'"
                                                                 onmouseout="this.style.background='${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}'">
-                                                                <span style="font-family: var(--font-mono); font-size: 0.85rem; color: ${c.active ? 'var(--text)' : 'var(--text-muted)'}; flex: 1;">Chunk ${i + 1} &gt;&gt; Select</span>
-                                                                <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); font-weight: bold;">(${chunkIndex}/${totalChunks})</span>
+                                                                <span style="font-size: 0.85rem; color: ${c.active ? 'var(--text)' : 'var(--text-muted)'}; flex: 1;">Chunk ${i + 1} &gt;&gt; Select</span>
+                                                                <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: bold;">(${chunkIndex}/${totalChunks})</span>
                                                             </div>
                                                         </div>
                                                     `;
                                                 })}
                                             </div>
-
-                                            <div slot="actions" style="display: flex; gap: 8px;">
+                                            <div slot="actions" style="display: flex; gap: 8px;" @click=${(e) => e.stopPropagation()}>
                                                 <button class="btn-sm" style="background: var(--intent-primary);" title="Change Target" @click=${(e) => {
                                                     e.stopPropagation();
                                                     if (window.openWorkspaceBrowser) {
@@ -416,7 +421,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                 }}>📁 Change</button>
 
                                                 ${this._fileVerificationCache[file] === true ? html`
-                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); window.viewSourceFile(file, true); this._dropdownOpen = false; }}>📋 View</button>
+                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); window.viewSourceFile(file, true); }}>📋 View</button>
                                                     <button class="btn-sm" style="background: var(--intent-highlight);" title="Download Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); fetchAndDownloadState(file); }}>⬇️ Download</button>
                                                 ` : html`
                                                     <div title="Unknown Target" style="font-size: 1.2rem; cursor: help; padding: 4px; opacity: 0.6; text-align: center;">❓</div>

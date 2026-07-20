@@ -39,19 +39,32 @@ export class InSetuMarkdownEditor extends InSetuElement {
         this._view = null;
         this.languageConf = null;
         this.readOnlyConf = null;
+        this.linkConf = null;
         this._EditorView = null;
+        this._settingsListener = this._handleSettingsChange.bind(this);
     }
 
     connectedCallback() {
         super.connectedCallback();
+        window.addEventListener('insetu-editor-settings-changed', this._settingsListener);
         setTimeout(() => this._initEditor(), 0);
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
+        window.removeEventListener('insetu-editor-settings-changed', this._settingsListener);
         if (this._view) {
             this._view.destroy();
             this._view = null;
+        }
+    }
+    _handleSettingsChange() {
+        if (this._view && this.linkConf && this._linkPluginExtension) {
+            const val = localStorage.getItem('insetu_md_links');
+            const enable = val !== null ? JSON.parse(val) : true;
+            this._view.dispatch({
+                effects: this.linkConf.reconfigure(enable ? this._linkPluginExtension : [])
+            });
         }
     }
     updated(changedProperties) {
@@ -84,18 +97,50 @@ export class InSetuMarkdownEditor extends InSetuElement {
     async _initEditor() {
         if (this._view || this._initializingEditor) return;
         this._initializingEditor = true;
-
         const [
             { EditorState, Compartment },
-            { EditorView, basicSetup }
+            { EditorView, basicSetup },
+            { MatchDecorator, WidgetType, ViewPlugin, Decoration }
         ] = await Promise.all([
             import('https://esm.sh/@codemirror/state'),
-            import('https://esm.sh/codemirror')
+            import('https://esm.sh/codemirror'),
+            import('https://esm.sh/@codemirror/view')
         ]);
 
         this.languageConf = new Compartment();
         this.readOnlyConf = new Compartment();
+        this.linkConf = new Compartment();
         this._EditorView = EditorView;
+
+        class LinkWidget extends WidgetType {
+            constructor(url) { super(); this.url = url; }
+            eq(other) { return this.url === other.url; }
+            toDOM() {
+                const btn = document.createElement('a');
+                btn.href = this.url;
+                btn.target = '_blank';
+                btn.innerHTML = ' 🔗';
+                btn.style.cssText = 'text-decoration: none; font-size: 0.9em; cursor: pointer; user-select: none; margin-left: 2px;';
+                btn.title = "Open link: " + this.url;
+                btn.onclick = (e) => { e.stopPropagation(); };
+                return btn;
+            }
+        }
+
+        const linkDecorator = new MatchDecorator({
+            regexp: /\[([^\]]+)\]\(([^)]+)\)/g,
+            decoration: (match) => Decoration.widget({
+                widget: new LinkWidget(match[2]),
+                side: 1
+            })
+        });
+
+        this._linkPluginExtension = ViewPlugin.fromClass(class {
+            constructor(view) { this.decorations = linkDecorator.createDeco(view); }
+            update(update) { this.decorations = linkDecorator.updateDeco(update, this.decorations); }
+        }, { decorations: v => v.decorations });
+        const val = localStorage.getItem('insetu_md_links');
+        const enableLinks = val !== null ? JSON.parse(val) : true;
 
         const langExt = await loadLanguageExtension(this.language);
 
@@ -104,7 +149,6 @@ export class InSetuMarkdownEditor extends InSetuElement {
             this._initializingEditor = false;
             return;
         }
-
         this._view = new EditorView({
             state: EditorState.create({
                 doc: this.value || '',
@@ -112,6 +156,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
                     basicSetup,
                     this.languageConf.of(langExt),
                     this.readOnlyConf.of(EditorView.editable.of(!this.readOnly)),
+                    this.linkConf.of(enableLinks ? this._linkPluginExtension : []),
                     EditorView.theme({
                         "&": { backgroundColor: "transparent", color: "var(--text)" },
                         ".cm-gutters": { backgroundColor: "var(--pane-bg)", color: "var(--text-muted)", borderRight: "1px solid var(--border)" },
@@ -156,3 +201,21 @@ export class InSetuMarkdownEditor extends InSetuElement {
     }
 }
 customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
+// Register local schema and action for the generic settings modal
+if (window.ExtensionRegistry) {
+    window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
+    window.inSetu.settingsSchemas['editor'] = [
+        { id: 'insetu_md_links', label: 'Enable Interactive MD Links', type: 'boolean', default: true, description: 'Renders Markdown links as clickable icons in the editor.' }
+    ];
+
+    window.ExtensionRegistry.registerSettingsAction(
+        'editor_settings',
+        'Editor Settings',
+        '📝',
+        () => {
+            const genericModal = document.getElementById('insetu-generic-settings-root');
+            if (genericModal) genericModal.openModal('editor', true);
+        },
+        'System'
+    );
+}

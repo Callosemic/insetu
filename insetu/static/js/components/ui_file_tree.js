@@ -12,7 +12,6 @@ export class InSetuCard extends LitElement {
         entityType: { type: String },
         entityData: { type: Object },
         _overlayActive: { type: Boolean, reflect: true },
-        _openUpwards: { type: Boolean, reflect: true },
         _hasActions: { type: Boolean, reflect: true, attribute: 'has-actions' }
     };
     static styles = [
@@ -50,9 +49,9 @@ export class InSetuCard extends LitElement {
             border-color: var(--intent-primary, #3b82f6);
             border-bottom-left-radius: 0;
         }
-        :host([_overlayactive][_openupwards]) .card-wrapper {
-            border-bottom-left-radius: 6px;
+        :host([_overlayactive]) .card-wrapper.overlay-top {
             border-top-left-radius: 0;
+            border-bottom-left-radius: 6px;
         }
         .main-content {
             flex: 1;
@@ -133,16 +132,17 @@ export class InSetuCard extends LitElement {
             pointer-events: none;
             transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
             z-index: 1; /* Elevated above the backdrop to maintain hover events */
-            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
-        }
-        .action-overlay:not(.open-up) {
-            top: calc(100% - 1px); /* Sub-pixel overlap kills any hover dead zones */
+
+            top: calc(100% - 1px);
             border-top: none;
             border-radius: 0 0 6px 6px;
             transform: translateY(-10px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
         }
-        .action-overlay.open-up {
+        .action-overlay.position-top {
+            top: auto;
             bottom: calc(100% - 1px);
+            border-top: 1px solid var(--intent-primary, #3b82f6);
             border-bottom: none;
             border-radius: 6px 6px 0 0;
             transform: translateY(10px);
@@ -157,13 +157,16 @@ export class InSetuCard extends LitElement {
             background: #ffffff;
             box-shadow: 0 10px 20px rgba(0,0,0,0.1);
         }
+        :host-context([data-theme="light"]) .action-overlay.position-top {
+            box-shadow: 0 -10px 20px rgba(0,0,0,0.1);
+        }
         :host-context([data-theme="e-ink"]) .action-overlay {
             background: #ffffff;
             border: 2px solid #8b5cf6;
             border-top: none;
             box-shadow: 4px 4px 0 #14b8a6;
         }
-        :host-context([data-theme="e-ink"]) .action-overlay.open-up {
+        :host-context([data-theme="e-ink"]) .action-overlay.position-top {
             border-top: 2px solid #8b5cf6;
             border-bottom: none;
             box-shadow: 4px -4px 0 #14b8a6;
@@ -232,17 +235,22 @@ export class InSetuCard extends LitElement {
     }
     _openOverlay() {
         this._overlayActive = true;
-
-        // Smart Collision Detection: Calculate if the drawer needs to open upwards
-        const rect = this.getBoundingClientRect();
-        // Estimate the drawer requires ~80px of vertical space
-        if (rect.bottom + 80 > window.innerHeight && rect.top - 80 > 0) {
-            this._openUpwards = true;
-        } else {
-            this._openUpwards = false;
-        }
-
         window.dispatchEvent(new CustomEvent('insetu-card-opened', { detail: { card: this } }));
+
+        setTimeout(() => {
+            const overlay = this.shadowRoot.querySelector('.action-overlay');
+            const wrapper = this.shadowRoot.querySelector('.card-wrapper');
+            if (!overlay || !wrapper) return;
+            const triggerRect = this.getBoundingClientRect();
+            const overlayHeight = overlay.offsetHeight || 60;
+            if (triggerRect.bottom + overlayHeight > window.innerHeight && triggerRect.top - overlayHeight > 0) {
+                overlay.classList.add('position-top');
+                wrapper.classList.add('overlay-top');
+            } else {
+                overlay.classList.remove('position-top');
+                wrapper.classList.remove('overlay-top');
+            }
+        }, 0);
     }
 
     _handleTouchStart(e) {
@@ -480,17 +488,18 @@ constructor() {
         });
         return html`
             ${(this.enableSearch || (this.currentPath.length > 0 && !this.hidePath)) ? html`
-                <div class="sticky-header" style="padding: 0; margin-bottom: 15px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
+                <div class="sticky-header" style="padding: 0; margin-bottom: 15px; gap: 0;">
                     ${this.enableSearch ? html`
-                        <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${(this.currentPath.length > 0 && !this.hidePath) ? '1px solid var(--border)' : 'none'};">
-                            <input type="text" placeholder=${this.searchPlaceholder} .value=${this._searchQuery} 
-                                style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                                @input=${(e) => this._searchQuery = e.target.value}>
-                            ${this._searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => this._searchQuery = ''}>Clear</button>` : ''}
+                        <div style="padding: 5px 20px; border-bottom: ${(this.currentPath.length > 0 && !this.hidePath) ? '1px solid var(--border)' : 'none'};">
+                            <insetu-search-bar 
+                                placeholder=${this.searchPlaceholder} 
+                                .value=${this._searchQuery} 
+                                @search-changed=${(e) => this._searchQuery = e.detail.value}>
+                            </insetu-search-bar>
                         </div>
                     ` : ''}
                     ${(this.currentPath.length > 0 && !this.hidePath) ? html`
-                        <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
+                        <div style="display: flex; gap: 10px; padding: 5px 20px; align-items: center; background: var(--input-bg);">
                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
                             <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
                         </div>

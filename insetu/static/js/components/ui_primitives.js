@@ -59,9 +59,67 @@ export class InSetuSearchBar extends LitElement {
         return html`
             <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent;">
                 <input type="text" placeholder=${this.placeholder} .value=${this.value} 
-                    style="border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
+                    style="border: none; background: transparent; padding: 4px 0; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
                     @input=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: e.target.value }, bubbles: true, composed: true }))}>
                 ${this.value ? html`<button class="fuzzy-search-clear" @click=${() => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: '' }, bubbles: true, composed: true }))}>Clear</button>` : ''}
+            </div>
+        `;
+    }
+}
+export class InSetuStandardToolbar extends InSetuElement {
+    static properties = {
+        searchQuery: { type: String },
+        searchPlaceholder: { type: String },
+        enableFilterDropdown: { type: Boolean },
+        filterText: { type: String },
+        activeFilters: { type: Array },
+        hasFiltersOverride: { type: Boolean },
+        noPadding: { type: Boolean },
+        bottomBorder: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`:host { display: contents; }`];
+
+    constructor() {
+        super();
+        this.searchQuery = '';
+        this.searchPlaceholder = 'Search...';
+        this.enableFilterDropdown = false;
+        this.filterText = '';
+        this.activeFilters = [];
+        this.hasFiltersOverride = false;
+        this.noPadding = false;
+        this.bottomBorder = false;
+    }
+
+    render() {
+        let btnText = this.filterText;
+        let hasF = this.hasFiltersOverride || false;
+        if (!btnText && this.activeFilters) {
+            const active = this.activeFilters.filter(r => r !== 'ALL');
+            if (active.length > 0) {
+                btnText = `Filters: ${active.slice(0, 2).join(', ')}${active.length > 2 ? '...' : ''}`;
+                hasF = true;
+            } else {
+                btnText = 'Filters';
+            }
+        }
+
+        return html`
+            <div class="sticky-header" style="${this.noPadding ? 'padding: 0; gap: 0;' : 'flex-shrink: 0;'}">
+                <div style="${this.noPadding ? 'padding: 5px 20px;' : 'display: flex; align-items: center; gap: 10px;'} ${this.bottomBorder ? 'border-bottom: 1px solid var(--border);' : ''}">
+                    <insetu-search-bar 
+                        style="flex: 1;"
+                        placeholder=${this.searchPlaceholder} 
+                        .value=${this.searchQuery} 
+                        @search-changed=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: e.detail, bubbles: true, composed: true }))}>
+                    </insetu-search-bar>
+                    ${this.enableFilterDropdown ? html`
+                        <insetu-filter-dropdown filterText=${btnText} .hasFilters=${hasF}>
+                            <slot name="filters"></slot>
+                        </insetu-filter-dropdown>
+                    ` : ''}
+                </div>
+                <slot name="bottom-row"></slot>
             </div>
         `;
     }
@@ -130,7 +188,7 @@ export class InSetuJobTracker extends InSetuElement {
         return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
     }
 }
-
 customElements.define('insetu-search-bar', InSetuSearchBar);
+customElements.define('insetu-standard-toolbar', InSetuStandardToolbar);
 customElements.define('insetu-job-tracker', InSetuJobTracker);
 customElements.define('insetu-async-btn', InSetuAsyncBtn);
