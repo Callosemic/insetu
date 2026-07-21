@@ -42,6 +42,8 @@ To prevent DOM bloat and spaghetti code, the creation of UI elements must strict
 Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation, as is using imperative `document.createElement()` calls within graduated LitElement extensions.
 * **The Centralized Filter Dropdown Primitive (`<insetu-filter-dropdown>`):** To enforce the DRY centralization principle and guarantee uniform click-outside handling across the interface, all horizontal toolbar filters must wrap their option pills inside the `<insetu-filter-dropdown>` component rather than wiring discrete window click interception events.
 
+* **The Standard Toolbar Primitive (`<insetu-standard-toolbar>`):** To eliminate sticky header, search bar, and filter dropdown layout duplication across views, horizontal search and filter headers must consume the `<insetu-standard-toolbar>` primitive, which standardizes padding, border lines, and search event emissions (`search-changed`).
+
 * **Slotted Modal Action Uniformity (`slot="footer"`):** To prevent structural layout padding drift, view panels must pass footer action controls directly into the `<button slot="footer">` configuration track rather than enclosing rows within custom layout `div` blocks. The modal shadow DOM isolates button grid alignment, uniform text transformations, and lateral dividing borders automatically.
 
 ## 7. The Component Graduation Checklist (Compliance Guardrails)
