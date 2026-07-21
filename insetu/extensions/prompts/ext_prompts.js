@@ -1,10 +1,10 @@
 // ext_prompts.js - Prompt Library Extension
 import { html, css } from 'lit';
-import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+const AppStore = window.inSetu.stores.App;
 
 export const PromptsStore = createExtensionStore('Prompts', {
     prompts: [],
@@ -65,9 +65,8 @@ export class InSetuExtPrompts extends InSetuElement {
     onWorkspaceChanged(newWorkspaceId) {
         PromptsStore.getState().fetchPrompts();
     }
-
     static openPromptEmbedModal() {
-        if (window.openWorkspaceBrowser) {
+        if (window.inSetu.ui && window.inSetu.ui.openWorkspaceBrowser) {
             const gatherOptions = AppStore.getState().gatherOptions || {};
             const rawPrompts = gatherOptions.prompts || [];
             if (rawPrompts.length === 0) {
@@ -81,15 +80,15 @@ export class InSetuExtPrompts extends InSetuElement {
                 return ".insetu/prompts/" + corePath;
             });
 
-            window.openWorkspaceBrowser({
+            window.inSetu.ui.openWorkspaceBrowser({
                 mode: 'file',
                 title: 'Select Prompt to Embed',
                 files: cleanPrompts,
                 autoDrilldown: true,
                 callback: (val) => {
                     const embedString = `{{include_prompt: ${val}}}`;
-                    if (window.insertTextAtCursor) {
-                        window.insertTextAtCursor(embedString);
+                    if (window.inSetu.editor && window.inSetu.editor.insertTextAtCursor) {
+                        window.inSetu.editor.insertTextAtCursor(embedString);
                     }
                 }
             });
@@ -97,7 +96,7 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     render() {
         return html`
-            <div class="prompts-body" @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}>
+            <div class="prompts-body" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 20px;">Loading prompts...</div>` : html`
                     <insetu-file-tree  
                         style="flex: 1;"
@@ -120,7 +119,6 @@ customElements.define('insetu-ext-prompts', InSetuExtPrompts);
 export class InSetuExtPromptsActions extends InSetuElement {
     get extName() { return 'prompts'; }
     static styles = [sharedStyles];
-
     get _menuItems() {
         return [
             { 
@@ -129,7 +127,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
                 onClick: () => { 
                     const cpPath = PromptsStore.getState().currentPromptsPath || []; 
                     const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
-                    if (window.openNewFolderModal) window.openNewFolderModal(prefix); 
+                    if (this.ui && this.ui.openNewFolderModal) this.ui.openNewFolderModal(prefix); 
                 } 
             },
             { 
@@ -138,7 +136,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
                 onClick: () => { 
                     const cpPath = PromptsStore.getState().currentPromptsPath || []; 
                     const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
-                    if (window.openNewFileModal) window.openNewFileModal(prefix); 
+                    if (this.ui && this.ui.openNewFileModal) this.ui.openNewFileModal(prefix); 
                 } 
             }
         ];

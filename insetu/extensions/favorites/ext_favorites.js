@@ -1,7 +1,8 @@
-import { AppStore } from '../store.js';
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
+
+const AppStore = window.inSetu.stores.App;
 
 export const FavoritesStore = createExtensionStore('Favorites', {
     items: [],
@@ -148,16 +149,16 @@ export class InSetuExtFavorites extends InSetuElement {
     _navigateToFavorite(item) {
         if (item.type === 'file') {
             const isContext = item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
-            if (!isContext && window.viewSourceFile) {
-                window.viewSourceFile(item.path, true);
-            } else if (isContext && window.viewAndCopy) {
-                window.viewAndCopy(item.path);
+            if (!isContext && this.vfs && this.vfs.viewSourceFile) {
+                this.vfs.viewSourceFile(item.path, true);
+            } else if (isContext && this.vfs && this.vfs.viewAndCopy) {
+                this.vfs.viewAndCopy(item.path);
             }
         } else if (item.type === 'folder') {
             const parts = item.path.split('/').filter(p => p);
             AppStore.setState({ globalBrowsePath: parts });
-            if (window.switchTab) window.switchTab(null, 'edit');
-            if (window.switchSubTab) window.switchSubTab('files');
+            if (this.sys && this.sys.switchTab) this.sys.switchTab('edit');
+            if (this.sys && this.sys.switchSubTab) this.sys.switchSubTab('files');
         }
     }
 

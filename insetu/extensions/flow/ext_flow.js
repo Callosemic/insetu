@@ -1,11 +1,9 @@
 import { html, css } from 'lit';
-import { executeWorkspaceMutation, executeSystemCompile } from '../app.js';
-import { fetchAndCopy, fetchAndDownloadState } from '../fs.js';
-import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+const AppStore = window.inSetu.stores.App;
 export const FlowStore = createExtensionStore('Flow', {
     batches: [],
     loading: false,
@@ -135,12 +133,12 @@ export class InSetuExtFlow extends InSetuElement {
     }
     async _downloadTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndDownloadState(targetFile, explicitUrl);
+        await this.vfs.fetchAndDownloadState(targetFile, explicitUrl);
     }
 
     async _copyTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, explicitUrl);
+        await this.vfs.fetchAndCopy(targetFile, explicitUrl);
     }
     // Logic abstracted to window.shareFiles
     openBatchModal(batch) {
@@ -222,14 +220,13 @@ export class InSetuExtFlow extends InSetuElement {
         const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, -1);
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this._viewingBatch.response_path.replace('{date}', dStr);
-
         const payload = {
             filepath: `${artifactsDir}/${finalPath}`,
             content: content,
             original_response_path: this._viewingBatch.response_path
         };
         if (this._viewingBatch.archive_path) payload.archive_path = `${artifactsDir}/${this._viewingBatch.archive_path}`;
-        window.executeWorkspaceMutation('fs/save', payload, {
+        this.sys.executeWorkspaceMutation('fs/save', payload, {
             loadingText: 'Saving...',
             onSuccess: () => {
                 this._viewingBatch = null;
@@ -357,8 +354,8 @@ export class InSetuExtFlow extends InSetuElement {
                                             <div style="display: flex; gap: 10px;">
                                                 <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📁 Select Contexts</button>
                                                 <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" @click=${() => {
-                                                    if (window.openWorkspaceBrowser) {
-                                                        window.openWorkspaceBrowser({
+                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
+                                                        this.ui.openWorkspaceBrowser({
                                                             mode: 'file',
                                                             title: 'Select Arbitrary File',
                                                             callback: (filepath) => {
@@ -474,7 +471,6 @@ export class InSetuExtFlow extends InSetuElement {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
                                                                 const chunks = AppStore.getState().manifest[baseFile]?.meta?.chunks;
                                                                 const hasShare = !!navigator.share && !!navigator.canShare;
-
                                                                 if (chunks && chunks.length > 1) {
                                                                     return html`
                                                                         <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => {
@@ -483,13 +479,13 @@ export class InSetuExtFlow extends InSetuElement {
                                                                             this.chunkModalOpen = true;
                                                                             this.requestUpdate();
                                                                         }}>📦 View Parts</button>
-                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share All" intent="neutral" .onClick=${() => window.shareFiles(baseFile, chunks)}></insetu-async-btn>` : ''}
+                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share All" intent="neutral" .onClick=${() => this.vfs.shareFiles(baseFile, chunks)}></insetu-async-btn>` : ''}
                                                                     `;
                                                                 } else {
                                                                     return html`
                                                                         <insetu-async-btn label="📋 Copy Context" intent="success" .onClick=${() => this._copyTarget(baseFile)}></insetu-async-btn>
                                                                         <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(baseFile)}></insetu-async-btn>
-                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share" intent="neutral" .onClick=${() => window.shareFiles(baseFile)}></insetu-async-btn>` : ''}
+                                                                        ${hasShare ? html`<insetu-async-btn label="📤 Share" intent="neutral" .onClick=${() => this.vfs.shareFiles(baseFile)}></insetu-async-btn>` : ''}
                                                                     `;
                                                                 }
                                                             })()}

@@ -1,7 +1,8 @@
 import { html, css } from 'lit';
 import { InSetuElement, createExtensionStore } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
-import { AppStore } from '../store.js';
+
+const AppStore = window.inSetu.stores.App;
 
 // 1. Strict Unidirectional Data Flow (UDF) Store
 export const FreshdeskStore = createExtensionStore('Freshdesk', {
@@ -109,7 +110,6 @@ export class InSetuExtFreshdesk extends InSetuElement {
             FreshdeskStore.setState({ ignoredTickets: [] });
         }
     }
-
     async ignoreTicket(ticketId) {
         if (!ticketId) return;
         const state = FreshdeskStore.getState();
@@ -118,7 +118,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
 
         try {
             await this.api.post(`tickets/${ticketId}/ignore`, {});
-            if (window.setGlobalStatus) window.setGlobalStatus("🚫 Ticket Ignored!", 2000);
+            if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("🚫 Ticket Ignored!", 2000);
         } catch (err) {
             console.error("Failed to save ignored tickets schema", err);
         }
@@ -139,9 +139,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         // Merge the new state while preserving our local agent name mappings
                         const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket, responder_name: t.responder_name } : t);
                         const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket, responder_name: state.selectedTicket.responder_name } : state.selectedTicket;
-
                         FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
-                        if (window.setGlobalStatus) window.setGlobalStatus("✅ Ticket Resolved!", 2000);
+                        if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Resolved!", 2000);
                     },
                     onError: (err) => {
                         FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
@@ -172,9 +171,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         // Reactively update the ticket in the background and the modal
                         const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket } : t);
                         const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket } : state.selectedTicket;
-
                         FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
-                        if (window.setGlobalStatus) window.setGlobalStatus("✅ Ticket Assigned!", 2000);
+                        if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Assigned!", 2000);
                     },
                     onError: (err) => {
                         FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
@@ -203,7 +201,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         onComplete: async () => {
                             FreshdeskStore.setState({ replyContent: '' });
                             this.fetchConversations(ticketId);
-                            if (window.setGlobalStatus) window.setGlobalStatus("✅ Reply Sent & Saved Locally!", 2000);
+                            if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Reply Sent & Saved Locally!", 2000);
                             resolve();
                         },
                         onError: (err) => {
@@ -228,8 +226,8 @@ export class InSetuExtFreshdesk extends InSetuElement {
             if (res.ok) {
                 const txt = await res.text();
                 // Enforce DRY Utility Centralization Mandate
-                window.inSetu.extensions.Registry.utils.copyRawText(txt);
-                if (window.setGlobalStatus) window.setGlobalStatus("✅ Thread copied successfully!", 2000);
+                this.utils.copyRawText(txt);
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Thread copied successfully!", 2000);
             } else {
                 if (window.alert) window.alert("Local thread index cache processing... retry shortly.");
             }

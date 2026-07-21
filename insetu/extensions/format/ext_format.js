@@ -1,10 +1,9 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
-import { downloadFile } from '../fs.js';
-import { AppStore } from '../store.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+const AppStore = window.inSetu.stores.App;
 export const FormatStore = createExtensionStore('Format', {
     formatModalOpen: false,
     currentFormatTarget: '',
@@ -79,7 +78,7 @@ export class InSetuExtFormatModals extends InSetuElement {
                         .jobId=${this.activeFormatJobId} 
                         @job-complete=${async (e) => {
                             FormatStore.setState({ activeFormatJobId: null, formatModalOpen: false });
-                            if (window.downloadFile) await window.downloadFile(e.detail.artifact.download_url, e.detail.artifact.filename);
+                            if (this.vfs && this.vfs.downloadFile) await this.vfs.downloadFile(e.detail.artifact.download_url, e.detail.artifact.filename);
                         }}
                         @job-error=${() => FormatStore.setState({ activeFormatJobId: null })}>
                     </insetu-job-tracker>

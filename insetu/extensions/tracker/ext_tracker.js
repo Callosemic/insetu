@@ -1,17 +1,7 @@
-import {
-    executeSystemCompile,
-    setContextManifest,
-    getFlattenedBuckets
-} from '../app.js';
-import {
-    viewSourceFile,
-    fetchAndCopy,
-    fetchAndDownloadState
-} from '../fs.js';
-import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+const AppStore = window.inSetu.stores.App;
 export const KanbanStore = createExtensionStore('Kanban', {
     tasks: [],
     pinnedTags: new Set(["ALL"]),
@@ -56,8 +46,7 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
     });
 }
 
-// Alias for legacy external triggers until fully deprecated
-window.loadTrackerBoard = () => KanbanStore.getState().fetchTasks();
+window.addEventListener('insetu:tracker:load-board', () => KanbanStore.getState().fetchTasks());
 
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
@@ -230,7 +219,7 @@ constructor() {
                 .icon=${icon}
                 entityType="file:task"
                 .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
-                @card-clicked=${() => viewSourceFile(t.filepath, true)}>
+                @card-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}>
 
                 <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
                     ${t.deliveryDate ? html`
@@ -341,7 +330,7 @@ if (this.allRepos.includes(pinnedRepo)) {
         if (!isActiveView) return '';
         const { newTaskForm } = KanbanStore.getState();
         const selectedRepo = newTaskForm.repo || this.allRepos[0];
-        const buckets = selectedRepo ? getFlattenedBuckets(selectedRepo) : [];
+        const buckets = selectedRepo ? this.sys.getFlattenedBuckets(selectedRepo) : [];
         return html`
             <insetu-modal 
                 ?open=${this._modals?.new} 
@@ -444,7 +433,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                         ${!this.pinnedRepos.has('ALL') ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
                                 ${Array.from(this.pinnedRepos).map(repo => {
-                                    const buckets = getFlattenedBuckets(repo);
+                                    const buckets = this.sys.getFlattenedBuckets(repo);
                                     if (buckets.length === 0) return '';
 
                                     const repoBucketsActive = buckets.some(b => this.pinnedBuckets.has(repo + '::' + b.id));
@@ -675,7 +664,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
         if (!isActiveView) return '';
         const { editTaskForm } = KanbanStore.getState();
         const activeRepo = editTaskForm.repo || '';
-        const buckets = activeRepo ? getFlattenedBuckets(activeRepo) : [];
+        const buckets = activeRepo ? this.sys.getFlattenedBuckets(activeRepo) : [];
         return html`
             <insetu-modal 
                 ?open=${this._modals?.edit} 
@@ -744,12 +733,12 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                 <button slot="footer" style="flex: 0 0 auto; background: var(--intent-danger); color: white;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
                 <button slot="footer" style="background: var(--intent-success); color: white;" @click=${async () => {
                     this._isCopying = true;
-                    try { await fetchAndCopy(editTaskForm.filepath); } catch(err) {}
+                    try { await this.vfs.fetchAndCopy(editTaskForm.filepath); } catch(err) {}
                     setTimeout(() => this._isCopying = false, 2000);
                 }}>${this._isCopying ? '✅ Copied!' : '📋 Copy'}</button>
                 <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${async () => {
                     this._isDownloading = true;
-                    try { await fetchAndDownloadState(editTaskForm.filepath); } catch(err) {}
+                    try { await this.vfs.fetchAndDownloadState(editTaskForm.filepath); } catch(err) {}
                     setTimeout(() => this._isDownloading = false, 2000);
                 }}>${this._isDownloading ? '✅ Downloaded' : '⬇️ Download'}</button>
                 ${this._isDirty() ? html`
@@ -803,12 +792,11 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                 changelogParts.push(...processed.parts);
                 changelogParts.push(`\n---\n\n`);
         });
-
         // Clean up trailing separators
         const changelog = changelogParts.join('').trim().replace(/---$/, '').trim();
 
-        if (window.openVirtualFile) {
-            window.openVirtualFile("Historical_Changelog.md", changelog);
+        if (this.vfs && this.vfs.openVirtualFile) {
+            this.vfs.openVirtualFile("Historical_Changelog.md", changelog);
         } else {
             alert("Virtual file viewer is not available.");
         }
@@ -984,7 +972,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
         'zone:file-edit-override': (filepath) => {
             if (filepath.includes('.tracker/')) {
                 window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
-                if (window.switchTab) window.switchTab(null, 'tasks');
+                if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'tasks');
                 const activeSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
                 const trackerEl = document.querySelector(`#sub-${activeSub} insetu-ext-tracker`);
                 if (trackerEl) {
@@ -1015,9 +1003,8 @@ window.ExtensionRegistry.registerExtension('tracker', {
         }
     }
 });
-window.KanbanStore = KanbanStore;
 
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
-// Executes independently of the UI component to ensure other extensions (like Git Changelogs) 
+// Executes independently of the UI component to ensure other extensions (like Git Changelogs)  
 // always have access to the tracker backlog via the UDF KanbanStore.
 KanbanStore.getState().fetchTasks();

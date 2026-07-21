@@ -1,7 +1,9 @@
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
+
+const AppStore = window.inSetu.stores.App;
+
 export const IngestStore = createExtensionStore('Ingest', {
     ingestModalOpen: false,
     ingestUrl: '',

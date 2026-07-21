@@ -1,7 +1,7 @@
-import { AppStore } from '../store.js';
-import { getFlattenedBuckets } from '../app.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+const AppStore = window.inSetu.stores.App;
+
 export const CitationStore = createExtensionStore('Citations', {
     localLibrary: [],
     pinnedRepos: new Set(['ALL']),
@@ -254,10 +254,10 @@ export class InSetuExtCitations extends InSetuElement {
                     }
                 }
                 if (results && results.length === 1) {
-                    if (window.viewSourceFile) window.viewSourceFile(results[0].path, true);
+                    if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(results[0].path, true);
                 } else if (results && results.length > 1) {
-                    if (window.openLinkModal) {
-                        window.openLinkModal(cslId, 'deep');
+                    if (this.ui && this.ui.openLinkModal) {
+                        this.ui.openLinkModal(cslId, 'deep');
                     }
                 } else {
                     alert("No markdown files found referencing this citation ID.");
@@ -508,7 +508,7 @@ export class InSetuExtCitations extends InSetuElement {
                         </select>
                         <select style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" .value=${this.attachForm.bucket} @change=${e => CitationStore.setState(s => ({ attachForm: { ...s.attachForm, bucket: e.target.value } }))}>
                             <option value="None">No Bucket</option>
-                            ${this.attachForm.repo ? getFlattenedBuckets(this.attachForm.repo).map(b => html`<option value="${b.id}">${b.title}</option>`) : ''}
+                            ${this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => html`<option value="${b.id}">${b.title}</option>`) : ''}
                         </select>
                         <button class="btn-sm" style="background:var(--intent-success); margin: 0;" @click=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}>📌 Pin</button>
                     </div>
@@ -659,12 +659,11 @@ export class InSetuExtCitationsModals extends InSetuElement {
     _insertCitationToEditor(citation) {
         const author = citation.author && citation.author[0] ? citation.author[0].family : 'unknown';
         const year = citation.issued && citation.issued['date-parts'] ? citation.issued['date-parts'][0][0] : 'nd';
-        const norm = window.normalizeAccentText || (str => str.toLowerCase());
+        const norm = window.inSetu.utils.normalizeAccentText || (str => str.toLowerCase());
         const normalizedAuthor = norm(author).replace(/[^a-z0-9]/g, '');
         const baseId = `${normalizedAuthor}${year}`;
-
         // Use OS-level APIs to avoid Shadow DOM contamination
-        const text = window.getEditorContent ? window.getEditorContent() : '';
+        const text = this.editor && this.editor.getEditorContent ? this.editor.getEditorContent() : '';
         const backmatterRegex = /\n+---\n+citations:\n([\s\S]*?)\n---$/;
         const match = text.match(backmatterRegex);
 
@@ -684,16 +683,17 @@ export class InSetuExtCitationsModals extends InSetuElement {
             };
             return baseId + String.fromCharCode(findAvailable(97));
         })();
-
         citationsMap[finalPrettyId] = citation.id;
         const newBackmatter = "\n\n---\ncitations:\n" + Object.keys(citationsMap).map(k => `  ${k}: "${citationsMap[k]}"\n`).join('') + "---";
         const updatedText = match ? text.replace(match[0], newBackmatter) : text + newBackmatter;
         const linkText = `[@${finalPrettyId}]`;
 
-        if (window.setEditorContent) window.setEditorContent(updatedText);
-        if (window.insertTextAtCursor) window.insertTextAtCursor(linkText);
+        if (this.editor && this.editor.setEditorContent) this.editor.setEditorContent(updatedText);
+        if (this.editor && this.editor.insertTextAtCursor) this.editor.insertTextAtCursor(linkText);
         CitationStore.setState({ citationModalOpen: false });
-        if (window.currentModalIsFS && window.saveModalFile) window.saveModalFile(true);
+        if (window.inSetu.stores.Fs?.getState()?.fileModal?.isFS && window.inSetu.ui?.saveModalFile) {
+            window.inSetu.ui.saveModalFile(true);
+        }
     }
 }
 customElements.define('insetu-ext-citations-modals', InSetuExtCitationsModals);
@@ -770,7 +770,7 @@ window.ExtensionRegistry.registerExtension('citations', {
                         }
                     } catch(e) {}
                 }});
-                data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: window.syncDocumentCitations });
+                data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: () => window.dispatchEvent(new CustomEvent('insetu:citations:sync')) });
             }
             return false;
         },

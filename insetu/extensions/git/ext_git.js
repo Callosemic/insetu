@@ -1,14 +1,6 @@
-import {
-    executeSystemCompile,
-    setContextManifest
-} from '../app.js';
-import {
-    createFileCard,
-    fetchAndDownloadState,
-    fetchAndCopy
-} from '../fs.js';
-import { AppStore } from '../store.js';
 import { createExtensionStore } from '../sdk.js';
+
+const AppStore = window.inSetu.stores.App;
 
 export const GitStore = createExtensionStore('Git', {
     reposStatus: {},
@@ -95,12 +87,12 @@ export async function generateDiffs(force = false) {
                 AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
             }
         });
-
     } catch (error) {
         AppStore.setState({ diffJobError: error.message });
     }
 }
-window.generateDiffs = generateDiffs;
+window.addEventListener('insetu:git:generate-diffs', (e) => generateDiffs(e.detail?.force));
+
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { InSetuElement } from '../sdk.js';
@@ -161,12 +153,12 @@ export class InSetuExtGitDiffs extends InSetuElement {
     }
     async _downloadTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndDownloadState(targetFile, explicitUrl);
+        await this.vfs.fetchAndDownloadState(targetFile, explicitUrl);
     }
 
     async _copyTarget(targetFile) {
         const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, explicitUrl);
+        await this.vfs.fetchAndCopy(targetFile, explicitUrl);
     }
 
     connectedCallback() {
@@ -266,11 +258,11 @@ disconnectedCallback() {
                     alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                     this.pushModalOpen = false;
                     try {
-                        if(window.executeSystemCompile) await window.executeSystemCompile();
+                        if(this.sys && this.sys.executeSystemCompile) await this.sys.executeSystemCompile();
                     } catch (refreshErr) {
                         console.warn("Background refresh failed:", refreshErr);
                     } finally {
-                        window.generateDiffs(true);
+                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
                     }
                 },
                 onError: (err) => {
@@ -329,10 +321,9 @@ disconnectedCallback() {
                 throw new Error(err.error || "Sweep request failed.");
             }
             const data = await res.json();
-
             this.api.pollJob(data.job_id, {
                 onProgress: (progressMsg) => {
-                    if (window.setGlobalStatus) window.setGlobalStatus(progressMsg || "Sweeping repo...");
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping repo...");
                 },
                 onComplete: async (statusData) => {
                     const { dirtyDiffRepos } = AppStore.getState();
@@ -341,10 +332,10 @@ disconnectedCallback() {
                     AppStore.setState({ dirtyDiffRepos: newDirty });
 
                     alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
-                    if (window.executeSystemCompile) {
-                        window.executeSystemCompile().then(() => window.generateDiffs(true));
+                    if (this.sys && this.sys.executeSystemCompile) {
+                        this.sys.executeSystemCompile().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
                     } else {
-                        window.generateDiffs(true);
+                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
                     }
                 },
                 onError: (err) => {
@@ -447,7 +438,7 @@ disconnectedCallback() {
                                 intentColor="var(--intent-highlight)"
                                 entityType="file:diff"
                                 .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: f.isFS }}
-                                @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                                @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
 ${(() => {
     const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
     const hasChunks = chunks && chunks.length > 1;
@@ -653,11 +644,11 @@ export class InSetuExtGitCtrl extends InSetuElement {
             this.api.pollJob(data.job_id, {
                 onProgress: (msg) => {
                     this.pullMessage = msg;
-                    if (window.setGlobalStatus) window.setGlobalStatus(`⏳ ${msg}`, null);
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
                 },
                 onComplete: (statusData) => {
                     this.activePullJobId = null;
-                    if (window.setGlobalStatus) window.setGlobalStatus(`✅ Fetch complete.`, 2000);
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Fetch complete.`, 2000);
 
                     this.previewRepo = repo;
                     this.previewMessage = statusData.message || 'Already up to date.';
@@ -722,11 +713,11 @@ export class InSetuExtGitCtrl extends InSetuElement {
             this.api.pollJob(data.job_id, {
                 onProgress: (msg) => {
                     this.pullMessage = msg;
-                    if (window.setGlobalStatus) window.setGlobalStatus(`⏳ ${msg}`, null);
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
                 },
                 onComplete: (statusData) => {
                     this.activePullJobId = null;
-                    if (window.setGlobalStatus) window.setGlobalStatus(`✅ Pull complete.`, 2000);
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Pull complete.`, 2000);
                     alert(`✅ Pull successful for ${repo}\n\n${statusData.message}`);
                     GitStore.getState().fetchStatus();
                 },
@@ -1000,8 +991,8 @@ window.ExtensionRegistry.registerExtension('git', {
                 const status = window.inSetu.stores.Git.getState().reposStatus[data.repoDir];
                 if (status && status.conflicts && status.conflicts.length > 0) {
                     const firstConflict = status.conflicts[0];
-                    if (window.viewSourceFile) {
-                        window.viewSourceFile(`${data.repoDir}/${firstConflict}`, true);
+                    if (window.inSetu.vfs && window.inSetu.vfs.viewSourceFile) {
+                        window.inSetu.vfs.viewSourceFile(`${data.repoDir}/${firstConflict}`, true);
                     }
                 }
             }

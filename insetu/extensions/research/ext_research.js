@@ -1,9 +1,9 @@
-import { executeWorkspaceMutation, fetchAndDownloadState, fetchAndCopy } from '../app.js';
-import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 import { html, css } from 'lit';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+const AppStore = window.inSetu.stores.App;
 
 // --- UDF STATE STORE ---
 export const ResearchStore = createExtensionStore('Research', {
@@ -160,18 +160,12 @@ export class InSetuExtResearch extends InSetuElement {
         if (status === 'accepted') {
             const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
             const slug = (() => {
-                const generated = window.generateSafeSlug(item.title);
+                const generated = this.utils.slugify(item.title);
                 return (generated || 'research-note').replace(/^-+|-+$/g, '').substring(0, 60);
             })();
             const filepath = targetDir + slug + '.md';
 
-            const contentToSave = await (async () => {
-                if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes('citations') && window.addFileToLibrary) {
-                    return await window.addFileToLibrary(slug + '.md', item.raw_markdown, filepath);
-                }
-                return item.raw_markdown;
-            })();
-            const success = await executeWorkspaceMutation('fs/save', { filepath, content: contentToSave }, { silent: true });
+            const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
         await this.api.post(`inbox/${inboxId}/disposition`, { status });
@@ -194,13 +188,12 @@ export class InSetuExtResearch extends InSetuElement {
             const res = await this.api.post(`${jobId}/export_context`, {});
             if (!res.ok) throw new Error("Failed to start export context job");
             const data = await res.json();
-
             this.api.pollJob(data.job_id, {
                 onProgress: () => {},
                 onComplete: async (statusData) => {
                     const files = statusData.artifact.files || [];
                     for (const f of files) {
-                        await fetchAndDownloadState(f.filename, f.download_url);
+                        await this.vfs.fetchAndDownloadState(f.filename, f.download_url);
                     }
                 },
                 onError: (err) => alert("Failed to generate context files: " + err.message)
@@ -393,7 +386,7 @@ export class InSetuExtResearch extends InSetuElement {
                             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                                 <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
                                     <input type="text" .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; padding: 6px; font-family: monospace;" @input=${(e) => ResearchStore.setState({ targetDir: e.target.value })}>
-                                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;" @click=${() => { if(window.openFolderBrowser) window.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
+                                    <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
                                 </div>
                                 <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}>✅ Accept to Workspace</button>
                                 <button class="btn-sm" style="background: var(--intent-danger); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'rejected')}>🗑️ Reject</button>
@@ -429,7 +422,7 @@ export class InSetuExtResearch extends InSetuElement {
                             <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Default Output Folder</label>
                             <div style="display: flex; gap: 8px;">
                                 ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { placeholder: 'e.g. research/', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;' })}
-                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(window.openFolderBrowser) window.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
+                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
                             </div>
                         </div>
                     </div>

@@ -1,7 +1,8 @@
-import { AppStore } from '../store.js';
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
+
+const AppStore = window.inSetu.stores.App;
 
 export const SkillsStore = createExtensionStore('Skills', {
             playlist: [],
