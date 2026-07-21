@@ -30,7 +30,11 @@ def _vfs_commit_worker():
                 if action == "delete":
                     resolved_path = resolve_workspace_path(filepath, workspace_id)
                     if os.path.exists(resolved_path):
-                        os.remove(resolved_path)
+                        if os.path.isdir(resolved_path):
+                            import shutil
+                            shutil.rmtree(resolved_path)
+                        else:
+                            os.remove(resolved_path)
                     if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
                         import time
                         from insetu.db import get_connection

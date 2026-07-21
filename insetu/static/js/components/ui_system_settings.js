@@ -66,7 +66,7 @@ export class InSetuSystemSettings extends InSetuElement {
         this.menuOpen = false;
     }
     render() {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
         const groupedActions = this.settingsActions.reduce((acc, act) => {
             const isSystem = act.section === 'System' || act.section === 'Workspace';
             const sec = isSystem ? 'System Settings' : 'Extension Settings';

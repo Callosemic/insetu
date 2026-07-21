@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { buildFileTree } from '../app.js';
+import { buildFileTree } from '../fs.js';
 
 export class InSetuFolderBrowser extends LitElement {
     static properties = {

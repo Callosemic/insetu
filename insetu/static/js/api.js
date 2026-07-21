@@ -12,18 +12,14 @@ window.inSetu.api = {
         try { bootToken = sessionStorage.getItem('insetu_boot_token'); } catch(e) {}
         const appToken = window.inSetu?.stores?.App?.getState()?.authToken || bootToken;
         if (appToken) headers.append('X-InSetu-Token', appToken);
-
         // Tenant Isolation
         if (isWorkspaceScoped) {
-            let localWs = 'default';
-            try { localWs = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default'; } catch(e) {}
-            const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || localWs;
-            headers.append('X-Workspace-ID', activeWs);
+            headers.append('X-Workspace-ID', window.inSetu.utils.getActiveWorkspace());
         }
         return headers;
     },
     workspace: async function(path, options = {}) {
-        const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
         const fullUrl = `/api/${activeWs}/${cleanPath}`;
 

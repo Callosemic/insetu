@@ -4,7 +4,7 @@ import json
 import datetime
 import subprocess
 from flask import jsonify
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics
+from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, generate_ascii_tree
 from insetu.sdk import InSetuExtension
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
@@ -21,24 +21,6 @@ gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHE
 __depends__ = []
 from insetu.hooks import hooks
 
-def generate_ascii_tree(file_paths):
-    tree = {}
-    for path in file_paths:
-        parts = path.split('/')
-        current = tree
-        for part in parts:
-            if part not in current: current[part] = {}
-            current = current[part]
-            
-    def print_tree(node, prefix=""):
-        lines = []
-        entries = sorted(list(node.keys()))
-        for i, key in enumerate(entries):
-            is_last = (i == len(entries) - 1)
-            lines.append(f"{prefix}{'└── ' if is_last else '├── '}{key}")
-            lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
-        return lines
-    return ".\n" + "\n".join(print_tree(tree))
 def resolve_file_bucket(filepath, sub_buckets):
     """DRY Helper to map a filepath to its configured sub-bucket."""
     import re

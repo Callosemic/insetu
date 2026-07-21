@@ -52,6 +52,11 @@ def parse_blocks(text):
             if state == "SEARCH":
                 state = "REPLACE"
                 replace_lines = []
+            elif state == "OUTSIDE" and current_file:
+                print(f"  [~] Warning: Missing '<<<<<<< SEARCH' tag detected for {current_file}. Auto-healing as a genesis patch.")
+                state = "REPLACE"
+                search_lines = []
+                replace_lines = []
         elif line.startswith(">>>>>>> REPLACE"):
             if state == "REPLACE" and current_file:
                 files[current_file].append({
@@ -141,7 +146,7 @@ def apply_block_in_memory(content, block, silent=False):
 
     # Scaffolding: Skip No-Ops (INS-TODO-20260708_0940)
     if is_effectively_identical(search_lines, replace_lines):
-        if not silent: print("  └─ ℹ️  No-Op: SEARCH and REPLACE blocks are identical. Skipping chunk.")
+        if not silent: print("  └─ [ℹ️] No-Op: SEARCH and REPLACE blocks are identical. Skipping chunk.")
         return True, content
 
     for r_line in replace_lines:
@@ -244,9 +249,8 @@ def apply_block_in_memory(content, block, silent=False):
             if r_raw_non_empty and any(is_effectively_identical(f_raw_non_empty[i:i+len(r_raw_non_empty)], r_raw_non_empty) for i in range(len(f_raw_non_empty) - len(r_raw_non_empty) + 1)):
                 if not any(dl in f_stripped for dl in deleted_lines):
                     is_idempotent = True
-
         if is_idempotent:
-            if not silent: print("  └─ ℹ️  Idempotency: Patch state already matches target. Skipping chunk.")
+            if not silent: print("  └─ [ℹ️] Idempotency: Patch state already matches target. Skipping chunk.")
             return True, content
 
         # Fallback: Regex extraction for edge-case grid desyncs
@@ -490,7 +494,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 print("." * 30)
                 continue
             working_content = ""
-
         original_content = working_content
         file_success = True
         for idx, b in enumerate(blocks):
@@ -503,6 +506,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1}/{len(blocks)} failed.")
                     print(f"  [ACTION_REQUIRED: COPY_STATE |\n{target_file} ]")
                 file_success = False
+                if idx + 1 < len(blocks):
+                    print(f"  [⏭️] Skipped chunks {idx + 2} through {len(blocks)} due to error.")
                 break
         # --- PRE-FLIGHT SYNTAX VALIDATION ---
         if file_success:

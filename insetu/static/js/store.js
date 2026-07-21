@@ -2,11 +2,20 @@
 // Strict Unidirectional Data Flow (UDF) State Manager
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
-window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+window.inSetu.utils = window.inSetu.utils || {};
+window.inSetu.utils.getActiveWorkspace = function() {
+    try {
+        if (window.inSetu?.stores?.App) return window.inSetu.stores.App.getState().activeWorkspace || 'default';
+        return sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+    } catch(e) { return 'default'; }
+};
+
 export const AppStore = createStore(
     devtools(
         subscribeWithSelector((set, get) => ({
-            activeWorkspace: sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default',
+            activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
             manifest: {},
             allRepos: [],
             targetConfigs: [],
@@ -17,7 +26,7 @@ export const AppStore = createStore(
             isConfigOpen: false,
             isWorkspaceEditorOpen: false,
 
-            pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default'}`)) || ["ALL"]),
+            pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
             setPinnedRepos: (repos) => {
                 const ws = get().activeWorkspace || 'default';
                 localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));

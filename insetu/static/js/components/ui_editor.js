@@ -1,5 +1,96 @@
 import { LitElement, css } from 'lit';
 import { InSetuElement } from '../sdk.js';
+import { FsStore } from '../fs.js';
+import { AppStore } from '../store.js';
+
+export function resolveEditorMode(filename) {
+    if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
+    const ext = filename.split('.').pop().toLowerCase();
+    const modeMap = {
+        'md': 'markdown', 'py': 'python', 'js': 'javascript',
+        'json': 'javascript', 'sh': 'shell', 'ts': 'javascript',
+        'rs': 'rust', 'go': 'go', 'yaml': 'yaml', 'yml': 'yaml',
+        'html': 'html', 'htm': 'html', 'css': 'css'
+    };
+    return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
+}
+window.resolveEditorMode = resolveEditorMode;
+
+export function getEditorContent() {
+    return FsStore.getState().fileModal.content;
+}
+export function setEditorContent(text) {
+    FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: text } }));
+}
+export function insertTextAtCursor(textToInsert) {
+    const state = FsStore.getState().fileModal;
+    const modalEl = document.querySelector('insetu-file-modal');
+
+    if (modalEl && modalEl.shadowRoot) {
+        const cmEditor = modalEl.shadowRoot.querySelector('insetu-markdown-editor');
+        const textarea = modalEl.shadowRoot.querySelector('textarea');
+
+        if (state.isSupportedEditor && cmEditor) {
+            cmEditor.insertAtCursor(textToInsert);
+            return; 
+        } else if (textarea) {
+            const insertPos = textarea.selectionStart;
+            const newContent = state.content.substring(0, insertPos) + textToInsert + state.content.substring(insertPos);
+            const st = textarea.scrollTop;
+
+            textarea.value = newContent;
+            textarea.selectionStart = textarea.selectionEnd = insertPos + textToInsert.length;
+            textarea.scrollTop = st;
+
+            FsStore.setState({ fileModal: { ...state, content: newContent } });
+            return;
+        }
+    }
+
+    FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
+}
+
+export function insertLinkToEditor(path, name) {
+    let finalPath = path;
+    const currentModalFile = window.currentModalFile;
+    if (currentModalFile) {
+        const { targetConfigs } = AppStore.getState();
+        const getRepo = (p) => {
+            const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
+            return match ? match.repo_dir : p.split('/')[0];
+        };
+
+        const currentRepo = getRepo(currentModalFile);
+        const targetRepo = getRepo(path);
+
+        if (currentRepo !== targetRepo) {
+            const targetPathWithinRepo = path.substring(targetRepo.length + 1);
+            finalPath = `${targetRepo}::${targetPathWithinRepo}`;
+        } else {
+            const currentParts = currentModalFile.split('/');
+            currentParts.pop();
+            const targetParts = path.split('/');
+            let commonLength = 0;
+            while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
+                commonLength++;
+            }
+            const upSteps = currentParts.length - commonLength;
+            const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
+            const downString = targetParts.slice(commonLength).join('/');
+            finalPath = upString + downString;
+        }
+    }
+    const linkText = `[${name}](${finalPath})`;
+    if (window.insertTextAtCursor) {
+        window.insertTextAtCursor(linkText);
+    }
+
+    FsStore.getState().setModal('linkInsert', { open: false });
+}
+
+window.getEditorContent = getEditorContent;
+window.setEditorContent = setEditorContent;
+window.insertTextAtCursor = insertTextAtCursor;
 
 async function loadLanguageExtension(lang) {
     try {

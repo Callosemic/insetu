@@ -175,12 +175,11 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
             if node.module == 'socket':
                 report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
-
-            banned_imports = {'load_config', 'resolve_workspace_path', 'get_gather_paths'}
+            banned_imports = {'load_config', 'resolve_workspace_path', 'get_gather_paths', 'get_connection'}
             imported_names = {alias.name for alias in node.names}
             violations = banned_imports.intersection(imported_names)
             if violations:
-                report_violation("SDK_CONTEXT_MANDATE", self.filepath, node.lineno, f"Banned SDK imports detected: {violations}. Use ctx.config, ctx.resolve_path(), or ctx.paths instead.")
+                report_violation("SDK_CONTEXT_MANDATE", self.filepath, node.lineno, f"Banned SDK imports detected: {violations}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.")
 
         self.generic_visit(node)
 

@@ -6,12 +6,9 @@ import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middlewa
 import {
     executeWorkspaceMutation,
     setContextManifest,
-    executeSystemCompile,
-    fetchAndCopy,
-    fetchAndDownloadState,
-    normalizeAccentText,
-    resolveEditorMode
+    executeSystemCompile
 } from './app.js';
+import { resolveEditorMode } from './components/ui_editor.js';
 import { AppStore } from './store.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
@@ -124,6 +121,102 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
         forceEdit: forceAllowEdit
     }});
 }
+export async function fetchAndCopy(filePath, explicitUrl = null) {
+    try {
+        let res;
+        if (explicitUrl) {
+            res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
+        } else {
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+                if (overrideUrl) res = await fetch(overrideUrl);
+            }
+
+            if (!res) {
+                res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filePath)}`);
+            }
+        }
+
+        if (!res.ok) throw new Error("File not found on disk.");
+        const text = await res.text();
+        await navigator.clipboard.writeText(text);
+        window.setGlobalStatus("✅ Copied!", 2000);
+    } catch (e) {
+        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
+        throw e;
+    }
+}
+
+export async function fetchAndDownloadState(filePath, explicitUrl = null) {
+    try {
+        let fetchUrl = explicitUrl;
+
+        if (!fetchUrl) {
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
+
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
+                if (override) fetchUrl = override;
+            }
+        }
+
+        await downloadFile(fetchUrl, filePath.split('/').pop());
+        window.setGlobalStatus("✅ Downloaded!", 2000);
+    } catch (e) {
+        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
+        throw e;
+    }
+}
+
+export async function shareFiles(baseFile, chunks = null, isFS = false) {
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
+    const shareFilesArray = [];
+
+    try {
+        for (const filepath of filesToFetch) {
+            let fetchUrl = null;
+            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+                fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
+            }
+
+            if (!fetchUrl) {
+                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+                fetchUrl = fileIsFS 
+                    ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
+                    : `/download/${encodeURIComponent(filepath)}`;
+            }
+
+            const res = await fetch(fetchUrl, { headers: window.inSetu.api._getHeaders(true) });
+            if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
+
+            const blob = await res.blob();
+            const filename = filepath.split('/').pop();
+            const ext = filename.split('.').pop().toLowerCase();
+
+            let mime = blob.type;
+            if (ext === 'md') mime = 'text/markdown';
+            else if (ext === 'txt') mime = 'text/plain';
+            else if (ext === 'json') mime = 'application/json';
+            else if (ext === 'py') mime = 'text/x-python';
+            else if (ext === 'js') mime = 'text/javascript';
+            else if (!mime || mime === 'application/octet-stream') mime = 'text/plain';
+            shareFilesArray.push(new File([blob], filename, { type: mime }));
+        }
+
+        if (navigator.canShare({ files: shareFilesArray })) {
+            await navigator.share({ files: shareFilesArray });
+        } else {
+            throw new Error("File sharing not supported by this browser.");
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            window.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
+        }
+    }
+}
+
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
     if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
         fetchOptions.headers = window.inSetu.api._getHeaders(true);
@@ -313,6 +406,38 @@ async function archiveModalFile() {
         }
     });
 }
+export async function deleteEmptyFolder(dirPath) {
+    if (!confirm(`Are you sure you want to delete the empty folder /${dirPath}?`)) return;
+    await executeWorkspaceMutation('fs/delete', { filepath: dirPath }, {
+        onSuccess: () => {
+            const parts = dirPath.split('/');
+            parts.pop();
+            AppStore.setState({ globalBrowsePath: parts });
+            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
+                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-delete', dirPath);
+            }
+            const manifest = AppStore.getState().manifest;
+            let changed = false;
+            const newManifest = { ...manifest };
+            Object.keys(newManifest).forEach(key => {
+                const obj = newManifest[key];
+                if (obj.files) {
+                    const keepPath = dirPath + '/.gitkeep';
+                    const index = obj.files.indexOf(keepPath);
+                    if (index > -1) {
+                        changed = true;
+                        const newFiles = [...obj.files];
+                        newFiles.splice(index, 1);
+                        newManifest[key] = { ...obj, files: newFiles };
+                    }
+                }
+            });
+            if (changed) AppStore.setState({ manifest: newManifest });
+        }
+    });
+}
+window.deleteEmptyFolder = deleteEmptyFolder;
+
 async function deleteModalFile() {
     const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to delete this file?\nThis cannot be undone!")) return;
@@ -546,6 +671,14 @@ export class InSetuVFSExplorerActions extends InSetuElement {
             items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
             items.push({ divider: true });
             items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
+
+            const manifestFiles = getGlobalManifest();
+            const prefixWithSlash = currentPath + '/';
+            const hasFiles = manifestFiles.some(f => f.startsWith(prefixWithSlash) && !f.endsWith('.gitkeep'));
+            if (!hasFiles) {
+                items.push({ divider: true });
+                items.push({ label: 'Delete Folder', icon: '🗑️', onClick: () => window.deleteEmptyFolder(currentPath) });
+            }
         }
 
         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
@@ -588,7 +721,7 @@ window.ExtensionRegistry.registerExtension('files', {
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                 if (!fetchUrl) {
-                    const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+                    const activeWs = window.inSetu.utils.getActiveWorkspace();
                     fetchUrl = data.isFS 
                         ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
                         : `/download/${encodeURIComponent(data.filepath)}`;
@@ -649,7 +782,7 @@ window.ExtensionRegistry.registerExtension('files', {
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                 if (!fetchUrl) {
-                    const activeWs = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+                    const activeWs = window.inSetu.utils.getActiveWorkspace();
                     fetchUrl = data.isFS 
                         ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
                         : `/download/${encodeURIComponent(data.filepath)}`;
@@ -818,43 +951,6 @@ async function saveNewFolder() {
             }
         }
     });
-}
-export function getEditorContent() {
-    return FsStore.getState().fileModal.content;
-}
-export function setEditorContent(text) {
-    FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: text } }));
-}
-export function insertTextAtCursor(textToInsert) {
-    const state = FsStore.getState().fileModal;
-    const modalEl = document.querySelector('insetu-file-modal');
-
-    if (modalEl && modalEl.shadowRoot) {
-        const cmEditor = modalEl.shadowRoot.querySelector('insetu-markdown-editor');
-        const textarea = modalEl.shadowRoot.querySelector('textarea');
-
-        if (state.isSupportedEditor && cmEditor) {
-            // Apply the injection natively so CodeMirror preserves scroll state.
-            // The editor's native updateListener will sync the new string back to the FsStore automatically.
-            cmEditor.insertAtCursor(textToInsert);
-            return; 
-        } else if (textarea) {
-            // Manually preserve layout positions for standard textareas
-            const insertPos = textarea.selectionStart;
-            const newContent = state.content.substring(0, insertPos) + textToInsert + state.content.substring(insertPos);
-            const st = textarea.scrollTop;
-
-            textarea.value = newContent;
-            textarea.selectionStart = textarea.selectionEnd = insertPos + textToInsert.length;
-            textarea.scrollTop = st;
-
-            FsStore.setState({ fileModal: { ...state, content: newContent } });
-            return;
-        }
-    }
-
-    // Fallback if no modal is active
-    FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
 }
 export async function viewSourceFile(filepath, isFS = false) {
     if (window.inSetu?.extensions?.Registry?.executeUIHook) {
@@ -1166,6 +1262,7 @@ window.confirmFolderSelection = confirmFolderSelection;
 window.openWorkspaceBrowser = openWorkspaceBrowser;
 window.openBrowseModal = openBrowseModal;
 window.viewAndCopy = viewAndCopy;
+window.shareFiles = shareFiles;
 export async function uploadFileToWorkspace(targetDir) {
     const input = document.createElement('input');
     input.type = 'file';
@@ -1190,95 +1287,6 @@ export async function uploadFileToWorkspace(targetDir) {
 }
 window.uploadFileToWorkspace = uploadFileToWorkspace;
 
-export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
-    setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
-    try {
-        const res = await window.inSetu.api.workspace('gather/quick-pack', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_dir: targetDir,
-                recursive: recursive,
-                specific_files: specificFiles
-            })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to queue quick-pack.");
-
-        let filename = data.filename;
-        if (res.status === 202) {
-            const jobId = data.job_id;
-            while (true) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
-                if (!pollRes.ok) throw new Error("Quick-Pack job failed");
-                const pollData = await pollRes.json();
-
-                if (pollData.status === 'processing' || pollData.status === 'pending') {
-                    setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
-                } else if (pollData.status === 'completed') {
-                    filename = pollData.artifact?.filename;
-                    break;
-                } else if (pollData.status === 'failed') {
-                    throw new Error(pollData.message);
-                }
-            }
-        }
-        // Open the physical file that was just written to disk natively
-        viewAndCopy(filename);
-
-        setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
-    } catch (e) {
-        alert("Error creating quick-pack: " + e.message);
-        setGlobalStatus("❌ Quick-Pack failed", 3000, true);
-    }
-}
-export async function openQuickPackModal(targetDir) {
-    const fullTree = buildFileTree(getGlobalManifest());
-    let current = fullTree;
-    const gbPath = AppStore.getState().globalBrowsePath || [];
-    for (const p of gbPath) {
-        if (current[p]) current = current[p];
-        else break;
-    }
-
-    const fileKeys = Object.keys(current).filter(k => k !== '_isFile' && current[k]._isFile).sort();
-
-    if (fileKeys.length === 0) {
-        alert("No files available in this directory to pack.");
-        return;
-    }
-
-    const selectedFiles = new Set(fileKeys.map(k => current[k].fullPath));
-    FsStore.getState().setModal('quickPack', { open: true, targetDir, files: fileKeys.map(k => ({ key: k, path: current[k].fullPath })), selectedFiles });
-}
-
-window.executeQuickPackSelected = function() {
-    const { targetDir, selectedFiles } = FsStore.getState().modals.quickPack;
-    const selectedArray = Array.from(selectedFiles);
-    if (selectedArray.length === 0) {
-        alert("Please select at least one file.");
-        return;
-    }
-    executeQuickPack(targetDir, false, selectedArray);
-    FsStore.getState().setModal('quickPack', { open: false });
-};
-
-export async function clearQuickPacks() {
-    if (!confirm("Clear all Quick-Pack clipboard items?")) return;
-    setGlobalStatus("⏳ Clearing Clipboard...", null);
-    try {
-        const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
-        if (!res.ok) throw new Error("Failed to clear quick-packs.");
-
-        setGlobalStatus("✅ Clipboard cleared!", 2000);
-    } catch (e) {
-        alert("Error clearing clipboard: " + e.message);
-        setGlobalStatus("❌ Clear failed", 3000, true);
-    }
-}
-
-window.clearQuickPacks = clearQuickPacks;
 export function openLinkModal(initialQuery = '', initialTab = 'filename') {
 
     FsStore.getState().setModal('linkInsert', { 
@@ -1359,53 +1367,12 @@ function executeLinkSearch(query) {
     const results = window.inSetu.utils.fuzzyFilterObjects(mdFiles, q).slice(0, 50).map(path => ({ path }));
     FsStore.getState().setModal('linkInsert', { searchResults: results });
 }
-
-export function insertLinkToEditor(path, name) {
-    let finalPath = path;
-    if (currentModalFile) {
-        const { targetConfigs } = window.inSetu.stores.App.getState();
-        const getRepo = (p) => {
-            const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
-            return match ? match.repo_dir : p.split('/')[0];
-        };
-
-        const currentRepo = getRepo(currentModalFile);
-        const targetRepo = getRepo(path);
-
-        if (currentRepo !== targetRepo) {
-            const targetPathWithinRepo = path.substring(targetRepo.length + 1);
-            finalPath = `${targetRepo}::${targetPathWithinRepo}`;
-        } else {
-            const currentParts = currentModalFile.split('/');
-            currentParts.pop();
-            const targetParts = path.split('/');
-            let commonLength = 0;
-            while (commonLength < currentParts.length && commonLength < targetParts.length && currentParts[commonLength] === targetParts[commonLength]) {
-                commonLength++;
-            }
-            const upSteps = currentParts.length - commonLength;
-            const upString = upSteps > 0 ? '../'.repeat(upSteps) : './';
-            const downString = targetParts.slice(commonLength).join('/');
-            finalPath = upString + downString;
-        }
-    }
-    const linkText = `[${name}](${finalPath})`;
-    if (window.insertTextAtCursor) {
-        window.insertTextAtCursor(linkText);
-    }
-
-    FsStore.getState().setModal('linkInsert', { open: false });
-}
-
 // Expose new functions to the window so HTML element handlers can reach them
 window.openLinkModal = openLinkModal;
 window.switchLinkTab = switchLinkTab;
 window.onLinkSearchInput = onLinkSearchInput;
 window.executeDeepLinkSearch = executeDeepLinkSearch;
 window.viewSourceFile = viewSourceFile;
-window.getEditorContent = getEditorContent;
-window.setEditorContent = setEditorContent;
-window.insertTextAtCursor = insertTextAtCursor;
 export class InSetuVFSModals extends InSetuElement {
     static properties = {
         modals: { type: Object },

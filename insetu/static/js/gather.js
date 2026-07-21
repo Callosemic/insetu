@@ -1,8 +1,100 @@
 import { html, css } from 'lit';
 import { AppStore } from './store.js';
-import { setGlobalStatus, executeSystemCompile, fetchAndDownloadState, fetchAndCopy } from './app.js';
+import { setGlobalStatus, executeSystemCompile } from './app.js';
+import { fetchAndDownloadState, fetchAndCopy, buildFileTree, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
+
+export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
+    setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
+    try {
+        const res = await window.inSetu.api.workspace('gather/quick-pack', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_dir: targetDir,
+                recursive: recursive,
+                specific_files: specificFiles
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to queue quick-pack.");
+
+        let filename = data.filename;
+        if (res.status === 202) {
+            const jobId = data.job_id;
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                if (!pollRes.ok) throw new Error("Quick-Pack job failed");
+                const pollData = await pollRes.json();
+
+                if (pollData.status === 'processing' || pollData.status === 'pending') {
+                    setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
+                } else if (pollData.status === 'completed') {
+                    filename = pollData.artifact?.filename;
+                    break;
+                } else if (pollData.status === 'failed') {
+                    throw new Error(pollData.message);
+                }
+            }
+        }
+        // Open the physical file that was just written to disk natively
+        viewAndCopy(filename);
+
+        setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
+    } catch (e) {
+        alert("Error creating quick-pack: " + e.message);
+        setGlobalStatus("❌ Quick-Pack failed", 3000, true);
+    }
+}
+export async function openQuickPackModal(targetDir) {
+    const fullTree = buildFileTree(getGlobalManifest());
+    let current = fullTree;
+    const gbPath = AppStore.getState().globalBrowsePath || [];
+    for (const p of gbPath) {
+        if (current[p]) current = current[p];
+        else break;
+    }
+
+    const fileKeys = Object.keys(current).filter(k => k !== '_isFile' && current[k]._isFile).sort();
+
+    if (fileKeys.length === 0) {
+        alert("No files available in this directory to pack.");
+        return;
+    }
+
+    const selectedFiles = new Set(fileKeys.map(k => current[k].fullPath));
+    FsStore.getState().setModal('quickPack', { open: true, targetDir, files: fileKeys.map(k => ({ key: k, path: current[k].fullPath })), selectedFiles });
+}
+
+window.executeQuickPackSelected = function() {
+    const { targetDir, selectedFiles } = FsStore.getState().modals.quickPack;
+    const selectedArray = Array.from(selectedFiles);
+    if (selectedArray.length === 0) {
+        alert("Please select at least one file.");
+        return;
+    }
+    executeQuickPack(targetDir, false, selectedArray);
+    FsStore.getState().setModal('quickPack', { open: false });
+};
+
+export async function clearQuickPacks() {
+    if (!confirm("Clear all Quick-Pack clipboard items?")) return;
+    setGlobalStatus("⏳ Clearing Clipboard...", null);
+    try {
+        const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
+        if (!res.ok) throw new Error("Failed to clear quick-packs.");
+
+        setGlobalStatus("✅ Clipboard cleared!", 2000);
+    } catch (e) {
+        alert("Error clearing clipboard: " + e.message);
+        setGlobalStatus("❌ Clear failed", 3000, true);
+    }
+}
+
+window.clearQuickPacks = clearQuickPacks;
+window.executeQuickPack = executeQuickPack;
 
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,

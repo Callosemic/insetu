@@ -11,17 +11,11 @@ _executor = None
 _metronome_thread = None
 _shutdown_event = threading.Event()
 _callbacks = {}
-
 def register_callback(ext_name, callback_name, func):
     """Extensions register their background functions here to be triggered by the Metronome."""
     _callbacks[f"{ext_name}:{callback_name}"] = func
-def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", 
 
-    jitter_ms=0, workspace_id=None):
-    """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
-    if _shutdown_event.is_set():
-        return False
-
+def _prepare_job_payload(args_json, workspace_id):
     if not workspace_id:
         from insetu.utils_core import sniff_tenant_id
         workspace_id = sniff_tenant_id()
@@ -36,31 +30,27 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}",
         args_json = json.dumps(args_payload)
     except Exception:
         pass
+    return workspace_id, conn, now, args_json
+
+def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", jitter_ms=0, workspace_id=None):
+    """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
+    if _shutdown_event.is_set():
+        return False
+
+    workspace_id, conn, now, args_json = _prepare_job_payload(args_json, workspace_id)
     conn.execute("""
         INSERT OR REPLACE 
 INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, interval_ms, jitter_ms, now, args_json))
     conn.commit()
+
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
     if _shutdown_event.is_set():
         return False
 
-    if not workspace_id:
-        from insetu.utils_core import sniff_tenant_id
-        workspace_id = sniff_tenant_id()
-    workspace_id = workspace_id or "default"
-    _init_worker_schema(workspace_id)
-    conn = get_connection("workers", workspace_id=workspace_id)
-    now = time.time()
-    try:
-        args_payload = json.loads(args_json)
-        if "_workspace_id" not in args_payload:
-            args_payload["_workspace_id"] = workspace_id
-        args_json = json.dumps(args_payload)
-    except Exception:
-        pass
+    workspace_id, conn, now, args_json = _prepare_job_payload(args_json, workspace_id)
     conn.execute("""
         INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
         VALUES (?, ?, ?, 'processing', 'Initializing...', '{}', ?, ?, ?)

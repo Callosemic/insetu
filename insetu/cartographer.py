@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, load_config
+from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, load_config, build_tree_dict
 from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
@@ -49,17 +49,6 @@ def extract_existing_comments(index_path, repo_path=None):
     merged = git_comments.copy()
     merged.update(live_comments)
     return merged
-
-def build_tree_dict(file_paths):
-    tree = {}
-    for path in file_paths:
-        parts = path.split('/')
-        current = tree
-        for part in parts:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-    return tree
 def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path=""):
     """Pass 2: Builds the new tree and injects the preserved or placeholder comments."""
     lines = []

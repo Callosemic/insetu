@@ -339,6 +339,29 @@ def generate_text_chunks(blocks, chunk_limit=400000):
         current_length += block_len
     if current_chunk:
         yield "".join(current_chunk)
+def build_tree_dict(file_paths):
+    tree = {}
+    for path in file_paths:
+        parts = path.split('/')
+        current = tree
+        for part in parts:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+    return tree
+
+def generate_ascii_tree(file_paths):
+    tree = build_tree_dict(file_paths)
+    def print_tree(node, prefix=""):
+        lines = []
+        entries = sorted(list(node.keys()))
+        for i, key in enumerate(entries):
+            is_last = (i == len(entries) - 1)
+            lines.append(f"{prefix}{'└── ' if is_last else '├── '}{key}")
+            lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
+        return lines
+    return ".\n" + "\n".join(print_tree(tree))
+
 def get_available_contexts(workspace_id=None):
     """
     SSOT Helper: Computes all expected and active context artifacts across the workspace.
@@ -541,9 +564,9 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
     import re
     if depth > 5:
         return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
-
     def replacer(match):
         include_path = match.group(1).strip()
+        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
 
         # Path resolution logic stays in core
         if include_path.startswith('./') or include_path.startswith('../'):
@@ -561,6 +584,13 @@ def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth
         inc_content = read_callback(target_path)
 
         if inc_content is not None:
+            if params_str:
+                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|([^;}]*))', params_str)
+                for pm in param_matches:
+                    key = pm.group(1)
+                    val = pm.group(2) if pm.group(2) is not None else pm.group(3).strip()
+                    macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
+                    inc_content = re.sub(macro_pattern, val, inc_content)
             return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
         else:
             return f"[!] MACRO TARGET NOT FOUND: {include_path}"

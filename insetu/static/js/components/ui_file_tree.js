@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { buildFileTree } from '../app.js';
+import { buildFileTree } from '../fs.js';
 import { sharedStyles } from '../shared_styles.js';
 export class InSetuCard extends LitElement {
     static properties = {

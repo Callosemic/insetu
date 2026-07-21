@@ -11,12 +11,8 @@ export function createExtensionStore(name, initialState, persistKeys = []) {
             { name: `${name}Store` }
         )
     );
-
     if (persistKeys && persistKeys.length > 0) {
-        const getWs = () => {
-            if (window.inSetu?.stores?.App) return window.inSetu.stores.App.getState().activeWorkspace || 'default';
-            return sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
-        };
+        const getWs = () => window.inSetu.utils.getActiveWorkspace();
 
         const hydrate = (ws) => {
             const hydrated = {};
@@ -60,7 +56,6 @@ export function createIsolatedSlice(store, sliceKey) {
         set: (val) => store.setState({ [sliceKey]: typeof val === 'object' && val !== null ? { ...val } : val })
     };
 }
-
 export class InSetuElement extends LitElement {
     static properties = {
         workspaceId: { type: String }
@@ -68,7 +63,7 @@ export class InSetuElement extends LitElement {
 
     constructor() {
         super();
-        this.workspaceId = window.inSetu?.stores?.App?.getState()?.activeWorkspace || 'default';
+        this.workspaceId = window.inSetu.utils.getActiveWorkspace();
         this._storeUnsubs = [];
     }
     get extName() {

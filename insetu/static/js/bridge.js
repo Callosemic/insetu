@@ -1,11 +1,7 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
-import {
-    viewSourceFile,
-    fetchAndCopy,
-    fetchAndDownloadState
-} from './app.js';
+import { fetchAndCopy, fetchAndDownloadState, viewSourceFile } from './fs.js';
 import { AppStore } from './store.js';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
@@ -234,11 +230,12 @@ export class InSetuExtBridge extends InSetuElement {
                     safeData = safeData.replace(/^Targeting: (.*?)$/gm, '<div class="file-card" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;"><div style="font-weight: bold; color: var(--intent-primary); font-family: var(--font-mono); font-size: 1.05rem; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">🎯 $1</div><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6;">');
                     safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.$/gm, '</div></div>');
                     safeData = safeData.replace(/^=== PULSE .*? COMPLETE ===/gm, '');
-
                     // Embellish semantic tags
                     safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
                     safeData = safeData.replace(/\[!\]/g, '<span style="color: var(--intent-danger); font-weight: bold;">[!]</span>');
                     safeData = safeData.replace(/\[🚀\]/g, '<span style="color: var(--intent-highlight); font-weight: bold;">[🚀]</span>');
+                    safeData = safeData.replace(/\[⏭️\]/g, '<span style="color: var(--intent-warning); font-weight: bold;">[⏭️]</span>');
+                    safeData = safeData.replace(/\[ℹ️\]/g, '<span style="color: var(--text-muted); font-weight: bold;">[ℹ️]</span>');
 
                     safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
                         const safeP1 = p1.trim().replace(/\\/g, '\\\\');

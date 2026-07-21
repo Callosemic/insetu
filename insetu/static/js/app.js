@@ -1,9 +1,3 @@
-import {
-    viewSourceFile,
-    createFileCard,
-    downloadFile,
-    buildFileTree
-} from './fs.js';
 import { BridgeStore } from './bridge.js';
 import { AppStore } from './store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
@@ -18,8 +12,7 @@ import './components/ui_primitives.js';
 import './components/ui_editor.js';
 import './gather.js';
 import './config.js';
-
-function getFlattenedBuckets(repoDir, includeSystem = false) {
+export function getFlattenedBuckets(repoDir, includeSystem = false) {
     const { targetConfigs } = AppStore.getState();
     const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
     if (!repoCfg || !repoCfg.sub_buckets) return [];
@@ -38,12 +31,6 @@ function getFlattenedBuckets(repoDir, includeSystem = false) {
     });
     return buckets;
 }
-export {
-    viewSourceFile,
-    createFileCard,
-    getFlattenedBuckets,
-    buildFileTree
-};
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -328,7 +315,7 @@ document.addEventListener('click', (e) => {
             if (match) tabId = match[1];
         }
         if (tabId) {
-            const ws = window.inSetu?.stores?.App?.getState()?.activeWorkspace || sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+            const ws = window.inSetu.utils.getActiveWorkspace();
             localStorage.setItem(`insetu_tab_${ws}`, tabId);
         }
     }
@@ -360,7 +347,7 @@ window.addEventListener('DOMContentLoaded', async () => {
         window.ExtensionRegistry.compileLayout();
     }
 
-    const ws = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
+    const ws = window.inSetu.utils.getActiveWorkspace();
     const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
 
     const targetTabEl = document.querySelector(`.tab[data-id="${savedTab}"]`) || document.querySelector(`.tab[onclick*="${savedTab}"]`);
@@ -422,15 +409,14 @@ async function executeWorkspaceSwap(key, title) {
     loadWorkspaces();
 }
 window.executeWorkspaceSwap = executeWorkspaceSwap;
-
 async function loadWorkspaces() {
     try {
         const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces && Object.keys(data.workspaces).length > 0) {
-            let activeWs = sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace');
-            if (!activeWs || !data.workspaces[activeWs]) {
+            let activeWs = window.inSetu.utils.getActiveWorkspace();
+            if (!activeWs || !data.workspaces[activeWs] || activeWs === 'default') {
                 activeWs = data.active_workspace || Object.keys(data.workspaces)[0] || 'default';
                 sessionStorage.setItem('insetu_workspace', activeWs);
                 localStorage.setItem('insetu_workspace', activeWs);
@@ -527,28 +513,8 @@ function updateRefreshText() {
     if (diff < 60) text = `${diff} second${diff !== 1 ? 's' : ''} ago`;
     else if (diff < 3600) text = `${Math.floor(diff/60)} minute${Math.floor(diff/60) !== 1 ? 's' : ''} ago`;
     else text = `${Math.floor(diff/3600)} hour${Math.floor(diff/3600) !== 1 ? 's' : ''} ago`;
-
     const el = document.getElementById('refresh-time');
     if (el) el.innerText = `Refreshed ${text}`;
-}
-export function resolveEditorMode(filename) {
-    if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
-    const ext = filename.split('.').pop().toLowerCase();
-    const modeMap = {
-        'md': 'markdown', 'py': 'python', 'js': 'javascript',
-        'json': 'javascript', 'sh': 'shell', 'ts': 'javascript',
-        'rs': 'rust', 'go': 'go', 'yaml': 'yaml', 'yml': 'yaml',
-        'html': 'html', 'htm': 'html', 'css': 'css'
-    };
-    return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
-}
-export function normalizeAccentText(str) {
-    if (!str) return '';
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-export function generateSafeSlug(str) {
-    if (!str) return '';
-    return normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 export function updateDefaultStatus() {
     const bar = document.getElementById('global-status-bar');
@@ -678,7 +644,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
 let compilePromise = null;
 let compilePromiseWs = null;
 export const executeSystemCompile = (onProgress = null, forceFull = false) => {
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
 
     // Guardrail: Short-circuit the compilation pipeline instantly if the workspace has no repositories tracked
@@ -780,7 +746,7 @@ async function simulatePanic() {
     }
 }
 async function performSoftRefresh() {
-    const currentWs = AppStore.getState().activeWorkspace || 'default';
+    const currentWs = window.inSetu.utils.getActiveWorkspace();
 
     // Pre-emptively unmount all optional extension DOM components to silence their lifecycles before network fetches
     document.querySelectorAll('[data-ext]').forEach(el => {
@@ -911,7 +877,7 @@ async function performSoftRefresh() {
             }
         }
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
-        const currentWsSafe = AppStore.getState().activeWorkspace || 'default';
+        const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: {} });
 
         let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
@@ -986,99 +952,7 @@ if (d.config_missing) {
     document.body.appendChild(banner);
 }
 });
-export async function fetchAndCopy(filePath, explicitUrl = null) {
-    try {
-        let res;
-        if (explicitUrl) {
-            res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
-        } else {
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-                if (overrideUrl) res = await fetch(overrideUrl);
-            }
 
-            if (!res) {
-                res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filePath)}`);
-            }
-        }
-
-        if (!res.ok) throw new Error("File not found on disk.");
-        const text = await res.text();
-        await navigator.clipboard.writeText(text);
-        window.setGlobalStatus("✅ Copied!", 2000);
-    } catch (e) {
-        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
-        throw e;
-    }
-}
-export async function fetchAndDownloadState(filePath, explicitUrl = null) {
-    try {
-        let fetchUrl = explicitUrl;
-
-        if (!fetchUrl) {
-            const activeWs = AppStore.getState().activeWorkspace || 'default';
-            fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
-
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-                if (override) fetchUrl = override;
-            }
-        }
-
-        await downloadFile(fetchUrl, filePath.split('/').pop());
-        window.setGlobalStatus("✅ Downloaded!", 2000);
-    } catch (e) {
-        window.setGlobalStatus("❌ Error: " + e.message, 3000, true);
-        throw e;
-    }
-}
-export async function shareFiles(baseFile, chunks = null, isFS = false) {
-    const activeWs = AppStore.getState().activeWorkspace || 'default';
-    const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
-    const shareFilesArray = [];
-
-    try {
-        for (const filepath of filesToFetch) {
-            let fetchUrl = null;
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
-            }
-
-            if (!fetchUrl) {
-                const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
-                fetchUrl = fileIsFS 
-                    ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
-                    : `/download/${encodeURIComponent(filepath)}`;
-            }
-
-            const res = await fetch(fetchUrl, { headers: window.inSetu.api._getHeaders(true) });
-            if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
-
-            const blob = await res.blob();
-            const filename = filepath.split('/').pop();
-            const ext = filename.split('.').pop().toLowerCase();
-
-            let mime = blob.type;
-            if (ext === 'md') mime = 'text/markdown';
-            else if (ext === 'txt') mime = 'text/plain';
-            else if (ext === 'json') mime = 'application/json';
-            else if (ext === 'py') mime = 'text/x-python';
-            else if (ext === 'js') mime = 'text/javascript';
-            else if (!mime || mime === 'application/octet-stream') mime = 'text/plain';
-            shareFilesArray.push(new File([blob], filename, { type: mime }));
-        }
-
-        if (navigator.canShare({ files: shareFilesArray })) {
-            await navigator.share({ files: shareFilesArray });
-        } else {
-            throw new Error("File sharing not supported by this browser.");
-        }
-    } catch (err) {
-        if (err.name !== 'AbortError') {
-            window.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
-        }
-    }
-}
 /* ==========================================================================
     TRACKER LOGIC (Extracted to kanban.js)
     ========================================================================== */
@@ -1087,7 +961,7 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
     ========================================================================== */
 (async function hydrateEcosystem() {
     try {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
 
         // Lazy Hydration: Attempt to fetch existing manifest first to prevent N+1 compiler thrashing
         let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
@@ -1120,12 +994,9 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
             Explicitly binding UI-triggered functions to the global scope so they 
             survive the transition to <script type="module">
             ========================================================================== */
-window.normalizeAccentText = normalizeAccentText;
 window.switchTab = switchTab;
 window.switchSubTab = switchSubTab;
 window.fullRefresh = fullRefresh;
 window.performSoftRefresh = performSoftRefresh;
 window.simulatePanic = simulatePanic;
-window.resolveEditorMode = resolveEditorMode;
-window.shareFiles = shareFiles;
 

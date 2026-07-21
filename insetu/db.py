@@ -60,7 +60,7 @@ def get_connection(db_name, workspace_id=None):
     if not workspace_id:
         from insetu.utils_core import sniff_tenant_id
         workspace_id = sniff_tenant_id()
-    workspace_id = workspace_id or "default"
+
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
     db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
