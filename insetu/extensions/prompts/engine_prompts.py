@@ -1,19 +1,33 @@
+from pathlib import Path
 import os
 import re
 from flask import jsonify
 from insetu.sdk import InSetuExtension, ExtensionContext
 from insetu.hooks import hooks
-prompts_bp = InSetuExtension('prompts', __name__, title="Prompt Library", description="Prompt template management and embedding.", target_repos=[{
-    "repo_dir": ".insetu",
-    "title": "inSetu OS",
-    "domain": "System Configuration",
-    "exts": [".json", ".md", ".txt"],
-    "apply_ignore": True,
-    "repo_ignore_dirs": ["data"],
-    "archive_type": "prompt-library",
-    "exclude_from_context": True,
-    "exclude_from_diffs": True
-}])
+
+prompts_bp = InSetuExtension(
+    'prompts', 
+    __name__, 
+    title="Prompt Library", 
+    description="Prompt template management and embedding.", 
+    target_repos=[{
+        "repo_dir": ".insetu",
+        "title": "inSetu OS",
+        "domain": "System Configuration",
+        "exts": [".json", ".md", ".txt"],
+        "apply_ignore": True,
+        "repo_ignore_dirs": ["data"],
+        "archive_type": "prompt-library",
+        "exclude_from_context": True,
+        "exclude_from_diffs": True
+    }],
+    virtual_contexts=[{
+        "title": "Prompts",
+        "domain": "Prompts & State",
+        "description": "The Master Ingestion Prompt and CLI templates.",
+        "out_file": "prompts_context.txt"
+    }]
+)
 __depends__ = []
 
 @hooks.on('compile_contexts')
@@ -43,10 +57,11 @@ def provide_available_prompts(workspace_id=None, **kwargs):
     ctx = ExtensionContext('prompts', workspace_id)
     prompts = []
     # VFS Walk natively yields paths relative to the workspace root.
-    for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"], exts=['.md', '.txt', '.gitkeep', '.keep']):
+    for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"]):
         prompts.append(ws_rel_path)
 
     return prompts
+
 @prompts_bp.route('list', methods=['GET'])
 def api_prompts_list(ctx):
     """Provides a list of available prompts for the UI."""
@@ -55,6 +70,7 @@ def api_prompts_list(ctx):
         "prompts": prompts,
         "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
     })
+
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):
     """Fetches a prompt and recursively resolves {{include: ...}} macros."""
@@ -63,6 +79,9 @@ def api_prompts_resolve(ctx):
     filename = ctx.req.args.get('file', '')
     if not filename:
         return jsonify({"error": "File required"}), 400
+
+    if filename.startswith('prompts/'):
+        filename = f".insetu/{filename}"
 
     content = ctx.vfs.read(filename)
     if content is not None:

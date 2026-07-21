@@ -91,7 +91,9 @@ export class InSetuExtSkills extends InSetuElement {
         _editTags: { type: String },
         _editGroup: { type: String }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; container-type: inline-size; }
+    `];
     constructor() {
         super();
         this.playlist = [];

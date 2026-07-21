@@ -82,23 +82,18 @@ export class InSetuExtTracker extends InSetuElement {
 static styles = [
 sharedStyles,
 css`
-    :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+    :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
     .tracker-body { flex: 1; overflow-y: auto; padding: 20px; }
 
     .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; display: inline-block; }
     :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
     :host-context([data-theme="light"]) .task-tag { background: #e2e8f0; color: #0f172a; }
     .board-columns { display: flex; gap: 15px; }
-    @media (max-width: 1024px) {
+    @container (max-width: 800px) {
         .board-columns { flex-direction: column; }
     }
     .column { flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px; }
     .column h3 { margin-top: 0; font-size: 1.1rem; }
-
-    insetu-modal {
-        position: fixed;
-        z-index: 2100 !important;
-    }
     .editor-wrapper {
         flex: 1;
         min-height: 0;

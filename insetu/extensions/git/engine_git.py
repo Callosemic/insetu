@@ -314,9 +314,8 @@ def _background_sweep_status(ctx):
                             is_excluded = True
                         elif set(p.lower() for p in filepath.split('/')).intersection(ignore_dirs):
                             is_excluded = True
-
-                # Sweepable State catches ALL untracked files (??) PLUS any tracked file explicitly excluded from Diffs
-                if is_excluded or status == "??":
+                # Sweepable State should ONLY catch files explicitly excluded from normal Diffs
+                if is_excluded:
                     files.append({"path": filepath, "status": status.strip()})
 
             if files:
@@ -574,17 +573,33 @@ def api_git_status(ctx):
                 branches = [b.strip() for b in br_res.stdout.splitlines() if b.strip()]
                 ahead_behind = ""
                 try:
-                    # Compare HEAD against its configured upstream branch
-                    ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path, check=True)
-                    parts = ab_res.stdout.strip().split()
-                    if len(parts) == 2:
-                        ahead, behind = int(parts[0]), int(parts[1])
-                        if ahead > 0 or behind > 0:
-                            ahead_behind = f"{f'⬆️ {ahead}' if ahead > 0 else ''} {f'⬇️ {behind}' if behind > 0 else ''}".strip()
-                        else:
-                            ahead_behind = "✔️ Sync"
+                    remote_res = subprocess.run(['git', 'remote', '-v'], capture_output=True, text=True, cwd=repo_path)
+                    remotes_out = remote_res.stdout.lower()
+
+                    # 1. Verify a remote exists and has an online network protocol
+                    has_remote = bool(remotes_out.strip())
+                    is_online = any(proto in remotes_out for proto in ['http://', 'https://', 'git@', 'ssh://'])
+
+                    if not has_remote or not is_online:
+                        ahead_behind = "☁️ Local Only"
+                    else:
+                        try:
+                            # 2. Compare HEAD against its configured upstream tracking branch
+                            ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path, check=True)
+                            parts = ab_res.stdout.strip().split()
+                            if len(parts) == 2:
+                                ahead, behind = int(parts[0]), int(parts[1])
+                                if ahead > 0 or behind > 0:
+                                    ahead_behind = f"{f'⬆️ {ahead}' if ahead > 0 else ''} {f'⬇️ {behind}' if behind > 0 else ''}".strip()
+                                else:
+                                    ahead_behind = "✔️ Sync"
+                            else:
+                                ahead_behind = "☁️ Local Only"
+                        except Exception:
+                            ahead_behind = "☁️ Local Only" # No upstream configured or no commits yet
                 except Exception:
-                    ahead_behind = "☁️ Local Only" # No upstream configured or no commits yet
+                    has_remote = False
+                    ahead_behind = "☁️ Local Only"
 
                 try:
                     status_res = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=repo_path)
@@ -593,14 +608,14 @@ def api_git_status(ctx):
                 except Exception:
                     conflicts = []
 
-                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind, "conflicts": conflicts}
+                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind, "conflicts": conflicts, "has_remote": has_remote}
             else:
                 repos_status[repo_dir] = {"is_git": False}
         except Exception:
             repos_status[repo_dir] = {"is_git": False}
     return jsonify({"status": "success", "repos": repos_status})
 @git_bp.worker("init_task")
-def _background_git_init(ctx, repo):
+def _background_git_init(ctx, repo, branch):
     import subprocess
     import os
 
@@ -613,19 +628,19 @@ def _background_git_init(ctx, repo):
             break
 
     try:
-        subprocess.run(['git', 'init'], cwd=repo_path, check=True, capture_output=True, text=True)
-        return f"Initialized Git repository."
+        subprocess.run(['git', 'init', '-b', branch], cwd=repo_path, check=True, capture_output=True, text=True)
+        return f"Initialized Git repository on branch '{branch}'."
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         raise RuntimeError(err_str)
-
 @git_bp.route('init', methods=['POST'])
 def api_git_init(ctx):
     repo = ctx.req.json.get('repo')
+    branch = ctx.req.json.get('branch', 'main')
     if not repo: return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("init_task", repo=repo)
+    job_id = ctx.jobs.submit("init_task", repo=repo, branch=branch)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("fetch_preview_task")
 def _background_git_fetch_preview(ctx, repo):
@@ -694,6 +709,8 @@ def _background_git_fetch_preview(ctx, repo):
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        if "could not read Username" in err_str or "No such device" in err_str:
+            raise RuntimeError("Authentication failed. Headless Git requires SSH URLs (git@github.com:...) instead of HTTPS, or a cached credential helper.")
         raise RuntimeError(err_str)
 
 @git_bp.route('fetch_preview', methods=['POST'])
@@ -769,6 +786,68 @@ def api_git_pull(ctx):
     if not repo: return jsonify({"error": "Repo required"}), 400
     job_id = ctx.jobs.submit("pull_task", repo=repo, strategy=strategy)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+@git_bp.worker("add_remote_task")
+def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
+    import subprocess
+    import os
+
+    ctx.jobs.update_progress(f"Adding remote origin for {repo}...")
+    repo_path = ctx.resolve_path(repo)
+    for c in ctx.config.get("target_repos", []):
+        if c.get("repo_dir") == repo and c.get("physical_path"):
+            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+            break
+    try:
+        # Ensure HEAD exists by creating an empty initial commit if the repo is completely empty
+        head_check = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo_path, capture_output=True)
+        if head_check.returncode != 0:
+            ctx.jobs.update_progress("Creating initial commit to establish HEAD...")
+            subprocess.run(['git', 'commit', '--allow-empty', '-m', 'chore: initial commit'], cwd=repo_path, check=True, capture_output=True)
+        # Check if origin already exists to handle retries gracefully
+        check_remote = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+        if 'origin' in check_remote.stdout.split():
+            subprocess.run(['git', 'remote', 'set-url', 'origin', remote_url], cwd=repo_path, check=True, capture_output=True, text=True)
+        else:
+            subprocess.run(['git', 'remote', 'add', 'origin', remote_url], cwd=repo_path, check=True, capture_output=True, text=True)
+
+        git_env = get_headless_git_env()
+
+        if resolution == "force":
+            ctx.jobs.update_progress("Force pushing to overwrite remote...")
+            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD', '--force'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            return push_res.stdout + push_res.stderr
+        elif resolution == "pull":
+            ctx.jobs.update_progress("Pulling and merging unrelated histories...")
+            # Fetch first, then merge allowing unrelated histories
+            curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip() or 'main'
+            subprocess.run(['git', 'pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+
+            ctx.jobs.update_progress("Pushing merged history to remote...")
+            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            return push_res.stdout + push_res.stderr
+        else:
+            # Standard push
+            ctx.jobs.update_progress("Pushing initial commit to remote...")
+            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            return push_res.stdout + push_res.stderr
+
+    except subprocess.CalledProcessError as e:
+        err = e.stderr or e.stdout
+        err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
+        if "could not read Username" in err_str or "No such device" in err_str:
+            raise RuntimeError("Authentication failed. Headless Git requires SSH URLs (git@github.com:...) instead of HTTPS, or a cached credential helper.")
+        raise RuntimeError(err_str)
+
+@git_bp.route('remote/add', methods=['POST'])
+def api_git_remote_add(ctx):
+    repo = ctx.req.json.get('repo')
+    url = ctx.req.json.get('url')
+    resolution = ctx.req.json.get('resolution')
+    if not repo or not url: return jsonify({"error": "Repo and URL required"}), 400
+
+    job_id = ctx.jobs.submit("add_remote_task", repo=repo, remote_url=url, resolution=resolution)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 @git_bp.worker("checkout_task")
 def _background_git_checkout(ctx, repo, branch, create_new):
     import subprocess

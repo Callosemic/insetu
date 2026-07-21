@@ -129,7 +129,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         .git-body { flex: 1; overflow-y: auto; padding: 20px; }
     `];
 
@@ -433,18 +433,19 @@ disconnectedCallback() {
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
                     <insetu-category-section titleText=${catName}>
-                        ${categories[catName].map(f => html`
+                        ${categories[catName].map(f => {
+                            const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
+                            return html`
                             <insetu-card
                                 .filename=${f.filename}
                                 .titleText=${f.displayName}
-                                .descriptionText=${f.description}
+                                .descriptionText=${descText}
                                 .detailText=${f.detailText}
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
                                 entityType="file:diff"
                                 .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: f.isFS }}
                                 @card-clicked=${() => { if(window.viewAndCopy) window.viewAndCopy(f.filename); }}>
-                                ${f.branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${f.branch}</span>` : ''}
 ${(() => {
     const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
     const hasChunks = chunks && chunks.length > 1;
@@ -463,7 +464,7 @@ ${(() => {
     return '';
 })()}
                             </insetu-card>
-                        `)}
+                        `;})}
                     </insetu-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
@@ -472,11 +473,12 @@ ${(() => {
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                         ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
                             const branch = GitStore.getState().reposStatus[repo]?.current;
+                            const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                             return html`
                             <insetu-card
                             .filename=${repo}
                             .titleText=${repo}
-                            .descriptionText=${`${files.length} untracked or excluded files pending.`}
+                            .descriptionText=${descText}
                             icon="📦"
                             intentColor="var(--intent-neutral)"
                             entityType="repo"
@@ -487,7 +489,6 @@ ${(() => {
                                 this.sweepExpandedRepos = newSet;
                                 this.requestUpdate();
                             }}>
-                            ${branch ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${branch}</span>` : ''}
                         </insetu-card>
 
                         ${this.sweepExpandedRepos.has(repo) ? html`
@@ -567,10 +568,16 @@ export class InSetuExtGitCtrl extends InSetuElement {
         previewModalOpen: { type: Boolean },
         previewRepo: { type: String },
         previewMessage: { type: String },
+        remoteModalOpen: { type: Boolean },
+        remoteUrlInput: { type: String },
+        activeRemoteRepo: { type: String },
+        remoteConflict: { type: Boolean },
         _runtimeStrategy: { type: String },
         _repoStrategies: { type: Object }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; }
+    `];
 
     constructor() {
         super();
@@ -584,6 +591,10 @@ export class InSetuExtGitCtrl extends InSetuElement {
         this.previewModalOpen = false;
         this.previewRepo = '';
         this.previewMessage = '';
+        this.remoteModalOpen = false;
+        this.remoteUrlInput = '';
+        this.activeRemoteRepo = '';
+        this.remoteConflict = false;
         this._runtimeStrategy = 'rebase';
         this._repoStrategies = {};
     }
@@ -660,9 +671,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
             alert(`Network error fetching ${repo}: ${err.message}`);
         }
     }
-    async _initRepo(repo) {
+    async _initRepo(repo, branch = 'main') {
         try {
-            const res = await this.api.post('init', { repo });
+            const res = await this.api.post('init', { repo, branch });
             if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
                 throw new Error(err.error || "Init failed");
@@ -755,6 +766,47 @@ export class InSetuExtGitCtrl extends InSetuElement {
             alert(`Network error during checkout for ${repo}: ${err.message}`);
         }
     }
+    async _connectRemote(resolution = null) {
+        const repo = this.activeRemoteRepo;
+        const url = this.remoteUrlInput.trim();
+        if (!url) return alert("Please enter a valid Git URL.");
+
+        this.remoteModalOpen = false;
+        try {
+            this.pullMessage = `Connecting ${repo} to remote...`;
+            this.activePullJobId = 'starting';
+
+            const res = await this.api.post('remote/add', { repo, url, resolution });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || "Failed to add remote");
+            }
+            const data = await res.json();
+
+            this.activePullJobId = data.job_id;
+            this.api.pollJob(data.job_id, {
+                onProgress: (msg) => this.pullMessage = msg,
+                onComplete: (statusData) => {
+                    this.activePullJobId = null;
+                    this.remoteConflict = false;
+                    alert(`✅ Remote connected and pushed successfully!\n\n${statusData.message}`);
+                    GitStore.getState().fetchStatus();
+                },
+                onError: (err) => {
+                    this.activePullJobId = null;
+                    if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('tip of your current branch is behind')) {
+                        this.remoteConflict = true;
+                        this.remoteModalOpen = true;
+                    } else {
+                        alert(`❌ Failed to connect remote for ${repo}\n\n${err.message}`);
+                    }
+                }
+            });
+        } catch (err) {
+            this.activePullJobId = null;
+            alert(`Network error connecting remote: ${err.message}`);
+        }
+    }
 
     render() {
         return html`
@@ -764,27 +816,46 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 ${this.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
                 ${this.allRepos.map(repo => {
                     const status = this.reposStatus[repo] || {};
-
                     if (status.is_git === false) {
                         return html`
                             <insetu-card titleText=${repo} descriptionText="Not a Git repository." icon="📁" intentColor="var(--intent-neutral)">
-                                <button slot="actions" class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this._initRepo(repo)}>✨ Initialize Git Repo</button>
+                                <div slot="actions" style="display: flex; align-items: center; gap: 5px;">
+                                    <input type="text" .value=${"main"} placeholder="main" style="width: 80px; padding: 4px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem;">
+                                    <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${(e) => {
+                                        const branch = e.target.previousElementSibling.value || 'main';
+                                        this._initRepo(repo, branch);
+                                    }}>✨ Initialize</button>
+                                </div>
                             </insetu-card>
                         `;
                     }
                     const currentBranch = status.current || 'unknown';
-                    const syncStatus = status.sync_status ? html`<span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border); margin-left: 5px;">${status.sync_status}</span>` : '';
+                    const syncText = status.sync_status ? ` | ${status.sync_status}` : '';
+                    const descText = `🌿 Branch: ${currentBranch}${syncText}`;
                     const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
                     const conflicts = status.conflicts || [];
                     const conflictBadge = conflicts.length > 0 ? html`<span slot="header-tags" class="task-tag" style="background: var(--intent-danger); color: white; border: 1px solid var(--intent-danger); margin-left: 5px;">⚠️ ${conflicts.length} Conflict${conflicts.length > 1 ? 's' : ''}</span>` : '';
 
                     return html`
-                        <insetu-card titleText=${repo} descriptionText="Current Branch: ${currentBranch}" icon="📦" intentColor="${conflicts.length > 0 ? 'var(--intent-danger)' : 'var(--intent-neutral)'}">
-                            <span slot="header-tags" class="task-tag" style="background: transparent; border: 1px solid var(--border);">🌿 ${currentBranch}</span>
-                            ${syncStatus}
+                        <insetu-card titleText=${repo} descriptionText=${descText} icon="📦" intentColor="${conflicts.length > 0 ? 'var(--intent-danger)' : 'var(--intent-neutral)'}">
                             ${conflictBadge}
-
-                            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</button>
+                            ${status.has_remote === false ? html`
+                                <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => {
+                                    this.activeRemoteRepo = repo;
+                                    this.remoteUrlInput = '';
+                                    this.remoteConflict = false;
+                                    this.remoteModalOpen = true;
+                                }}>☁️ Connect Remote</button>
+                            ` : status.sync_status === '☁️ Local Only' ? html`
+                                <button slot="actions" class="btn-sm" style="background: var(--intent-warning); margin: 0 5px 0 0;" @click=${() => {
+                                    this.activeRemoteRepo = repo;
+                                    this.remoteUrlInput = '';
+                                    this.remoteConflict = false;
+                                    this.remoteModalOpen = true;
+                                }}>⬆️ Publish / Fix Remote</button>
+                            ` : html`
+                                <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0 5px 0 0;" @click=${() => this._previewPull(repo)}>⬇️ Fetch & Pull...</button>
+                            `}
                             <button slot="actions" class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => {
                                 this.activeRepo = repo;
                                 this.newBranchName = '';
@@ -845,6 +916,41 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
+            </insetu-modal>
+            <insetu-modal ?open=${this.remoteModalOpen} titleText="Connect Remote: ${this.activeRemoteRepo}" @modal-closed=${() => this.remoteModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    ${this.remoteConflict ? html`
+                        <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
+                            <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">⚠️ Remote Contains Unmerged Work</h4>
+                            <p style="font-size: 0.85rem; color: var(--text); margin: 0 0 10px 0;">The repository you created on GitHub likely has an initial README or License file. Git rejected the push to prevent overwriting it.</p>
+                            <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;"><strong>Option 1 (Recommended):</strong> Pull those remote files down and merge them with your local code.<br><strong>Option 2:</strong> Force push your local code, completely overwriting whatever is currently on the remote.</p>
+                        </div>
+                    ` : html`
+                        <div>
+                            <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Remote Git URL:</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @input=${e => this.remoteUrlInput = e.target.value} style="flex: 1; padding: 10px; font-weight: bold; box-sizing: border-box; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
+                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0; white-space: nowrap;" @click=${() => {
+                                    const url = this.remoteUrlInput.trim();
+                                    const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
+                                    if (match) {
+                                        this.remoteUrlInput = 'git@' + match[1] + ':' + match[2] + '.git';
+                                        this.requestUpdate();
+                                    } else if (url.startsWith('https://')) {
+                                        alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
+                                    }
+                                }}>🔄 Convert to SSH</button>
+                            </div>
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">We will set this as the 'origin' remote and push the current branch to establish upstream tracking. <b style="color: var(--intent-warning);">Use an SSH URL to avoid headless authentication errors.</b></p>
+                        </div>
+                    `}
+                </div>
+                ${this.remoteConflict ? html`
+                    <button slot="footer" style="background: var(--intent-danger); color: white; margin-right: auto;" @click=${() => this._connectRemote('force')}>⚠️ Force Push (Overwrite)</button>
+                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote('pull')}>⬇️ Pull & Merge</button>
+                ` : html`
+                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote()}>☁️ Connect & Push</button>
+                `}
             </insetu-modal>
         `;
     }

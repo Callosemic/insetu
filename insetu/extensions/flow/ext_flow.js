@@ -58,7 +58,7 @@ export class InSetuExtFlow extends InSetuElement {
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         .flow-body { flex: 1; overflow-y: auto; padding: 20px; }
     `];
     constructor() {
@@ -108,6 +108,14 @@ export class InSetuExtFlow extends InSetuElement {
 
     openEditBatchModal(batch = null) {
         this._editingBatch = batch;
+        const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
+        const gatherOptions = AppStore.getState().gatherOptions || {};
+        const availablePrompts = gatherOptions.prompts || [];
+        let matchedPrompt = savedPrompt;
+        if (savedPrompt && !availablePrompts.includes(savedPrompt)) {
+            matchedPrompt = availablePrompts.find(p => p.endsWith(savedPrompt)) || savedPrompt;
+        }
+
         this._editForm = {
             id: batch ? batch.id : '',
             title: batch ? batch.title : '',
@@ -116,7 +124,7 @@ export class InSetuExtFlow extends InSetuElement {
             showIfExists: batch && batch.show_if_exists ? [...batch.show_if_exists] : [],
             showIfMissing: batch && batch.show_if_missing ? [...batch.show_if_missing] : [],
             hasPrompt: batch ? !!batch.include_prompt : false,
-            prompt: batch && batch.include_prompt ? batch.include_prompt : '',
+            prompt: matchedPrompt,
             hasResponse: batch ? !!batch.response_path : false,
             responsePath: batch && batch.response_path ? batch.response_path : '',
             archivePath: batch && batch.archive_path ? batch.archive_path : ''
@@ -142,8 +150,11 @@ export class InSetuExtFlow extends InSetuElement {
         this.requestUpdate();
         const { gatherOptions, activeWorkspace } = AppStore.getState();
         if (batch.include_prompt) {
-            const profileDir = gatherOptions.profileDir || ".insetu/profiles/default";
-            const promptPath = profileDir + '/' + batch.include_prompt;
+            let promptPath = batch.include_prompt;
+            const prompts = gatherOptions.prompts || [];
+            if (!prompts.includes(promptPath)) {
+                promptPath = prompts.find(p => p.endsWith(promptPath)) || promptPath;
+            }
             window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
                 .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
                 .then(text => { this._viewingBatchPromptText = text; })

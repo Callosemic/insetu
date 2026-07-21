@@ -35,7 +35,7 @@ export class InSetuExtResearch extends InSetuElement {
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; container-type: inline-size; }
             .rs-layout { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
             .rs-view { display: none; flex-direction: column; height: 100%; overflow: hidden; }
             .rs-view.active { display: flex; }
