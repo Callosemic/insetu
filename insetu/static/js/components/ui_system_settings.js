@@ -99,7 +99,7 @@ export class InSetuSystemSettings extends InSetuElement {
                                     const isActive = activeWs === key;
                                     return html`
                                         <button class="menu-btn ${isActive ? 'active' : ''}" style="margin: 0; background: ${isActive ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; cursor: pointer; border-radius: 4px; font-weight: ${isActive ? 'bold' : 'normal'};"
-                                            @click=${() => { this.menuOpen = false; if(window.executeWorkspaceSwap) window.executeWorkspaceSwap(key, ws.title); }}>
+                                            @click=${() => { this.menuOpen = false; if(window.inSetu.sys.executeWorkspaceSwap) window.inSetu.sys.executeWorkspaceSwap(key, ws.title); }}>
                                             ${isActive ? '🟢 ' : '⚪ '} ${ws.title || key}
                                         </button>
                                     `;
@@ -115,7 +115,7 @@ export class InSetuSystemSettings extends InSetuElement {
                         </div>
                         <h4 style="margin: 15px 0 10px 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; font-size: 0.9rem; color: var(--text);">System</h4>
                         <div style="display: flex; flex-direction: column; gap: 5px;">
-                            <button class="menu-btn" @click=${() => { this.menuOpen = false; if(window.fullRefresh) window.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full UI Refresh</button>
+                            <button class="menu-btn" @click=${() => { this.menuOpen = false; if(window.inSetu.sys.fullRefresh) window.inSetu.sys.fullRefresh(); }} style="margin: 0; background: transparent; color: #ef4444; text-align: left; padding: 6px; border: 1px solid transparent; cursor: pointer; font-weight: bold;">🔄 Full UI Refresh</button>
                         </div>
                     </div>
                 ` : ''}
@@ -139,11 +139,11 @@ export class InSetuSystemSettings extends InSetuElement {
                                 const orig = btn.innerText;
                                 btn.innerText = "⏳ Recompiling...";
                                 try {
-                                    if (window.executeSystemCompile) await window.executeSystemCompile(null, true);
+                                    if (window.inSetu.sys.executeSystemCompile) await window.inSetu.sys.executeSystemCompile(null, true);
                                 } catch(err) {}
                                 btn.innerText = orig;
                             }}>⚙️ Full Context Recompile</button>
-                        <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.simulatePanic) window.simulatePanic(); }}>⚠️ Test Recovery</button>
+                        <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic(); }}>⚠️ Test Recovery</button>
                     </div>
                 </div>
             </insetu-modal>
@@ -254,7 +254,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                 this._newWsRoot = '';
                 this.requestUpdate();
                 await this._loadWorkspacesManifest();
-                if (window.loadWorkspaces) window.loadWorkspaces();
+                if (window.inSetu.sys.loadWorkspaces) window.inSetu.sys.loadWorkspaces();
             } else {
                 const err = await res.json();
                 alert(`Creation failed: ${err.error}`);
@@ -274,7 +274,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
             });
             if (res.ok) {
                 await this._loadWorkspacesManifest();
-                if (window.loadWorkspaces) window.loadWorkspaces();
+                if (window.inSetu.sys.loadWorkspaces) window.inSetu.sys.loadWorkspaces();
                 if (wsId === this.activeWorkspace) {
                     window.location.reload();
                 }

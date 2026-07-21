@@ -1,7 +1,6 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
-import { fetchAndCopy, fetchAndDownloadState, viewSourceFile } from './fs.js';
 import { AppStore } from './store.js';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
@@ -302,14 +301,14 @@ export class InSetuExtBridge extends InSetuElement {
             this._sync(this._lastDryRun || false, this._globalBypassSandwich);
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            if (window.openVirtualFile) window.openVirtualFile('Diff_Analysis.diff', decodedDiff);
+            if (this.vfs && this.vfs.openVirtualFile) this.vfs.openVirtualFile('Diff_Analysis.diff', decodedDiff);
         } else if (action === 'copy-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            window.inSetu.utils.copyRawText(decodedDiff);
+            this.utils.copyRawText(decodedDiff);
         } else if (action === 'copy-state') {
-            fetchAndCopy(btn.dataset.file);
+            this.vfs.fetchAndCopy(btn.dataset.file);
         } else if (action === 'download-state') {
-            fetchAndDownloadState(btn.dataset.file);
+            this.vfs.fetchAndDownloadState(btn.dataset.file);
         } else if (action === 'force-sync') {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._sync(isDryRun, true);
@@ -406,8 +405,8 @@ export class InSetuExtBridge extends InSetuElement {
                                             <div slot="actions" style="display: flex; gap: 8px;" @click=${(e) => e.stopPropagation()}>
                                                 <button class="btn-sm" style="background: var(--intent-primary);" title="Change Target" @click=${(e) => {
                                                     e.stopPropagation();
-                                                    if (window.openWorkspaceBrowser) {
-                                                        window.openWorkspaceBrowser({
+                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
+                                                        this.ui.openWorkspaceBrowser({
                                                             mode: 'file',
                                                             title: 'Select File for Patch',
                                                             callback: (filepath) => {
@@ -416,10 +415,9 @@ export class InSetuExtBridge extends InSetuElement {
                                                         });
                                                     }
                                                 }}>📁 Change</button>
-
                                                 ${this._fileVerificationCache[file] === true ? html`
-                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); window.viewSourceFile(file, true); }}>📋 View</button>
-                                                    <button class="btn-sm" style="background: var(--intent-highlight);" title="Download Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); fetchAndDownloadState(file); }}>⬇️ Download</button>
+                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); this.vfs.viewSourceFile(file, true); }}>📋 View</button>
+                                                    <button class="btn-sm" style="background: var(--intent-highlight);" title="Download Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); this.vfs.fetchAndDownloadState(file); }}>⬇️ Download</button>
                                                 ` : html`
                                                     <div title="Unknown Target" style="font-size: 1.2rem; cursor: help; padding: 4px; opacity: 0.6; text-align: center;">❓</div>
                                                 `}

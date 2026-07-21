@@ -434,8 +434,8 @@ export class InSetuExtConfig extends InSetuElement {
             if (res.ok) {
                 const data = await res.json();
                 btn.innerText = '⏳ Re-indexing...';
-                if (window.executeSystemCompile) {
-                    await window.executeSystemCompile(null, true);
+                if (window.inSetu.sys.executeSystemCompile) {
+                    await window.inSetu.sys.executeSystemCompile(null, true);
                 }
 
                 if (data.requires_reboot) {
@@ -449,8 +449,8 @@ export class InSetuExtConfig extends InSetuElement {
                     this._isOpen = false;
                     AppStore.setState({ isConfigOpen: false });
 
-                    if (window.performSoftRefresh) {
-                        await window.performSoftRefresh();
+                    if (window.inSetu.sys.performSoftRefresh) {
+                        await window.inSetu.sys.performSoftRefresh();
                     } else {
                         window.location.reload();
                     }

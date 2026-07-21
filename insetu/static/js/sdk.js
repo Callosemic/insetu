@@ -84,6 +84,11 @@ export class InSetuElement extends LitElement {
 
         return inferred;
     }
+    get vfs() { return window.inSetu.vfs; }
+    get ui() { return window.inSetu.ui; }
+    get sys() { return window.inSetu.sys; }
+    get editor() { return window.inSetu.editor; }
+
     get utils() {
         return {
             fuzzyFilterObjects: window.inSetu.utils.fuzzyFilterObjects,
@@ -279,22 +284,25 @@ window.inSetu.utils.slugify = function(str) {
 };
 window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
-
 window.inSetu.utils.copyToClipboard = async function(text) {
     try {
         await navigator.clipboard.writeText(text);
         return true;
     } catch (e) {
-        if (window.setGlobalStatus) window.setGlobalStatus("Clipboard access denied.", 3000, true);
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Clipboard access denied.", 3000, true);
         throw new Error("Clipboard access denied");
     }
 };
 window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!") {
     try {
         await window.inSetu.utils.copyToClipboard(text);
-        if (window.setGlobalStatus) window.setGlobalStatus(successMsg, 2000);
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(successMsg, 2000);
     } catch (e) {
-        if (window.setGlobalStatus) window.setGlobalStatus("❌ Error copying text", 3000, true);
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("❌ Error copying text", 3000, true);
         throw e;
     }
 };
+
+// Global backwards compatibility proxies for HTML click handlers and legacy extensions
+window.switchTab = (e, tabId) => window.inSetu.sys && window.inSetu.sys.switchTab ? window.inSetu.sys.switchTab(e, tabId) : null;
+window.switchSubTab = (subId, forceRefresh, isProgrammatic) => window.inSetu.sys && window.inSetu.sys.switchSubTab ? window.inSetu.sys.switchSubTab(subId, forceRefresh, isProgrammatic) : null;

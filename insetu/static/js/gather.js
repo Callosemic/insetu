@@ -1,12 +1,10 @@
 import { html, css } from 'lit';
 import { AppStore } from './store.js';
-import { setGlobalStatus, executeSystemCompile } from './app.js';
 import { fetchAndDownloadState, fetchAndCopy, buildFileTree, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
-
 export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
-    setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
+    window.inSetu.ui.setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
     try {
         const res = await window.inSetu.api.workspace('gather/quick-pack', {
             method: 'POST',
@@ -28,9 +26,8 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
                 const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
                 if (!pollRes.ok) throw new Error("Quick-Pack job failed");
                 const pollData = await pollRes.json();
-
                 if (pollData.status === 'processing' || pollData.status === 'pending') {
-                    setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
+                    window.inSetu.ui.setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
                 } else if (pollData.status === 'completed') {
                     filename = pollData.artifact?.filename;
                     break;
@@ -42,10 +39,10 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
         // Open the physical file that was just written to disk natively
         viewAndCopy(filename);
 
-        setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
+        window.inSetu.ui.setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
     } catch (e) {
         alert("Error creating quick-pack: " + e.message);
-        setGlobalStatus("❌ Quick-Pack failed", 3000, true);
+        window.inSetu.ui.setGlobalStatus("❌ Quick-Pack failed", 3000, true);
     }
 }
 export async function openQuickPackModal(targetDir) {
@@ -68,7 +65,7 @@ export async function openQuickPackModal(targetDir) {
     FsStore.getState().setModal('quickPack', { open: true, targetDir, files: fileKeys.map(k => ({ key: k, path: current[k].fullPath })), selectedFiles });
 }
 
-window.executeQuickPackSelected = function() {
+const executeQuickPackSelected = function() {
     const { targetDir, selectedFiles } = FsStore.getState().modals.quickPack;
     const selectedArray = Array.from(selectedFiles);
     if (selectedArray.length === 0) {
@@ -78,23 +75,25 @@ window.executeQuickPackSelected = function() {
     executeQuickPack(targetDir, false, selectedArray);
     FsStore.getState().setModal('quickPack', { open: false });
 };
-
 export async function clearQuickPacks() {
     if (!confirm("Clear all Quick-Pack clipboard items?")) return;
-    setGlobalStatus("⏳ Clearing Clipboard...", null);
+    window.inSetu.ui.setGlobalStatus("⏳ Clearing Clipboard...", null);
     try {
         const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
         if (!res.ok) throw new Error("Failed to clear quick-packs.");
 
-        setGlobalStatus("✅ Clipboard cleared!", 2000);
+        window.inSetu.ui.setGlobalStatus("✅ Clipboard cleared!", 2000);
     } catch (e) {
         alert("Error clearing clipboard: " + e.message);
-        setGlobalStatus("❌ Clear failed", 3000, true);
+        window.inSetu.ui.setGlobalStatus("❌ Clear failed", 3000, true);
     }
 }
-
-window.clearQuickPacks = clearQuickPacks;
-window.executeQuickPack = executeQuickPack;
+window.inSetu.vfs = window.inSetu.vfs || {};
+window.inSetu.ui = window.inSetu.ui || {};
+window.inSetu.vfs.executeQuickPack = executeQuickPack;
+window.inSetu.vfs.clearQuickPacks = clearQuickPacks;
+window.inSetu.ui.openQuickPackModal = openQuickPackModal;
+window.inSetu.ui.executeQuickPackSelected = executeQuickPackSelected;
 
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
@@ -172,11 +171,10 @@ export class InSetuExtGather extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
     async loadContext() {
         GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
-            const result = await executeSystemCompile((msg) => {
+            const result = await window.inSetu.sys.executeSystemCompile((msg) => {
                 GatherStore.setState({ loadingMessage: msg });
             });
             if (result && result.status === 'error') {
@@ -285,7 +283,7 @@ export class InSetuExtGather extends InSetuElement {
                     .items=${filteredFiles}
                     categoryKey="finalCat"
                     .categoryOrder=${categoryOrder}
-                    .renderCategoryHeader=${(cat) => cat === "Quick-Pack Clipboard" ? html`<insetu-async-btn slot="header-actions" label="🗑️ Clear" intent="danger" .onClick=${async (e) => { e.stopPropagation(); if(window.clearQuickPacks) await window.clearQuickPacks(); }}></insetu-async-btn>` : ''}
+                    .renderCategoryHeader=${(cat) => cat === "Quick-Pack Clipboard" ? html`<insetu-async-btn slot="header-actions" label="🗑️ Clear" intent="danger" .onClick=${async (e) => { e.stopPropagation(); if(window.inSetu.vfs.clearQuickPacks) await window.inSetu.vfs.clearQuickPacks(); }}></insetu-async-btn>` : ''}
                     .renderItem=${(f) => html`
                         <insetu-card
                             .filename=${f.filename}
@@ -296,7 +294,7 @@ export class InSetuExtGather extends InSetuElement {
                             intentColor="var(--intent-highlight)"
                             entityType="file:context"
                             .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton }}
-                            @card-clicked=${() => { if(!f.isSkeleton && window.viewAndCopy) window.viewAndCopy(f.filename); }}>
+                            @card-clicked=${() => { if(!f.isSkeleton && window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f.filename); }}>
 
                             ${f.isSkeleton ? html`
                                 <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>

@@ -14,7 +14,6 @@ export function resolveEditorMode(filename) {
     };
     return { ext, mode: modeMap[ext], isSupported: !!modeMap[ext], isMarkdown: ext === 'md' };
 }
-window.resolveEditorMode = resolveEditorMode;
 
 export function getEditorContent() {
     return FsStore.getState().fileModal.content;
@@ -49,10 +48,9 @@ export function insertTextAtCursor(textToInsert) {
 
     FsStore.setState({ fileModal: { ...state, content: state.content + "\n" + textToInsert } });
 }
-
 export function insertLinkToEditor(path, name) {
     let finalPath = path;
-    const currentModalFile = window.currentModalFile;
+    const currentModalFile = FsStore.getState().fileModal.filename;
     if (currentModalFile) {
         const { targetConfigs } = AppStore.getState();
         const getRepo = (p) => {
@@ -81,16 +79,16 @@ export function insertLinkToEditor(path, name) {
         }
     }
     const linkText = `[${name}](${finalPath})`;
-    if (window.insertTextAtCursor) {
-        window.insertTextAtCursor(linkText);
-    }
+    insertTextAtCursor(linkText);
 
     FsStore.getState().setModal('linkInsert', { open: false });
 }
-
-window.getEditorContent = getEditorContent;
-window.setEditorContent = setEditorContent;
-window.insertTextAtCursor = insertTextAtCursor;
+window.inSetu.editor = window.inSetu.editor || {};
+window.inSetu.editor.getEditorContent = getEditorContent;
+window.inSetu.editor.setEditorContent = setEditorContent;
+window.inSetu.editor.insertTextAtCursor = insertTextAtCursor;
+window.inSetu.editor.resolveEditorMode = resolveEditorMode;
+window.inSetu.editor.insertLinkToEditor = insertLinkToEditor;
 
 async function loadLanguageExtension(lang) {
     try {

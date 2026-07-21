@@ -123,10 +123,9 @@ window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
     }
     // 2. Fallback for legacy hardcoded modals
     const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
-
     if (activeModal) {
-        if (activeModal.id === 'file-modal' && window.closeFileModal) {
-            window.closeFileModal();
+        if (activeModal.id === 'file-modal' && window.inSetu.ui.closeFileModal) {
+            window.inSetu.ui.closeFileModal();
             return;
         }
         // Trigger specific close/cancel buttons to ensure teardown logic fires natively
@@ -213,10 +212,16 @@ document.addEventListener('input', (e) => {
     }
 });
 // Map Cmd/Ctrl + S contextually depending on which modal is currently visible
-window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.saveModalFile && window.saveModalFile(false));
-window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.saveNewFile && window.saveNewFile());
-window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => window.saveNewTask && window.saveNewTask());
-window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => window.saveEditTask && window.saveEditTask());
+window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
+window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
+window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => {
+    const el = document.querySelector('insetu-ext-tracker');
+    if (el) el._saveNewTask();
+});
+window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => {
+    const el = document.querySelector('insetu-ext-tracker');
+    if (el) el._saveEditTask();
+});
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
@@ -245,7 +250,6 @@ export function autoWireSettingsSchemas() {
                         label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Settings`,
                         icon: '📋',
                         onClick: () => {
-                            if (window.closeSettingsModal) window.closeSettingsModal();
                             const genericModal = document.getElementById('insetu-generic-settings-root');
                             if (genericModal) genericModal.openModal(extName);
                         }
@@ -379,7 +383,7 @@ try {
 } catch(e) {}
 document.body.setAttribute('data-theme', currentTheme);
 async function executeWorkspaceSwap(key, title) {
-    setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
+    window.inSetu.ui.setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
     if ('caches' in window) {
         try {
             const keys = await caches.keys();
@@ -408,7 +412,6 @@ async function executeWorkspaceSwap(key, title) {
     await performSoftRefresh();
     loadWorkspaces();
 }
-window.executeWorkspaceSwap = executeWorkspaceSwap;
 async function loadWorkspaces() {
     try {
         const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
@@ -552,7 +555,6 @@ export function setGlobalStatus(msg, timeout = 3000, isError = false) {
         }, timeout);
     }
 }
-window.setGlobalStatus = setGlobalStatus;
 
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
@@ -594,7 +596,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
     if (btn && !silent) {
         origText = btn.innerText;
         btn.innerText = loadingText;
-        setGlobalStatus(loadingText, null);
+        window.inSetu.ui.setGlobalStatus(loadingText, null);
     }
 
     try {
@@ -631,13 +633,13 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
     } catch (e) {
         if (!silent) {
             alert(`Network error: ${e.message}`);
-            setGlobalStatus(`❌ Error: ${e.message}`, 5000);
+            window.inSetu.ui.setGlobalStatus(`❌ Error: ${e.message}`, 5000);
         }
         return false;
     } finally {
         if (btn && !silent) {
             btn.innerText = origText;
-            setGlobalStatus("✅ Success!", 2000);
+            window.inSetu.ui.setGlobalStatus("✅ Success!", 2000);
         }
     }
 }
@@ -693,7 +695,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
                     if (pollData.status === 'processing' || pollData.status === 'pending') {
                         const msg = pollData.message || "Compiling...";
                         if (AppStore.getState().activeWorkspace === compilePromiseWs) {
-                            setGlobalStatus(`⏳ ${msg}`, null);
+                            window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                             if (onProgress) onProgress(msg);
                         }
 
@@ -713,14 +715,13 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             } else {
                 result = data;
             }
-
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
                 const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
             }
 
-            setGlobalStatus("✅ Sync Complete", 2000);
+            window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
             return result;
         } catch (error) {
             throw error;
@@ -730,10 +731,6 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     })();
     return compilePromise;
 };
-window.executeSystemCompile = executeSystemCompile;
-window.compileContexts = executeSystemCompile; // Legacy bridge alias
-
-export const setContextManifest = (m) => { AppStore.setState({ manifest: m }); };
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload in 3 seconds. Continue?")) return;
     const btn = document.getElementById('simulate-panic-btn');
@@ -902,10 +899,9 @@ const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
 if (requiredExt && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(requiredExt)) {
     targetTab = 'context';
 }
-
 if (typeof switchTab === 'function') switchTab(null, targetTab);
 
-        setGlobalStatus("✅ Workspace Hydrated", 2000);
+        window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {
         console.error(e);
         alert("Soft refresh failed. Falling back to hard reload.");
@@ -973,7 +969,7 @@ if (d.config_missing) {
         }
 
         if (mRes.ok) {
-            setContextManifest(manifestData);
+            AppStore.setState({ manifest: manifestData });
 
             // Emit a global hydrate event so extensions can refresh their states
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
@@ -994,9 +990,21 @@ if (d.config_missing) {
             Explicitly binding UI-triggered functions to the global scope so they 
             survive the transition to <script type="module">
             ========================================================================== */
-window.switchTab = switchTab;
-window.switchSubTab = switchSubTab;
-window.fullRefresh = fullRefresh;
-window.performSoftRefresh = performSoftRefresh;
-window.simulatePanic = simulatePanic;
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
+window.inSetu.sys = window.inSetu.sys || {};
+window.inSetu.ui = window.inSetu.ui || {};
+
+window.inSetu.sys.switchTab = switchTab;
+window.inSetu.sys.switchSubTab = switchSubTab;
+window.inSetu.sys.fullRefresh = fullRefresh;
+window.inSetu.sys.performSoftRefresh = performSoftRefresh;
+window.inSetu.sys.simulatePanic = simulatePanic;
+window.inSetu.sys.executeSystemCompile = executeSystemCompile;
+window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
+window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
+window.inSetu.sys.loadWorkspaces = loadWorkspaces;
+window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
+
+window.inSetu.ui.setGlobalStatus = setGlobalStatus;
+window.inSetu.ui.updateDefaultStatus = updateDefaultStatus;
 

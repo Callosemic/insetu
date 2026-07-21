@@ -350,6 +350,10 @@ def check_javascript_files():
                     if is_extension and raw_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
+                    # 28. Banned Chassis Import in Extensions (ADR 0024)
+                    if is_extension and re.search(r'from\s+[\'"]\.\./(app|fs|store)\.js[\'"]', line):
+                        report_violation("CHASSIS_IMPORT_BAN", filepath, line_num, "Direct import from core chassis file detected in extension. Use SDK domain getters (this.vfs, this.sys, this.ui) instead (ADR 0024).")
+
                     # 15.5 CQRS Delta Synchronization Mandate
                     if is_extension and ("api.workspace('manifest" in line or "api.workspace(\"manifest" in line or 'api.workspace(`manifest' in line):
                         report_violation("MANIFEST_CQRS_BYPASS", filepath, line_num, "Blind manifest re-fetching detected. Rely on surgical backend delta payloads to mutate the AppStore.manifest instead of heavy N+1 polling.")
