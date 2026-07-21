@@ -118,14 +118,23 @@ export class MyComponent extends InSetuElement {
 }
 ```
 
-### Network Requests
-Raw `fetch()` calls and manual URL strings (e.g., `/api/${workspace}/...`) are strictly banned. Use the native `this.api` wrapper, which enforces ADR 0016 compliance.
+### Network Requests & Domain Accessors
+
+Raw `fetch()` calls and manual URL strings are strictly banned. Use the native `this.api` wrapper. Furthermore, extensions are strictly banned from importing directly from core chassis files (`../app.js`, `../fs.js`, `../store.js`). Use native SDK getters instead (ADR 0024):
+
+* **`this.vfs`**: Virtual File System methods (`this.vfs.viewSourceFile()`, `this.vfs.fetchAndCopy()`, `this.vfs.downloadFile()`).
+* **`this.ui`**: UI/Modal orchestrations (`this.ui.openFolderBrowser()`, `this.ui.setGlobalStatus()`).
+* **`this.sys`**: System/Workspace commands (`this.sys.executeWorkspaceMutation()`, `this.sys.switchTab()`).
+* **`this.editor`**: Text editor integration (`this.editor.insertTextAtCursor()`, `this.editor.getEditorContent()`).
+* **`this.utils`**: General utilities (`this.utils.slugify()`, `this.utils.copyRawText()`).
 
 ```javascript
 async fetchData() {
     const res = await this.api.get('list');
     const data = await res.json();
+    this.ui.setGlobalStatus("Data Loaded", 2000);
 }
+
 ```
 
 ## 4. Declarative Layout Registration
