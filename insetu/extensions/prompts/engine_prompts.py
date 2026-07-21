@@ -89,8 +89,7 @@ def api_prompts_resolve(ctx):
             if target_path.startswith('prompts/'):
                 target_path = f".insetu/{target_path}"
             return ctx.vfs.read(target_path)
-
-        pattern = r'\{\{\s*include_prompt\s*:\s*(.+?)\s*\}\}'
+        pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
         resolved_content = resolve_macro_includes(content, filename, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 

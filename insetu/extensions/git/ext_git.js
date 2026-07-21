@@ -1,10 +1,12 @@
 import {
     executeSystemCompile,
-    setContextManifest,
+    setContextManifest
+} from '../app.js';
+import {
     createFileCard,
     fetchAndDownloadState,
     fetchAndCopy
-} from '../app.js';
+} from '../fs.js';
 import { AppStore } from '../store.js';
 import { createExtensionStore } from '../sdk.js';
 

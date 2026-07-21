@@ -1,5 +1,6 @@
 import { html, css } from 'lit';
-import { executeWorkspaceMutation, fetchAndCopy, fetchAndDownloadState, executeSystemCompile } from '../app.js';
+import { executeWorkspaceMutation, executeSystemCompile } from '../app.js';
+import { fetchAndCopy, fetchAndDownloadState } from '../fs.js';
 import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';

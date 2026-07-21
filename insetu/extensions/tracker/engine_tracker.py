@@ -73,13 +73,13 @@ def handle_tracker_file_save(filepath, workspace_id=None):
                 enforce_declarative_tickets(workspace_id=workspace_id, specific_file=filepath)
             except Exception as e:
                 print(f"Targeted tracker housekeeping failed: {e}")
-
 @hooks.on('post_file_delete')
 def handle_tracker_file_delete(filepath, workspace_id=None):
     if ".tracker/" in filepath and filepath.endswith(".md"):
-        conn = get_connection('tracker', workspace_id=workspace_id)
-        conn.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
-        conn.commit()
+        from insetu.sdk import ExtensionContext
+        ctx = ExtensionContext('tracker', workspace_id)
+        ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
+        ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
     from insetu.sdk import ExtensionContext
@@ -149,7 +149,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
                     elif "archiv" in raw_s: status = "archived"
                     elif "log" in raw_s: status = "logged"
                     else: status = "open"
-        conn = get_connection('tracker', workspace_id=workspace_id)
+        conn = ctx.db
         conn.execute("""
             INSERT OR REPLACE INTO tracker_tickets 
             (id, repo, ticket_type, status, title, description, tags, sub_bucket, created_at, closed_at, delivery_date, filepath)
@@ -509,7 +509,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 db_created_at = None
                 db_closed_at = None
                 try:
-                    conn = get_connection('tracker', workspace_id=workspace_id)
+                    conn = ctx.db
                     cache_row = conn.execute("SELECT status, created_at, closed_at FROM tracker_tickets WHERE id = ?", (decl_id,)).fetchone()
                     if cache_row:
                         db_status = cache_row['status']
@@ -770,10 +770,9 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
 
     # We include 'logged' gracefully alongside 'closed' to capture recent grace-period tickets
     status_filter = "status IN ('closed', 'logged', 'archived')" if include_archived else "status IN ('closed', 'logged')"
-
     changelogs = []
     try:
-        conn = get_connection('tracker', workspace_id=workspace_id)
+        conn = ctx.db
         cursor = conn.execute(f"""
             SELECT title FROM tracker_tickets 
             WHERE repo = ? AND {status_filter} 

@@ -1,11 +1,13 @@
 import {
     executeSystemCompile,
-    viewSourceFile,
     setContextManifest,
-    getFlattenedBuckets,
+    getFlattenedBuckets
+} from '../app.js';
+import {
+    viewSourceFile,
     fetchAndCopy,
     fetchAndDownloadState
-} from '../app.js';
+} from '../fs.js';
 import { AppStore } from '../store.js';
 import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
 

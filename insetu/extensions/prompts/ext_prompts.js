@@ -209,7 +209,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
         },
         'zone:file-fetch-url': (filepath) => {
             if (filepath && isPromptPath(filepath)) {
-                const activeWs = window.inSetu.stores.App.getState().activeWorkspace || 'default';
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
                 return `/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(filepath);
             }
             return null;
