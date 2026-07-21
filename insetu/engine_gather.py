@@ -3,7 +3,6 @@ import os
 import json
 import datetime
 import subprocess
-import shutil
 from flask import jsonify
 from insetu.utils_core import get_valid_workspace_files, get_workspace_physics
 from insetu.sdk import InSetuExtension

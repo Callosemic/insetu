@@ -25,7 +25,7 @@
     --border: #000000; --btn: #000000; --btn-hover: #333333;
     --console-bg: #ffffff; --console-text: #000000;
 }
-body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; height: 100dvh; overflow: hidden; line-height: 1.6; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; height: 100dvh; overflow: hidden; line-height: 1.6; display: flex; flex-direction: column; }
 
 /* Global Custom Scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -33,12 +33,12 @@ body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg);
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; border: 2px solid var(--input-bg); }
 ::-webkit-scrollbar-thumb:hover { background: #888; }
 [data-theme="e-ink"] ::-webkit-scrollbar-thumb { background: #000; border: 2px solid #fff; }
-.top-bar { position: fixed; top: 0; left: 0; right: 0; height: 54px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 20px; z-index: 100; display: flex; align-items: center; justify-content: space-between; }
+.top-bar { width: 100%; flex-shrink: 0; height: 54px; box-sizing: border-box; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 20px; z-index: 100; display: flex; align-items: center; justify-content: space-between; }
 .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
 .system-action-btn:hover { background: var(--input-bg); }
-.bottom-bar { position: fixed; bottom: 0; left: 0; right: 0; height: 30px; background: var(--bg); border-top: 1px solid var(--border); z-index: 1000; padding: 0 15px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); font-weight: bold; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.bottom-bar { width: 100%; box-sizing: border-box; flex-shrink: 0; height: 30px; background: var(--bg); border-top: 1px solid var(--border); z-index: 1000; padding: 0 15px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); font-weight: bold; line-height: 29px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 /* Tabs */
-.tabs { display: flex; gap: 8px; padding: 0; margin: 0; overflow-x: auto; width: 100%; max-width: 100%; align-items: center; height: 100%; scrollbar-width: none; }
+.tabs { display: flex; gap: 8px; padding: 0; margin: 0; overflow-x: auto; flex: 1; min-width: 0; align-items: center; height: 100%; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { padding: 6px 12px; cursor: pointer; font-weight: bold; color: #888; border-radius: 4px; white-space: nowrap; border: 2px solid transparent; box-sizing: border-box; }
 .theme-text { display: inline; }
@@ -47,10 +47,8 @@ body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg);
 .tab-bridge { border: 1px solid #8b5cf6; color: #8b5cf6; }
 .tab-bridge.active { background: #8b5cf6; color: white; border-color: #8b5cf6; }
 .sub-tabs-bar {
-    position: fixed;
-    top: 54px;
-    left: 0;
-    right: 0;
+    width: 100%;
+    flex-shrink: 0;
     background: var(--bg);
     z-index: 99;
     border-bottom: 1px solid var(--border);
@@ -75,15 +73,15 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 .sub-tab.active { color: var(--text); background: transparent; border-bottom: 2px solid var(--btn); }
 .sub-tab-content { display: none; height: 100%; }
 .sub-tab-content.active { display: block; }
-.tab-content { display: none; max-width: 100%; margin: 0 auto; padding: 0; padding-top: 98px; padding-bottom: 30px; height: 100dvh; box-sizing: border-box; }
-.tab-content.active { display: block; }
-#tab-term { padding-bottom: env(safe-area-inset-bottom, 0px); box-sizing: border-box; }
-.screen { display: none; background: transparent; padding: 20px; height: 100%; overflow-y: auto;
-box-sizing: border-box; border-radius: 0; box-shadow: none; }
-/* Full-Bleed Chassis: Zero out layout padding and container scrollbars when full-screen views are active */
-.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { padding: 0 !important; overflow: hidden !important; }
-.sticky-header { position: sticky; top: -20px; margin: -20px -20px 15px -20px; padding: 20px 20px 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
-.screen.active { display: block; }
+.tab-content { display: none; flex: 1; min-height: 0; flex-direction: column; width: 100%; box-sizing: border-box; container-type: inline-size; }
+.tab-content.active { display: flex; }
+#tab-term { box-sizing: border-box; }
+.screen { display: none; background: transparent; padding: 0; flex: 1; min-height: 0; overflow-y: auto;
+box-sizing: border-box; border-radius: 0; box-shadow: none; flex-direction: column; container-type: inline-size; }
+/* Full-Bleed Chassis: Component roots naturally command bounds now */
+.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { overflow: hidden !important; }
+.sticky-header { flex-shrink: 0; padding: 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
+.screen.active { display: flex; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
 textarea { height: 250px; margin-top: 10px; }
 pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; letter-spacing: 0.3px; }
@@ -196,7 +194,7 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 #file-modal .cm-gutters { background-color: var(--input-bg) !important; border-right: 1px solid var(--border) !important; color: var(--text-muted) !important; }
 /* Dynamic UI Factory & Legacy Modals */
 .dynamic-modal { display: flex !important; align-items: center; justify-content: center; flex-direction: column; }
-.modal-panel, .modal-content { background: var(--pane-bg); border: 1px solid var(--border); border-radius: 8px; width: 100%; max-width: 800px; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 0; margin: 0 auto; box-sizing: border-box; }
+.modal-panel, .modal-content { background: var(--pane-bg); border: 1px solid var(--border); border-radius: 8px; width: 100%; max-width: 800px; max-height: 85dvh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); padding: 0; margin: 0 auto; box-sizing: border-box; container-type: inline-size; }
 .modal-panel { max-width: 600px; background: var(--bg); }
 .modal-header { padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); border-top: 4px solid var(--btn); z-index: 10; box-shadow: 0 4px 15px rgba(0,0,0,0.15); flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: nowrap; }
 .modal-header h2, .modal-header h3 { margin: 0; font-size: 1.2rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -205,15 +203,6 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
 .modal-footer { padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; z-index: 10; box-shadow: 0 -4px 15px rgba(0,0,0,0.15); flex-shrink: 0; }
 .modal-footer button { flex: 1; margin: 0 !important; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; border-right: 1px solid var(--border); }
 .modal-footer button:last-child { border-right: none; }
-
-/* Legacy modal specific layout tweaks */
-#modal-edit-toolbar { margin: 15px 20px 0 20px !important; }
-#modal-body-container { padding: 0 20px; margin-bottom: 20px !important; }
-#modal-preview ul { padding-left: 1.2rem; }
-/* Target any list item containing a checkbox to strip the bullet natively */
-#modal-preview li:has(input[type="checkbox"]) { list-style: none; margin-left: -1.2rem; }
-#modal-preview input[type="checkbox"] { margin-right: 8px; transform: scale(1.1); cursor: pointer; }
-#modal-preview h1, #modal-preview h2, #modal-preview h3 { margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
 /* YAML Frontmatter Formatting */
 .yaml-frontmatter { 
     font-family: var(--font-mono);
@@ -227,21 +216,6 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
     white-space: pre-wrap;
 }
 [data-theme="e-ink"] .yaml-frontmatter { border: 1px dashed #000; color: #000; background: transparent; font-weight: bold; }
-/* Bridge Specific */
-#target-files { background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-bottom: 15px; flex-shrink: 0; }
-#target-files:empty { display: none;
-}
-.checkbox-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.file-label { font-family: monospace; font-weight: bold; cursor: pointer; }
-/* Kanban Board Layout Classes */
-.board-columns { display: flex; gap: 15px; }
-/* Force Active columns to render before Open columns via Flexbox ordering */
-.board-columns > div:has([id*="active"]) { order: -1; }
-.board-columns > div:has([id*="open"]), .board-columns > div:has([id*="queue"]) { order: 0; }
-.board-columns > div:has([id*="closed"]) { order: 1; }
-.board-columns > div:has([id*="log"]) { order: 2; }
-.tasks-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
-.tasks-controls { display: flex; gap: 10px; }
 @media (max-width: 1024px), (max-aspect-ratio: 1/1) {
     /* Fullscreen Edge-to-Edge Modals */
     .fullscreen-modal { padding: 0 !important; }
@@ -249,26 +223,9 @@ padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); b
     .modal-header { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
     .modal-footer { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
-    .board-columns { flex-direction: column;
-}
-    .board-columns > div { padding: 10px 5px !important; }
-    .tasks-header { flex-direction: column; align-items: stretch; gap: 15px; }
-    .tasks-controls { display: flex;
-width: 100%; gap: 10px; }
-    .tasks-controls select { flex: 1;
-}
-.screen { padding: 15px 5px; border-radius: 0; height: 100%; background: transparent;
-box-shadow: none; }
-    .sticky-header { top: -15px; margin: -15px -5px 15px -5px; padding: 15px 5px 15px 5px; }
-.file-card { padding: 12px 10px; border-radius: 4px; margin-bottom: 8px; }
-#tab-term { padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box; }
-.tab-content { padding-top: 98px; padding-bottom: 30px; }
-.top-bar { padding: 0 10px; }
-.sub-tabs-bar { padding: 0 10px; }
-body { padding-top: 0; }
-    textarea { height: 150px; }
+    #tab-term { padding-bottom: env(safe-area-inset-bottom, 15px); box-sizing: border-box; }
+    .top-bar, .sub-tabs-bar { padding: 0 10px; }
     .theme-text { display: none; }
-    #theme-toggle { padding: 4px; font-size: 1.3rem; border: none; background: transparent; }
     .tab { padding: 6px 10px; font-size: 0.95rem; }
 }
 /* --- Universal Header & Light Mode Polishing --- */

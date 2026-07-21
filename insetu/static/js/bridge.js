@@ -336,7 +336,7 @@ export class InSetuExtBridge extends InSetuElement {
                 <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
                     <!-- THE COMBOBOX HEADER -->
                     <div data-custom-dropdown="true" style="display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; position: relative; z-index: 10; flex-shrink: 0; background: ${this._dropdownOpen ? 'var(--pane-bg)' : 'var(--bg)'}; border-bottom: ${this._dropdownOpen ? 'none' : '1px solid var(--border)'}; transition: background 0.2s;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 0; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
+                        <div class="toolbar-row" style="justify-content: space-between; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
                             <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
                                 <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0;">${this._dropdownOpen ? '▲' : '▼'}</span>
                                 ${this._activeCellId ? (() => {

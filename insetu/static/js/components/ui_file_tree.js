@@ -431,7 +431,10 @@ export class InSetuFileTree extends LitElement {
         entityType: { type: String },
         _searchQuery: { type: String }
     };
-static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
+        .tree-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; }
+    `];
 
 constructor() {
         super();
@@ -464,57 +467,85 @@ constructor() {
     }
     render() {
         if (this.files.length === 0) {
-            return html`<p style="color: var(--text-muted); font-style: italic;">No files found.</p>`;
+            return html`<p style="padding: 20px; color: var(--text-muted); font-style: italic;">No files found.</p>`;
         }
 
-        const tree = this._buildTree();
-        let current = tree;
-        for (const p of this.currentPath) {
-            if (current[p] && !current[p]._isFile) {
-                current = current[p];
-            } else {
-                this.currentPath = [];
-                current = tree;
-                break;
+        const isSearching = this.enableSearch && this._searchQuery;
+
+        let current = null;
+        let keys = [];
+        let flatResults = [];
+
+        // Short-circuit the hierarchical tree generation if we are actively searching
+        if (isSearching) {
+            const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(this.files, this._searchQuery);
+            flatResults = filteredFiles.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
+        } else {
+            const tree = this._buildTree();
+            current = tree;
+            for (const p of this.currentPath) {
+                if (current[p] && !current[p]._isFile) {
+                    current = current[p];
+                } else {
+                    this.currentPath = [];
+                    current = tree;
+                    break;
+                }
             }
+            keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
+                const aIsDir = !current[a]._isFile;
+                const bIsDir = !current[b]._isFile;
+                if (aIsDir && !bIsDir) return -1;
+                if (!aIsDir && bIsDir) return 1;
+                return a.localeCompare(b);
+            });
         }
 
-        const keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
-            const aIsDir = !current[a]._isFile;
-            const bIsDir = !current[b]._isFile;
-            if (aIsDir && !bIsDir) return -1;
-            if (!aIsDir && bIsDir) return 1;
-            return a.localeCompare(b);
-        });
         return html`
-            ${(this.enableSearch || (this.currentPath.length > 0 && !this.hidePath)) ? html`
-                <div class="sticky-header" style="padding: 0; margin-bottom: 15px; gap: 0;">
-                    ${this.enableSearch ? html`
-                        <div style="padding: 5px 20px; border-bottom: ${(this.currentPath.length > 0 && !this.hidePath) ? '1px solid var(--border)' : 'none'};">
-                            <insetu-search-bar 
-                                placeholder=${this.searchPlaceholder} 
-                                .value=${this._searchQuery} 
-                                @search-changed=${(e) => this._searchQuery = e.detail.value}>
-                            </insetu-search-bar>
-                        </div>
-                    ` : ''}
-                    ${(this.currentPath.length > 0 && !this.hidePath) ? html`
-                        <div style="display: flex; gap: 10px; padding: 5px 20px; align-items: center; background: var(--input-bg);">
+            ${this.enableSearch ? html`
+                <insetu-standard-toolbar
+                    searchPlaceholder=${this.searchPlaceholder}
+                    .searchQuery=${this._searchQuery || ''}
+                    @search-changed=${(e) => this._searchQuery = e.detail.value}
+                    .noPadding=${true}
+                    ?bottomBorder=${(!isSearching && this.currentPath.length > 0 && !this.hidePath)}>
+                    ${(!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
+                        <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border);">
                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
                             <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
                         </div>
                     ` : ''}
+                </insetu-standard-toolbar>
+            ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
+                <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border);">
+                    <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
+                    <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
                 </div>
-            ` : ''}
-            <div style="display: flex; flex-direction: column;">
-                ${keys.map(key => {
+            ` : '')}
+            <div class="tree-container">
+                ${isSearching ? flatResults.map(filepath => {
+                    const key = filepath.split('/').pop();
+                    const fullFilepath = `${this.basePath}${filepath}`;
+                    if (this.hideFiles) return '';
+                    return html`
+                        <insetu-card
+                            .filename=${fullFilepath}
+                            .detailText=${fullFilepath}
+                            .titleText=${key}
+                            descriptionText=""
+                            intentColor="var(--intent-primary)"
+                            icon="📄"
+                            .entityType=${this.entityType || 'file'}
+                            .entityData=${{ filepath: fullFilepath, isFS: true }}>
+                        </insetu-card>
+                    `;
+                }) : keys.map(key => {
                     const item = current[key];
                     const isDir = !item._isFile;
                     if (!isDir && (key === '.gitkeep' || key === '.keep')) return '';
-
                     if (isDir) {
                         return html`
-                            <div class="file-card" style="display: flex; align-items: center; cursor: pointer;" @click=${() => this._setPath([...this.currentPath, key])}>
+                            <div class="file-card" style="display: flex; align-items: center; cursor: pointer; flex-shrink: 0; padding: 10px 15px;" @click=${() => this._setPath([...this.currentPath, key])}>
                                 <span class="folder-label">📁 ${key}</span>
                             </div>
                         `;
@@ -539,7 +570,6 @@ constructor() {
         `;
     }
 }
-// InSetuFileActions has been deprecated in favor of the Polymorphic Entity-Action Registry.
 
 customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-categorized-list', InSetuCategorizedList);

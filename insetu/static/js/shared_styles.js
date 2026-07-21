@@ -50,39 +50,41 @@ export const sharedStyles = css`
     .sub-tabs-bar { position: relative; display: flex; justify-content: space-between; align-items: center; background: var(--bg); z-index: 99; border-bottom: 1px solid var(--border); padding: 0 20px; height: 44px; box-sizing: border-box; }
     .sub-tabs-actions:empty { display: none !important; }
     .sub-tabs { display: flex; gap: 8px; margin: 0; padding: 0; overflow-x: auto; align-items: center; height: 100%; scrollbar-width: none; }
-
-    .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
+    .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; box-sizing: border-box; }
     .system-action-btn:hover { background: var(--input-bg); }
 
     .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; }
     .sub-tab:hover { color: var(--text); }
-.sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
-}
-.sticky-header { position: sticky; top: 0; margin: -20px -20px 10px -20px; padding: 5px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
-@media (max-width: 1024px), (max-aspect-ratio: 1/1) {
-    .sticky-header { top: 0; margin: -15px -5px 10px -5px; padding: 5px 15px; }
-}
-.fuzzy-search-wrapper {
-    display: flex;
-    align-items: center;
-    background: var(--input-bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 0 10px;
-    width: 100%;
-    box-sizing: border-box;
-}
-.fuzzy-search-wrapper input {
-    flex: 1;
-    border: none !important;
-    background: transparent !important;
-    outline: none;
-    color: var(--text);
-    padding: 8px 0;
-    margin: 0;
-    font-size: 0.95rem;
-    box-shadow: none !important;
-}
+    .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
+    }
+    .sticky-header { position: relative; flex-shrink: 0; padding: 0; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }
+    .toolbar-row { display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; }
+    @container (max-width: 800px) {
+        .toolbar-row { padding: 5px 10px; }
+    }
+    .fuzzy-search-wrapper {
+        display: flex;
+        align-items: center;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        padding: 0 10px;
+        width: 100%;
+        height: 34px;
+        box-sizing: border-box;
+    }
+    .fuzzy-search-wrapper input {
+        flex: 1;
+        border: none !important;
+        background: transparent !important;
+        outline: none;
+        color: var(--text);
+        padding: 0;
+        margin: 0;
+        height: 100%;
+        font-size: 0.95rem;
+        box-shadow: none !important;
+    }
 .fuzzy-search-wrapper input::placeholder {
     color: var(--text-muted);
     opacity: 0.6;
@@ -99,14 +101,13 @@ export const sharedStyles = css`
     margin-left: 8px;
 }
 :host-context([data-theme="light"]) .fuzzy-search-wrapper {
-    background: #f1f5f9;
-    border: 1px solid #cbd5e1;
+    background: transparent;
+    border: none;
 }
 :host-context([data-theme="e-ink"]) .fuzzy-search-wrapper {
     border: none !important;
-    border-bottom: 2px solid #0ea5e9 !important;
     border-radius: 0 !important;
-    background: #ffffff !important;
+    background: transparent !important;
 }
 :host-context([data-theme="e-ink"]) .fuzzy-search-wrapper input {
     border: none !important;

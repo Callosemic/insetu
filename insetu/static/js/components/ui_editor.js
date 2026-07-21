@@ -100,7 +100,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
         const [
             { EditorState, Compartment },
             { EditorView, basicSetup },
-            { MatchDecorator, WidgetType, ViewPlugin, Decoration }
+            { hoverTooltip }
         ] = await Promise.all([
             import('https://esm.sh/@codemirror/state'),
             import('https://esm.sh/codemirror'),
@@ -112,35 +112,56 @@ export class InSetuMarkdownEditor extends InSetuElement {
         this.linkConf = new Compartment();
         this._EditorView = EditorView;
 
-        class LinkWidget extends WidgetType {
-            constructor(url) { super(); this.url = url; }
-            eq(other) { return this.url === other.url; }
-            toDOM() {
-                const btn = document.createElement('a');
-                btn.href = this.url;
-                btn.target = '_blank';
-                btn.innerHTML = ' 🔗';
-                btn.style.cssText = 'text-decoration: none; font-size: 0.9em; cursor: pointer; user-select: none; margin-left: 2px;';
-                btn.title = "Open link: " + this.url;
-                btn.onclick = (e) => { e.stopPropagation(); };
-                return btn;
+        this._linkPluginExtension = hoverTooltip((view, pos, side) => {
+            let { from, to, text } = view.state.doc.lineAt(pos);
+            let match;
+            const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+            while ((match = linkRegex.exec(text)) !== null) {
+                let start = from + match.index;
+                let end = start + match[0].length;
+                if (pos >= start && pos <= end) {
+                    const url = match[2];
+                    return {
+                        pos: start,
+                        end,
+                        above: true,
+                        create(view) {
+                            let dom = document.createElement("div");
+                            dom.className = "wiki-link-popup";
+                            dom.innerHTML = '<a href="' + url + '" target="_blank" rel="noopener noreferrer" onclick="window.open(\'' + url + '\', \'_blank\', \'noopener,noreferrer\'); return false;" style="color: var(--intent-primary); font-weight: bold; text-decoration: none; font-size: 1.05rem; display: flex; align-items: center; gap: 12px; padding: 6px 4px;">Go ↗ <span style="color: var(--text-muted); font-size: 0.9rem; font-weight: normal; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + url + '</span></a>';
+                            return { dom };
+                        }
+                    };
+                }
             }
-        }
-
-        const linkDecorator = new MatchDecorator({
-            regexp: /\[([^\]]+)\]\(([^)]+)\)/g,
-            decoration: (match) => Decoration.widget({
-                widget: new LinkWidget(match[2]),
-                side: 1
-            })
+            return null;
         });
 
-        this._linkPluginExtension = ViewPlugin.fromClass(class {
-            constructor(view) { this.decorations = linkDecorator.createDeco(view); }
-            update(update) { this.decorations = linkDecorator.updateDeco(update, this.decorations); }
-        }, { decorations: v => v.decorations });
         const val = localStorage.getItem('insetu_md_links');
         const enableLinks = val !== null ? JSON.parse(val) : true;
+
+        const checkboxToggleExtension = EditorView.domEventHandlers({
+            mousedown(e, view) {
+                const pos = view.posAtCoords({x: e.clientX, y: e.clientY});
+                if (pos === null) return false;
+                const line = view.state.doc.lineAt(pos);
+                const match = /^\s*-\s*\[([ xX])\]/.exec(line.text);
+                if (match) {
+                    const boxStart = line.from + match[0].indexOf('[');
+                    const boxEnd = line.from + match[0].indexOf(']') + 1;
+                    if (pos >= boxStart && pos <= boxEnd) {
+                        e.preventDefault();
+                        const isChecked = match[1] !== ' ';
+                        const char = isChecked ? ' ' : 'x';
+                        view.dispatch({
+                            changes: { from: boxStart + 1, to: boxEnd - 1, insert: char }
+                        });
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
 
         const langExt = await loadLanguageExtension(this.language);
 
@@ -154,6 +175,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
                 doc: this.value || '',
                 extensions: [
                     basicSetup,
+                    checkboxToggleExtension,
                     this.languageConf.of(langExt),
                     this.readOnlyConf.of(EditorView.editable.of(!this.readOnly)),
                     this.linkConf.of(enableLinks ? this._linkPluginExtension : []),

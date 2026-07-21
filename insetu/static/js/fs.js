@@ -404,8 +404,29 @@ export function createFileCard(fileInfo, container) {
 export const getGlobalManifest = () => {
     const state = AppStore.getState();
     const validPrefixes = (state.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+
     const allFiles = Array.from(new Set(Object.values(state.manifest || {}).flatMap(obj => obj.files || [])));
-    return allFiles.filter(f => validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix)));
+
+    // Inject active prompts directly into the tree to guarantee navigation in Modals (Move, etc)
+    const rawPrompts = state.gatherOptions?.prompts || [];
+    if (rawPrompts.length === 0) {
+        // Guarantee the prompts folder exists even if completely empty
+        allFiles.push('.insetu/prompts/.gitkeep');
+    } else {
+        rawPrompts.forEach(p => {
+            const pPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`;
+            allFiles.push(pPath);
+        });
+    }
+
+    // Explicitly whitelist prompts to avoid opening the entire OS control plane
+    const isAllowed = (f) => {
+        if (f.startsWith('.insetu/prompts/')) return true;
+        if (validPrefixes.length === 0) return true;
+        return validPrefixes.some(prefix => f.startsWith(prefix));
+    };
+
+    return allFiles.filter(isAllowed);
 };
 export class InSetuVFSExplorer extends InSetuElement {
         static properties = {
@@ -415,7 +436,7 @@ export class InSetuVFSExplorer extends InSetuElement {
         };
         static styles = [sharedStyles, css`
                 :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-                .vfs-body { flex: 1; overflow-y: auto; padding: 20px; }
+                .vfs-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
         `];
 
         constructor() {
@@ -474,73 +495,19 @@ export class InSetuVFSExplorer extends InSetuElement {
             if (this.manifestFiles.length === 0) {
                 return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
             }
-            const q = this.searchQuery.trim();
-            const currentPrefix = this.globalBrowsePath.length > 0 ? this.globalBrowsePath.join('/') + '/' : '';
-            const availableFiles = currentPrefix ? this.manifestFiles.filter(f => f.startsWith(currentPrefix)) : this.manifestFiles;
-
-            let contentUI;
-            if (!q) {
-                contentUI = html`
-                    <div @card-clicked="${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}">
-                        <insetu-file-tree  
-                            basePath=""
-                            .files=${this.manifestFiles}
-                            .currentPath=${this.globalBrowsePath}
-                            .hidePath=${true}
-                            entityType="file"
-                            @path-changed="${this._handlePathChange}">
-                        </insetu-file-tree>
-                    </div>
-                `;
-            } else {
-                const matches = window.inSetu.utils.fuzzyFilterObjects(availableFiles, q, f => f.substring(currentPrefix.length));
-
-                if (matches.length === 0) {
-                    contentUI = html`<div style="padding: 15px; color: var(--text-muted);">No matching files found.</div>`;
-                } else {
-                    contentUI = html`
-                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px;">
-                            ${matches.map(filepath => {
-                                const filename = filepath.split('/').pop();
-                                return html`
-                                    <insetu-card
-                                        .filename=${filepath}
-                                        .titleText=${filename}
-                                        .descriptionText=${filepath}
-                                        icon="📄"
-                                        intentColor="var(--intent-success)"
-                                        entityType="file"
-                                        .entityData=${{ filepath, isFS: true }}
-                                        @card-clicked=${() => { if(window.viewSourceFile) window.viewSourceFile(filepath, true); }}>
-                                    </insetu-card>
-                                `;
-                            })}
-                        </div>
-                    `;
-                }
-            }
             return html`
-                <insetu-standard-toolbar
+                <insetu-file-tree  
+                    style="flex: 1;"
+                    @card-clicked=${(e) => { if(e.detail.isSource && window.viewSourceFile) window.viewSourceFile(e.detail.filename, true); }}
+                    basePath=""
+                    .files=${this.manifestFiles}
+                    .currentPath=${this.globalBrowsePath}
+                    .hidePath=${false}
+                    .enableSearch=${true}
                     searchPlaceholder="🔍 Fuzzy search files..."
-                    .searchQuery=${this.searchQuery}
-                    @search-changed=${(e) => {
-                        const val = e.detail.value;
-                        window.inSetu.extensions.Registry.utils.debounce('vfsSearch', () => {
-                            window.inSetu.stores.Fs.getState().setSearchQuery(val);
-                        }, 200);
-                    }}
-                    .noPadding=${true}
-                    .bottomBorder=${this.globalBrowsePath.length > 0}>
-                    ${this.globalBrowsePath.length > 0 ? html`
-                        <div slot="bottom-row" style="display: flex; gap: 10px; padding: 5px 20px; align-items: center; background: var(--input-bg);">
-                            <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ globalBrowsePath: this.globalBrowsePath.slice(0, -1) })}>⬆️ Up</button>
-                            <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.globalBrowsePath.join('/')}</span>
-                        </div>
-                    ` : ''}
-                </insetu-standard-toolbar>
-                <div class="vfs-body">
-                    ${contentUI}
-                </div>
+                    entityType="file"
+                    @path-changed=${this._handlePathChange}>
+                </insetu-file-tree>
             `;
         }
 }
@@ -779,11 +746,26 @@ async function saveNewFile() {
         }
 });
 }
-function openNewFolderModal(overridePath = null) {
+async function openNewFolderModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     const isRoot = overridePath === null && gbPath.length === 0;
     const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : gbPath.join('/') + '/');
-    FsStore.getState().setModal('newFolder', { open: true, basePath: prefix, folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' });
+
+    let exts = '.py, .json, .md, .sh, .txt, .html, .css, .js';
+    let domain = 'Workspaces';
+
+    if (isRoot) {
+        try {
+            const res = await window.inSetu.api.system('repos/template');
+            if (res.ok) {
+                const tpl = await res.json();
+                exts = tpl.exts.join(', ');
+                domain = tpl.domain;
+            }
+        } catch(e) {}
+    }
+
+    FsStore.getState().setModal('newFolder', { open: true, basePath: prefix, folderName: '', repoTitle: '', repoDomain: domain, repoDesc: '', repoExts: exts });
 }
 
 async function saveNewFolder() {
@@ -1460,22 +1442,29 @@ export class InSetuVFSModals extends InSetuElement {
     render() {
         const m = this.modals;
         if (!m) return '';
-
         return html`
-            <insetu-modal ?open=${m.move?.open} titleText="Move File to..." @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
+            <insetu-modal ?open=${m.move?.open} titleText="Move File to..." zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
-                    <input type="text" .value=${m.move?.destPath || ''} @input=${e => FsStore.getState().setModal('move', { destPath: e.target.value })} style="margin-bottom: 15px; font-family: monospace; min-width: 0; box-sizing: border-box;">
+                    <input type="text" .value=${m.move?.destPath || ''} @input=${e => {
+                        const newDest = e.target.value;
+                        const parts = newDest.split('/').filter(p => p);
+                        parts.pop();
+                        FsStore.getState().setModal('move', { destPath: newDest, initialParts: parts });
+                    }} style="margin-bottom: 15px; font-family: monospace; min-width: 0; box-sizing: border-box;">
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 0 10px;">
                         <insetu-folder-browser .files=${getGlobalManifest()} .currentPath=${m.move?.initialParts || []} @path-changed=${e => {
                             const filename = m.move?.currentFile ? m.move.currentFile.split('/').pop() : '';
-                            FsStore.getState().setModal('move', { destPath: e.detail.path ? (e.detail.path + '/' + filename) : filename });
+                            FsStore.getState().setModal('move', { 
+                                destPath: e.detail.path ? (e.detail.path + '/' + filename) : filename,
+                                initialParts: e.detail.path ? e.detail.path.split('/') : []
+                            });
                         }}></insetu-folder-browser>
                     </div>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${executeMove}>🚚 Move File</button>
             </insetu-modal>
 
-            <insetu-modal ?open=${m.newFile?.open} titleText="Create New Workspace File" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+            <insetu-modal ?open=${m.newFile?.open} titleText="Create New Workspace File" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
                     <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.checkFileExtension) window.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1486,7 +1475,7 @@ export class InSetuVFSModals extends InSetuElement {
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>
             </insetu-modal>
 
-            <insetu-modal ?open=${m.newFolder?.open} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
+            <insetu-modal ?open=${m.newFolder?.open} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFolder?.basePath}</span></label>
                     <input type="text" placeholder="Directory name..." .value=${m.newFolder?.folderName || ''} @input=${e => FsStore.getState().setModal('newFolder', { folderName: e.target.value })} style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1517,8 +1506,7 @@ export class InSetuVFSModals extends InSetuElement {
                     ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
                 </button>
             </insetu-modal>
-
-            <insetu-modal ?open=${m.linkInsert?.open} titleText="Insert Link" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
+            <insetu-modal ?open=${m.linkInsert?.open} titleText="Insert Link" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%;">
                     <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
                         <div class="sub-tabs">
@@ -1568,60 +1556,24 @@ export class InSetuVFSModals extends InSetuElement {
                 </div>
             </insetu-modal>
 <insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} maxWidth="100vw" zIndex="3100" @modal-closed=${window.closeBrowseModal}>
-    <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1;">
-                    <div class="sticky-header" style="padding: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--bg);">
-                        ${this.browserConfig?.mode !== 'folder' ? html`
-                            <div class="fuzzy-search-wrapper" style="margin: 0; border: none; border-radius: 0; background: transparent; border-bottom: ${this.currentBrowsePath?.length > 0 ? '1px solid var(--border)' : 'none'};">
-                                <input type="text" placeholder="Fuzzy find files..." style="flex: 1; min-width: 0; border: none; background: transparent; padding: 10px 12px; margin: 0; border-radius: 0; outline: none; box-shadow: none; width: 100%; box-sizing: border-box;"
-                                    .value=${m.browser?.searchQuery || ''}
-                                    @input=${e => FsStore.getState().setModal('browser', { searchQuery: e.target.value })}>
-                                ${m.browser?.searchQuery ? html`<button class="fuzzy-search-clear" @click=${() => FsStore.getState().setModal('browser', { searchQuery: '' })}>Clear</button>` : ''}
-                            </div>
-                        ` : ''}
-                        ${this.currentBrowsePath?.length > 0 ? html`
-                            <div style="display: flex; gap: 10px; padding: 10px 12px; align-items: center; background: var(--input-bg);">
-                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => AppStore.setState({ currentBrowsePath: this.currentBrowsePath.slice(0, -1) })}>⬆️ Up</button>
-                                <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentBrowsePath.join('/')}</span>
-                            </div>
-                        ` : ''}
-                    </div>
-                    <div style="display: flex; flex-direction: column; flex: 1; overflow-y: auto; padding-top: 15px;">
-                        ${m.browser?.searchQuery ? html`
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                                ${window.inSetu.utils.fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).slice(0, 50).map(filepath => {
-                                    const filename = filepath.split('/').pop();
-                                    return html`
-                                        <insetu-card
-                                            .filename=${filepath}
-                                            .titleText=${filename}
-                                            .descriptionText=${filepath}
-                                            icon="📄"
-                                            intentColor="var(--intent-primary)"
-                                            @card-clicked=${() => window._handleBrowserCardClick({ filename: filepath, isSource: true })}>
-                                        </insetu-card>
-                                    `;
-                                })}
-                                ${window.inSetu.utils.fuzzyFilterObjects(m.browser.manifest, m.browser.searchQuery).length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No files found.</span>` : ''}
-                            </div>
-                        ` : html`
-                            <insetu-file-tree 
-                                basePath=""
-                                .files=${m.browser?.manifest || []}
-                                .currentPath=${this.currentBrowsePath || []}
-                                .hidePath=${true}
-                                .hideFiles=${this.browserConfig?.mode === 'folder'}
-                                @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
-                                @card-clicked=${e => window._handleBrowserCardClick(e.detail)}>
-                            </insetu-file-tree>
-                        `}
-                    </div>
-                </div>
-                ${this.browserConfig?.mode === 'folder' ? html`
-                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${window.confirmFolderSelection}>✅ Select This Folder</button>
-                ` : ''}
-            </insetu-modal>
-
-            <insetu-modal ?open=${m.quickPack?.open} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
+    <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
+        <insetu-file-tree 
+            basePath=""
+            .files=${m.browser?.manifest || []}
+            .currentPath=${this.currentBrowsePath || []}
+            .hidePath=${false}
+            .enableSearch=${this.browserConfig?.mode !== 'folder'}
+            searchPlaceholder="Fuzzy find files..."
+            .hideFiles=${this.browserConfig?.mode === 'folder'}
+            @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
+            @card-clicked=${e => window._handleBrowserCardClick(e.detail)}>
+        </insetu-file-tree>
+    </div>
+    ${this.browserConfig?.mode === 'folder' ? html`
+        <button slot="footer" style="background: var(--intent-success); color: white;" @click=${window.confirmFolderSelection}>✅ Select This Folder</button>
+    ` : ''}
+</insetu-modal>
+            <insetu-modal ?open=${m.quickPack?.open} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 5px; max-height: 50vh; overflow-y: auto; padding-right: 10px;">
                     ${m.quickPack?.files?.map(f => html`
                         <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">

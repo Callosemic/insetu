@@ -280,10 +280,7 @@ def index():
     extensions = cfg.get("extensions", [])
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
 import threading
-import json
-from flask import Response
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-import threading
 _COMPILER_LOCKS = {}
 _COMPILER_GLOBAL_LOCK = threading.Lock()
 

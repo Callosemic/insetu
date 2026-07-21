@@ -671,7 +671,49 @@ def slugify(text):
     }
     for broken, fixed in charmap.items():
         text = text.replace(broken, fixed)
-
     clean = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
     clean = re.sub(r'[^a-zA-Z0-9_-]', '_', clean.lower())
     return re.sub(r'_+', '_', clean).strip('_')
+
+def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
+    """SSOT for new repository configurations."""
+    if not exts:
+        exts = [".py", ".json", ".md", ".sh", ".txt", ".html", ".css", ".js"]
+    return {
+        "repo_dir": repo_dir,
+        "title": title or repo_dir.replace("-", " ").replace("_", " ").title(),
+        "domain": domain or "Workspaces",
+        "description": description or f"Auto-initialized repository: {repo_dir}",
+        "exts": exts,
+        "apply_ignore": True,
+        "sub_buckets": []
+    }
+def sanitize_workspace_config(cfg):
+    """
+    Universal Config Middleware.
+    Strips ghost system buckets, purges empty repos, enforces valid IDs,
+    and cleans out legacy fields.
+    """
+    # Purge legacy settings schemas that are now handled natively by extensions
+    cfg.pop("_settings_schemas", None)
+
+    valid_repos = []
+    for repo in cfg.get("target_repos", []):
+        if not repo.get("repo_dir"):
+            continue
+
+        valid_buckets = []
+        for b in repo.get("sub_buckets", []):
+            if b.get("is_system"):
+                continue
+            if not b.get("dynamic_split_prefix"):
+                if not b.get("id"):
+                    title = b.get("title", "").strip()
+                    b["id"] = slugify(title) if title else "untitled_bucket"
+            valid_buckets.append(b)
+
+        repo["sub_buckets"] = valid_buckets
+        valid_repos.append(repo)
+
+    cfg["target_repos"] = valid_repos
+    return cfg

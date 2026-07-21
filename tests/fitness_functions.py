@@ -261,6 +261,7 @@ def check_javascript_files():
     zustand_reference_mutation_pattern = re.compile(r'\.setState\(\{\s*([a-zA-Z0-9_]+)\s*:\s*\1\s*\}\)')
     subtab_leak_pattern = re.compile(r"localStorage\.getItem\([\'\"]insetu_subtab_")
     sticky_header_pattern = re.compile(r'class=[\'"]sticky-header[\'"]')
+    media_layout_pattern = re.compile(r'@media\s*\([^)]*(?:width|height)[^)]*\)')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -394,11 +395,14 @@ def check_javascript_files():
                     # 26. Standard Toolbar Mandate
                     if is_extension and is_lit_component and sticky_header_pattern.search(line):
                         report_violation("STANDARD_TOOLBAR_MANDATE", filepath, line_num, "Legacy 'sticky-header' container detected. Migrate to <insetu-standard-toolbar> for standard UI layouts.")
-
                     # 24. Hardcoded Extension Demolition Ban (Inversion of Control Enforcement)
                     if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):
                         if "tagName.startsWith" not in line:
                             report_violation("HARDCODED_EXTENSION_EVICTION", filepath, line_num, "Hardcoded extension element tags found in reload sequence. Utilize stateless prefix checks to preserve Inversion of Control.")
+
+                    # 27. Container Query Mandate
+                    if is_extension and media_layout_pattern.search(line):
+                        report_violation("CONTAINER_QUERY_MANDATE", filepath, line_num, "Responsive layout via @media detected. Extensions must utilize @container queries to remain layout-agnostic and resilient within dynamic host slots.")
 if __name__ == "__main__":
     print("============================================================")
     print("      inSetu Architectural Fitness Functions Validator      ")

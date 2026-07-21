@@ -45,6 +45,8 @@ def get_system_config(workspace_id):
     try:
         with open(cfg_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        from insetu.utils_core import sanitize_workspace_config
+        data = sanitize_workspace_config(data)
     except Exception:
         data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
@@ -134,20 +136,9 @@ def save_system_config(workspace_id, payload):
     # Security Guardrail: Enforce the core config UI is never locked out
     if "extensions" in payload and "config" not in payload["extensions"]:
         payload["extensions"].insert(0, "config")
-    from insetu.utils_core import slugify
+    from insetu.utils_core import sanitize_workspace_config
 
-    valid_repos = []
-    for repo in payload.get("target_repos", []):
-        if not repo.get("repo_dir"):
-            continue
-        for b in repo.get("sub_buckets", []):
-            if not b.get("dynamic_split_prefix"):
-                if not b.get("id"):
-                    title = b.get("title", "").strip()
-                    b["id"] = slugify(title) if title else "untitled_bucket"
-        valid_repos.append(repo)
-    payload["target_repos"] = valid_repos
-
+    payload = sanitize_workspace_config(payload)
     save_json_file(cfg_path, payload, workspace_id)
 
     # Invalidate the mutated config cache so backend physics immediately see changes
@@ -180,6 +171,11 @@ def api_system_config(workspace_id=None):
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+@system_bp.route('/api/system/repos/template', methods=['GET'])
+def api_repo_template():
+    """Serves the SSOT default repository configuration to the frontend UI."""
+    from insetu.utils_core import get_default_repo_template
+    return jsonify(get_default_repo_template(""))
 
 @system_bp.route('/api/system/workspaces/create', methods=['POST'])
 def api_create_workspace():

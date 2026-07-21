@@ -256,27 +256,28 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                                 (delete_source, 'deleted', time.time())
                             )
                             db_conn.commit()
-
         if data.get("is_new_repo") and data.get("repo_dir"):
                 repo_dir = data.get("repo_dir")
-                from insetu.utils_core import load_config, get_workspace_physics
+                from insetu.utils_core import load_json_file, get_workspace_physics, sanitize_workspace_config, get_default_repo_template
                 import insetu.utils_core as utils_core
-                cfg = load_config(workspace_id)
+                cfg_path, _, _ = get_workspace_physics(workspace_id)
+                cfg = load_json_file(cfg_path, {})
+                cfg = sanitize_workspace_config(cfg)
+
                 targets = cfg.get("target_repos", [])
                 if not any(r.get("repo_dir") == repo_dir for r in targets):
-                        ext_str = data.get("repo_exts", ".py,.json,.md,.sh,.txt,.html,.css,.js")
-                        exts = [e.strip() for e in ext_str.split(",") if e.strip()]
+                        ext_str = data.get("repo_exts", "")
+                        exts = [e.strip() for e in ext_str.split(",") if e.strip()] if ext_str else None
 
-                        targets.append({
-                                "repo_dir": repo_dir,
-                                "title": data.get("repo_title") or repo_dir.replace("-", " ").replace("_", " ").title(),
-                                "domain": data.get("repo_domain") or "Workspaces",
-                                "description": data.get("repo_desc") or f"Auto-initialized repository: {repo_dir}",
-                                "exts": exts,
-                                "apply_ignore": True
-                        })
+                        new_repo = get_default_repo_template(
+                            repo_dir=repo_dir,
+                            title=data.get("repo_title"),
+                            domain=data.get("repo_domain"),
+                            description=data.get("repo_desc"),
+                            exts=exts
+                        )
+                        targets.append(new_repo)
                         cfg["target_repos"] = targets
-                        cfg_path, _, _ = get_workspace_physics(workspace_id)
                         utils_core.save_json_file(cfg_path, cfg)
         hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
 @fs_bp.route('/api/<workspace_id>/fs/upload', methods=['POST'])

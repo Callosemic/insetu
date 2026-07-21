@@ -104,14 +104,15 @@ export class InSetuExtConfig extends InSetuElement {
             </div>
         `;
     }
-
     renderSubBuckets(repo, rIdx) {
         const buckets = repo.sub_buckets || [];
-        if (buckets.length === 0) {
+        const visibleBuckets = buckets.filter(b => !b.is_system);
+        if (visibleBuckets.length === 0) {
             return html`<span style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">No sub-buckets defined.</span>`;
         }
 
         return buckets.map((b, bIdx) => {
+            if (b.is_system) return '';
             const isImplicit = !!b.dynamic_split_prefix;
             return html`
                 <div style="background: var(--bg); border: 1px solid var(--border); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 8px;">
@@ -379,12 +380,20 @@ export class InSetuExtConfig extends InSetuElement {
                                 ${this.renderRepos()}
                             </div>
                             <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-                                @click=${() => {
+                                @click=${async () => {
                                     if (!this.configForm.target_repos) this.configForm.target_repos = [];
-                                    this.configForm.target_repos.push({  
+
+                                    let newRepo = {  
                                         repo_dir: '', title: '', domain: 'Workspaces', 
                                         exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
-                                    });
+                                    };
+
+                                    try {
+                                        const res = await window.inSetu.api.system('repos/template');
+                                        if (res.ok) newRepo = await res.json();
+                                    } catch(e) {}
+
+                                    this.configForm.target_repos.push(newRepo);
                                     this.requestUpdate();
                                     setTimeout(() => {
                                         const modal = this.shadowRoot.querySelector('insetu-modal');
