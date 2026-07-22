@@ -163,13 +163,11 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                 if f"{config['repo_dir']}_vault.json" in manifest_ref:
                     del manifest_ref[f"{config['repo_dir']}_vault.json"]
         return True
-
     dirty = False
     sub_buckets = config.get("sub_buckets", [])
     if sub_buckets:
         buckets = {b["id"]: {"files": [], "cfg": b} for b in sub_buckets if not b.get("dynamic_split_prefix")}
         dynamic_files = {}
-        managed_dirs = ctx.config.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
 
         for filepath in final_list:
             b, module = resolve_file_bucket(filepath, sub_buckets)
@@ -179,10 +177,6 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
             elif b:
                 buckets[b["id"]]["files"].append(filepath)
             else:
-                # Anti-Pattern Guard: Prevent unmatched managed OS directories from bleeding into the default context
-                if any(filepath.startswith(d + '/') or f"/{d}/" in filepath for d in managed_dirs):
-                    continue
-
                 if "default_catch_all" not in buckets:
                     buckets["default_catch_all"] = {
                         "files": [], "cfg": {
@@ -251,10 +245,8 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
             r_desc = config.get("description", f"Context payload for {r_title}.")
             out_path = Path(paths["contexts_dir"]).joinpath(safe_out).as_posix()
 
-            managed_dirs = ctx.config.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
-            filtered_list = [f for f in final_list if not any(f.startswith(d + '/') or f"/{d}/" in f for d in managed_dirs)]
-            if filtered_list:
-                manifest_entry = write_bucket(out_path, filtered_list, r_title, r_domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
+            if final_list:
+                manifest_entry = write_bucket(out_path, final_list, r_title, r_domain, repo_path, config['repo_dir'], workspace_id, max_kb=max_kb)
                 manifest_ref[safe_out] = manifest_entry
                 dirty = True
             else:
@@ -279,9 +271,8 @@ def _process_vfs_ledger(workspace_id="default"):
         return
     last_mut = row['last_mut']
     now = time.time()
-
-    # Macro Slew Limiter: 1.5-second silence window to balance batching with UI responsiveness
-    if now - last_mut < 1.5:
+    # Macro Slew Limiter: 0.5-second silence window to balance batching with UI responsiveness
+    if now - last_mut < 0.5:
         return
 
     events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
@@ -391,9 +382,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
     from insetu.context import VFSTransaction
     vfs = VFSTransaction(workspace_id)
-
     live_cfg = ctx.config
-    manifest = {}
+    manifest = {} if target_repos is None else ctx.manifest
     for config in live_cfg.get("target_repos", []):
         if config.get("exclude_from_context"): continue
         if target_repos and config.get("repo_dir") not in target_repos: continue
@@ -406,20 +396,21 @@ def generate_context_file(workspace_id=None, target_repos=None):
     sweep_payload = True if target_repos is None else target_repos
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, is_full_sweep=sweep_payload)
     # Set Analysis: Prune only orphaned context files that were not regenerated
-    valid_basenames = set(manifest.keys())
-    for data in manifest.values():
-        for chunk in data.get("meta", {}).get("chunks", []):
-            valid_basenames.add(chunk)
-    for ws_rel_path in vfs.walk(paths["contexts_dir"]):
-        f_path = ctx.resolve_path(ws_rel_path)
-        f_basename = Path(f_path).name
+    if target_repos is None:
+        valid_basenames = set(manifest.keys())
+        for data in manifest.values():
+            for chunk in data.get("meta", {}).get("chunks", []):
+                valid_basenames.add(chunk)
+        for ws_rel_path in vfs.walk(paths["contexts_dir"]):
+            f_path = ctx.resolve_path(ws_rel_path)
+            f_basename = Path(f_path).name
 
-        if f_path not in active_ephemerals and f_basename not in valid_basenames and f_basename != "manifest.json":
-            try:
-                from insetu.routes_fs import execute_vfs_delete
-                execute_vfs_delete(workspace_id, ws_rel_path)
-            except Exception:
-                pass
+            if f_path not in active_ephemerals and f_basename not in valid_basenames and f_basename != "manifest.json":
+                try:
+                    from insetu.routes_fs import execute_vfs_delete
+                    execute_vfs_delete(workspace_id, ws_rel_path)
+                except Exception:
+                    pass
     # Re-inject surviving Ephemeral Artifacts into the manifest so they persist through background compiles
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]):

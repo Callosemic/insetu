@@ -43,14 +43,14 @@ class HookRegistry:
     def __init__(self):
         self._hooks = {}
         self._lock = threading.Lock()
-
-    def on(self, event_name):
+    def on(self, event_name, priority=50):
         """Decorator for extensions to subscribe to OS lifecycle events."""
         def decorator(func):
             with self._lock:
                 if event_name not in self._hooks:
                     self._hooks[event_name] = []
-                self._hooks[event_name].append(func)
+                self._hooks[event_name].append((priority, func))
+                self._hooks[event_name].sort(key=lambda item: item[0])
             return func
         return decorator
 
@@ -77,12 +77,11 @@ class HookRegistry:
             return is_extension_enabled(ext_name, workspace_id)
 
         return True
-
     def emit(self, event_name, *args, **kwargs):
         """Core OS trigger to broadcast payloads to all subscribed extensions."""
         workspace_id = kwargs.get('workspace_id')
         with self._lock:
-            callbacks = self._hooks.get(event_name, []).copy()
+            callbacks = [cb for _, cb in self._hooks.get(event_name, [])]
         results = []
         for cb in callbacks:
             if not self._is_authorized(cb, event_name, workspace_id):
@@ -97,7 +96,7 @@ class HookRegistry:
         """Dispatches long-running hooks to a background thread to prevent blocking."""
         workspace_id = kwargs.get('workspace_id')
         with self._lock:
-            callbacks = self._hooks.get(event_name, []).copy()
+            callbacks = [cb for _, cb in self._hooks.get(event_name, [])]
 
         def _run_hooks():
             for cb in callbacks:

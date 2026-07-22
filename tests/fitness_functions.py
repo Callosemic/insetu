@@ -275,6 +275,8 @@ def check_javascript_files():
                 full_content = "".join(lines)
                 if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
                     report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
+                if is_extension and "extends InSetuElement" in full_content and "static get extensionName()" not in full_content:
+                    report_violation("EXTENSION_NAME_GETTER_MANDATE", filepath, 1, "Components extending InSetuElement must define 'static get extensionName()' to ensure deterministic API routing.")
                 if "innerHTML =" in full_content and file != "ext_citations.js" and is_extension:
                     report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
 

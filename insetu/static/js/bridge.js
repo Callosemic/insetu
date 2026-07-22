@@ -178,11 +178,10 @@ export class InSetuExtBridge extends InSetuElement {
         super.disconnectedCallback();
         document.removeEventListener('click', this._docClickListener);
     }
-
-    _verifyFiles(files) {
+    _verifyFiles(files, force = false) {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
         files.forEach(file => {
-            if (this._fileVerificationCache[file] === undefined) {
+            if (force || this._fileVerificationCache[file] === undefined) {
                 if (window.inSetu?.extensions?.Registry?.utils) {
                     window.inSetu.extensions.Registry.utils.debounceVerifyFile(activeWs, file, (exists) => {
                         this._fileVerificationCache = { ...this._fileVerificationCache, [file]: exists };
@@ -410,7 +409,9 @@ export class InSetuExtBridge extends InSetuElement {
                                                             mode: 'file',
                                                             title: 'Select File for Patch',
                                                             callback: (filepath) => {
+                                                                delete this._fileVerificationCache[filepath];
                                                                 BridgeStore.getState().updateGroupFile(file, filepath);
+                                                                this._verifyFiles([filepath], true);
                                                             }
                                                         });
                                                     }

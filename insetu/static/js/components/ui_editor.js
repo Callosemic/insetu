@@ -319,14 +319,19 @@ if (window.ExtensionRegistry) {
         { id: 'insetu_md_links', label: 'Enable Interactive MD Links', type: 'boolean', default: true, description: 'Renders Markdown links as clickable icons in the editor.' }
     ];
 
-    window.ExtensionRegistry.registerSettingsAction(
-        'editor_settings',
-        'Editor Settings',
-        '📝',
-        () => {
-            const genericModal = document.getElementById('insetu-generic-settings-root');
-            if (genericModal) genericModal.openModal('editor', true);
-        },
-        'System'
-    );
+    window.ExtensionRegistry.registerExtension('editor', {
+        name: "Editor Configuration",
+        version: "1.0.0",
+        settingsActions: [
+            {
+                id: 'editor_settings',
+                label: 'Editor Settings',
+                icon: '📝',
+                onClick: () => {
+                    const genericModal = document.getElementById('insetu-generic-settings-root');
+                    if (genericModal) genericModal.openModal('editor', true);
+                }
+            }
+        ]
+    });
 }

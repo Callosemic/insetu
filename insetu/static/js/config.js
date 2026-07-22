@@ -314,6 +314,15 @@ export class InSetuExtConfig extends InSetuElement {
                                     <input type="text" .value=${this.configForm.instance_emoji || ''} placeholder="⚙️" @input=${(e) => { this.configForm = { ...this.configForm, instance_emoji: e.target.value }; }}>
                                 </div>
                             </div>
+                            <div style="margin-bottom: 4px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
+                                <label style="font-size: 0.85rem; color: var(--text); font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 10px;">
+                                    <input type="checkbox" style="transform: scale(1.2); cursor: pointer;" 
+                                        .checked=${this.configForm.track_os !== false} 
+                                        @change=${(e) => { this.configForm = { ...this.configForm, track_os: e.target.checked }; }}>
+                                    Track inSetu OS (.insetu)
+                                </label>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 26px;">Maps the underlying system directory to natively manage prompts and internal state tracking.</span>
+                            </div>
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 200px;">
                                     <div style="margin-bottom: 4px;">
@@ -379,11 +388,12 @@ export class InSetuExtConfig extends InSetuElement {
                             <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
                                 ${this.renderRepos()}
                             </div>
-                            <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-                                @click=${async () => {
-                                    if (!this.configForm.target_repos) this.configForm.target_repos = [];
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
+                                    @click=${async () => {
+                                        if (!this.configForm.target_repos) this.configForm.target_repos = [];
 
-                                    let newRepo = {  
+                                        let newRepo = {    
                                         repo_dir: '', title: '', domain: 'Workspaces', 
                                         exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
                                     };
@@ -392,18 +402,16 @@ export class InSetuExtConfig extends InSetuElement {
                                         const res = await window.inSetu.api.system('repos/template');
                                         if (res.ok) newRepo = await res.json();
                                     } catch(e) {}
-
-                                    this.configForm.target_repos.push(newRepo);
-                                    this.requestUpdate();
-                                    setTimeout(() => {
-                                        const modal = this.shadowRoot.querySelector('insetu-modal');
-                                        const container = modal?.shadowRoot?.querySelector('.body');
-                                        if (container) container.scrollTo(0, container.scrollHeight);
-                                    }, 50);
-                                }}>➕ Add Repository</button>
+                                        this.configForm.target_repos.push(newRepo);
+                                        this.requestUpdate();
+                                        setTimeout(() => {
+                                            const modal = this.shadowRoot.querySelector('insetu-modal');
+                                            const container = modal?.shadowRoot?.querySelector('.body');
+                                            if (container) container.scrollTo(0, container.scrollHeight);
+                                        }, 50);
+                                    }}>➕ Add Repository</button>
+                            </div>
                         </div>
-                    </div>
-                </div>
             `;
         return html`
             <insetu-modal 

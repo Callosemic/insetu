@@ -158,12 +158,12 @@ window.inSetu.extensions.Registry = {
                 activeConfigs.push({ extName, config });
             }
         });
-
         // Pass 1: Primary Navigation Tabs (Ensures parent containers exist before sub-tabs mount)
         activeConfigs.forEach(({ extName, config }) => {
             if (config.layoutSlots) {
                 config.layoutSlots.forEach(slotDef => {
-                    if (slotDef.slot === 'slots:primary-navigation') {
+                    const cleanSlot = slotDef.slot.replace('slots:', '');
+                    if (cleanSlot === 'primary-navigation') {
                         this.registerTab(slotDef.id, slotDef.label, extName, slotDef.component);
                     }
                 });
@@ -175,11 +175,12 @@ window.inSetu.extensions.Registry = {
             if (config.layoutSlots) {
                 const sortedSlots = [...config.layoutSlots].sort((a, b) => (a.order || 99) - (b.order || 99));
                 sortedSlots.forEach(slotDef => {
-                    if (slotDef.slot === 'slots:sub-navigation') {
+                    const cleanSlot = slotDef.slot.replace('slots:', '');
+                    if (cleanSlot === 'sub-navigation') {
                         this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
-                    } else if (slotDef.slot === 'slots:sub-navigation-actions') {
+                    } else if (cleanSlot === 'sub-navigation-actions') {
                         this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
-                    } else if (slotDef.slot === 'slots:global') {
+                    } else if (cleanSlot === 'global') {
                         let container = document.getElementById('global-extensions-container');
                         if (!container) {
                             container = document.createElement('div');
@@ -215,18 +216,21 @@ window.inSetu.extensions.Registry = {
         }
         if (config.layoutSlots) {
             const sortedSlots = [...config.layoutSlots].sort((a, b) => {
-                if (a.slot === 'slots:primary-navigation' && b.slot !== 'slots:primary-navigation') return -1;
-                if (a.slot !== 'slots:primary-navigation' && b.slot === 'slots:primary-navigation') return 1;
+                const aSlot = a.slot.replace('slots:', '');
+                const bSlot = b.slot.replace('slots:', '');
+                if (aSlot === 'primary-navigation' && bSlot !== 'primary-navigation') return -1;
+                if (aSlot !== 'primary-navigation' && bSlot === 'primary-navigation') return 1;
                 return (a.order || 99) - (b.order || 99);
             });
             sortedSlots.forEach(slotDef => {
-                if (slotDef.slot === 'slots:primary-navigation') {
+                const cleanSlot = slotDef.slot.replace('slots:', '');
+                if (cleanSlot === 'primary-navigation') {
                     this.registerTab(slotDef.id, slotDef.label, extName, slotDef.component);
-                } else if (slotDef.slot === 'slots:sub-navigation') {
+                } else if (cleanSlot === 'sub-navigation') {
                     this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
-                } else if (slotDef.slot === 'slots:sub-navigation-actions') {
+                } else if (cleanSlot === 'sub-navigation-actions') {
                     this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
-                } else if (slotDef.slot === 'slots:global') {
+                } else if (cleanSlot === 'global') {
                     let container = document.getElementById('global-extensions-container');
                     if (!container) {
                         container = document.createElement('div');

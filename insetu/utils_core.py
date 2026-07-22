@@ -59,13 +59,17 @@ def get_workspace_physics(workspace_id=None):
     # 2. Host Workspace Switchboard
     resolved_cfg = default_config
     cfg_path = None
-
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
                 w_data = json.load(f)
-            if target_ws in w_data.get("workspaces", {}):
-                cfg_path = w_data["workspaces"][target_ws].get("config_path")
+            registered = w_data.get("workspaces", {})
+            if target_ws in registered:
+                cfg_path = registered[target_ws].get("config_path")
+            elif target_ws != "default":
+                raise KeyError(f"Workspace '{target_ws}' is not registered.")
+        except KeyError:
+            raise
         except Exception:
             pass
     if cfg_path:
@@ -197,6 +201,22 @@ def load_config(workspace_id=None):
         # Deep copy to prevent mutating the raw shared JSON cache
         import copy
         cfg = copy.deepcopy(load_json_file(cfg_path, {}))
+
+        # Dynamic OS mapping protocol
+        if cfg.get("track_os", True):
+            if not any(r.get("repo_dir") == ".insetu" for r in cfg.get("target_repos", [])):
+                cfg.setdefault("target_repos", []).append({
+                    "repo_dir": ".insetu",
+                    "title": "inSetu OS",
+                    "domain": "System Configuration",
+                    "exts": [".json", ".md", ".txt"],
+                    "apply_ignore": True,
+                    "repo_ignore_dirs": ["data", "workspaces", "profiles"],
+                    "archive_type": "prompt-library",
+                    "exclude_from_context": True,
+                    "exclude_from_diffs": True
+                })
+
         from insetu.hooks import hooks
         hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
         _MUTATED_CONFIG_CACHE[cfg_path] = cfg
@@ -419,7 +439,6 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     ws_root_path = Path(ws_root).resolve()
     live_cfg = load_config(workspace_id)
     ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
-    managed_dirs = set(live_cfg.get("managed_dirs", []))
 
     search_roots = [Path(cfg_path).parent.resolve()]
     for repo in allowed_repos:
@@ -427,11 +446,11 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
         if repo_path.exists():
             search_roots.append(repo_path)
     search_roots = list(set(search_roots))
-
     candidates = []
     for s_root in search_roots:
         for root, dirs, files in os.walk(str(s_root)):
-            dirs[:] = [d for d in dirs if (not d.startswith('.') or d in managed_dirs) and d not in ignore_dirs]
+            # Explicit is better than implicit: only ignore directories explicitly declared
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
             for f in files:
                 cand_abs = Path(root) / f
                 try:
@@ -523,33 +542,47 @@ def resolve_workspace_path(path, workspace_id=None):
                 expanded_base = Path(physical_path).expanduser().resolve()
             else:
                 expanded_base = (ws_root_path / repo.get("repo_dir")).resolve()
+            # CASE 1: Resolving the repository root directory itself (e.g. "insetu")
+            if len(parts) == 1:
+                if expanded_base.exists():
+                    return expanded_base.as_posix()
 
-            # EDGE CASE FIX: "Repo Name == Top Level Folder Name" (e.g. insetu/insetu/app.py)
-            path_stripped = expanded_base.joinpath(*parts[1:]).resolve() if len(parts) > 1 else expanded_base
-            path_kept = expanded_base.joinpath(*parts).resolve()
+            # CASE 2: Resolving nested paths inside the repository
+            candidate_paths = []
+            if len(parts) > 1:
+                candidate_paths.append(expanded_base.joinpath(*parts[1:]).resolve())
+            candidate_paths.append(expanded_base.joinpath(*parts).resolve())
 
-            if path_kept.exists() and not path_stripped.exists():
-                return path_kept.as_posix()
+            repo_dir_name = repo.get("repo_dir")
+            dup_idx = 1
+            while dup_idx < len(parts) and parts[dup_idx] == repo_dir_name:
+                dup_idx += 1
+                if dup_idx < len(parts):
+                    candidate_paths.append(expanded_base.joinpath(*parts[dup_idx:]).resolve())
+
+            for cand in candidate_paths:
+                if cand.exists():
+                    return cand.as_posix()
 
             # GENESIS PATCH AMBIGUITY HEALER
-            if not path_kept.exists() and not path_stripped.exists():
-                def get_unmatched_distance(target_path):
-                    d_path = target_path.parent
-                    distance = 0
-                    while d_path and str(d_path).startswith(str(expanded_base)) and len(str(d_path)) >= len(str(expanded_base)):
-                        if d_path.is_dir():
-                            return distance
-                        distance += 1
-                        d_path = d_path.parent
-                    return distance
+            path_stripped = candidate_paths[0] if candidate_paths else expanded_base
+            path_kept = expanded_base.joinpath(*parts).resolve()
 
-                dist_kept = get_unmatched_distance(path_kept)
-                dist_stripped = get_unmatched_distance(path_stripped)
+            def get_unmatched_distance(target_path):
+                d_path = target_path.parent
+                distance = 0
+                while d_path and str(d_path).startswith(str(expanded_base)) and len(str(d_path)) >= len(str(expanded_base)):
+                    if d_path.is_dir():
+                        return distance
+                    distance += 1
+                    d_path = d_path.parent
+                return distance
 
-                if dist_kept < dist_stripped:
-                    return path_kept.as_posix()
-                return path_stripped.as_posix()
+            dist_kept = get_unmatched_distance(path_kept)
+            dist_stripped = get_unmatched_distance(path_stripped)
 
+            if dist_kept < dist_stripped:
+                return path_kept.as_posix()
             return path_stripped.as_posix()
     # Mathematically resolve against dynamic root
     return ws_root_path.joinpath(norm_path).resolve().as_posix()

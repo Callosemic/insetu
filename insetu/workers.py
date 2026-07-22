@@ -277,7 +277,7 @@ def _init_worker_schema(workspace_id="default"):
         """)
         conn.execute("""
                 INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-                VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 2000, 0, 0, 'pending', '{}')
+                VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
         """)
         conn.commit()
         _INITIALIZED_WORKSPACES.add(workspace_id)

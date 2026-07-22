@@ -233,7 +233,7 @@ export function autoWireSettingsSchemas() {
             ...Object.keys(window.inSetu.serverSchemas || {})
         ]);
         allExts.forEach((extName) => {
-            const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
+            const isCore = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
             if (!isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
                 return;
             }
@@ -842,7 +842,7 @@ async function performSoftRefresh() {
             if (window.ExtensionRegistry) {
                 window.ExtensionRegistry._settingsActions = [];
                 window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
-                    const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
+                    const isCore = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
                     if (isCore || window.ACTIVE_EXTENSIONS.includes(extName)) {
                         if (manifest.settingsActions) {
                             manifest.settingsActions.forEach(act => {
