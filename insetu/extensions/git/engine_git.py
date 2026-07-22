@@ -126,14 +126,11 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             if not changed_files: continue
             sub_buckets = config.get("sub_buckets", [])
             bucketed_files = {}
-
-            managed_dirs = live_cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
             ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
             ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
             if sub_buckets:
                 for rel_to_repo, status, orig_filepath in changed_files:
                     # Global ignore guards should apply BEFORE sub-bucket routing
-                    if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
                     if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
                     if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
 
@@ -153,7 +150,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 out_filename = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
                 filtered_files = []
                 for rel_to_repo, status, orig_filepath in changed_files:
-                    if any(rel_to_repo.startswith(d + '/') or f"/{d}/" in rel_to_repo for d in managed_dirs): continue
                     if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
                     if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
                     filtered_files.append((rel_to_repo, status, orig_filepath))
@@ -287,10 +283,8 @@ def _background_sweep_status(ctx):
             res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
             lines = res.stdout.splitlines()
             files = []
-
             repo_excluded = c.get("exclude_from_diffs", False)
             sub_buckets = c.get("sub_buckets", [])
-            managed_dirs = managed_dirs_global + c.get("repo_managed_dirs", [])
             ignore_dirs = set(ignore_dirs_global + c.get("repo_ignore_dirs", []))
             ignore_patterns = ignore_patterns_global + c.get("repo_ignore_patterns", [])
 
@@ -301,19 +295,16 @@ def _background_sweep_status(ctx):
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
 
                 is_excluded = repo_excluded
-                if not is_excluded and sub_buckets:
-                    b, _ = resolve_file_bucket(filepath, sub_buckets)
-                    if b:
-                        if b.get("exclude_from_diffs"):
+                if not is_excluded:
+                    if any(pattern in filepath for pattern in ignore_patterns):
+                        is_excluded = True
+                    elif set(p.lower() for p in filepath.split('/')).intersection(ignore_dirs):
+                        is_excluded = True
+                    elif sub_buckets:
+                        b, _ = resolve_file_bucket(filepath, sub_buckets)
+                        if b and b.get("exclude_from_diffs"):
                             is_excluded = True
-                    else:
-                        # Anti-Pattern Guard: If it falls through buckets and is a managed/ignored file, it is excluded from normal diffs
-                        if any(filepath.startswith(d + '/') or f"/{d}/" in filepath for d in managed_dirs):
-                            is_excluded = True
-                        elif any(pattern in filepath for pattern in ignore_patterns):
-                            is_excluded = True
-                        elif set(p.lower() for p in filepath.split('/')).intersection(ignore_dirs):
-                            is_excluded = True
+
                 # Sweepable State should ONLY catch files explicitly excluded from normal Diffs
                 if is_excluded:
                     files.append({"path": filepath, "status": status.strip()})

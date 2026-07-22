@@ -86,31 +86,33 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
                     chunks = meta["chunks"]
             if not chunks:
                 chunks = [inc]
+
+            is_diff_target = "diffs/" in inc or basename.endswith("_diffs.txt")
+            is_prompt_target = "prompts/" in inc
+            is_context_target = "contexts/" in inc or basename.endswith("_context.txt")
+
             for chunk_identifier in chunks:
                 safe_chunk_base = Path(chunk_identifier).name
-                if chunk_identifier != inc and chunk_identifier in manifest_data.get(basename, {}).get("meta", {}).get("chunks", []):
+                display_name = f"{Path(inc).parent.as_posix()}/{safe_chunk_base}" if (chunk_identifier != inc and "/" in inc) else chunk_identifier
+
+                if is_prompt_target or "prompts/" in chunk_identifier:
+                    inc_path = Path(ctx.paths["prompts_dir"]).joinpath(safe_chunk_base).as_posix()
+                elif is_diff_target or "diffs/" in chunk_identifier or safe_chunk_base.endswith("_diffs.txt") or "_diffs_part" in safe_chunk_base:
+                    inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
+                elif is_context_target or "contexts/" in chunk_identifier or safe_chunk_base.endswith("_context.txt") or "_context_part" in safe_chunk_base:
                     inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
-                    if not os.path.exists(inc_path):
-                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
-                    display_name = f"{Path(inc).parent.as_posix()}/{safe_chunk_base}" if "/" in inc else safe_chunk_base
                 else:
-                    display_name = chunk_identifier
-                    if "prompts/" in chunk_identifier:
-                        inc_path = Path(ctx.paths["prompts_dir"]).joinpath(safe_chunk_base).as_posix()
-                    elif "diffs/" in chunk_identifier or chunk_identifier.endswith("_diffs.txt"):
-                        inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
-                        if not os.path.exists(inc_path):
-                            inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
-                    elif "contexts/" in chunk_identifier or chunk_identifier.endswith("_context.txt"):
-                        inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
-                    else:
-                        inc_path = ctx.resolve_path(inc)
-                        if not os.path.exists(inc_path):
-                            inc_path = Path(ctx.paths["artifacts_base"]).joinpath(inc).as_posix()
+                    inc_path = ctx.resolve_path(inc)
+                    if not os.path.exists(inc_path):
+                        inc_path = Path(ctx.paths["artifacts_base"]).joinpath(inc).as_posix()
+
                 try:
                     content = ctx.vfs.read(inc_path, is_absolute_artifact=True)
                     if content is not None:
                         text_blocks.append(f"--- {display_name} ---\n{content}\n\n")
+                        resolved_files.append(display_name)
+                    elif is_diff_target or "diffs/" in chunk_identifier or safe_chunk_base.endswith("_diffs.txt"):
+                        text_blocks.append(f"--- {display_name} (NO PENDING DIFFS) ---\n[Working tree clean. No uncommitted changes detected.]\n\n")
                         resolved_files.append(display_name)
                     else:
                         verbose_debug = f"--- {display_name} (NOT FOUND) ---\n"
