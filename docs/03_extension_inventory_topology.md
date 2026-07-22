@@ -80,15 +80,24 @@ These are fully built and compliant extensions currently operating within the sy
 * **Data Containment:** Ephemeral stream contexts.
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
-
 ### J. Freshdesk Support (`engine_freshdesk.py`)
-* **Status:** Active Extension (SDK V2).
-* **Role:** Support ticket synchronization, reply management, and agent triaging.
-* **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `~/.insetu/data/freshdesk.db`
+* **Status:** Active Extension (SDK V2)[cite: 1].
+* **Role:** Support ticket synchronization, reply management, and agent triaging[cite: 1].
+* **Dependencies (`__depends__`):** `None`[cite: 1]
+* **Data Containment:** `~/.insetu/data/freshdesk.db`[cite: 1]
 * **Injection Surfaces:**
-    * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets.
-    * UI Hooks: Primary Edit Sub-navigation Tab injection.
+    * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets[cite: 1].
+    * UI Hooks: Primary Edit Sub-navigation Tab injection[cite: 1].
+
+### K. Automation Hooks (`engine_hooks.py`)
+* **Status:** Active Extension (SDK V2)[cite: 2].
+* **Role:** IFTTT-style local command automation triggered by VFS events[cite: 2].
+* **Dependencies (`__depends__`):** `None`[cite: 2]
+* **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table) and `workers.db` execution logs[cite: 2].
+* **Injection Surfaces:**
+    * VFS Hooks: `@hooks.on('post_file_save')`, `@hooks.on('post_file_delete')`, `@hooks.on('vfs_transaction_committed')`[cite: 2].
+    * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`)[cite: 2].
+    * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities[cite: 2].
 
 ---
 
@@ -115,6 +124,9 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `release` | `git` | None |
 | `favorites` | `<Micro-Kernel>` | None (Currently) |
 | `skills` | `<Micro-Kernel>` | None (Currently) |
+| `term` | `<Micro-Kernel>` | None (Currently) |
+| `freshdesk` | `<Micro-Kernel>` | None (Currently) |
+| `hooks` | `<Micro-Kernel>` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
 > For **Soft Dependencies** (opportunistic cross-talk, such as the `git` extension asking the `tracker` extension for recent tickets to populate a UI), extensions MUST use the Event Bus. This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing.

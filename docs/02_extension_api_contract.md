@@ -18,7 +18,7 @@ Extensions must be capable of relying on one another (e.g., a `zotero_sync` exte
 * **The JS Bootloader (app.js):** The frontend mirrors the backend DAG. ES6 imports guarantee that parent modules load and register their API surfaces before child extensions attempt to attach to them.
 ## 2. The Backend Injection Surface (Python Event Bus)
 Extensions cannot hardcode themselves into `engine_gather.py` or the `bridge_sync` transaction loop. They must subscribe to OS lifecycle events.
-* **The `HookRegistry`:** The core OS will expose an `insetu.hooks` namespace where extensions register callbacks. Hooks can be triggered synchronously via `hooks.emit` or asynchronously via `hooks.emit_background`.
+* **The `HookRegistry`:** The core OS will expose an `insetu.hooks` namespace where extensions register callbacks via `@hooks.on(event_name, priority=50)`. Hooks execute in ascending priority order and can be triggered synchronously via `hooks.emit` or asynchronously via `hooks.emit_background`.
 * `@hooks.on('mutate_workspace_config')`: Allows an extension to intercept the configuration load phase and dynamically inject virtual `sub_buckets`, append to `managed_dirs`, or define isolated extension payloads in `virtual_contexts` (e.g., the Kanban tracker injecting its `.tracker` sub-bucket).
 The RAG compiler and Cartographer will then natively process these environments without bespoke logic.
 * `@hooks.on('compile_contexts')`: Fires during the RAG context compilation phase. Extensions receive the `manifest` dictionary and should inject their custom `.txt` artifacts natively, bypassing the core Cartographer sweep.
