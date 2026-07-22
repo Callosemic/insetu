@@ -40,7 +40,7 @@ import{LitElement,html,css}from'lit';export class YenvuiTabs extends LitElement{
             color: var(--text);
         }
         .tab-btn.active {
-            color: #fff;
+            color: var(--pane-bg, #ffffff);
             background: var(--intent-primary);
         }
         .content-container {
