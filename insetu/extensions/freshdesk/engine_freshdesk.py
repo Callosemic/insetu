@@ -259,8 +259,11 @@ def get_freshdesk_conversations(ctx, ticket_id):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @freshdesk_bp.route('tickets/ignored', methods=['GET'])
 def get_ignored_tickets(ctx):
-    rows = ctx.db.get_all("freshdesk_ignored")
-    return jsonify([r['ticket_id'] for row in rows])
+    try:
+        rows = ctx.db.get_all("freshdesk_ignored")
+        return jsonify([r['ticket_id'] for row in rows])
+    except Exception:
+        return jsonify([])
 
 @freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'])
 def ignore_freshdesk_ticket(ctx, ticket_id):

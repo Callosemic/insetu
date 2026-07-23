@@ -786,10 +786,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
             <!-- New Task Modal -->
             <insetu-modal 
                 ?open=${this._modals?.new} 
+                ?fullscreen=${true}
                 titleText="Create New Ticket"
                 @modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
 
-                <div slot="body">
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
                         ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: this.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}

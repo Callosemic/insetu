@@ -68,21 +68,12 @@ export async function generateDiffs(force = false) {
                         diffJobError: null
                     });
                 window.dispatchEvent(new CustomEvent('git-diffs-refreshed'));
-
-                const deltas = statusData.artifact.manifest_deltas || {};
-                const currentManifest = { ...AppStore.getState().manifest };
-
-                Object.keys(currentManifest).forEach(k => {
-                    if (k.endsWith('_diffs.txt')) {
-                        const repo = currentManifest[k].meta?.repo;
-                        if (!targetReposRes || targetReposRes.includes(repo)) {
-                            delete currentManifest[k];
-                        }
-                    }
-                });
-
-                Object.assign(currentManifest, deltas);
-                AppStore.setState({ manifest: currentManifest });
+                // Hydrate the global manifest explicitly so downstream extensions (like Flow) reflect the new batch chunks
+                window.inSetu.api.workspace('manifest?t=' + Date.now())
+                    .then(mRes => mRes.ok ? mRes.json() : null)
+                    .then(newManifest => {
+                        if (newManifest) AppStore.setState({ manifest: newManifest });
+                    });
             },
             onError: (err) => {
                 AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
@@ -597,16 +588,15 @@ ${(() => {
                     `)}
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${this.pushModalOpen} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column;">
+            <insetu-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
-                    <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;" @change=${(e) => this.gitPushMessage = e.target.value}>
+                    <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold; flex-shrink: 0;" @change=${(e) => this.gitPushMessage = e.target.value}>
                         <option value="">-- Type a custom message below --</option>
                         ${this.pushChangelogs.map(cl => html`<option value="${cl.title}" ?selected=${this.gitPushMessage === cl.title}>${cl.title}</option>`)}
                     </select>
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
-                    <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; height: 80px; width: 100%; box-sizing: border-box;"></textarea>
+                    <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
                 </div>
                 <div slot="footer">
                     <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
@@ -926,9 +916,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     `;
                 })}
             </div>
-
-            <insetu-modal ?open=${this.branchModalOpen} titleText="Branch Management: ${this.activeRepo}" @modal-closed=${() => this.branchModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+            <insetu-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @modal-closed=${() => this.branchModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Switch to Existing Branch:</label>
                         <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => {
@@ -951,9 +940,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     </div>
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${this.previewModalOpen} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+            <insetu-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
 
                     ${(() => {
@@ -978,8 +966,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
             </insetu-modal>
-            <insetu-modal ?open=${this.remoteModalOpen} titleText="Connect Remote: ${this.activeRemoteRepo}" @modal-closed=${() => this.remoteModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+            <insetu-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @modal-closed=${() => this.remoteModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${this.remoteConflict ? html`
                         <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
                             <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">⚠️ Remote Contains Unmerged Work</h4>

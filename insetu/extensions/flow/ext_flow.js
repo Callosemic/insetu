@@ -91,6 +91,7 @@ export class InSetuExtFlow extends InSetuElement {
             this.searchQuery = state.searchQuery;
         });
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
+        this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
         this.subscribe(AppStore, state => {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.allRepos = state.allRepos || [];

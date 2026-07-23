@@ -396,9 +396,8 @@ export class InSetuExtResearch extends InSetuElement {
                     ` : ''}
                 </div>
             </insetu-modal>
-
-            <insetu-modal ?open=${this.newJobModalOpen} titleText="New Research Job" @modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+            <insetu-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; box-sizing: border-box;' })}
                     <div style="display: flex; gap: 10px;">
                         ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}

@@ -500,8 +500,8 @@ export class InSetuExtCitations extends InSetuElement {
     _renderModals() {
         return html`
             <!-- Attach Modal -->
-            <insetu-modal ?open=${!!this.activeAttachCitation} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
-                <div slot="body">
+            <insetu-modal ?open=${!!this.activeAttachCitation} ?fullscreen=${true} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <select style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" .value=${this.attachForm.repo} @change=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.target.value, bucket: 'None' } })); }}>
                             ${this.allRepos.map(r => html`<option value="${r}">${r}</option>`)}
@@ -527,10 +527,9 @@ export class InSetuExtCitations extends InSetuElement {
                     </div>
                 </div>
             </insetu-modal>
-
             <!-- Edit Modal -->
-            <insetu-modal ?open=${!!this.activeEditCitation} titleText="Edit: [@${this.activeEditCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
-                <div slot="body">
+            <insetu-modal ?open=${!!this.activeEditCitation} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 12px;">
                         <div style="flex: 1;">
                             <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Type:</label>
@@ -637,8 +636,8 @@ export class InSetuExtCitationsModals extends InSetuElement {
         const results = q ? window.inSetu.utils.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
 
         return html`
-            <insetu-modal ?open=${this.citationModalOpen} titleText="Insert Citation" @modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 300px;">
+            <insetu-modal ?open=${this.citationModalOpen} ?fullscreen=${true} titleText="Insert Citation" @modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <input type="text" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" .value=${this.citationSearchQuery} @input=${(e) => CitationStore.setState({ citationSearchQuery: e.target.value })}>
                     <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
                         ${!q ? html`<span style="color:var(--text-muted); font-style:italic;">Type to search...</span>` : results.length === 0 ? html`<span style="color:var(--text-muted); font-style:italic;">No citations found.</span>` : results.map(c => {

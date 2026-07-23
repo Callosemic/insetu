@@ -65,8 +65,8 @@ export class InSetuExtFormatModals extends InSetuElement {
 
     render() {
         return html`
-            <insetu-modal ?open=${this.formatModalOpen} titleText="Publish Document" @modal-closed=${() => FormatStore.setState({ formatModalOpen: false })}>
-                <div slot="body">
+            <insetu-modal ?open=${this.formatModalOpen} ?fullscreen=${true} titleText="Publish Document" @modal-closed=${() => FormatStore.setState({ formatModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
                     <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;"
                         .value=${this.formatMode} @change=${e => FormatStore.setState({ formatMode: e.target.value })}>

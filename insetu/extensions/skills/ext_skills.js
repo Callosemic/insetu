@@ -486,9 +486,10 @@ export class InSetuExtSkills extends InSetuElement {
             </div>
             <insetu-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'train'}
+                ?fullscreen=${true}
                 titleText="⏱️ Practice Session: ${this.selectedItem?.name}"
                 @modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Quality Rating Scale (SM-2 Algorithm)</label>
                         <select .value=${this.formScore} @change=${(e) => SkillsStore.setState({ formScore: parseInt(e.target.value, 10) })}>
@@ -534,9 +535,10 @@ export class InSetuExtSkills extends InSetuElement {
             </insetu-modal>
             <insetu-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'edit'}
+                ?fullscreen=${true}
                 titleText="✏️ Edit Skill Architecture & Structure"
                 @modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Track / Skill Title</label>
@@ -571,9 +573,10 @@ border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delet
             </insetu-modal>
             <insetu-modal
                 ?open=${this.newSkillModalOpen}
+                ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
                 @modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
-                <form slot="body" @submit=${this._handleCreateSkill} style="display: flex; flex-direction: column; gap: 15px;">
+                <form slot="body" @submit=${this._handleCreateSkill} style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Item Name / Track Title</label>

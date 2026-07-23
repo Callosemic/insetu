@@ -49,12 +49,24 @@ export class InSetuExtFreshdesk extends InSetuElement {
     };
 
     static styles = [sharedStyles];
-
     constructor() {
         super();
         this.tickets = [];
         this.loadingMsg = null;
         this.activeJobId = null;
+        this.selectedTicket = null;
+        this.isModalOpen = false;
+        this.conversations = [];
+        this.conversationsLoading = false;
+        this.myAgentId = null;
+        this.filterAssignee = 'Self + Unassigned';
+        this.filterStatus = 'Open';
+        this.replyContent = '';
+        this.editorFocused = false;
+        this.ignoredTickets = [];
+        this.syncLedger = [];
+        this.contiguousCount = 0;
+        this.lastFetchedPage = 0;
     }
     connectedCallback() {
         super.connectedCallback();

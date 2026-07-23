@@ -49,7 +49,7 @@ def term_stream(ws, workspace_id):
     """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
     from insetu.utils_core import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
-        ws.close(message="403 Forbidden: Terminal extension disabled.")
+        ws.close()
         return
     if not SUPPORT_PTY:
         ws.send("PTY is not supported on this host operating system (Windows natively requires pywinpty).\r\n")

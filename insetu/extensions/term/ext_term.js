@@ -47,21 +47,33 @@ export class InSetuExtTerm extends InSetuElement {
     }
     onWorkspaceChanged(newWorkspaceId) {
         if (this._ws) {
-            // Silently close: Nullify the onclose handler to prevent it from logging the error
             this._ws.onclose = null;
             this._ws.close();
             this._ws = null;
         }
-        if (this._term) this._term.reset();
-        if (this.isConnected) this._connectWebSocket();
+        if (this._term) {
+            try { this._term.dispose(); } catch (e) {}
+            this._term = null;
+        }
+
+        // Defer complete terminal recreation to avoid race conditions during DOM teardown
+        setTimeout(() => {
+            if (this.isConnected) {
+                const container = this.shadowRoot.getElementById('terminal-container');
+                if (container) container.innerHTML = '';
+                this._initTerminal();
+            }
+        }, 150);
     }
     _handleResize = () => {
         // Only calculate geometry if the component is actively visible on the screen
-        if (this._fitAddon && this.offsetParent !== null && this.isConnected) {
-            this._fitAddon.fit();
-            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-                this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
-            }
+        if (this._fitAddon && this._term && this.offsetParent !== null && this.isConnected) {
+            try {
+                this._fitAddon.fit();
+                if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                    this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+                }
+            } catch (e) {}
         }
     };
     _initTerminal() {

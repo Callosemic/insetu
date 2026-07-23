@@ -4,9 +4,9 @@ import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
-
 export const HooksStore = createExtensionStore('Hooks', {
     rules: [],
+    logs: [],
     loading: false,
     ruleModalOpen: false,
     editingRule: null,
@@ -74,12 +74,11 @@ export class InSetuExtHooks extends InSetuElement {
         this.allRepos = [];
         this.targetConfigs = [];
     }
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(HooksStore, state => {
-            this.rules = state.rules;
-            this.logs = state.logs;
+            this.rules = state.rules || [];
+            this.logs = state.logs || [];
             this.loading = state.loading;
             this.ruleModalOpen = state.ruleModalOpen;
             this.editingRule = state.editingRule;
@@ -250,13 +249,13 @@ export class InSetuExtHooks extends InSetuElement {
                     </div>
                 </div>
             </div>
-
             <insetu-modal  
                 ?open=${this.ruleModalOpen} 
+                ?fullscreen=${true}
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
                 @modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
 
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Rule Friendly Title</label>
                         ${bindStoreInput(HooksStore, 'ruleForm.name', this.ruleForm.name, { placeholder: 'e.g., Auto-Compile UI Assets on Save' })}

@@ -251,6 +251,13 @@ def _background_generate_diffs(ctx, target_repos=None):
     msg = f"Analyzing Git trees for {', '.join(target_repos)}..." if target_repos else "Analyzing Git trees across sister repositories..."
     ctx.jobs.update_progress(msg)
     files, manifest_deltas = generate_diff_context(ctx.workspace_id, target_repos)
+
+    # Notify the ecosystem (e.g., Flow) that diffs have updated so dependent batches can recompile
+    if files:
+        from insetu.hooks import hooks
+        diff_filenames = [f['filename'] for f in files]
+        hooks.emit('compile_contexts', manifest=ctx.manifest, workspace_id=ctx.workspace_id, is_full_sweep=False, touched_buckets=diff_filenames)
+
     return {"message": "Diff generation complete.", "artifact": {"files": files, "target_repos": target_repos, "manifest_deltas": manifest_deltas}}
 
 @git_bp.route('diffs/generate', methods=['POST'])
