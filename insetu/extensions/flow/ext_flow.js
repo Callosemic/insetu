@@ -319,7 +319,7 @@ export class InSetuExtFlow extends InSetuElement {
             </div>
                     <insetu-modal  
                             ?open=${this._editModalOpen} 
-                            fullscreen
+                            ?fullscreen=${true}
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
                             @modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
@@ -457,8 +457,8 @@ export class InSetuExtFlow extends InSetuElement {
                                     }}>✅ Confirm Selection</button>
                             </div>
                     </insetu-modal>
-                    <insetu-modal ?open=${this._viewModalOpen} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
-                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
+                    <insetu-modal ?open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
+                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0;">
                                     ${this._viewingBatch ? html`
                                             <div>
                                                     <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>

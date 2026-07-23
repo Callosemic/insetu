@@ -364,7 +364,8 @@ export class InSetuExtHooksActions extends InSetuElement {
     render() {
         return html`
             <button title="New Rule" @click=${() => {
-                const el = document.querySelector('insetu-ext-hooks');
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
                 if (el) el.openCreateModal(null);
             }}>➕</button>
         `;
@@ -383,7 +384,8 @@ window.ExtensionRegistry.registerExtension('hooks', {
             intent: (data) => data.enabled ? 'warning' : 'success',
             order: 10,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-hooks');
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
                 if (el) await el.toggleRule(data);
             }
         },
@@ -395,7 +397,8 @@ window.ExtensionRegistry.registerExtension('hooks', {
             intent: 'highlight',
             order: 15,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-hooks');
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
                 if (el) await el.executeRule(data.id);
             }
         },
@@ -407,7 +410,8 @@ window.ExtensionRegistry.registerExtension('hooks', {
             intent: 'primary',
             order: 20,
             onClick: (data, e) => {
-                const el = document.querySelector('insetu-ext-hooks');
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
                 if (el) el.openCreateModal(data);
             }
         },
@@ -419,7 +423,8 @@ window.ExtensionRegistry.registerExtension('hooks', {
             intent: 'danger',
             order: 30,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-hooks');
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
                 if (el) await el.deleteRule(data.id);
             }
         }

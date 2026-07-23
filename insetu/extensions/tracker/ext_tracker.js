@@ -94,11 +94,19 @@ css`
     :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
     :host-context([data-theme="light"]) .task-tag { background: #e2e8f0; color: #0f172a; }
     .board-columns { display: flex; gap: 15px; }
-    @container (max-width: 800px) {
-        .board-columns { flex-direction: column; }
-    }
     .column { flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px; }
     .column h3 { margin-top: 0; font-size: 1.1rem; }
+
+    @container (max-width: 800px) {
+        .board-columns { flex-direction: column; gap: 25px; }
+        .column { background: transparent; padding: 0; }
+        .column h3 { 
+            font-size: 1.2rem; 
+            border-bottom: 1px solid var(--border); 
+            padding-bottom: 5px; 
+            margin-bottom: 15px; 
+        }
+    }
     .editor-wrapper {
         flex: 1;
         min-height: 0;
@@ -356,7 +364,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                             <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._bucketsExpanded = !this._bucketsExpanded}>
                                                 🗂️ ${repo} ${this._bucketsExpanded ? '▼' : '▶'}
                                             </span>
-                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @pill-toggled=${(e) => {
+                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @yenvui-pill-toggled=${(e) => {
                                                 e.stopPropagation();
                                                 const { id, active } = e.detail;
                                                 let newSet = new Set(this.pinnedBuckets);
@@ -372,9 +380,9 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                                 }
                                                 KanbanStore.setState({ pinnedBuckets: newSet });
                                             }}>
-                                                <insetu-filter-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></insetu-filter-pill>
+                                                <yenvui-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></yenvui-pill>
                                                 ${visibleBuckets.map(b => html`
-                                                    <insetu-filter-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></insetu-filter-pill>
+                                                    <yenvui-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></yenvui-pill>
                                                 `)}
                                             </div>
                                         </div>
@@ -387,15 +395,15 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                 <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._tagsExpanded = !this._tagsExpanded}>
                                     🏷️ Tags ${this._tagsExpanded ? '▼' : '▶'}
                                 </span>
-                                <insetu-filter-group
+                                <yenvui-filter-group
                                     label=""
                                     .allowAll=${true}
                                     .items=${(this._tagsExpanded ? tagsArray : Array.from(this.pinnedTags).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
                                     .activeItems=${Array.from(this.pinnedTags)}
-                                    @filter-changed=${(e) => {
+                                    @yenvui-filter-changed=${(e) => {
                                         KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
                                     }}>
-                                </insetu-filter-group>
+                                </yenvui-filter-group>
                             </div>
                         ` : ''}
                 </div>
@@ -799,12 +807,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     this._isSaving = false;
                 }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
             </insetu-modal>
-
             <!-- Edit Task Modal -->
             <insetu-modal 
                 ?open=${this._modals?.edit} 
                 titleText="Edit Ticket"
-                maxWidth="100vw"
+                ?fullscreen=${true}
                 @modal-closing=${this._handleModalClosing}
                 @modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
 

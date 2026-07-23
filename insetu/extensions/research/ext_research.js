@@ -373,8 +373,7 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-
-            <insetu-modal ?open=${!!activeItem} titleText="Research Item Preview" maxWidth="95vw" @modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
+            <insetu-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%; padding: 0;">
                     ${activeItem ? html`
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">

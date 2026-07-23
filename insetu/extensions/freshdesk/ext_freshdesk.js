@@ -333,7 +333,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
     }
     render() {
         return html`
-            <insetu-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" maxWidth="100vw" ?fullscreen=${true} @modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
+            <insetu-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; height: 100%;">
                     <!-- Metadata Header -->
                     <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
