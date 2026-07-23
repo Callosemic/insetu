@@ -238,8 +238,10 @@ def check_javascript_files():
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
     hex_color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}\b')
     clear_timeout_pattern = re.compile(r'\bclearTimeout\s*\(')
-
     # New Rules
+    raw_layout_ban_pattern = re.compile(r'class=[\'"].*\bfile-card\b.*[\'"]')
+    legacy_modal_ban_pattern = re.compile(r'class=[\'"].*\b(modal-panel|modal-content|fullscreen-modal)\b.*[\'"]')
+    legacy_modal_maxwidth_pattern = re.compile(r'<insetu-modal[^>]*\bmaxWidth=[\'"](?:100vw|95vw)[\'"]')
     dom_annihilation_pattern = re.compile(r'(?:\.innerHTML|\[[\'"]innerHTML[\'"]\])\s*=\s*([\'"`][\'"`])')
     bracket_bypass_pattern = re.compile(r'\[[\'"](value|checked|classList)[\'"]\]')
     floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
@@ -261,6 +263,7 @@ def check_javascript_files():
     subtab_leak_pattern = re.compile(r"localStorage\.getItem\([\'\"]insetu_subtab_")
     sticky_header_pattern = re.compile(r'class=[\'"]sticky-header[\'"]')
     media_layout_pattern = re.compile(r'@media\s*\([^)]*(?:width|height)[^)]*\)')
+    dom_action_query_pattern = re.compile(r'document\.querySelector\([\'"]#?(sub-|insetu-ext-)[^\'"]+[\'"]\)')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -277,6 +280,11 @@ def check_javascript_files():
                     report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
                 if is_extension and "extends InSetuElement" in full_content and "static get extensionName()" not in full_content:
                     report_violation("EXTENSION_NAME_GETTER_MANDATE", filepath, 1, "Components extending InSetuElement must define 'static get extensionName()' to ensure deterministic API routing.")
+                if is_extension:
+                    classes_extending = re.findall(r'class\s+([A-Za-z0-9_]+)\s+extends\s+(?:InSetuElement|LitElement)\b', full_content)
+                    for cls_name in classes_extending:
+                        if not re.search(r'customElements\.define\s*\(\s*[\'"][^\'"]+[\'"]\s*,\s*' + re.escape(cls_name) + r'\b', full_content):
+                            report_violation("CUSTOM_ELEMENT_DEFINE_MANDATE", filepath, 1, f"Class '{cls_name}' extends InSetuElement/LitElement but is missing a customElements.define registration.")
                 if "innerHTML =" in full_content and file != "ext_citations.js" and is_extension:
                     report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
 
@@ -321,6 +329,13 @@ def check_javascript_files():
                     # 6. Surgical DOM Annihilation Ban
                     if dom_annihilation_pattern.search(line):
                         report_violation("SURGICAL_DOM_MANDATE", filepath, line_num, "DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.")
+                    # 3. Rule A: Raw Layout Element Ban
+                    if raw_layout_ban_pattern.search(line):
+                        report_violation("RAW_LAYOUT_BAN", filepath, line_num, "Raw layout class '.file-card' detected. Migrate to <insetu-card> or <yenvui-card> primitives.")
+                    if legacy_modal_ban_pattern.search(line):
+                        report_violation("LEGACY_MODAL_BAN", filepath, line_num, "Legacy modal layout class detected. Migrate to <yenvui-modal> or <insetu-modal> primitives.")
+                    if legacy_modal_maxwidth_pattern.search(line):
+                        report_violation("MODAL_FULLSCREEN_PROPERTY_MANDATE", filepath, line_num, "Deprecated maxWidth viewport attribute on <insetu-modal>. Use declarative ?fullscreen=${true} property instead.")
 
                     # 7. Floating Globals / UDF Bleed
                     if is_extension and floating_global_pattern.match(line.strip()):
@@ -404,10 +419,12 @@ def check_javascript_files():
                     if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):
                         if "tagName.startsWith" not in line:
                             report_violation("HARDCODED_EXTENSION_EVICTION", filepath, line_num, "Hardcoded extension element tags found in reload sequence. Utilize stateless prefix checks to preserve Inversion of Control.")
-
                     # 27. Container Query Mandate
                     if is_extension and media_layout_pattern.search(line):
                         report_violation("CONTAINER_QUERY_MANDATE", filepath, line_num, "Responsive layout via @media detected. Extensions must utilize @container queries to remain layout-agnostic and resilient within dynamic host slots.")
+                    # 28. Imperative DOM Query Ban
+                    if is_extension and dom_action_query_pattern.search(line):
+                        report_violation("DOM_QUERY_IN_ACTION_BAN", filepath, line_num, "Imperative document.querySelector on extension elements detected. Use Custom Events or Store actions instead.")
 if __name__ == "__main__":
     print("============================================================")
     print("      inSetu Architectural Fitness Functions Validator      ")

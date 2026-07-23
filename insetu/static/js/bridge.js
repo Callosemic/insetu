@@ -222,11 +222,10 @@ export class InSetuExtBridge extends InSetuElement {
                     BridgeStore.setState({ activeBridgeJobId: null });
                     const rawData = statusData.message || "";
                     let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
                     // Format raw log text into elegant inSetu cards
                     safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE (.*?) ===/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
-                    safeData = safeData.replace(/^Targeting: (.*?)$/gm, '<div class="file-card" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;"><div style="font-weight: bold; color: var(--intent-primary); font-family: var(--font-mono); font-size: 1.05rem; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px;">🎯 $1</div><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6;">');
-                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.$/gm, '</div></div>');
+                    safeData = safeData.replace(/^Targeting: (.*?)$/gm, '<yenvui-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono);">');
+                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.$/gm, '</div></yenvui-card>');
                     safeData = safeData.replace(/^=== PULSE .*? COMPLETE ===/gm, '');
                     // Embellish semantic tags
                     safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
@@ -261,18 +260,14 @@ export class InSetuExtBridge extends InSetuElement {
                     if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
                         const savedFiles = BridgeStore.getState().getActiveFiles();
                         BridgeStore.setState({ cells: [] });
-
-                        // Optimistically inject any Genesis Patch files directly into the UI manifest
-                        const appStoreState = AppStore.getState();
-                        savedFiles.forEach(f => {
-                            if (appStoreState.optimisticallyAddFileToManifest) {
-                                appStoreState.optimisticallyAddFileToManifest(f);
-                            }
-                        });
-
                         // Alert listening extensions (like the Tracker) that files have been modified
                         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
                             savedFiles.forEach(f => window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', f));
+                        }
+
+                        // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
+                        if (window.inSetu.sys.executeSystemCompile) {
+                            window.inSetu.sys.executeSystemCompile();
                         }
                     }
                 },
@@ -331,7 +326,7 @@ export class InSetuExtBridge extends InSetuElement {
                 <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
                     <!-- THE COMBOBOX HEADER -->
                     <div data-custom-dropdown="true" style="display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; position: relative; z-index: 10; flex-shrink: 0; background: ${this._dropdownOpen ? 'var(--pane-bg)' : 'var(--bg)'}; border-bottom: ${this._dropdownOpen ? 'none' : '1px solid var(--border)'}; transition: background 0.2s;">
-                        <div class="toolbar-row" style="justify-content: space-between; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('insetu-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
+                        <div class="toolbar-row" style="justify-content: space-between; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('yenvui-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
                             <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
                                 <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0;">${this._dropdownOpen ? '▲' : '▼'}</span>
                                 ${this._activeCellId ? (() => {
@@ -343,14 +338,14 @@ export class InSetuExtBridge extends InSetuElement {
                                     return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;">&lrm;${shortFile}&lrm; <span style="color: var(--text-muted); font-weight: normal; margin-left: 5px;">(${chunkIndex}/${totalChunks})</span></span>`;
                                 })() : html`<span style="color: var(--text-muted); opacity: 0.6; font-weight: normal;">Select a patch...</span>`}
                             </span>
-                            <insetu-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0} @click=${e => e.stopPropagation()}>
+                            <yenvui-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0} @click=${e => e.stopPropagation()}>
                                 <insetu-repo-filter
                                     label="📌 Repos:"
                                     .repos=${this.allRepos}
                                     .activeRepos=${Array.from(this.pinnedRepos)}
                                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                                 </insetu-repo-filter>
-                            </insetu-filter-dropdown>
+                            </yenvui-filter-dropdown>
                         </div>
                         <div style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: 100%; left: 0; right: 0; height: calc(100dvh - 170px); overflow-y: auto; background: var(--pane-bg); border-bottom: 1px solid var(--border); border-top: 1px dashed var(--border); padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-direction: column;">
                             ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}

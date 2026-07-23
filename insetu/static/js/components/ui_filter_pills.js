@@ -1,158 +1,8 @@
+import '../../vendor/yenvui/js/pill.js';
+import '../../vendor/yenvui/js/filter-group.js';
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-export class InSetuFilterPill extends LitElement {
-    static properties = {
-        pillId: { type: String },
-        labelText: { type: String },
-        active: { type: Boolean },
-        small: { type: Boolean },
-        variant: { type: String } // 'standard' or 'text'
-    };
-static styles = [
-        sharedStyles,
-        css`
-            button {
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 0.75rem;
-                border: 1px solid var(--border);
-                cursor: pointer;
-                font-weight: bold;
-                margin: 0;
-                transition: background 0.2s, color 0.2s, border-color 0.2s;
-            }
-            button.small {
-                padding: 2px 6px;
-                font-size: 0.7rem;
-            }
 
-            /* Standard Variant (Repos/Tags) */
-            button.variant-standard.active {
-                background: var(--btn);
-                color: #fff;
-            }
-            button.variant-standard.inactive {
-                background: transparent;
-                color: var(--text);
-            }
-            /* Text Variant (Sub-buckets) */
-            button.variant-text {
-                background: transparent;
-                font-weight: normal;
-                border-radius: 0;
-                border-left: none;
-                border-right: none;
-                border-top: 1px solid transparent;
-                border-bottom: 1px solid transparent;
-            }
-            button.variant-text.inactive {
-                color: var(--text-muted);
-            }
-            button.variant-text.inactive:hover {
-                color: var(--text);
-            }
-            button.variant-text.active {
-                border-top: 1px solid var(--text);
-                border-bottom: 1px solid var(--text);
-                color: var(--text);
-                font-weight: bold;
-                background: transparent;
-            }
-            /* E-Ink overrides */
-            :host-context([data-theme="e-ink"]) button.variant-standard.active {
-                background: #000000 !important;
-                color: #ffffff !important;
-                border: 2px solid #000000 !important;
-                box-shadow: 3px 3px 0 #9ca3af !important;
-            }
-            :host-context([data-theme="e-ink"]) button.variant-text.active {
-                border-top: 2px solid #000000 !important;
-                border-bottom: 2px solid #000000 !important;
-                border-left: none !important;
-                border-right: none !important;
-            }
-        `
-    ];
-
-    constructor() {
-        super();
-        this.variant = 'standard';
-    }
-
-    render() {
-        return html`
-            <button 
-                class="${this.active ? 'active' : 'inactive'} ${this.small ? 'small' : ''} variant-${this.variant}"
-                @click=${this._onClick}>
-                ${this.labelText}
-            </button>
-        `;
-    }
-
-    _onClick(e) {
-        this.dispatchEvent(new CustomEvent('pill-toggled', {
-            detail: { id: this.pillId, active: !this.active },
-            bubbles: true,
-            composed: true
-        }));
-    }
-}
-export class InSetuFilterGroup extends LitElement {
-    static properties = {
-        label: { type: String },
-        items: { type: Array }, // [{id, label}]
-        activeItems: { type: Array },
-        allowAll: { type: Boolean }
-    };
-
-    static styles = [
-        sharedStyles,
-        css`
-            .wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-            .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
-        `
-    ];
-
-    _handleToggle(e) {
-        const { id, active } = e.detail;
-        let newSet = new Set(this.activeItems);
-        
-        if (this.allowAll && id === 'ALL') {
-            newSet.clear();
-            newSet.add('ALL');
-        } else {
-            newSet.delete('ALL');
-            if (active) newSet.add(id);
-            else newSet.delete(id);
-            if (newSet.size === 0 && this.allowAll) newSet.add('ALL');
-        }
-        
-        this.dispatchEvent(new CustomEvent('filter-changed', {
-            detail: { activeItems: Array.from(newSet) },
-            bubbles: true,
-            composed: true
-        }));
-    }
-    render() {
-        const activeSet = new Set(this.activeItems);
-        const visibleItems = this.items || [];
-        const showAllPill = this.allowAll;
-
-        return html`
-            <div class="wrap" @pill-toggled=${this._handleToggle}>
-                ${this.label ? html`<span class="label">${this.label}</span>` : ''}
-                ${showAllPill ? html`<insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeSet.has('ALL')}></insetu-filter-pill>` : ''}
-                ${visibleItems.map(item => html`
-                    <insetu-filter-pill 
-                        pillId=${item.id} 
-                        labelText=${item.label} 
-                        ?active=${activeSet.has(item.id)}>
-                    </insetu-filter-pill>
-                `)}
-            </div>
-        `;
-    }
-}
 export class InSetuRepoFilter extends LitElement {
     static properties = {
         label: { type: String },
@@ -168,7 +18,6 @@ export class InSetuRepoFilter extends LitElement {
             .label { font-size: 0.85rem; font-weight: bold; color: var(--text); opacity: 0.8; margin-right: 5px; white-space: nowrap; user-select: none; }
         `
     ];
-
     _handleRepoToggle(e) {
             e.stopPropagation();
             const { id, active } = e.detail;
@@ -185,7 +34,7 @@ export class InSetuRepoFilter extends LitElement {
             else newSet.delete(id);
             if (newSet.size === 0) newSet.add('ALL');
         }
-        
+
         this.dispatchEvent(new CustomEvent('repo-filter-changed', {
             detail: { activeRepos: Array.from(newSet) },
             bubbles: true,
@@ -201,79 +50,17 @@ export class InSetuRepoFilter extends LitElement {
             <div class="wrap">
                 ${this.label ? html`<span class="label">${this.label}</span>` : ''}
 
-                <div @pill-toggled=${this._handleRepoToggle} style="display: contents;">
-                    <insetu-filter-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></insetu-filter-pill>
+                <div @yenvui-pill-toggled=${this._handleRepoToggle} style="display: contents;">
+                    <yenvui-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></yenvui-pill>
                     ${visibleExtra.map(ex => html`
-                        <insetu-filter-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></insetu-filter-pill>
+                        <yenvui-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></yenvui-pill>
                     `)}
                     ${visibleRepos.map(repo => html`
-                        <insetu-filter-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></insetu-filter-pill>
+                        <yenvui-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></yenvui-pill>
                     `)}
                 </div>
             </div>
         `;
     }
 }
-export class InSetuFilterDropdown extends LitElement {
-    static properties = {
-        filterText: { type: String },
-        open: { type: Boolean, reflect: true },
-        hasFilters: { type: Boolean }
-    };
-    static styles = [sharedStyles, css`
-        :host { display: block; position: static; }
-        .container { display: flex; align-items: center; }
-        .panel {
-            display: none; position: absolute; top: 100%; left: 0; right: 0;
-            z-index: 100; padding: 15px 20px; background: var(--pane-bg); border-bottom: 1px solid var(--border);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-            max-height: 50vh; overflow-y: auto;
-        }
-        :host([open]) .panel { display: flex; flex-direction: column; }
-        .btn {
-            padding: 4px 8px; margin: 0; font-size: 0.85rem; white-space: nowrap;
-            max-width: 250px; overflow: hidden; text-overflow: ellipsis;
-            background: transparent; border: 1px solid transparent; color: var(--text);
-        }
-        :host([open]) .btn { background: var(--input-bg); border-color: var(--border); }
-    `];
-    constructor() {
-        super();
-        this.open = false;
-        this.filterText = 'Filters';
-        this.hasFilters = false;
-        this._handleOutsideClick = this._handleOutsideClick.bind(this);
-    }
-    connectedCallback() {
-        super.connectedCallback();
-        document.addEventListener('click', this._handleOutsideClick);
-    }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        document.removeEventListener('click', this._handleOutsideClick);
-    }
-    _handleOutsideClick(e) {
-        if (!this.open) return;
-        const path = e.composedPath();
-        if (!path.includes(this)) {
-            this.open = false;
-        }
-    }
-    render() {
-        return html`
-            <div class="container">
-                <button class="system-action-btn" title=${this.filterText} @click=${() => this.open = !this.open} style="opacity: ${this.hasFilters ? '1' : '0.5'};">
-                    ${this.hasFilters ? '🔻' : '▽'}
-                </button>
-                <div class="panel">
-                    <slot></slot>
-                </div>
-            </div>
-        `;
-    }
-}
-
-customElements.define('insetu-filter-pill', InSetuFilterPill);
-customElements.define('insetu-filter-group', InSetuFilterGroup);
 customElements.define('insetu-repo-filter', InSetuRepoFilter);
-customElements.define('insetu-filter-dropdown', InSetuFilterDropdown);

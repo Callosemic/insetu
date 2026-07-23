@@ -10,6 +10,8 @@ import './components/ui_system_settings.js';
 import './components/ui_filter_pills.js';
 import './components/ui_primitives.js';
 import './components/ui_editor.js';
+import './components/ui_app_shell.js';
+import '../vendor/yenvui/js/toast.js';
 import './gather.js';
 import './config.js';
 export function getFlattenedBuckets(repoDir, includeSystem = false) {
@@ -134,67 +136,6 @@ window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
         else activeModal.style.display = 'none';
     }
 });
-// Global File Card Swipe/Hover/Click Actions Manager
-let cardTouchStartX = 0;
-let cardTouchStartY = 0;
-
-document.addEventListener('touchstart', (e) => {
-    const card = e.target.closest('.file-card');
-    if (card) {
-        cardTouchStartX = e.changedTouches[0].screenX;
-        cardTouchStartY = e.changedTouches[0].screenY;
-    }
-}, { passive: true });
-
-document.addEventListener('touchend', (e) => {
-    const card = e.target.closest('.file-card');
-    if (card) {
-        const touchEndX = e.changedTouches[0].screenX;
-        const touchEndY = e.changedTouches[0].screenY;
-        const diffX = cardTouchStartX - touchEndX;
-        const diffY = Math.abs(cardTouchStartY - touchEndY);
-
-        // Swipe Left (Reveal Actions)
-        if (diffX > 40 && diffY < 40) {
-            document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
-            card.classList.add('show-actions');
-        } 
-        // Swipe Right (Hide Actions)
-        else if (diffX < -40 && diffY < 40) {
-            card.classList.remove('show-actions');
-        }
-    }
-}, { passive: true });
-
-document.addEventListener('click', (e) => {
-    const card = e.target.closest('.file-card');
-
-    // 1. Click outside any card: dismiss all active menus
-    if (!card) {
-        document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
-        return;
-    }
-
-    // 2. Click inside the actions area: let the button process normally
-    if (e.target.closest('.file-actions') || e.target.closest('.cit-card-actions')) {
-        return;
-    }
-    const rect = card.getBoundingClientRect();
-    // 3. Click on right 25% edge: toggle actions, block card click
-    const triggerZone = rect.width * 0.25;
-    if (e.clientX > rect.right - triggerZone) {
-        e.preventDefault();
-        e.stopPropagation();
-        const isShowing = card.classList.contains('show-actions');
-        document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
-        if (!isShowing) card.classList.add('show-actions');
-        return;
-    }
-
-    // 4. Click elsewhere on the card (like the title): dismiss actions and let click pass through
-    document.querySelectorAll('.file-card.show-actions').forEach(c => c.classList.remove('show-actions'));
-}, { capture: true });
-
 window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
     const el = e.target;
     const start = el.selectionStart;
@@ -215,11 +156,13 @@ document.addEventListener('input', (e) => {
 window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
 window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
 window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => {
-    const el = document.querySelector('insetu-ext-tracker');
+    const shell = document.querySelector('insetu-app-shell');
+    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
     if (el) el._saveNewTask();
 });
 window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => {
-    const el = document.querySelector('insetu-ext-tracker');
+    const shell = document.querySelector('insetu-app-shell');
+    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
     if (el) el._saveEditTask();
 });
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
@@ -256,12 +199,12 @@ export function autoWireSettingsSchemas() {
                     };
                     manifest.settingsActions.push(action);
                 }
-
                 // Push directly to the registry to ensure it renders in the DOM
                 if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
                     const actionToRegister = manifest.settingsActions.find(a => a.id === `${extName}_generic_settings`);
                     if (actionToRegister) {
-                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick);
+                        const isCoreConfig = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
+                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick, isCoreConfig ? 'System' : 'Extensions');
                     }
                 }
             }
@@ -309,21 +252,7 @@ setInterval(() => {
     });
 }, 100);
 import './api.js'; // Mount explicit API client and network interceptors
-// Global listener to track active tab routing per-tenant
-document.addEventListener('click', (e) => {
-    const tab = e.target.closest('.tab');
-    if (tab) {
-        let tabId = tab.dataset.id;
-        if (!tabId && tab.getAttribute('onclick')) {
-            const match = tab.getAttribute('onclick').match(/'([^']+)'/);
-            if (match) tabId = match[1];
-        }
-        if (tabId) {
-            const ws = window.inSetu.utils.getActiveWorkspace();
-            localStorage.setItem(`insetu_tab_${ws}`, tabId);
-        }
-    }
-});
+
 // Restore UI State on Load
 window.addEventListener('DOMContentLoaded', async () => {
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
@@ -336,10 +265,9 @@ window.addEventListener('DOMContentLoaded', async () => {
             window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
             // Synchronize branding tokens while we have the config
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.getElementById('global-status-bar');
+            const statusBar = document.querySelector('insetu-status-bar');
             if (statusBar) {
-                statusBar.setAttribute('data-base-title', config.instance_title || "inSetu Developer OS");
-                updateDefaultStatus();
+                statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
             }
         }
     } catch (e) {
@@ -353,13 +281,8 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     const ws = window.inSetu.utils.getActiveWorkspace();
     const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
-
-    const targetTabEl = document.querySelector(`.tab[data-id="${savedTab}"]`) || document.querySelector(`.tab[onclick*="${savedTab}"]`);
-    const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
-    if (!requiredExt || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(requiredExt))) {
-        switchTab(null, savedTab);
-    } else {
-        switchTab(null, 'context');
+    if (window.inSetu.sys && window.inSetu.sys.switchTab) {
+        window.inSetu.sys.switchTab(null, savedTab);
     }
 });
 // Evade iOS PWA suspension timeout races by clearing the panic switch immediately upon JS evaluation
@@ -398,11 +321,7 @@ async function executeWorkspaceSwap(key, title) {
     sessionStorage.setItem('insetu_workspace', key);
     localStorage.setItem('insetu_workspace', key);
     window.ACTIVE_EXTENSIONS = [];
-    document.querySelectorAll('[data-ext]').forEach(el => {
-        const extName = el.dataset.ext;
-        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
-        if (!isCore) el.remove();
-    });
+
     Object.values(window.inSetu.stores).forEach(store => {
         if (store.getState().clearPayload) store.getState().clearPayload();
         if (store.getState().resetState) store.getState().resetState();
@@ -431,81 +350,6 @@ async function loadWorkspaces() {
     }
 }
 loadWorkspaces();
-function switchTab(event, tabId) {
-    if (typeof event === 'string') {
-        tabId = event;
-        event = null;
-    }
-
-    const targetContent = document.getElementById('tab-' + tabId);
-    const isAlreadyActive = targetContent && targetContent.classList.contains('active');
-
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
-    if (event && event.currentTarget) {
-        event.currentTarget.classList.add('active');
-    } else {
-        const targetTab = document.querySelector(`.tab[onclick*="${tabId}"], .tab[data-id="${tabId}"]`);
-        if (targetTab) targetTab.classList.add('active');
-    }
-    if (targetContent) targetContent.classList.add('active');
-    localStorage.setItem('insetu_tab', tabId);
-    if (isAlreadyActive && event !== null) {
-        // User manually tapped an already active tab: trigger a lazy refresh
-        const activeSub = targetContent.querySelector('.sub-tab.active');
-        if (activeSub) {
-            const subId = activeSub.id.replace('st-', '');
-            switchSubTab(subId, true); // Pass forceRefresh flag
-        } else {
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:force-refresh', tabId);
-            }
-        }
-        return; // Break standard initialization to avoid double-firing
-    }
-    // Restore the last active sub-tab for this view statelessly
-    const savedSub = localStorage.getItem('insetu_subtab_' + tabId);
-    const savedSubEl = document.getElementById('st-' + savedSub);
-    if (savedSubEl && savedSubEl.style.display !== 'none') {
-        switchSubTab(savedSub, false, true);
-    } else if (targetContent) {
-        const firstSub = targetContent.querySelector('.sub-tab:not([style*="display: none"])');
-        if (firstSub) switchSubTab(firstSub.id.replace('st-', ''), false, true);
-    }
-
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
-    }
-}
-function switchSubTab(subId, forceRefresh = false, isProgrammatic = false) {
-    const activeTabContent = document.querySelector('.tab-content.active');
-    if (!activeTabContent) return;
-    const targetSt = document.getElementById('st-' + subId);
-    const isAlreadyActive = targetSt && targetSt.classList.contains('active');
-
-    // Prevent programmatic tab hydration from violently triggering a full system compile
-    const actualForceRefresh = forceRefresh || (isAlreadyActive && !forceRefresh && !isProgrammatic);
-
-    activeTabContent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
-    activeTabContent.querySelectorAll('.sub-tab-content').forEach(c => c.classList.remove('active'));
-    const parentTabId = activeTabContent.id.replace('tab-', '');
-    localStorage.setItem('insetu_subtab_' + parentTabId, subId);
-    if (targetSt) targetSt.classList.add('active');
-    const targetSub = document.getElementById('sub-' + subId);
-    if (targetSub) targetSub.classList.add('active');
-
-    // Declarative Layout Slot Management: Update visibility states for registered sub-navigation actions
-    const actionsContainer = activeTabContent.querySelector('.sub-tabs-actions');
-    if (actionsContainer) {
-        Array.from(actionsContainer.children).forEach(act => {
-            act.style.display = act.dataset.subId === subId ? '' : 'none';
-        });
-    }
-    if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-        window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: parentTabId, subId: subId, forceRefresh: actualForceRefresh });
-    }
-}
 let lastRefreshed = null;
 
 function updateRefreshText() {
@@ -519,69 +363,40 @@ function updateRefreshText() {
     const el = document.getElementById('refresh-time');
     if (el) el.innerText = `Refreshed ${text}`;
 }
-export function updateDefaultStatus() {
-    const bar = document.getElementById('global-status-bar');
-    if (!bar) return;
-    const baseTitle = bar.getAttribute('data-base-title') || bar.getAttribute('data-default') || "inSetu Developer OS";
-    const repos = AppStore.getState().pinnedRepos;
-
-    let defaultText = baseTitle;
-    if (repos && repos.size > 0 && !repos.has('ALL')) {
-        defaultText = `${baseTitle} | [${Array.from(repos).join(', ')}]`;
-    }
-
-    bar.setAttribute('data-default', defaultText);
-    if (!bar.getAttribute('data-is-temp')) {
-        bar.innerText = defaultText;
-        bar.title = defaultText;
-        bar.style.color = 'var(--text)';
-    }
-}
-
-AppStore.subscribe(state => state.pinnedRepos, () => updateDefaultStatus());
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
-    const bar = document.getElementById('global-status-bar');
-    if (!bar) return;
-    bar.setAttribute('data-is-temp', 'true');
-    bar.innerText = msg;
-    bar.title = msg;
-    bar.style.color = isError ? 'var(--intent-danger)' : 'var(--text)';
-    if (timeout) {
-        setTimeout(() => {
-            if (bar.innerText === msg) {
-                bar.removeAttribute('data-is-temp');
-                updateDefaultStatus();
-            }
-        }, timeout);
-    }
+    window.dispatchEvent(new CustomEvent('insetu-status-update', { detail: { msg, timeout, isError } }));
 }
-
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
-window.alert = function(msg) {
-    const container = document.getElementById('toast-container') || (function() {
-        const c = document.createElement('div');
-        c.id = 'toast-container';
-        c.style.cssText = 'position: fixed; bottom: 40px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; pointer-events: none;';
-        document.body.appendChild(c);
-        return c;
-    })();
+let activeToasts = [];
+let toastIdCounter = 0;
+
+window.alert = function(msg, intent = 'danger') {
+    let container = document.querySelector('yenvui-toast-container');
+    if (!container) {
+        container = document.createElement('yenvui-toast-container');
+        document.body.appendChild(container);
+
+        // Listen for internal dismissals from the yenVUI component
+        container.addEventListener('yenvui-toast-dismissed', (e) => {
+            activeToasts = activeToasts.filter(t => t.id !== e.detail.id);
+            container.toasts = [...activeToasts];
+        });
+    }
+
     // Anti-spam constraint: Prevent stacking identical active toasts
-    if (Array.from(container.children).some(t => t.innerText === msg || t.textContent === msg)) {
+    if (activeToasts.some(t => t.message === msg)) {
         return;
     }
 
-    const toast = document.createElement('div');
-    toast.style.cssText = 'background: var(--input-bg); color: var(--text); border-left: 4px solid var(--intent-danger); padding: 12px 15px; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); font-family: var(--font-mono); font-size: 0.85rem; max-width: 400px; white-space: pre-wrap; word-break: break-word; pointer-events: auto; transition: opacity 0.3s; cursor: pointer;';
-    toast.innerText = msg;
-    toast.title = "Click to dismiss";
-
-    toast.onclick = () => toast.remove();
-    container.appendChild(toast);
+    const id = `toast_${toastIdCounter++}`;
+    const newToast = { id, message: msg, intent };
+    activeToasts = [...activeToasts, newToast];
+    container.toasts = [...activeToasts];
 
     setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
+        activeToasts = activeToasts.filter(t => t.id !== id);
+        if (container) container.toasts = [...activeToasts];
     }, 6000);
 };
 export async function executeWorkspaceMutation(path, payload, options = {}) {
@@ -745,13 +560,6 @@ async function simulatePanic() {
 async function performSoftRefresh() {
     const currentWs = window.inSetu.utils.getActiveWorkspace();
 
-    // Pre-emptively unmount all optional extension DOM components to silence their lifecycles before network fetches
-    document.querySelectorAll('[data-ext]').forEach(el => {
-        const extName = el.dataset.ext;
-        const isCore = ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
-        if (!isCore) el.remove();
-    });
-
     // Dynamically iterate over all mounted global stores to trigger resets
     Object.values(window.inSetu.stores).forEach(store => {
         if (store.getState().clearPayload) store.getState().clearPayload();
@@ -801,25 +609,10 @@ async function performSoftRefresh() {
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.getElementById('global-status-bar');
+            const statusBar = document.querySelector('insetu-status-bar');
             if (statusBar) {
-                statusBar.setAttribute('data-base-title', config.instance_title || "inSetu Developer OS");
-                updateDefaultStatus();
+                statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
             }
-            // Clear out dynamic sub-tab navigation tracks and extension views to prepare for a clean redraw
-            document.querySelectorAll('.sub-tabs').forEach(track => track.replaceChildren());
-
-            // Inversion of Control: Clean up views statelessly by parsing custom element conventions 
-            // inside the main content panes, keeping the kernel 100% blind to extension names.
-            document.querySelectorAll('.tab-content *').forEach(el => {
-                if (el.tagName.startsWith('INSETU-EXT-') || el.tagName === 'INSETU-VFS-EXPLORER') {
-                    el.remove();
-                }
-            });
-
-            // Unmount extension-contributed top-level tabs completely so the layout manager can rebuild them fresh
-            document.querySelectorAll('.tab[data-ext]').forEach(el => el.remove());
-
             // Flush old memory states only for deactivated extensions to protect core layout definitions
             if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
                 window.ExtensionRegistry._manifests.forEach((ext, extName) => {
@@ -830,14 +623,6 @@ async function performSoftRefresh() {
                     }
                 });
             }
-            // Toggle visibility parameters across core structural tab headers
-            document.querySelectorAll('.tab').forEach(tabEl => {
-                const extName = tabEl.dataset.ext;
-                const isCore = !extName || ['bridge', 'gather', 'config', 'files', 'context', 'edit'].includes(extName);
-                const isActive = isCore || window.ACTIVE_EXTENSIONS.includes(extName);
-                tabEl.style.display = isActive ? '' : 'none';
-            });
-
             // Rebuild Settings Actions based strictly on active extensions
             if (window.ExtensionRegistry) {
                 window.ExtensionRegistry._settingsActions = [];
@@ -849,7 +634,7 @@ async function performSoftRefresh() {
                                 // Skip generic settings, autoWireSettingsSchemas handles them below
                                 if (act.id === `${extName}_generic_settings`) return;
                                 let sectionName = 'Extensions';
-                                if (manifest.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'Workspace';
+                                if (isCore || manifest.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'System';
                                 else if (manifest.name === 'Issue Tracker') sectionName = 'Tracker';
                                 else if (manifest.name === 'Skills Tracker') sectionName = 'Practice';
                                 window.ExtensionRegistry.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
@@ -890,16 +675,9 @@ async function performSoftRefresh() {
             // Trust the background watchdog/metronome to maintain SOTU differential syncs; 
             // no need to thrash the compiler heavily on every UI tab swap.
         }
-
         // 4. Hydrate active DOM views using native routing
-let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
-const targetTabEl = document.querySelector(`.tab[data-id="${targetTab}"]`);
-const requiredExt = targetTabEl ? targetTabEl.dataset.ext : null;
-
-if (requiredExt && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(requiredExt)) {
-    targetTab = 'context';
-}
-if (typeof switchTab === 'function') switchTab(null, targetTab);
+        let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
+        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, targetTab);
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {
@@ -993,9 +771,6 @@ if (d.config_missing) {
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 window.inSetu.sys = window.inSetu.sys || {};
 window.inSetu.ui = window.inSetu.ui || {};
-
-window.inSetu.sys.switchTab = switchTab;
-window.inSetu.sys.switchSubTab = switchSubTab;
 window.inSetu.sys.fullRefresh = fullRefresh;
 window.inSetu.sys.performSoftRefresh = performSoftRefresh;
 window.inSetu.sys.simulatePanic = simulatePanic;
@@ -1004,7 +779,5 @@ window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
 window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
 window.inSetu.sys.loadWorkspaces = loadWorkspaces;
 window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
-
 window.inSetu.ui.setGlobalStatus = setGlobalStatus;
-window.inSetu.ui.updateDefaultStatus = updateDefaultStatus;
 

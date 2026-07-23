@@ -25,39 +25,13 @@
             <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='Rebooting Engine...'; setTimeout(()=>window.location.reload(), 3000);" style="color: #ef4444; text-decoration: underline; font-weight: bold;">[Boot Recovery OS]</a>
         </p>
     </div>
-
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
     </script>
-    <div class="top-bar">
-        <div class="tabs" id="main-tabs-container">
-            <div class="tab" onclick="window.inSetu.sys.switchTab(event, 'context')">Context</div>
-            <div class="tab" onclick="window.inSetu.sys.switchTab(event, 'edit')">Edit</div>
-        </div>
-        <div style="display: flex; align-items: center; justify-content: flex-end;">
-            <insetu-system-settings></insetu-system-settings>
-        </div>
-    </div>
-    <div id="tab-context" class="tab-content">
-        <div class="sub-tabs-bar">
-            <div class="sub-tabs"></div>
-            <div class="sub-tabs-actions" style="display: flex; gap: 8px; align-items: center;"></div>
-        </div>
-        <div class="screen active"></div>
-    </div>
 
-    <div id="tab-edit" class="tab-content">
-        <div class="sub-tabs-bar">
-            <div class="sub-tabs"></div>
-            <div class="sub-tabs-actions" style="display: flex; gap: 8px; align-items: center;"></div>
-        </div>
-        <div class="screen active"></div>
-    </div>
+    <insetu-app-shell></insetu-app-shell>
     <insetu-file-modal id="file-modal"></insetu-file-modal>
-
-
-
-    <div id="global-status-bar" class="bottom-bar" data-default="{{ title }}">{{ title }}</div>
+    <insetu-status-bar baseTitle="{{ title }}"></insetu-status-bar>
 
     <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

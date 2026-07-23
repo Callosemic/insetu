@@ -60,11 +60,12 @@ export class InSetuElement extends LitElement {
     static properties = {
         workspaceId: { type: String }
     };
-
     constructor() {
         super();
         this.workspaceId = window.inSetu.utils.getActiveWorkspace();
         this._storeUnsubs = [];
+        this._managedIntervals = [];
+        this._managedListeners = [];
     }
     get extName() {
         // 1. Explicit static class definition (Strict OOP)
@@ -122,11 +123,29 @@ export class InSetuElement extends LitElement {
             }
         };
     }
-
     subscribe(store, selectorOrListener, listener = undefined) {
         const unsub = listener ? store.subscribe(selectorOrListener, listener) : store.subscribe(selectorOrListener);
         this._storeUnsubs.push(unsub);
         return unsub;
+    }
+
+    registerInterval(callback, delayMs) {
+        const id = setInterval(callback, delayMs);
+        this._managedIntervals.push(id);
+        return id;
+    }
+
+    registerGlobalListener(eventType, targetNode, callback, options = false) {
+        targetNode.addEventListener(eventType, callback, options);
+        this._managedListeners.push({ eventType, targetNode, callback, options });
+    }
+
+    dispatch(eventName, detail = null) {
+        window.dispatchEvent(new CustomEvent(eventName, { 
+            detail, 
+            bubbles: true, 
+            composed: true 
+        }));
     }
 
     connectedCallback() {
@@ -141,11 +160,18 @@ export class InSetuElement extends LitElement {
             });
         }
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
         this._storeUnsubs.forEach(unsub => unsub());
         this._storeUnsubs = [];
+
+        this._managedIntervals.forEach(id => clearInterval(id));
+        this._managedIntervals = [];
+
+        this._managedListeners.forEach(({ eventType, targetNode, callback, options }) => {
+            targetNode.removeEventListener(eventType, callback, options);
+        });
+        this._managedListeners = [];
     }
 
     onWorkspaceChanged(newWorkspaceId) {}

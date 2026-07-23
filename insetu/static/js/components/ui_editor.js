@@ -318,13 +318,12 @@ if (window.ExtensionRegistry) {
     window.inSetu.settingsSchemas['editor'] = [
         { id: 'insetu_md_links', label: 'Enable Interactive MD Links', type: 'boolean', default: true, description: 'Renders Markdown links as clickable icons in the editor.' }
     ];
-
     window.ExtensionRegistry.registerExtension('editor', {
         name: "Editor Configuration",
         version: "1.0.0",
         settingsActions: [
             {
-                id: 'editor_settings',
+                id: 'editor_generic_settings',
                 label: 'Editor Settings',
                 icon: '📝',
                 onClick: () => {

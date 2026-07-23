@@ -205,8 +205,8 @@ export class InSetuExtConfig extends InSetuElement {
         if (!this.configForm) return '';
         const repos = this.configForm.target_repos || [];
         return repos.map((repo, idx) => html`
-            <div class="file-card" style="display: flex; flex-direction: column; gap: 10px; background: var(--bg);">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
+            <yenvui-card intentcolor="var(--intent-highlight)" style="display: block; margin-bottom: 15px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px;">
                     <div style="flex: 1; display: flex; align-items: center; gap: 10px;">
                         <span style="font-size: 1.2rem;">📦</span>
                         <input type="text" .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="font-weight: bold; width: 60%; background: var(--input-bg);" @input=${(e) => { repo.repo_dir = e.target.value; this.requestUpdate(); }}>
@@ -290,7 +290,7 @@ export class InSetuExtConfig extends InSetuElement {
                         ${this.renderSubBuckets(repo, idx)}
                     </div>
                 </div>
-            </div>
+            </yenvui-card>
         `);
     }
     render() {
@@ -417,7 +417,7 @@ export class InSetuExtConfig extends InSetuElement {
             <insetu-modal 
                 ?open=${this._isOpen} 
                 titleText="Workspace Configuration" 
-                maxWidth="100vw" 
+                ?fullscreen=${true} 
                 @modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
                 <div slot="body">${bodyContent}</div>
 

@@ -2,7 +2,6 @@ import { html, css } from 'lit';
 import { InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 import { AppStore } from '../store.js';
-
 export class InSetuSystemSettings extends InSetuElement {
     static properties = {
         menuOpen: { type: Boolean },
@@ -13,6 +12,7 @@ export class InSetuSystemSettings extends InSetuElement {
         settingsActions: { type: Array }
     };
     static styles = [sharedStyles, css`
+        :host { display: contents; }
         :host-context([data-theme="e-ink"]) .menu-btn {
             border: 1px solid transparent !important;
             box-shadow: none !important;
@@ -120,14 +120,14 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                 ` : ''}
             </div>
-            <insetu-modal ?open=${this.modalOpen} titleText="System Settings & Extensions" @modal-closed=${() => this.modalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; overflow-y: auto; margin-bottom: 20px;">
+            <insetu-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="System Settings & Extensions" @modal-closed=${() => this.modalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto; margin-bottom: 20px;">
                     ${sortedSections.map(section => html`
                         <div style="font-weight: bold; font-size: 0.85rem; color: var(--intent-primary); margin-top: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">${section}:</div>
                         ${groupedActions[section].map(act => html`
                             <button class="btn-sm" style="background: var(--input-bg); color: var(--text); border: 1px solid var(--border); text-align: left; padding: 10px 15px; font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 10px; font-weight: bold; transition: background 0.2s; width: 100%;"
                                 onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'"
-                                @click=${() => { this.modalOpen = false; act.callback(); }}>
+                                @click=${() => { act.callback(); }}>
                                 <span style="font-size: 1.2rem;">${act.icon}</span> <span>${act.label}</span>
                             </button>
                         `)}
@@ -151,7 +151,6 @@ export class InSetuSystemSettings extends InSetuElement {
     }
 }
 customElements.define('insetu-system-settings', InSetuSystemSettings);
-
 export class InSetuWorkspaceEditor extends InSetuElement {
     static properties = {
         open: { type: Boolean, reflect: true },
@@ -163,7 +162,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         _newWsId: { type: String },
         _newWsRoot: { type: String }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: contents; }`];
     constructor() {
         super();
         this.open = false;
@@ -290,8 +289,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         if (!this.open) return '';
 
         return html`
-            <insetu-modal ?open=${this.open} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${() => { this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
+            <insetu-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${() => { this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Unique Name / ID</label>
@@ -306,9 +305,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                         </div>
                         <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin: 0; font-size: 0.9rem; border-radius: 4px;">➕ Provision & Mount Isolated Workspace</button>
                     </form>
-
-                    <insetu-modal ?open=${this._showHostBrowser} titleText="📁 Select Local System Directory" @modal-closed=${() => this._showHostBrowser = false}>
-                        <div slot="body" style="display: flex; flex-direction: column; gap: 12px; max-height: 60vh;">
+                    <insetu-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @modal-closed=${() => this._showHostBrowser = false}>
+                        <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
                                 <button type="button" class="btn-sm" style="background: var(--intent-neutral); margin:0;" @click=${this._goUpHostDir}>Parent Dir</button>
                                 <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; flex: 1;">${this._hostCurrentPath}</span>
@@ -369,7 +367,7 @@ export class InSetuGenericSettingsModal extends InSetuElement {
         schema: { type: Array },
         formData: { type: Object }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: contents; }`];
 
     constructor() {
         super();
@@ -453,10 +451,10 @@ export class InSetuGenericSettingsModal extends InSetuElement {
             <insetu-modal 
                 ?open=${this.open} 
                 titleText=${title} 
-                maxWidth="600px" 
+                ?fullscreen=${true} 
                 @modal-closed=${() => this.open = false}>
 
-                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${this.schema.map(field => {
                         const val = this.formData[field.id] !== undefined ? this.formData[field.id] : field.default;
                         let inputHtml = '';

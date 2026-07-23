@@ -337,13 +337,14 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
                         ledger_events = [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
                         db_conn.execute("DELETE FROM vfs_event_log")
                         db_conn.commit()
-
-                        # Trigger cartographer instantly before compiling
+                        # Decouple Cartographer: Dispatch asynchronously so it doesn't block Gather
                         touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
                         if touched_repos:
-                            from insetu.cartographer import map_repositories
-                            try: map_repositories(workspace_id=workspace_id, target_repos=touched_repos)
-                            except Exception: pass
+                            import uuid, json
+                            from insetu.workers import submit_immediate_job
+                            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+                            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=workspace_id)
+
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing
                     changed_files = [e["filepath"] for e in ledger_events]
@@ -381,11 +382,11 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
                 print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
                 needs_full_compile = True
         if needs_full_compile or forced_repos:
-            update_immediate_job_status(job_id, 'processing', "Mapping repositories (Cartographer)...", workspace_id=workspace_id)
-            try:
-                from insetu.cartographer import map_repositories
-                map_repositories(workspace_id, target_repos=None if needs_full_compile else forced_repos)
-            except Exception: pass
+            # Fire Cartographer asynchronously to prevent bottlenecking the Context Compiler
+            import uuid, json
+            from insetu.workers import submit_immediate_job
+            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": None if needs_full_compile else forced_repos}), workspace_id=workspace_id)
 
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
             update_immediate_job_status(job_id, 'processing', f"Compiling context payloads ({sweep_label})...", workspace_id=workspace_id)

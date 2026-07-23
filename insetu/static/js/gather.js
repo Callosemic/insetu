@@ -39,6 +39,10 @@ export async function executeQuickPack(targetDir, recursive = false, specificFil
         // Open the physical file that was just written to disk natively
         viewAndCopy(filename);
 
+        // Fetch the updated manifest to render the new Quick-Pack in the UI list
+        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+        if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+
         window.inSetu.ui.setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
     } catch (e) {
         alert("Error creating quick-pack: " + e.message);
@@ -81,6 +85,10 @@ export async function clearQuickPacks() {
     try {
         const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
         if (!res.ok) throw new Error("Failed to clear quick-packs.");
+
+        // Fetch the updated manifest to clear the Quick-Packs from the UI list
+        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+        if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
 
         window.inSetu.ui.setGlobalStatus("✅ Clipboard cleared!", 2000);
     } catch (e) {
@@ -340,7 +348,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return chunks && chunks.length > 1;
                 },
                 onClick: (data, e) => {
-                    const gatherEl = document.querySelector('insetu-ext-gather');
+                    const shell = document.querySelector('insetu-app-shell');
+                    const gatherEl = shell ? shell.shadowRoot.querySelector('insetu-ext-gather') : document.querySelector('insetu-ext-gather');
                     if (gatherEl) {
                         gatherEl.activeChunkFile = data.filepath;
                         gatherEl.chunkModalOpen = true;

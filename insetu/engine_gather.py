@@ -281,18 +281,15 @@ def _process_vfs_ledger(workspace_id="default"):
     # Clear processed events
     db_conn.execute("DELETE FROM vfs_event_log WHERE timestamp <= ?", (last_mut,))
     db_conn.commit()
-
-    # Pre-flight Topology Sync: Inject Cartographer exactly here 
-    # so it natively limits to touched repos without stampeding.
+    # Decouple Cartographer: Run asynchronously so it doesn't block the background Context Gatherer
     touched_repos = list(set(e["filepath"].split('/')[0] for e in events if '/' in e["filepath"]))
-    if touched_repos:
-        from insetu.cartographer import map_repositories
-        try:
-            map_repositories(workspace_id=workspace_id, target_repos=touched_repos)
-        except Exception: pass
-
     import uuid, json
     from insetu.workers import submit_immediate_job
+
+    if touched_repos:
+        cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+        submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=workspace_id)
+
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
     args_json = json.dumps({
         "force_full": False, 

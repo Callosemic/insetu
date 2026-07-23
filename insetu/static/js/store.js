@@ -48,27 +48,6 @@ export const AppStore = createStore(
             dirtyDiffRepos: new Set(["ALL"]),
             cachedDiffFiles: null,
 
-            optimisticallyAddFileToManifest: (filepath) => {
-                const { manifest } = get();
-                const updatedManifest = { ...manifest };
-                const repoDir = filepath.split('/')[0];
-                const defaultBucket = `${repoDir}_context.txt`;
-
-                if (updatedManifest[defaultBucket]) {
-                    const bucketCopy = { ...updatedManifest[defaultBucket], files: [...updatedManifest[defaultBucket].files] };
-                    if (!bucketCopy.files.includes(filepath)) {
-                        bucketCopy.files.push(filepath);
-                    }
-                    updatedManifest[defaultBucket] = bucketCopy;
-                } else {
-                    updatedManifest[defaultBucket] = {
-                        files: [filepath],
-                        meta: { title: repoDir, domain: "Workspaces", desc: "Context payload." }
-                    };
-                }
-                set({ manifest: updatedManifest });
-            },
-
             resetState: () => set({
                 globalBrowsePath: [],
                 currentBrowsePath: [],
@@ -147,56 +126,8 @@ window.inSetu.extensions.Registry = {
         this.uiHooks[zone].push(callback);
     },
     compileLayout: function() {
-        // Synchronously purge dynamic extension tabs and view content panels to avoid duplicates
-        document.querySelectorAll('.tab[data-ext], .sub-tab[data-ext], .sub-tab-content[data-ext]').forEach(el => el.remove());
-        document.querySelectorAll('.sub-tabs-actions').forEach(track => track.replaceChildren());
-
-        const activeConfigs = [];
-        this._manifests.forEach((config, extName) => {
-            const isCore = ['bridge', 'gather', 'config', 'files'].includes(extName);
-            if (isCore || (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(extName))) {
-                activeConfigs.push({ extName, config });
-            }
-        });
-        // Pass 1: Primary Navigation Tabs (Ensures parent containers exist before sub-tabs mount)
-        activeConfigs.forEach(({ extName, config }) => {
-            if (config.layoutSlots) {
-                config.layoutSlots.forEach(slotDef => {
-                    const cleanSlot = slotDef.slot.replace('slots:', '');
-                    if (cleanSlot === 'primary-navigation') {
-                        this.registerTab(slotDef.id, slotDef.label, extName, slotDef.component);
-                    }
-                });
-            }
-        });
-
-        // Pass 2: Sub-Tabs, Actions, and Globals (Now guaranteed to find their parents)
-        activeConfigs.forEach(({ extName, config }) => {
-            if (config.layoutSlots) {
-                const sortedSlots = [...config.layoutSlots].sort((a, b) => (a.order || 99) - (b.order || 99));
-                sortedSlots.forEach(slotDef => {
-                    const cleanSlot = slotDef.slot.replace('slots:', '');
-                    if (cleanSlot === 'sub-navigation') {
-                        this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
-                    } else if (cleanSlot === 'sub-navigation-actions') {
-                        this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
-                    } else if (cleanSlot === 'global') {
-                        let container = document.getElementById('global-extensions-container');
-                        if (!container) {
-                            container = document.createElement('div');
-                            container.id = 'global-extensions-container';
-                            container.style.display = 'contents';
-                            document.body.appendChild(container);
-                        }
-                        if (!container.querySelector(slotDef.component)) {
-                            const el = document.createElement(slotDef.component);
-                            el.dataset.ext = extName;
-                            container.appendChild(el);
-                        }
-                    }
-                });
-            }
-        });
+        // Let the declarative App Shell handle the DOM rendering seamlessly
+        window.dispatchEvent(new Event('insetu-layout-recompile'));
         window.dispatchEvent(new Event('insetu-settings-actions-updated'));
     },
     registerExtension: function(extName, config) {
@@ -222,29 +153,7 @@ window.inSetu.extensions.Registry = {
                 if (aSlot !== 'primary-navigation' && bSlot === 'primary-navigation') return 1;
                 return (a.order || 99) - (b.order || 99);
             });
-            sortedSlots.forEach(slotDef => {
-                const cleanSlot = slotDef.slot.replace('slots:', '');
-                if (cleanSlot === 'primary-navigation') {
-                    this.registerTab(slotDef.id, slotDef.label, extName, slotDef.component);
-                } else if (cleanSlot === 'sub-navigation') {
-                    this.registerSubTab(slotDef.targetParent, slotDef.id, slotDef.label, extName, slotDef.component, slotDef.order);
-                } else if (cleanSlot === 'sub-navigation-actions') {
-                    this.registerSubTabAction(slotDef.targetParent, slotDef.targetSub, extName, slotDef.component, slotDef.order);
-                } else if (cleanSlot === 'global') {
-                    let container = document.getElementById('global-extensions-container');
-                    if (!container) {
-                        container = document.createElement('div');
-                        container.id = 'global-extensions-container';
-                        container.style.display = 'contents';
-                        document.body.appendChild(container);
-                    }
-                    if (!container.querySelector(slotDef.component)) {
-                        const el = document.createElement(slotDef.component);
-                        el.dataset.ext = extName;
-                        container.appendChild(el);
-                    }
-                }
-            });
+            // Layout is now bound exclusively to AppShell recompilation updates
         }
         if (config.settingsActions) {
             config.settingsActions.forEach(act => {
@@ -260,8 +169,12 @@ window.inSetu.extensions.Registry = {
     executeUIHook: function(zone, data) {
         if (this.uiHooks[zone]) {
             for (let cb of this.uiHooks[zone]) {
-                const res = cb(data);
-                if (res) return res;
+                try {
+                    const res = cb(data);
+                    if (res) return res;
+                } catch (e) {
+                    console.error(`[inSetu Event Bus] Error executing UI hook for zone '${zone}':`, e);
+                }
             }
         }
         return null;

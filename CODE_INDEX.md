@@ -7,14 +7,15 @@ insetu/
 ├── .gitignore                      # [comment required]
 ├── .gitkeep                        # [comment required]
 ├── CODE_INDEX.md                   # [comment required]
-├── docs/                           # [comment required]
-│   ├── 01_engineering_standards.md # [comment required]
-│   ├── 02_extension_api_contract.md # [comment required]
-│   ├── 03_extension_inventory_topology.md # [comment required]
-│   ├── 04_ui_design_standards.md   # [comment required]
-│   ├── 05_extension_developer_guide.md # [comment required]
-│   ├── ADR_INDEX.md                # [comment required]
-│   ├── adrs/                       # [comment required]
+├── docs/                           # Internal Documentation and Architecture.
+│   ├── 00_index.md                 # Master Index for inSetu.
+│   ├── 01_engineering_standards.md # Engineering standards and audit guardrails.
+│   ├── 02_extension_api_contract.md # Extension architecture and API contracts.
+│   ├── 03_extension_inventory_topology.md # Living inventory of active/planned extensions.
+│   ├── 04_ui_design_standards.md   # UI/UX design standards and guardrails.
+│   ├── 05_extension_developer_guide.md # Extension developer guide ("Pit of Success").
+│   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
+│   ├── adrs/                       # Architectural Decision Records.
 │   │   ├── 0002-workspace-physics-and-extensions.md # [comment required]
 │   │   ├── 0004-asynchronous-vfs-commit-pipeline.md # [comment required]
 │   │   ├── 0006-tenant-isolated-compilation-locks.md # [comment required]
@@ -32,8 +33,9 @@ insetu/
 │   │   ├── 0021_standardized_state_isolation.md # [comment required]
 │   │   ├── 0022-differential-context-compilation.md # [comment required]
 │   │   ├── 0023-polymorphic-entity-action-card-registry.md # [comment required]
-│   │   └── 0024-frontend-sdk-decoupling-and-domain-accessors.md # [comment required]
-│   └── standups/                   # [comment required]
+│   │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # [comment required]
+│   │   └── 0025-declarative-app-shell-and-brokered-resource-management.md # [comment required]
+│   └── standups/                   # R&D scratchpads and engineering notes.
 │       ├── 2026-07-08-insetu-release-timeline.md # [comment required]
 │       ├── 2026-07-08-insetu-security-model.md # [comment required]
 │       ├── 2026-07-09-extension-sdk-blueprint.md # [comment required]
@@ -46,7 +48,8 @@ insetu/
 │       ├── 2026-07-18-core-architecture-tightening.md # [comment required]
 │       ├── 2026-07-18-sdk-tightening-blueprint.md # [comment required]
 │       ├── 2026-07-21-hypothetical-yomama-expansion.md # [comment required]
-│       └── 2026-07-21-sdk-decoupling-and-api-surface.md # [comment required]
+│       ├── 2026-07-21-sdk-decoupling-and-api-surface.md # [comment required]
+│       └── 2026-07-23-sdk-yenvui-ergonomics-blueprint.md # [comment required]
 ├── insetu/                         # [comment required]
 │   ├── .gitkeep                    # [comment required]
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -116,6 +119,7 @@ insetu/
 │   │   │   ├── app.js              # [Frontend Bootloader & Core Setup]
 │   │   │   ├── bridge.js           # [Sync Bridge Payload UI]
 │   │   │   ├── components/         # [comment required]
+│   │   │   │   ├── ui_app_shell.js # [comment required]
 │   │   │   │   ├── ui_dropdowns.js # [comment required]
 │   │   │   │   ├── ui_editor.js    # [comment required]
 │   │   │   │   ├── ui_file_tree.js # [comment required]
@@ -131,16 +135,7 @@ insetu/
 │   │   │   ├── shared_styles.js    # [comment required]
 │   │   │   └── store.js            # [Zustand Unified Data Flow (UDF) Store]
 │   │   ├── manifest.json           # [comment required]
-│   │   ├── sw.js                   # [comment required]
-│   │   └── vendor/                 # [comment required]
-│   │       └── yenvui/             # [comment required]
-│   │           ├── css/            # [comment required]
-│   │           │   └── theme-tokens.css # [comment required]
-│   │           └── js/             # [Frontend JavaScript Payloads]
-│   │               ├── async-btn.js # [comment required]
-│   │               ├── card.js     # [comment required]
-│   │               ├── modal.js    # [comment required]
-│   │               └── tabs.js     # [comment required]
+│   │   └── sw.js                   # [comment required]
 │   ├── templates/                  # [comment required]
 │   │   └── index.html              # [comment required]
 │   ├── utils_core.py               # [Workspace Physics & Universal Utils]

@@ -1,7 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { InSetuElement } from '../sdk.js';
-
 export class InSetuAsyncBtn extends LitElement {
     static properties = {
         label: { type: String },
@@ -14,7 +13,6 @@ export class InSetuAsyncBtn extends LitElement {
     };
     static styles = [sharedStyles, css`
         :host { display: inline-block; }
-        button { margin: 0; white-space: nowrap; width: 100%; height: 100%; box-sizing: border-box; }
     `];
     constructor() {
         super();
@@ -26,11 +24,12 @@ export class InSetuAsyncBtn extends LitElement {
         this._status = 'idle';
     }
     async _handleClick(e) {
-        e.stopPropagation();
+        if (e) e.stopPropagation();
         if (this._status === 'loading' || !this.onClick) return;
         this._status = 'loading';
         try {
-            await this.onClick(e);
+            // Unwrap the original event payload if routed through yenVUI's dispatcher
+            await this.onClick(e?.detail?.originalEvent || e);
             this._status = 'success';
         } catch (err) {
             console.error(err);
@@ -40,31 +39,21 @@ export class InSetuAsyncBtn extends LitElement {
         }
     }
     render() {
-        let text = this.label;
-        if (this._status === 'loading') text = this.loadingLabel;
-        if (this._status === 'success') text = this.successLabel;
-        if (this._status === 'error') text = this.errorLabel;
-        return html`<button class="btn-sm" style="background: var(--intent-${this.intent});" @click=${this._handleClick}>${text}</button>`;
-    }
-}
-
-export class InSetuSearchBar extends LitElement {
-    static properties = {
-        placeholder: { type: String },
-        value: { type: String }
-    };
-    static styles = [sharedStyles];
-    constructor() { super(); this.placeholder = 'Search...'; this.value = ''; }
-    render() {
         return html`
-            <div class="fuzzy-search-wrapper">
-                <input type="text" placeholder=${this.placeholder} .value=${this.value} 
-                    @input=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: e.target.value }, bubbles: true, composed: true }))}>
-                ${this.value ? html`<button class="fuzzy-search-clear" @click=${() => this.dispatchEvent(new CustomEvent('search-changed', { detail: { value: '' }, bubbles: true, composed: true }))}>Clear</button>` : ''}
-            </div>
+            <yenvui-async-btn
+                .label=${this.label}
+                .loadingLabel=${this.loadingLabel}
+                .successLabel=${this.successLabel}
+                .errorLabel=${this.errorLabel}
+                .intent=${this.intent}
+                .status=${this._status}
+                @yv-click=${this._handleClick}>
+            </yenvui-async-btn>
         `;
     }
 }
+import '../../vendor/yenvui/js/search-bar.js';
+
 export class InSetuStandardToolbar extends InSetuElement {
     static properties = {
         searchQuery: { type: String },
@@ -104,16 +93,16 @@ export class InSetuStandardToolbar extends InSetuElement {
         return html`
             <div class="sticky-header">
                 <div class="toolbar-row" style="${this.bottomBorder ? 'border-bottom: 1px solid var(--border);' : ''}">
-                    <insetu-search-bar 
+                    <yenvui-search-bar 
                         style="flex: 1;"
-                        placeholder=${this.searchPlaceholder} 
+                        .placeholder=${this.searchPlaceholder} 
                         .value=${this.searchQuery} 
-                        @search-changed=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: e.detail, bubbles: true, composed: true }))}>
-                    </insetu-search-bar>
+                        @yenvui-search-changed=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: e.detail, bubbles: true, composed: true }))}>
+                    </yenvui-search-bar>
                     ${this.enableFilterDropdown ? html`
-                        <insetu-filter-dropdown filterText=${btnText} .hasFilters=${hasF}>
+                        <yenvui-filter-dropdown filterText=${btnText} .hasFilters=${hasF}>
                             <slot name="filters"></slot>
-                        </insetu-filter-dropdown>
+                        </yenvui-filter-dropdown>
                     ` : ''}
                 </div>
                 <slot name="bottom-row"></slot>
@@ -185,7 +174,61 @@ export class InSetuJobTracker extends InSetuElement {
         return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
     }
 }
-customElements.define('insetu-search-bar', InSetuSearchBar);
 customElements.define('insetu-standard-toolbar', InSetuStandardToolbar);
 customElements.define('insetu-job-tracker', InSetuJobTracker);
 customElements.define('insetu-async-btn', InSetuAsyncBtn);
+import '../../vendor/yenvui/js/status-bar.js';
+
+export class InSetuStatusBar extends InSetuElement {
+    static properties = {
+        baseTitle: { type: String },
+        pinnedRepos: { type: Object },
+        tempMessage: { type: String },
+        isError: { type: Boolean }
+    };
+    static styles = css`
+        :host { display: block; width: 100%; flex-shrink: 0; z-index: 1000; }
+    `;
+    constructor() {
+        super();
+        this.baseTitle = 'inSetu Developer OS';
+        this.pinnedRepos = new Set(['ALL']);
+        this.tempMessage = '';
+        this.isError = false;
+        this._statusListener = this._handleStatusUpdate.bind(this);
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        // Bind statelessly to the central AppStore
+        this.subscribe(window.inSetu.stores.App, state => {
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+        });
+        window.addEventListener('insetu-status-update', this._statusListener);
+    }
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        window.removeEventListener('insetu-status-update', this._statusListener);
+    }
+    _handleStatusUpdate(e) {
+        this.tempMessage = e.detail.msg;
+        this.isError = e.detail.isError;
+        if (this._timeout) clearTimeout(this._timeout);
+        if (e.detail.timeout) {
+            this._timeout = setTimeout(() => {
+                this.tempMessage = '';
+                this.isError = false;
+            }, e.detail.timeout);
+        }
+    }
+    render() {
+        if (this.tempMessage) {
+            return html`<yenvui-status-bar .text=${this.tempMessage} ?isError=${this.isError}></yenvui-status-bar>`;
+        }
+        let text = this.baseTitle;
+        if (this.pinnedRepos && this.pinnedRepos.size > 0 && !this.pinnedRepos.has('ALL')) {
+            text = `${text} | [${Array.from(this.pinnedRepos).join(', ')}]`;
+        }
+        return html`<yenvui-status-bar .text=${text} ?isError=${false}></yenvui-status-bar>`;
+    }
+}
+customElements.define('insetu-status-bar', InSetuStatusBar);

@@ -28,7 +28,6 @@ export const sharedStyles = css`
     textarea:focus, input:focus, select:focus {
         border-color: var(--btn);
     }
-
     /* Buttons */
     button {
         background: var(--btn);
@@ -36,6 +35,7 @@ export const sharedStyles = css`
         border: none;
         padding: 10px 20px;
         font-size: 16px;
+        font-weight: bold;
         border-radius: 4px;
         cursor: pointer;
         transition: background 0.2s;
@@ -52,68 +52,25 @@ export const sharedStyles = css`
     .sub-tabs { display: flex; gap: 8px; margin: 0; padding: 0; overflow-x: auto; align-items: center; height: 100%; scrollbar-width: none; }
     .system-action-btn { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; box-sizing: border-box; }
     .system-action-btn:hover { background: var(--input-bg); }
-
-    .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; }
+    .sub-tab { cursor: pointer; padding: 0 12px; font-size: 0.9rem; font-weight: bold; color: var(--text-muted); white-space: nowrap; transition: all 0.2s; height: 100%; display: flex; align-items: center; border-top: 2px solid transparent; border-bottom: 2px solid transparent; box-sizing: border-box; outline: none; }
     .sub-tab:hover { color: var(--text); }
-    .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn);
+    .sub-tab.active { color: var(--text); border-bottom: 2px solid var(--btn); }
+
+    :host-context([data-theme="e-ink"]) .sub-tab {
+        transition: none !important;
     }
+    :host-context([data-theme="e-ink"]) .sub-tab:hover {
+        color: var(--text-muted);
+    }
+    :host-context([data-theme="e-ink"]) .sub-tab.active {
+        color: var(--text) !important;
+    }
+
     .sticky-header { position: relative; flex-shrink: 0; padding: 0; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; }
     .toolbar-row { display: flex; align-items: center; gap: 10px; padding: 5px 20px; height: 44px; box-sizing: border-box; }
-    @container (max-width: 800px) {
+    @container (max-width: 50rem) {
         .toolbar-row { padding: 5px 10px; }
     }
-    .fuzzy-search-wrapper {
-        display: flex;
-        align-items: center;
-        background: transparent;
-        border: none;
-        border-radius: 4px;
-        padding: 0 10px;
-        width: 100%;
-        height: 34px;
-        box-sizing: border-box;
-    }
-    .fuzzy-search-wrapper input {
-        flex: 1;
-        border: none !important;
-        background: transparent !important;
-        outline: none;
-        color: var(--text);
-        padding: 0;
-        margin: 0;
-        height: 100%;
-        font-size: 0.95rem;
-        box-shadow: none !important;
-    }
-.fuzzy-search-wrapper input::placeholder {
-    color: var(--text-muted);
-    opacity: 0.6;
-}
-.fuzzy-search-clear {
-    background: var(--intent-neutral);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    font-size: 0.65rem;
-    font-weight: bold;
-    padding: 2px 8px;
-    cursor: pointer;
-    margin-left: 8px;
-}
-:host-context([data-theme="light"]) .fuzzy-search-wrapper {
-    background: transparent;
-    border: none;
-}
-:host-context([data-theme="e-ink"]) .fuzzy-search-wrapper {
-    border: none !important;
-    border-radius: 0 !important;
-    background: transparent !important;
-}
-:host-context([data-theme="e-ink"]) .fuzzy-search-wrapper input {
-    border: none !important;
-    box-shadow: none !important;
-}
-
 /* Utilities */
     .spinner {
         display: none;
@@ -121,17 +78,6 @@ export const sharedStyles = css`
         font-style: italic;
         color: #888;
     }
-
-    .file-card {
-        background: var(--input-bg);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 15px;
-        margin-bottom: 12px;
-        position: relative;
-        overflow: hidden;
-    }
-
     .folder-label {
         font-weight: bold;
         font-family: monospace;
@@ -154,11 +100,6 @@ export const sharedStyles = css`
         background: #f1f5f9;
         color: #0f172a;
         border: 1px solid #cbd5e1;
-    }
-    :host-context([data-theme="light"]) .file-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.04);
     }
     :host-context([data-theme="light"]) .folder-label {
         color: #b45309;
@@ -192,11 +133,5 @@ export const sharedStyles = css`
         background: #ffffff !important;
         color: #000000 !important;
         font-weight: 600;
-    }
-    :host-context([data-theme="e-ink"]) .file-card {
-        border: 2px solid #8b5cf6 !important;
-        box-shadow: 4px 4px 0 #14b8a6 !important;
-        background: #ffffff !important;
-        color: #000000 !important;
     }
 `;
