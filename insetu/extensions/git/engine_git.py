@@ -71,7 +71,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         for f_path in diffs_dir_path.iterdir():
             if f_path.is_file() and ('_diffs.txt' in f_path.name or '_diffs_part' in f_path.name):
                 f = f_path.name
-                if not target_repos or any(f.startswith(st) for st in safe_targets):
+                if not target_repos or any(f == f"{st}_diffs.txt" or f.startswith(f"{st}_") for st in safe_targets):
                     try:
                         execute_vfs_delete(workspace_id, f_path.as_posix())
                     except Exception as e:
@@ -80,7 +80,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     is_standalone = manifest_ref is None
 
     working_manifest = manifest_ref if not is_standalone else ctx.manifest
-    stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k.startswith(st) for st in safe_targets))]
+    stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k == f"{st}_diffs.txt" or k.startswith(f"{st}_") for st in safe_targets))]
     for k in stale_keys:
         del working_manifest[k]
     diff_manifest = []
@@ -106,13 +106,12 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             # Resolve Git root to normalize `--porcelain` paths against logical workspace directories
             git_root_res = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=str(repo_path))
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
-
             changed_files = []
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
-                filepath = line[3:]
-                if '->' in filepath: filepath = filepath.split('->')[-1].strip()
+                filepath = line[3:].strip().strip('"')
+                if '->' in filepath: filepath = filepath.split('->')[-1].strip().strip('"')
                 if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
 
                 abs_filepath = git_root / filepath

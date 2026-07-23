@@ -50,8 +50,8 @@ window.addEventListener('insetu:tracker:load-board', () => KanbanStore.getState(
 
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuExtTracker extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
     static properties = {
         tasks: { type: Array },
@@ -61,14 +61,9 @@ export class InSetuExtTracker extends InSetuElement {
         allRepos: { type: Array },
         activeTab: { type: String },
         searchQuery: { type: String },
-        _modals: { type: Object },
-        _yamlExpanded: { type: Boolean },
         _reposExpanded: { type: Boolean },
         _bucketsExpanded: { type: Boolean },
-        _tagsExpanded: { type: Boolean },
-        _isSaving: { type: Boolean },
-        _isCopying: { type: Boolean },
-        _isDownloading: { type: Boolean }
+        _tagsExpanded: { type: Boolean }
     };
 static styles = [
 sharedStyles,
@@ -118,18 +113,13 @@ constructor() {
         this.allRepos = [];
         this.activeTab = 'todos';
         this.searchQuery = '';
-        this._modals = { new: false, edit: false };
-        this._yamlExpanded = false;
         this._reposExpanded = true;
         this._bucketsExpanded = true;
         this._tagsExpanded = true;
-        this._isSaving = false;
-        this._isCopying = false;
-        this._isDownloading = false;
 }
     connectedCallback() {
         super.connectedCallback();
-        const parsedTab = this.parentElement?.id?.replace('sub-', '');
+        const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
         this.subscribe(AppStore, (state) => {
             this.allRepos = state.allRepos || [];
@@ -141,14 +131,12 @@ constructor() {
             this.tasks = state.tasks || [];
             this.pinnedTags = state.pinnedTags;
             this.pinnedBuckets = state.pinnedBuckets;
-            this._modals = state.modals;
             this.requestUpdate();
         });
         const kState = KanbanStore.getState();
         this.tasks = kState.tasks || [];
         this.pinnedTags = kState.pinnedTags;
         this.pinnedBuckets = kState.pinnedBuckets;
-        this._modals = kState.modals;
         KanbanStore.getState().fetchTasks();
     }
 
@@ -281,82 +269,7 @@ constructor() {
             </div>
         `;
     }
-    _openNewTaskModal() {
-        const state = KanbanStore.getState();
-        const isBugs = this.activeTab === 'bugs';
-        const isQueue = this.activeTab === 'queue';
-        const defaultType = isBugs ? 'bug' : (isQueue ? 'queue' : 'todo');
-        const prePopulatedTags = Array.from(this.pinnedTags).filter(t => t !== 'ALL');
-        const defaultTagsStr = prePopulatedTags.join(', ');
-        state.setNewTaskField('type', defaultType);
-        state.setNewTaskField('tags', defaultTagsStr);
-        state.setNewTaskField('title', '');
-        state.setNewTaskField('desc', '');
-        state.setNewTaskField('status', 'open');
-        state.setNewTaskField('bucket', 'None');
-        state.setNewTaskField('deliveryDate', '');
-        if (this.allRepos.length > 0) state.setNewTaskField('repo', this.allRepos[0]);
-        if (this.pinnedRepos.size === 1 && !this.pinnedRepos.has('ALL')) {
-            const pinnedRepo = Array.from(this.pinnedRepos)[0];
-if (this.allRepos.includes(pinnedRepo)) {
-                state.setNewTaskField('repo', pinnedRepo);
-}
-        }
 
-        state.setModal('new', true);
-}
-    async _saveNewTask() {
-        const { repo, type, status, title, tags, desc, bucket, deliveryDate } = KanbanStore.getState().newTaskForm;
-        const sub_bucket = bucket || 'None';
-
-        if (!title || !desc) {
-            throw new Error("Title and Description are required.");
-        }
-
-        const res = await this.api.post('new', {
-            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
-        });
-        if (res.ok) {
-            KanbanStore.getState().setModal('new', false);
-            KanbanStore.getState().fetchTasks();
-        } else {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || "Failed to create task.");
-        }
-    }
-    _renderNewTaskModal() {
-        // Strict UI isolation: read DOM state instead of global storage leaks
-        const isActiveView = this.closest('.sub-tab-content')?.classList.contains('active');
-        if (!isActiveView) return '';
-        const { newTaskForm } = KanbanStore.getState();
-        const selectedRepo = newTaskForm.repo || this.allRepos[0];
-        const buckets = selectedRepo ? this.sys.getFlattenedBuckets(selectedRepo) : [];
-        return html`
-            <insetu-modal 
-                ?open=${this._modals?.new} 
-                titleText="Create New Ticket"
-                @modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
-
-                <div slot="body">
-                    <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: this.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...buckets.map(b => ({value: b.id, label: b.title}))] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { type: 'date', style: 'flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);' })}
-                    </div>
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { placeholder: 'Ticket Title (e.g., Fix schema registry timeout)', style: 'margin-bottom: 10px; font-weight: bold;' })}
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { placeholder: 'Tags (comma separated, e.g. frontend, critical)', style: 'margin-bottom: 10px;' })}
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; margin-bottom: 10px; min-height: 150px;' })}
-                </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${async (e) => {
-                    this._isSaving = true;
-                    try { await this._saveNewTask(); } catch(err) {}
-                    this._isSaving = false;
-                }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
-            </insetu-modal>
-        `;
-    }
     _renderLog(filteredTasks) {
         const recentlyClosed = filteredTasks.filter(t => t.status === 'closed' || t.status === 'logged').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
@@ -407,7 +320,6 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
         const hasFilters = !this.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
 
         return html`
-            ${this._renderNewTaskModal()}
             <insetu-standard-toolbar
                 searchPlaceholder="🔍 Fuzzy search tickets..."
                 .searchQuery=${this.searchQuery}
@@ -501,10 +413,201 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                 ${this.activeTab === 'queue' ? this._renderColumns('queue', textFilteredTasks) : ''}
                 ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
             </div>
-
-            ${this._renderEditTaskModal()}
         `;
     }
+    _generateHistoricalChangelog(allRepos = false) {
+        const state = KanbanStore.getState();
+        const closedTasks = state.tasks.filter(t => {
+            const isClosed = t.status === 'closed' || t.status === 'archived' || t.status === 'logged';
+            if (allRepos) return isClosed;
+            const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
+            const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
+            return isClosed && matchesRepo && matchesTag;
+        });
+        const tasksByRepo = closedTasks.reduce((acc, t) => {
+                if (!acc[t.repo]) acc[t.repo] = [];
+                acc[t.repo].push(t);
+                return acc;
+        }, {});
+
+        const changelogParts = [];
+
+        Object.keys(tasksByRepo).sort().forEach(repo => {
+                changelogParts.push(`# 📜 Historical Changelog for ${repo}\n\n`);
+                const repoTasks = tasksByRepo[repo];
+                repoTasks.sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+                const processed = repoTasks.reduce((acc, t) => {
+                                const activeDate = t.closedAt || t.timestamp;
+                                const dateStr = activeDate ? activeDate.split('T')[0] : 'Unknown Date';
+                                const newParts = [...acc.parts];
+                                if (dateStr !== acc.currentDate) {
+                                                newParts.push(`\n## ${dateStr}\n\n`);
+                                }
+                                const typeIcon = t.isBug ? '🐛' : t.isQueue ? '🔬' : '✨';
+                                newParts.push(`### ${typeIcon} ${t.title}\n\n`);
+
+                                if (t.description) {
+                                                const cleanDesc = t.description.split('## Notes / Execution Log')[0].trim();
+                                                newParts.push(`${cleanDesc}\n\n`);
+                                }
+                                return { parts: newParts, currentDate: dateStr };
+                }, { parts: [], currentDate: "" });
+
+                changelogParts.push(...processed.parts);
+                changelogParts.push(`\n---\n\n`);
+        });
+        // Clean up trailing separators
+        const changelog = changelogParts.join('').trim().replace(/---$/, '').trim();
+
+        if (this.vfs && this.vfs.openVirtualFile) {
+            this.vfs.openVirtualFile("Historical_Changelog.md", changelog);
+        } else {
+            alert("Virtual file viewer is not available.");
+        }
+    }
+}
+customElements.define('insetu-ext-tracker', InSetuExtTracker);
+export class InSetuExtTrackerActions extends InSetuElement {
+    get extName() { return 'tracker'; }
+    static styles = [sharedStyles];
+    get _menuItems() {
+        const activeSubTab = this.dataset.subId || 'todos';
+        const trackerEl = document.querySelector(`#sub-${activeSubTab} insetu-ext-tracker`);
+        const items = [];
+        if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
+            items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
+                const modalEl = document.querySelector('insetu-ext-tracker-modals');
+                if (modalEl) modalEl._openNewTaskModal(activeSubTab); 
+            } });
+        } else if (activeSubTab === 'log') {
+            items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { trackerEl?._generateHistoricalChangelog(true); } });
+            items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { trackerEl?._generateHistoricalChangelog(false); } });
+        }
+        return items;
+    }
+    render() {
+        return html`
+            <insetu-dropdown align="right" .items=${this._menuItems}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </insetu-dropdown>
+        `;
+    }
+}
+customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
+
+export class InSetuExtTrackerModals extends InSetuElement {
+    static get extensionName() { return 'tracker'; }
+    get extName() { return 'tracker'; }
+    static properties = {
+        allRepos: { type: Array },
+        pinnedRepos: { type: Object },
+        pinnedTags: { type: Object },
+        _modals: { type: Object },
+        _yamlExpanded: { type: Boolean },
+        _isSaving: { type: Boolean },
+        _isCopying: { type: Boolean },
+        _isDownloading: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        select, input[type="date"] {
+            background: var(--input-bg) !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 4px !important;
+            box-sizing: border-box;
+        }
+        .editor-wrapper {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .editor-wrapper insetu-markdown-editor {
+            flex: 1;
+            background: var(--bg);
+        }
+    `];
+
+    constructor() {
+        super();
+        this.allRepos = [];
+        this.pinnedRepos = new Set(['ALL']);
+        this.pinnedTags = new Set(['ALL']);
+        this._modals = { new: false, edit: false };
+        this._yamlExpanded = false;
+        this._isSaving = false;
+        this._isCopying = false;
+        this._isDownloading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(AppStore, (state) => {
+            this.allRepos = state.allRepos || [];
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+        });
+        this.subscribe(KanbanStore, (state) => {
+            this.pinnedTags = state.pinnedTags;
+            this._modals = state.modals;
+            this.requestUpdate();
+        });
+        const aState = AppStore.getState();
+        this.allRepos = aState.allRepos || [];
+        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
+
+        const kState = KanbanStore.getState();
+        this.pinnedTags = kState.pinnedTags;
+        this._modals = kState.modals;
+    }
+
+    _openNewTaskModal(activeTab) {
+        const state = KanbanStore.getState();
+        const isBugs = activeTab === 'bugs';
+        const isQueue = activeTab === 'queue';
+        const defaultType = isBugs ? 'bug' : (isQueue ? 'queue' : 'todo');
+        const prePopulatedTags = Array.from(this.pinnedTags || []).filter(t => t !== 'ALL');
+        const defaultTagsStr = prePopulatedTags.join(', ');
+        state.setNewTaskField('type', defaultType);
+        state.setNewTaskField('tags', defaultTagsStr);
+        state.setNewTaskField('title', '');
+        state.setNewTaskField('desc', '');
+        state.setNewTaskField('status', 'open');
+        state.setNewTaskField('bucket', 'None');
+        state.setNewTaskField('deliveryDate', '');
+        if (this.allRepos.length > 0) state.setNewTaskField('repo', this.allRepos[0]);
+        if (this.pinnedRepos.size === 1 && !this.pinnedRepos.has('ALL')) {
+            const pinnedRepo = Array.from(this.pinnedRepos)[0];
+            if (this.allRepos.includes(pinnedRepo)) {
+                state.setNewTaskField('repo', pinnedRepo);
+            }
+        }
+
+        state.setModal('new', true);
+    }
+
+    async _saveNewTask() {
+        const { repo, type, status, title, tags, desc, bucket, deliveryDate } = KanbanStore.getState().newTaskForm;
+        const sub_bucket = bucket || 'None';
+
+        if (!title || !desc) {
+            throw new Error("Title and Description are required.");
+        }
+
+        const res = await this.api.post('new', {
+            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
+        });
+        if (res.ok) {
+            KanbanStore.getState().setModal('new', false);
+            KanbanStore.getState().fetchTasks();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to create task.");
+        }
+    }
+
     async _openEditTaskModal(filepath) {
         try {
             const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filepath)}`);
@@ -591,6 +694,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                 current.status !== orig.status ||
                 current.repo !== orig.repo;
     }
+
     _handleModalClosing(e) {
         if (this._isDirty() && !confirm("You have unsaved changes. Are you sure you want to go back?")) {
             e.preventDefault();
@@ -619,6 +723,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
             alert("Network error.");
         }
     }
+
     async _saveEditTask() {
         const { filepath, title, tagsRaw, bucket, deliveryDate, createdAt, closedAt, origYaml, type, status, repo, desc } = KanbanStore.getState().editTaskForm;
         if (!title || !desc.trim()) {
@@ -631,10 +736,8 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
         const closedYaml = closedAt ? `closed_at: ${closedAt}` : `closed_at: null`;
 
         const ticketId = filepath.split('/').pop().replace('.md', '');
-        // Pristine Declarative Frontmatter Generation Blueprint
         const newContent = `---\nrepo: "${repo}"\ntype: "${type}"\nstatus: "${status}"\nid: "${ticketId}"\ntitle: "${title.replace(/"/g, "'")}"\n${createdYaml}\n${closedYaml}\nsub_bucket: "${bucket}"\n${tagsYaml}\n${deliveryYaml}\n---\n\n## Description\n${desc}\n`;
 
-        // Dynamic Path Re-Routing Configuration
         const filename = filepath.split('/').pop();
         const folderType = type === 'queue' ? 'queue' : `${type}s`;
         const intendedRelPath = `${repo}/.tracker/${folderType}/${status}/${filename}`;
@@ -658,14 +761,43 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
             throw new Error(err.error || "Failed to save changes.");
         }
     }
-    _renderEditTaskModal() {
-        // Strict UI isolation: read DOM state instead of global storage leaks
-        const isActiveView = this.closest('.sub-tab-content')?.classList.contains('active');
-        if (!isActiveView) return '';
+
+    render() {
+        const { newTaskForm } = KanbanStore.getState();
+        const selectedRepoNew = newTaskForm.repo || this.allRepos[0];
+        const bucketsNew = selectedRepoNew ? this.sys.getFlattenedBuckets(selectedRepoNew) : [];
+
         const { editTaskForm } = KanbanStore.getState();
-        const activeRepo = editTaskForm.repo || '';
-        const buckets = activeRepo ? this.sys.getFlattenedBuckets(activeRepo) : [];
+        const activeRepoEdit = editTaskForm.repo || '';
+        const bucketsEdit = activeRepoEdit ? this.sys.getFlattenedBuckets(activeRepoEdit) : [];
+
         return html`
+            <!-- New Task Modal -->
+            <insetu-modal 
+                ?open=${this._modals?.new} 
+                titleText="Create New Ticket"
+                @modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
+
+                <div slot="body">
+                    <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: this.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { type: 'date', style: 'flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);' })}
+                    </div>
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { placeholder: 'Ticket Title (e.g., Fix schema registry timeout)', style: 'margin-bottom: 10px; font-weight: bold;' })}
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { placeholder: 'Tags (comma separated, e.g. frontend, critical)', style: 'margin-bottom: 10px;' })}
+                    ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; margin-bottom: 10px; min-height: 150px;' })}
+                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${async (e) => {
+                    this._isSaving = true;
+                    try { await this._saveNewTask(); } catch(err) {}
+                    this._isSaving = false;
+                }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
+            </insetu-modal>
+
+            <!-- Edit Task Modal -->
             <insetu-modal 
                 ?open=${this._modals?.edit} 
                 titleText="Edit Ticket"
@@ -702,7 +834,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Sub-Bucket Mapping</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...buckets.map(b => ({value: b.id, label: b.title}))] })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] })}
                                 </div>
                                 <div>
                                     <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Delivery Deadline</label>
@@ -750,85 +882,10 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                 ` : ''}
             </insetu-modal>
 `;
-}
-    _generateHistoricalChangelog(allRepos = false) {
-        const state = KanbanStore.getState();
-        const closedTasks = state.tasks.filter(t => {
-            const isClosed = t.status === 'closed' || t.status === 'archived' || t.status === 'logged';
-            if (allRepos) return isClosed;
-            const matchesRepo = this.pinnedRepos.has('ALL') || this.pinnedRepos.has(t.repo);
-            const matchesTag = state.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => state.pinnedTags.has(tag)));
-            return isClosed && matchesRepo && matchesTag;
-        });
-        const tasksByRepo = closedTasks.reduce((acc, t) => {
-                if (!acc[t.repo]) acc[t.repo] = [];
-                acc[t.repo].push(t);
-                return acc;
-        }, {});
-
-        const changelogParts = [];
-
-        Object.keys(tasksByRepo).sort().forEach(repo => {
-                changelogParts.push(`# 📜 Historical Changelog for ${repo}\n\n`);
-                const repoTasks = tasksByRepo[repo];
-                repoTasks.sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
-                const processed = repoTasks.reduce((acc, t) => {
-                                const activeDate = t.closedAt || t.timestamp;
-                                const dateStr = activeDate ? activeDate.split('T')[0] : 'Unknown Date';
-                                const newParts = [...acc.parts];
-                                if (dateStr !== acc.currentDate) {
-                                                newParts.push(`\n## ${dateStr}\n\n`);
-                                }
-                                const typeIcon = t.isBug ? '🐛' : t.isQueue ? '🔬' : '✨';
-                                newParts.push(`### ${typeIcon} ${t.title}\n\n`);
-
-                                if (t.description) {
-                                                const cleanDesc = t.description.split('## Notes / Execution Log')[0].trim();
-                                                newParts.push(`${cleanDesc}\n\n`);
-                                }
-                                return { parts: newParts, currentDate: dateStr };
-                }, { parts: [], currentDate: "" });
-
-                changelogParts.push(...processed.parts);
-                changelogParts.push(`\n---\n\n`);
-        });
-        // Clean up trailing separators
-        const changelog = changelogParts.join('').trim().replace(/---$/, '').trim();
-
-        if (this.vfs && this.vfs.openVirtualFile) {
-            this.vfs.openVirtualFile("Historical_Changelog.md", changelog);
-        } else {
-            alert("Virtual file viewer is not available.");
-        }
     }
 }
-customElements.define('insetu-ext-tracker', InSetuExtTracker);
-export class InSetuExtTrackerActions extends InSetuElement {
-    get extName() { return 'tracker'; }
-    static styles = [sharedStyles];
+customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
 
-    get _menuItems() {
-        const activeSubTab = this.dataset.subId || 'todos';
-        const trackerEl = document.querySelector(`#sub-${activeSubTab} insetu-ext-tracker`);
-        const items = [];
-        if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
-            items.push({ label: 'New Task', icon: '🎫', onClick: () => { trackerEl?._openNewTaskModal(); } });
-        } else if (activeSubTab === 'log') {
-            items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { trackerEl?._generateHistoricalChangelog(true); } });
-            items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { trackerEl?._generateHistoricalChangelog(false); } });
-        }
-        return items;
-    }
-
-    render() {
-        return html`
-            <insetu-dropdown align="right" .items=${this._menuItems}>
-                <button slot="trigger" class="system-action-btn">☰</button>
-            </insetu-dropdown>
-        `;
-    }
-}
-customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
 // OS Registration Hook
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
@@ -902,6 +959,10 @@ window.ExtensionRegistry.registerExtension('tracker', {
     ],
     layoutSlots: [
         {
+            slot: "slots:global",
+            component: "insetu-ext-tracker-modals"
+        },
+        {
             slot: "slots:primary-navigation",
             id: "tasks",
             label: "Tasks",
@@ -973,10 +1034,9 @@ window.ExtensionRegistry.registerExtension('tracker', {
             if (filepath.includes('.tracker/')) {
                 window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
                 if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'tasks');
-                const activeSub = localStorage.getItem('insetu_subtab_tasks') || 'todos';
-                const trackerEl = document.querySelector(`#sub-${activeSub} insetu-ext-tracker`);
-                if (trackerEl) {
-                    trackerEl._openEditTaskModal(filepath);
+                const modalEl = document.querySelector('insetu-ext-tracker-modals');
+                if (modalEl) {
+                    modalEl._openEditTaskModal(filepath);
                 }
                 return true;
             }

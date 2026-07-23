@@ -15,9 +15,10 @@ export const GitStore = createExtensionStore('Git', {
     }
 });
 window.inSetu.stores.Git = GitStore;
-
 export async function generateDiffs(force = false) {
-    const { cachedDiffFiles, dirtyDiffRepos } = AppStore.getState();
+    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = AppStore.getState();
+    if (activeDiffJobId) return; // Prevent concurrent diff generation loops
+
     const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
         ? null 
         : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
@@ -96,8 +97,8 @@ window.addEventListener('insetu:git:generate-diffs', (e) => generateDiffs(e.deta
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
 import { InSetuElement } from '../sdk.js';
-
 export class InSetuExtGitDiffs extends InSetuElement {
+    static get extensionName() { return 'git'; }
     static properties = {
         cachedDiffFiles: { type: Array },
         activeDiffJobId: { type: String },
@@ -160,11 +161,18 @@ export class InSetuExtGitDiffs extends InSetuElement {
         const explicitUrl = `/download/${targetFile}`;
         await this.vfs.fetchAndCopy(targetFile, explicitUrl);
     }
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(AppStore, (state) => {
-            this.cachedDiffFiles = state.cachedDiffFiles || [];
+            // Hydrate natively from the persistent manifest if the runtime cache is uninitialized
+            let cached = state.cachedDiffFiles;
+            if (!cached && state.manifest) {
+                cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+                    filename: k,
+                    repo: state.manifest[k].meta?.repo
+                }));
+            }
+            this.cachedDiffFiles = cached || [];
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobMessage = state.diffJobMessage;
             this.diffJobError = state.diffJobError;
@@ -179,7 +187,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.requestUpdate();
         });
         const state = AppStore.getState();
-        this.cachedDiffFiles = state.cachedDiffFiles || [];
+        let cached = state.cachedDiffFiles;
+        if (!cached && state.manifest) {
+            cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+                filename: k,
+                repo: state.manifest[k].meta?.repo
+            }));
+        }
+        this.cachedDiffFiles = cached || [];
         this.activeDiffJobId = state.activeDiffJobId;
         this.diffJobMessage = state.diffJobMessage;
         this.diffJobError = state.diffJobError;
@@ -302,6 +317,57 @@ disconnectedCallback() {
         } catch (err) {
             console.error("Error starting scan: ", err.message);
             this.sweepLoading = false;
+        }
+    }
+    async _executeSweepAll() {
+        const selections = {};
+        let totalFiles = 0;
+
+        Object.keys(this.sweepFiles).forEach(repo => {
+            if (this.pinnedRepos.has('ALL') || this.pinnedRepos.has(repo)) {
+                const selected = this.selectedSweepFiles[repo] || [];
+                if (selected.length > 0) {
+                    selections[repo] = selected;
+                    totalFiles += selected.length;
+                }
+            }
+        });
+
+        if (totalFiles === 0) return alert("No files selected to sweep.");
+
+        const msg = prompt(`Enter a commit message to sweep ${totalFiles} file(s) across multiple repositories:`, "chore: global workspace sweep");
+        if (!msg) return;
+
+        try {
+            const res = await this.api.post('sweep/push', { selections, message: msg });
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.error || "Sweep request failed.");
+            }
+            const data = await res.json();
+            this.api.pollJob(data.job_id, {
+                onProgress: (progressMsg) => {
+                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping workspaces...");
+                },
+                onComplete: async (statusData) => {
+                    const { dirtyDiffRepos } = AppStore.getState();
+                    const newDirty = new Set(dirtyDiffRepos);
+                    newDirty.add("ALL");
+                    AppStore.setState({ dirtyDiffRepos: newDirty });
+
+                    alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
+                    if (this.sys && this.sys.executeSystemCompile) {
+                        this.sys.executeSystemCompile().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
+                    } else {
+                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
+                    }
+                },
+                onError: (err) => {
+                    alert(`❌ Global Sweep failed:\n\n${err.message}`);
+                }
+            });
+        } catch (e) {
+            alert("Network error executing sweep: " + e.message);
         }
     }
 
@@ -463,6 +529,7 @@ ${(() => {
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
                     <insetu-category-section titleText="🧹 Sweepable State">
+                        <button slot="header-actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${this._executeSweepAll}>🚀 Sweep All</button>
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                         ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
                             const branch = GitStore.getState().reposStatus[repo]?.current;
@@ -550,6 +617,7 @@ ${(() => {
 }
 customElements.define('insetu-ext-git-diffs', InSetuExtGitDiffs);
 export class InSetuExtGitCtrl extends InSetuElement {
+    static get extensionName() { return 'git'; }
     static properties = {
         reposStatus: { type: Object },
         allRepos: { type: Array },
