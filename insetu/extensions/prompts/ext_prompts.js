@@ -141,12 +141,11 @@ export class InSetuExtPromptsActions extends InSetuElement {
             }
         ];
     }
-
     render() {
         return html`
-            <insetu-dropdown align="right" .items=${this._menuItems}>
+            <yenvui-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </insetu-dropdown>
+            </yenvui-dropdown>
         `;
     }
 }

@@ -90,6 +90,7 @@ export class InSetuExtFlow extends InSetuElement {
             this.loading = state.loading;
             this.searchQuery = state.searchQuery;
         });
+        this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
         this.subscribe(AppStore, state => {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.allRepos = state.allRepos || [];
@@ -534,16 +535,15 @@ export class InSetuExtFlowActions extends InSetuElement {
     get _menuItems() {
         return [
             { label: 'New Batch', icon: '📦', onClick: () => { 
-                const flowEl = document.querySelector('insetu-ext-flow');
-                if (flowEl) flowEl.openEditBatchModal(null); 
+                this.dispatch('insetu:flow:edit-batch', null);
             }}
         ];
     }
     render() {
         return html`
-            <insetu-dropdown align="right" .items=${this._menuItems}>
+            <yenvui-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </insetu-dropdown>
+            </yenvui-dropdown>
         `;
     }
 }
@@ -560,8 +560,7 @@ window.ExtensionRegistry.registerExtension('flow', {
             intent: 'primary',
             order: 10,
             onClick: (data, e) => {
-                const el = document.querySelector('insetu-ext-flow');
-                if (el) el.openEditBatchModal(data);
+                window.dispatchEvent(new CustomEvent('insetu:flow:edit-batch', { detail: data, bubbles: true, composed: true }));
             }
         }
     ],

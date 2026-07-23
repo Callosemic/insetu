@@ -29,6 +29,25 @@ export const KanbanStore = createExtensionStore('Kanban', {
             const data = await res.json();
             KanbanStore.setState({ tasks: data.tasks || [] });
         }
+    },
+    transitionTask: async (task, newStatus, newType = null) => {
+        const res = await window.inSetu.api.workspace('tracker/transition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo: task.repo, filepath: task.filepath, new_status: newStatus, new_type: newType })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            KanbanStore.setState(state => ({
+                tasks: state.tasks.map(t => t.id === task.id ? {
+                    ...t, status: newStatus, filepath: data.new_filepath, ticket_type: newType || t.ticket_type,
+                    isTodo: newType ? newType === 'todo' : t.isTodo, isBug: newType ? newType === 'bug' : t.isBug, isQueue: newType ? newType === 'queue' : t.isQueue
+                } : t)
+            }));
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to transition task.");
+        }
     }
 }, ['pinnedTags', 'pinnedBuckets']);
 window.inSetu.stores.Kanban = KanbanStore;
@@ -137,6 +156,13 @@ constructor() {
         this.tasks = kState.tasks || [];
         this.pinnedTags = kState.pinnedTags;
         this.pinnedBuckets = kState.pinnedBuckets;
+
+        this.registerGlobalListener('insetu:tracker:generate-changelog', window, (e) => {
+            if (this.activeTab === 'log') {
+                this._generateHistoricalChangelog(e.detail.allRepos);
+            }
+        });
+
         KanbanStore.getState().fetchTasks();
     }
 
@@ -147,7 +173,6 @@ constructor() {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
     updated(changedProperties) {
         super.updated(changedProperties);
         // Ensure the title textarea expands dynamically on initial render
@@ -155,37 +180,6 @@ constructor() {
         if (titleArea) {
             titleArea.style.height = 'auto';
             titleArea.style.height = Math.min(titleArea.scrollHeight, 150) + 'px';
-        }
-    }
-    async _transitionTask(task, newStatus, newType = null) {
-        const res = await this.api.post('transition', {
-            repo: task.repo,
-            filepath: task.filepath,
-            new_status: newStatus,
-            new_type: newType
-        });
-
-        if (res.ok) {
-            const data = await res.json();
-            const currentTasks = KanbanStore.getState().tasks;
-            const updatedTasks = currentTasks.map(t => {
-                if (t.id === task.id) {
-                    return {
-                        ...t,
-                        status: newStatus,
-                        filepath: data.new_filepath,
-                        ticket_type: newType || t.ticket_type,
-                        isTodo: newType ? newType === 'todo' : t.isTodo,
-                        isBug: newType ? newType === 'bug' : t.isBug,
-                        isQueue: newType ? newType === 'queue' : t.isQueue
-                    };
-                }
-                return t;
-            });
-            KanbanStore.setState({ tasks: updatedTasks });
-        } else {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || "Failed to transition task.");
         }
     }
     _renderTaskCard(t) {
@@ -472,24 +466,27 @@ export class InSetuExtTrackerActions extends InSetuElement {
     static styles = [sharedStyles];
     get _menuItems() {
         const activeSubTab = this.dataset.subId || 'todos';
-        const trackerEl = document.querySelector(`#sub-${activeSubTab} insetu-ext-tracker`);
         const items = [];
         if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
             items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
-                const modalEl = document.querySelector('insetu-ext-tracker-modals');
-                if (modalEl) modalEl._openNewTaskModal(activeSubTab); 
+                this.dispatch('insetu:tracker:open-new-task', { activeTab: activeSubTab });
             } });
         } else if (activeSubTab === 'log') {
-            items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { trackerEl?._generateHistoricalChangelog(true); } });
-            items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { trackerEl?._generateHistoricalChangelog(false); } });
+            items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { 
+                this.dispatch('insetu:tracker:generate-changelog', { allRepos: true });
+            } });
+            items.push({ label: 'Generate Changelog (current filter)', icon: '🔍', onClick: () => { 
+                this.dispatch('insetu:tracker:generate-changelog', { allRepos: false });
+            } });
         }
         return items;
     }
+
     render() {
         return html`
-            <insetu-dropdown align="right" .items=${this._menuItems}>
+            <yenvui-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </insetu-dropdown>
+            </yenvui-dropdown>
         `;
     }
 }
@@ -557,10 +554,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const aState = AppStore.getState();
         this.allRepos = aState.allRepos || [];
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-
         const kState = KanbanStore.getState();
         this.pinnedTags = kState.pinnedTags;
         this._modals = kState.modals;
+
+        this.registerGlobalListener('insetu:tracker:open-new-task', window, (e) => {
+            this._openNewTaskModal(e.detail.activeTab);
+        });
+        this.registerGlobalListener('insetu:tracker:open-edit-task', window, (e) => {
+            this._openEditTaskModal(e.detail.filepath);
+        });
     }
 
     _openNewTaskModal(activeTab) {
@@ -900,8 +903,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 110,
             match: (data) => data.status === 'open' && !data.isQueue,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-tracker');
-                if (el) await el._transitionTask(data, 'active');
+                await KanbanStore.getState().transitionTask(data, 'active');
             }
         },
         {
@@ -913,8 +915,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 110,
             match: (data) => data.status === 'closed',
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-tracker');
-                if (el) await el._transitionTask(data, 'open');
+                await KanbanStore.getState().transitionTask(data, 'open');
             }
         },
         {
@@ -926,8 +927,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 110,
             match: (data) => data.status !== 'closed' && data.isQueue,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-tracker');
-                if (el) await el._transitionTask(data, 'open', 'todo');
+                await KanbanStore.getState().transitionTask(data, 'open', 'todo');
             }
         },
         {
@@ -939,8 +939,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 120,
             match: (data) => data.status === 'active' && !data.isQueue,
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-tracker');
-                if (el) await el._transitionTask(data, 'open');
+                await KanbanStore.getState().transitionTask(data, 'open');
             }
         },
         {
@@ -952,8 +951,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 130,
             match: (data) => data.status !== 'closed' && data.status !== 'archived',
             asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-tracker');
-                if (el) await el._transitionTask(data, 'closed');
+                await KanbanStore.getState().transitionTask(data, 'closed');
             }
         }
     ],
@@ -1034,10 +1032,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             if (filepath.includes('.tracker/')) {
                 window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
                 if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'tasks');
-                const modalEl = document.querySelector('insetu-ext-tracker-modals');
-                if (modalEl) {
-                    modalEl._openEditTaskModal(filepath);
-                }
+                window.dispatchEvent(new CustomEvent('insetu:tracker:open-edit-task', { detail: { filepath }, bubbles: true, composed: true }));
                 return true;
             }
             return false;
