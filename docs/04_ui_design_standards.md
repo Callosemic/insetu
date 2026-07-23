@@ -35,8 +35,7 @@ As mandated by Engineering Standard 01, the UI is a pure presentation layer.
 
 ## 6. The DOM Generation Matrix: HTML vs. JavaScript
 To prevent DOM bloat and spaghetti code, the creation of UI elements must strictly adhere to the following boundary rules:
-
-* **Rule 1: The OS Skeleton (HTML-Bound):** The absolute foundational structure—top navigation bars, the global status bar, main tab container shells, and heavy singletons (specifically the `#file-modal` and its `<textarea>` editor)—must be hardcoded in `index.html`. This guarantees instant First Contentful Paint (FCP) and provides stable, immutable anchor nodes for extensions to hook into upon boot.
+* **Rule 1: The OS App Shell (`<insetu-app-shell>`):** The top navigation, sub-tab bars, status bar, and global extension slots are declaratively assembled by the `<insetu-app-shell>` Web Component. `index.html` remains strictly lightweight and presentation-agnostic.
 * **Rule 2: Extension Canvases (JS Template Strings):** Extensions (e.g., Research, Tracker) must inject their primary fullscreen layouts into the OS Skeleton using static `innerHTML` template strings during their registration phase (`ExtensionRegistry.registerTab`). This keeps `index.html` strictly agnostic to domain-specific tools.
 * **Rule 3: Transient & Data-Driven Elements (Declarative Templates & UI Factory):** Anything that appears temporarily, layers over the screen, or iterates based on dynamic data (Modals, Dropdowns, Toast notifications, File/Task Cards) MUST be rendered declaratively within LitElement `html` templates or built via the stateless `UIFactory`.
 Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` is an architectural violation, as is using imperative `document.createElement()` calls within graduated LitElement extensions.

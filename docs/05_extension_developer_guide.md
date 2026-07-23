@@ -117,6 +117,12 @@ export class MyComponent extends InSetuElement {
     }
 }
 ```
+### Event Bus PubSub & Brokered Resources
+
+Directly assigning `window.addEventListener` inside extensions is highly dangerous as it causes persistent memory leaks across multi-tenant workspace swaps if not manually cleared. The SDK provides an automated lifecycle broker.
+*   **`this.registerGlobalListener(eventType, targetNode, callback, options)`**: Securely binds a listener (e.g., to `window` or `document`) that automatically unmounts when the component is destroyed.
+*   **`this.registerInterval(callback, delayMs)`**: Securely spins up a polling loop that is automatically cleared on unmount.
+*   **`this.dispatch(eventName, detailData)`**: A clean helper to broadcast CustomEvents to the `window` to communicate with other disconnected components natively.
 
 ### Network Requests & Domain Accessors
 

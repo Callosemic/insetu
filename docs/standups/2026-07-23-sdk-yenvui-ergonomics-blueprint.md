@@ -1,0 +1,65 @@
+# SDK Ergonomics & yenVUI Harmonization Blueprint
+**Date:** 2026-07-23
+**Context:** Standup & Architectural Blueprint
+
+This document outlines the evolutionary roadmap for the `inSetu` Frontend SDK. As we enforce the `yenVUI` presentation boundary—stripping developers of the ability to write imperative HTML and custom CSS—we must supply an ergonomic "pit of success"[cite: 1]. The SDK must absorb the friction of strict Unidirectional Data Flow (UDF) by providing high-level declarative orchestrators.
+
+---
+
+## 1. The yenVUI Intersection
+
+How does the inclusion of `yenVUI` change the trajectory of our SDK upgrades? 
+
+It fundamentally shifts the SDK's role from *generating raw DOM elements* to *orchestrating custom web components*[cite: 1]. 
+*   **Property Projection over String Interpolation:** The SDK wrappers will no longer output `<div class="file-card">`[cite: 1]. Instead, they will map data directly into the `.titleText` and `.intentColor` properties of `<yenvui-card>`[cite: 1].
+*   **Custom Event Interception:** Native DOM events (`click`, `input`) are replaced by `yenVUI` normalized emissions[cite: 1]. The SDK must natively listen for `@yv-click`, `@yenvui-modal-closed`, and `@yenvui-search-changed`[cite: 1].
+*   **The CSS Vacuum Completion:** To fully realize the "Universal CSS Vacuum" mandate[cite: 1], the SDK cannot fall back to rendering raw `<input>` or `<select>` tags[cite: 2].
+
+### Identified Gap: Missing yenVUI Primitives
+To support the Native UDF Input Binding suggestion, we must expand the `yenVUI` arsenal before we write the SDK wrappers. We currently lack presentation primitives for forms[cite: 1]. We must construct:
+1.  **`<yenvui-input>`:** Encapsulating `type="text|number|date"`, handling its own focus rings, hover states, and theme colors[cite: 1].
+2.  **`<yenvui-select>`:** A styled dropdown primitive[cite: 1].
+3.  **`<yenvui-textarea>`:** A multi-line text input primitive[cite: 1].
+
+Once these primitives exist, the SDK can safely orchestrate forms without violating the CSS vacuum[cite: 1].
+
+---
+
+## 2. The 6 SDK Ergonomic Upgrades
+
+### I. Automated Job-to-Button Orchestration
+*   **Concept:** Eliminate the boilerplate of tracking `activeJobId`, `loadingMessage`, and `try/catch` polling loops for backend worker jobs[cite: 6, 7].
+*   **The yenVUI Integration:** The SDK will expose `this.api.bindJobAction(endpoint, payload)`. This method will return a directive that plugs directly into a `<yenvui-async-btn>`[cite: 1]. The SDK will capture the `@yv-click` event[cite: 1], execute the REST call, handle the polling metronome, and reactively pipe the state (`loading`, `success`, `error`) back into the `<yenvui-async-btn>` `.status` property[cite: 1].
+
+### II. Data-Driven View & Catalog Generators
+*   **Concept:** Abstract away the repetitive `.map()` loops used to render lists of items[cite: 5, 6, 7].
+*   **The yenVUI Integration:** Developers will call `this.ui.renderCatalog(items, schema)`. The SDK will iterate over the Zustand store array and declaratively project the data into `<yenvui-card>` elements[cite: 1]. The schema will allow developers to map specific data keys to the `<yenvui-card>` properties (e.g., `schema: { title: 'name', description: 'desc', icon: () => '📦' }`), while automatically utilizing the `<slot name="actions">`[cite: 1] for extension-specific buttons.
+
+### III. Unified Fuzzy Search & Filter Mixins
+*   **Concept:** Standardize local search and repository filtering, which is currently duplicated across `tracker`, `research`, `git`, and `flow`[cite: 5, 6, 7].
+*   **The yenVUI Integration:** We will introduce a `withSearch(dataKey, searchKeys)` mixin for `createExtensionStore`[cite: 2]. This automatically binds to `<yenvui-search-bar>` via the `@yenvui-search-changed` event[cite: 1]. The mixin manages the `searchQuery` state and exposes a computed `filteredData` array, completely decoupling the filtering math from the Lit template renders.
+
+### IV. Standardized Modal Lifecycle Management
+*   **Concept:** Centralize the state tracking required to open/close modals, manage working drafts, and prevent accidental data loss[cite: 5, 7].
+*   **The yenVUI Integration:** The SDK will provide a `ModalController`. Because `yenVUI` relies on the HTML5 `<dialog>` element and emits `@yenvui-modal-closing`[cite: 1], the SDK controller will natively intercept this event. If the developer configures `dirtyCheck: true`, the SDK will automatically diff the working state against the original snapshot, halting the `<yenvui-modal>` teardown[cite: 1] to prompt the user if unsaved changes exist.
+
+### V. Native UDF Input Binding
+*   **Concept:** Replace raw `@input=${e => Store.setState(...)}` callbacks[cite: 6, 7] with a native declarative binder.
+*   **The yenVUI Integration:** We will upgrade the existing `bindStoreInput`[cite: 2] into a core `InSetuElement` method: `this.bindInput('storeKey')`. This method will map strictly to the upcoming `<yenvui-input>`, `<yenvui-select>`, and `<yenvui-textarea>` primitives. It will establish a two-way synchronization layer: projecting the Zustand store value downward as a property, and listening for `@yv-input-changed` to automatically mutate the store upward.
+### VI. CLI Scaffolding
+*   **Concept:** Lower the barrier to entry by generating boilerplate code instantly[cite: 5, 6].
+*   **The yenVUI Integration:** The `insetu create-extension <name>` command will scaffold `ext_<name>.js` files that are "yenVUI-native" from day one. The generated Lit templates will completely omit raw HTML tags, utilizing `<yenvui-tabs>`, `<yenvui-card>`, and the new SDK orchestrators by default, ensuring all new extensions fall directly into the architectural pit of success.
+
+### VII. Standalone Entity Action Renderer
+*   **Concept:** Eradicate duplicate button layouts and click handlers inside detail modals[cite: 5, 6]. 
+*   **The yenVUI Integration:** Developers can call `this.ui.renderEntityActions(entityType, entityData)` anywhere in their Lit templates. The SDK will query the central `ExtensionRegistry` and dynamically generate the mapped `<yenvui-async-btn>` primitives for that entity, injecting them into the modal or detail view perfectly styled and functionally bound.
+### VIII. Universal Date & Time Formatters
+*   **Concept:** Eliminate the scattered, manual `new Date(...).toLocaleString()` implementations found across multiple extensions[cite: 5, 6].
+*   **The yenVUI Integration:** The `InSetuElement` base class will expose `this.utils.formatDate()` and `this.utils.timeAgo()`. This ensures that any temporal data projected into `yenVUI` cards or modals maintains strict visual consistency across the entire ecosystem.
+
+### IX. Automated Concurrency Guards & Event Debouncing
+*   **Concept:** Extension makers should never have to manually manage race conditions, write `if (jobRunning) return;` guard clauses, or debounce UI lifecycle hooks.
+*   **The yenVUI Integration:** The SDK will automatically debounce overlapping `ExtensionRegistry` UI hooks to prevent concurrent hydration thrashing. Furthermore, the new `bindJobAction()` orchestrator will act as an automatic mutex—silently dropping duplicate triggers from `<yenvui-async-btn>` primitives while a job is actively processing in the background.
+
+---
+**Status:** Approved for execution. Pending `yenVUI` form primitive construction.
