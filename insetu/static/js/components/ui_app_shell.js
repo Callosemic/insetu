@@ -31,7 +31,6 @@ export class InSetuAppShell extends InSetuElement {
             background: var(--bg);
         }
     `;
-
     constructor() {
         super();
         this.activePrimary = 'context';
@@ -41,6 +40,7 @@ export class InSetuAppShell extends InSetuElement {
         this.subActions = {};
         this.globalComponents = [];
         this._compileListener = this._compileFromRegistry.bind(this);
+        this._componentCache = new Map();
     }
 
     connectedCallback() {
@@ -226,10 +226,15 @@ export class InSetuAppShell extends InSetuElement {
         `;
     }
     _renderDynamicComponent(tag, subId = null) {
-        // Safe declarative hydration mapping
-        const el = document.createElement(tag);
-        if (subId) el.dataset.subId = subId;
-        return el;
+        // Cache components to prevent Lit from destroying DOM nodes on tab switch, 
+        // which protects WebSockets (Terminal) and iframe state.
+        const cacheKey = tag + (subId ? '-' + subId : '');
+        if (!this._componentCache.has(cacheKey)) {
+            const el = document.createElement(tag);
+            if (subId) el.dataset.subId = subId;
+            this._componentCache.set(cacheKey, el);
+        }
+        return this._componentCache.get(cacheKey);
     }
 }
 customElements.define('insetu-app-shell', InSetuAppShell);

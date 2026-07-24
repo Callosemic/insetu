@@ -112,56 +112,19 @@ export class InSetuCategorizedList extends LitElement {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-
         return html`
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(cat => html`
-                    <insetu-category-section titleText=${cat}>
+                    <yenvui-category-section titleText=${cat}>
                         ${this.renderCategoryHeader ? this.renderCategoryHeader(cat) : ''}
                         ${categories[cat].map(item => this.renderItem(item))}
-                    </insetu-category-section>
+                    </yenvui-category-section>
                 `)}
             </div>
         `;
     }
 }
 
-export class InSetuCategorySection extends LitElement {
-    static properties = {
-        titleText: { type: String }
-    };
-    static styles = [
-        sharedStyles,
-        css`
-        :host {
-            display: block;
-}
-        .category-heading {
-            margin-top: 25px;
-            margin-bottom: 15px;
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: var(--text, #e0e0e0);
-            border-bottom: 1px solid var(--border, #444);
-            padding-bottom: 5px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-    `];
-
-    render() {
-        return html`
-            <div class="category-heading">
-                <span>${this.titleText}</span>
-                <slot name="header-actions"></slot>
-            </div>
-            <div class="category-content">
-                <slot></slot>
-            </div>
-        `;
-    }
-}
 export class InSetuFileTree extends LitElement {
     static properties = {
         files: { type: Array },
@@ -243,14 +206,12 @@ constructor() {
                 return a.localeCompare(b);
             });
         }
-
         return html`
             ${this.enableSearch ? html`
-                <insetu-standard-toolbar
+                <yenvui-toolbar
                     searchPlaceholder=${this.searchPlaceholder}
                     .searchQuery=${this._searchQuery || ''}
                     @search-changed=${(e) => this._searchQuery = e.detail.value}
-                    .noPadding=${true}
                     ?bottomBorder=${(!isSearching && this.currentPath.length > 0 && !this.hidePath)}>
                     ${(!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                         <div slot="bottom-row" class="toolbar-row" style="background: var(--input-bg); border-top: 1px solid var(--border);">
@@ -258,7 +219,7 @@ constructor() {
                             <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
                         </div>
                     ` : ''}
-                </insetu-standard-toolbar>
+                </yenvui-toolbar>
             ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                 <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border);">
                     <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>
@@ -319,5 +280,4 @@ constructor() {
 
 customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-categorized-list', InSetuCategorizedList);
-customElements.define('insetu-category-section', InSetuCategorySection);
 customElements.define('insetu-file-tree', InSetuFileTree);

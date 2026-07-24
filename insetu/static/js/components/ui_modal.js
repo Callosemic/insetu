@@ -11,23 +11,18 @@ export class InSetuModal extends LitElement {
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
-
         /* Catch slotted buttons at this boundary before they pass into yenVUI */
         ::slotted(button[slot="footer"]),
         ::slotted(insetu-async-btn[slot="footer"]),
         ::slotted(yenvui-async-btn[slot="footer"]) { 
             flex: 1; 
             margin: 0 !important; 
-            padding: 15px !important; 
-            border-radius: 0 !important; 
-            font-size: 1.1rem !important; 
+            padding: 12px !important; 
+            border-radius: 6px !important; 
+            font-size: 1.05rem !important; 
             font-weight: bold !important; 
             border: none !important; 
-            border-right: 1px solid var(--border) !important; 
             cursor: pointer; 
-        }
-        ::slotted(*[slot="footer"]:last-child) { 
-            border-right: none !important; 
         }
     `];
 

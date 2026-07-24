@@ -52,64 +52,6 @@ export class InSetuAsyncBtn extends LitElement {
         `;
     }
 }
-import '../../vendor/yenvui/js/search-bar.js';
-
-export class InSetuStandardToolbar extends InSetuElement {
-    static properties = {
-        searchQuery: { type: String },
-        searchPlaceholder: { type: String },
-        enableFilterDropdown: { type: Boolean },
-        filterText: { type: String },
-        activeFilters: { type: Array },
-        hasFiltersOverride: { type: Boolean },
-        bottomBorder: { type: Boolean }
-    };
-    static styles = [sharedStyles, css`:host { display: contents; }`];
-
-    constructor() {
-        super();
-        this.searchQuery = '';
-        this.searchPlaceholder = 'Search...';
-        this.enableFilterDropdown = false;
-        this.filterText = '';
-        this.activeFilters = [];
-        this.hasFiltersOverride = false;
-        this.bottomBorder = false;
-    }
-
-    render() {
-        let btnText = this.filterText;
-        let hasF = this.hasFiltersOverride || false;
-        if (!btnText && this.activeFilters) {
-            const active = this.activeFilters.filter(r => r !== 'ALL');
-            if (active.length > 0) {
-                btnText = `Filters: ${active.slice(0, 2).join(', ')}${active.length > 2 ? '...' : ''}`;
-                hasF = true;
-            } else {
-                btnText = 'Filters';
-            }
-        }
-
-        return html`
-            <div class="sticky-header">
-                <div class="toolbar-row" style="${this.bottomBorder ? 'border-bottom: 1px solid var(--border);' : ''}">
-                    <yenvui-search-bar 
-                        style="flex: 1;"
-                        .placeholder=${this.searchPlaceholder} 
-                        .value=${this.searchQuery} 
-                        @yenvui-search-changed=${(e) => this.dispatchEvent(new CustomEvent('search-changed', { detail: e.detail, bubbles: true, composed: true }))}>
-                    </yenvui-search-bar>
-                    ${this.enableFilterDropdown ? html`
-                        <yenvui-filter-dropdown filterText=${btnText} .hasFilters=${hasF}>
-                            <slot name="filters"></slot>
-                        </yenvui-filter-dropdown>
-                    ` : ''}
-                </div>
-                <slot name="bottom-row"></slot>
-            </div>
-        `;
-    }
-}
 
 export class InSetuJobTracker extends InSetuElement {
     static properties = {
@@ -174,7 +116,6 @@ export class InSetuJobTracker extends InSetuElement {
         return html`<div class="spinner" style="display: block; margin-top: 10px;">${this._message || 'Processing...'}</div>`;
     }
 }
-customElements.define('insetu-standard-toolbar', InSetuStandardToolbar);
 customElements.define('insetu-job-tracker', InSetuJobTracker);
 customElements.define('insetu-async-btn', InSetuAsyncBtn);
 import '../../vendor/yenvui/js/status-bar.js';

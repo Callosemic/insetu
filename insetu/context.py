@@ -43,7 +43,8 @@ class VFSTransaction:
             # Broadcast the atomic commit to the ecosystem
             try:
                 from insetu.hooks import hooks
-                hooks.emit_background('vfs_transaction_committed', workspace_id=self.workspace_id, files=[f[0] for f in self._buffer])
+                mutations = [{"filepath": f[0], "operation": "save", "ignore_ledger": bool((f[2] or {}).get("is_absolute_artifact") or (f[2] or {}).get("ignore_ledger"))} for f in self._buffer]
+                hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=mutations)
             except Exception:
                 pass
 

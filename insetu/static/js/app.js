@@ -12,6 +12,9 @@ import './components/ui_primitives.js';
 import './components/ui_editor.js';
 import './components/ui_app_shell.js';
 import '../vendor/yenvui/js/toast.js';
+import '../vendor/yenvui/js/category-section.js';
+import '../vendor/yenvui/js/toolbar.js';
+import '../vendor/yenvui/js/editor.js';
 import './gather.js';
 import './config.js';
 export function getFlattenedBuckets(repoDir, includeSystem = false) {

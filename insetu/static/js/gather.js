@@ -268,7 +268,7 @@ export class InSetuExtGather extends InSetuElement {
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, this.searchQuery, f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
                 : repoFilteredFiles;
         return html`
-            <insetu-standard-toolbar
+            <yenvui-toolbar
                 searchPlaceholder="🔍 Fuzzy search contexts..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
@@ -281,7 +281,7 @@ export class InSetuExtGather extends InSetuElement {
                     .activeRepos=${Array.from(this.pinnedRepos)}
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
-            </insetu-standard-toolbar>
+            </yenvui-toolbar>
 
             <div class="gather-body">
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
@@ -312,13 +312,12 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-categorized-list>
                 </div>
             </div>
-
             <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${(this.activeChunkFile ? (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunks || []) : []).map((chunk, idx) => html`
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                            <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
-                            <div style="display: flex; gap: 8px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; flex-wrap: wrap; gap: 10px;">
+                            <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                 <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
                                 <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
                             </div>

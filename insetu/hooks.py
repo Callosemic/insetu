@@ -20,17 +20,11 @@ class HookPayload_PreCompileDocument(TypedDict, total=False):
     filepath: str
     text: str
     workspace_id: Optional[str]
-
 class HookPayload_RequestChangelogSuggestions(TypedDict, total=False):
     repo: str
     workspace_id: Optional[str]
-
-class HookPayload_VFSTransactionCommitted(TypedDict, total=False):
-    files: List[str]
-    workspace_id: Optional[str]
-
-class HookPayload_FileMutation(TypedDict, total=False):
-    filepath: str
+class HookPayload_VFSMutated(TypedDict, total=False):
+    mutations: List[Dict[str, Any]]
     workspace_id: Optional[str]
 
 class HookPayload_WorkspaceScoped(TypedDict, total=False):

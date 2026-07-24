@@ -139,17 +139,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
     def visit_FunctionDef(self, node):
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
-
-        # CQRS Hook Parity Check
+        # Banned Legacy Hook Checks
         hook_events = []
         for dec in node.decorator_list:
             if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
                 if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
                     if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
                         hook_events.append(dec.args[0].value)
-        if 'vfs_transaction_committed' in hook_events:
-            if 'post_file_save' not in hook_events or 'post_file_delete' not in hook_events:
-                report_violation("CQRS_EVENT_PARITY", self.filepath, node.lineno, "Function subscribes to 'vfs_transaction_committed' but is missing 'post_file_save' and/or 'post_file_delete'.")
+        for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
+            if legacy_hook in hook_events:
+                report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
 
         # Check for BANNED_MAGIC_GENERATOR in worker tasks
         if is_ext:
@@ -413,8 +412,8 @@ def check_javascript_files():
                         report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")
 
                     # 26. Standard Toolbar Mandate
-                    if is_extension and is_lit_component and sticky_header_pattern.search(line):
-                        report_violation("STANDARD_TOOLBAR_MANDATE", filepath, line_num, "Legacy 'sticky-header' container detected. Migrate to <insetu-standard-toolbar> for standard UI layouts.")
+                    if is_extension and is_lit_component and (sticky_header_pattern.search(line) or 'insetu-standard-toolbar' in line):
+                        report_violation("STANDARD_TOOLBAR_MANDATE", filepath, line_num, "Legacy 'sticky-header' or '<insetu-standard-toolbar>' detected. Migrate to <yenvui-toolbar> for standard UI layouts.")
                     # 24. Hardcoded Extension Demolition Ban (Inversion of Control Enforcement)
                     if file == "app.js" and ("insetu-ext-" in line or "ext_" in line) and (".remove()" in line or "document.querySelectorAll" in line):
                         if "tagName.startsWith" not in line:
@@ -425,6 +424,9 @@ def check_javascript_files():
                     # 28. Imperative DOM Query Ban
                     if is_extension and dom_action_query_pattern.search(line):
                         report_violation("DOM_QUERY_IN_ACTION_BAN", filepath, line_num, "Imperative document.querySelector on extension elements detected. Use Custom Events or Store actions instead.")
+                    # 29. Banned Legacy UI Hooks
+                    if is_extension and ("zone:post-file-save" in line or "zone:post-file-delete" in line):
+                        report_violation("LEGACY_UI_HOOK_BAN", filepath, line_num, "Deprecated UI hook (post-file-save/delete) detected. Use unified 'zone:vfs-mutated' instead.")
 if __name__ == "__main__":
     print("============================================================")
     print("      inSetu Architectural Fitness Functions Validator      ")

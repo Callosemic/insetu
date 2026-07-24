@@ -264,12 +264,9 @@ export async function viewAndCopy(filename) {
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
     if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        window.inSetu.extensions.Registry.executeUIHook('zone:post-file-delete', oldPath);
-        if (newPath) {
-            window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', newPath);
-        } else {
-            window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', oldPath);
-        }
+        const mutations = [{ filepath: oldPath, operation: 'delete' }];
+        if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
+        window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations });
     }
 
     // Trigger a proactive compile to let the Cartographer map the renamed/moved/deleted files
@@ -329,7 +326,7 @@ async function saveModalFile(autoSave = false) {
         onSuccess: () => {
             FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
             if (autoSave && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', state.filename);
+                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
             }
 
             // File modifications can drastically alter chunk boundaries; force a resync
@@ -410,7 +407,7 @@ export async function deleteEmptyFolder(dirPath) {
             parts.pop();
             AppStore.setState({ globalBrowsePath: parts });
             if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-delete', dirPath);
+                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
             }
             const manifest = AppStore.getState().manifest;
             let changed = false;
@@ -870,7 +867,7 @@ async function saveNewFile() {
             FsStore.getState().setModal('newFile', { open: false });
 
             if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', filepath);
+                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
             }
 
             // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
@@ -942,11 +939,10 @@ async function saveNewFolder() {
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
                 }
             }
-
             FsStore.getState().setModal('newFolder', { open: false });
 
             if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', filepath);
+                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
             }
 
             // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately

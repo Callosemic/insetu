@@ -35,7 +35,8 @@ def _vfs_commit_worker():
                             shutil.rmtree(resolved_path)
                         else:
                             os.remove(resolved_path)
-                    if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
+                    ignore_ledger = bool(data.get("is_absolute_artifact") or data.get("ignore_ledger"))
+                    if not ignore_ledger:
                         import time
                         from insetu.db import get_connection
                         db_conn = get_connection("workers", workspace_id=workspace_id)
@@ -45,7 +46,7 @@ def _vfs_commit_worker():
                         )
                         db_conn.commit()
 
-                    _trigger_post_mutation_hooks(workspace_id, filepath)
+                    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger}])
                 elif action == "move":
                     dest_path = data.get("dest_path")
                     resolved_src = resolve_workspace_path(filepath, workspace_id)
@@ -54,7 +55,11 @@ def _vfs_commit_worker():
                         os.makedirs(Path(resolved_dest).parent, exist_ok=True)
                         import shutil
                         shutil.move(resolved_src, resolved_dest)
-                    _trigger_post_mutation_hooks(workspace_id, filepath, dest_path)
+                    ignore_ledger = bool(data.get("is_absolute_artifact") or data.get("ignore_ledger"))
+                    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[
+                        {"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger},
+                        {"filepath": dest_path, "operation": "save", "ignore_ledger": ignore_ledger}
+                    ])
                 else:
                     execute_vfs_save_physical(workspace_id, filepath, content, data)
             except Exception as e:
@@ -79,11 +84,6 @@ def stop_vfs_pipeline():
     _VFS_WRITE_QUEUE.put(None) # Poison pill to break blocking lookups
     if _VFS_WORKER_THREAD:
         _VFS_WORKER_THREAD.join(timeout=5.0)
-def _trigger_post_mutation_hooks(workspace_id, old_filepath, new_filepath=None):
-    """DRY helper for triggering event bus updates after a VFS mutation."""
-    hooks.emit_background('post_file_delete', filepath=old_filepath, workspace_id=workspace_id)
-    if new_filepath:
-        hooks.emit_background('post_file_save', filepath=new_filepath, workspace_id=workspace_id)
 def execute_vfs_move(workspace_id, filepath, dest_path):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": dest_path}))
     return {"status": "accepted", "message": f"File move queued."}, 202
@@ -227,12 +227,12 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 os.makedirs(target_dir, exist_ok=True)
         with open(resolved_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-
         import time
         from insetu.db import get_connection
         db_conn = get_connection("workers", workspace_id=workspace_id)
         # Universal OS Ledger: Track every physical file mutation
-        if not data.get("is_absolute_artifact") and not data.get("ignore_ledger"):
+        ignore_ledger = bool(data.get("is_absolute_artifact") or data.get("ignore_ledger"))
+        if not ignore_ledger:
             db_conn.execute(
                     "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
                     (filepath, 'modified' if not is_new else 'added', time.time())
@@ -244,7 +244,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 old_abs_path = resolve_workspace_path(delete_source, workspace_id)
                 if os.path.exists(old_abs_path) and os.path.abspath(old_abs_path) != os.path.abspath(resolved_path):
                         os.remove(old_abs_path)
-                        hooks.emit_background('post_file_delete', filepath=delete_source, workspace_id=workspace_id)
+                        hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": delete_source, "operation": "delete", "ignore_ledger": ignore_ledger}])
                         # Clean up empty ghost directories left behind
                         try:
                             parent_dir = Path(old_abs_path).parent.as_posix()
@@ -283,7 +283,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                         targets.append(new_repo)
                         cfg["target_repos"] = targets
                         utils_core.save_json_file(cfg_path, cfg)
-        hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
+        hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "save", "ignore_ledger": ignore_ledger}])
 @fs_bp.route('/api/<workspace_id>/fs/upload', methods=['POST'])
 def api_fs_upload(workspace_id):
         """Native multipart/form-data uploader for robust binary handling."""
@@ -292,13 +292,12 @@ def api_fs_upload(workspace_id):
 
         files = request.files.getlist('file')
         dest_dir = request.form.get('dest_dir', '').strip()
-
         import werkzeug.utils
         import time
         from insetu.db import get_connection
         db_conn = get_connection("workers", workspace_id=workspace_id)
-
         uploaded_paths = []
+        mutations = []
         for file in files:
                 if file.filename == '':
                         continue
@@ -312,14 +311,15 @@ def api_fs_upload(workspace_id):
 
                 file.save(resolved_path)
                 uploaded_paths.append(filepath)
+                mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
 
                 # Trigger VFS Event Ledger sync
                 db_conn.execute(
                         "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
                         (filepath, 'modified' if not is_new else 'added', time.time())
                 )
-                hooks.emit_background('post_file_save', filepath=filepath, workspace_id=workspace_id)
 
+        hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
         db_conn.commit()
 
         if not uploaded_paths:

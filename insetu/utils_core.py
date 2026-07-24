@@ -201,7 +201,6 @@ def load_config(workspace_id=None):
         # Deep copy to prevent mutating the raw shared JSON cache
         import copy
         cfg = copy.deepcopy(load_json_file(cfg_path, {}))
-
         # Dynamic OS mapping protocol
         if cfg.get("track_os", True):
             if not any(r.get("repo_dir") == ".insetu" for r in cfg.get("target_repos", [])):
@@ -209,7 +208,7 @@ def load_config(workspace_id=None):
                     "repo_dir": ".insetu",
                     "title": "inSetu OS",
                     "domain": "System Configuration",
-                    "exts": [".json", ".md", ".txt"],
+                    "exts": [".json", ".md", ".txt", ".js", ".html", ".css", ".sh"],
                     "apply_ignore": True,
                     "repo_ignore_dirs": ["data", "workspaces", "profiles"],
                     "archive_type": "prompt-library",

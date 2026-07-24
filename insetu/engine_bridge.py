@@ -139,7 +139,7 @@ def apply_block_in_memory(content, block, silent=False):
     file_lines = content.split('\n')
     search_str = expand_macros(block["search"]).replace('\xa0', ' ')
     replace_str = expand_macros(block["replace"]).replace('\xa0', ' ')
-    if not search_str.strip(): return True, replace_str
+    if not search_str.strip(): return True, replace_str, "genesis"
 
     search_lines = search_str.split('\n')
     replace_lines = replace_str.split('\n')
@@ -147,12 +147,11 @@ def apply_block_in_memory(content, block, silent=False):
     # Scaffolding: Skip No-Ops (INS-TODO-20260708_0940)
     if is_effectively_identical(search_lines, replace_lines):
         if not silent: print("  └─ [ℹ️] No-Op: SEARCH and REPLACE blocks are identical. Skipping chunk.")
-        return True, content
-
+        return True, content, "no_op"
     for r_line in replace_lines:
         if r_line.strip().upper() == "{{UNTIL}}":
             if not silent: print(f"  └─ 🚨 TRANSACTION ERROR: LLM hallucinated {{{{UNTIL}}}} in the REPLACE block. Aborting chunk.")
-            return False, content
+            return False, content, "error"
 
     baseline_s_idx = next((idx for idx, l in enumerate(search_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"), -1)
     last_content_s_idx = next((idx for idx in reversed(range(len(search_lines))) if search_lines[idx].strip() and search_lines[idx].strip().upper() != "{{UNTIL}}"), -1)
@@ -251,7 +250,7 @@ def apply_block_in_memory(content, block, silent=False):
                     is_idempotent = True
         if is_idempotent:
             if not silent: print("  └─ [ℹ️] Idempotency: Patch state already matches target. Skipping chunk.")
-            return True, content
+            return True, content, "idempotent"
 
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
@@ -267,7 +266,7 @@ def apply_block_in_memory(content, block, silent=False):
                     while start_idx > 0 and content[start_idx - 1] in ' \t':
                         start_idx -= 1
                     if not silent: print("  └─ ⚠️  Grid desync detected. Rescued chunk via Regex Fallback.")
-                    return True, content[:start_idx] + replace_str.lstrip('\n') + content[match.end():]
+                    return True, content[:start_idx] + replace_str.lstrip('\n') + content[match.end():], "success"
             except Exception:
                 pass
         if not silent:
@@ -288,7 +287,7 @@ def apply_block_in_memory(content, block, silent=False):
             print("  └─ 🔍 DIFF ANALYSIS: The closest block on disk differed from your SEARCH block.")
             print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
 
-        return False, content
+        return False, content, "error"
 
     # --- ATOMIC S/R HEALER (Duplication Prevention) ---
     # Look ahead in the file to see if the REPLACE block contains trailing context
@@ -365,8 +364,7 @@ def apply_block_in_memory(content, block, silent=False):
                 # Snap to the discrete grid: round the tier FIRST, then multiply by the physical step
                 target_indent = max(0, actual_base_indent + (int(round(nesting_levels)) * file_step))
         new_replace_lines.append((" " * target_indent) + r_line.lstrip())
-
-    return True, "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:])
+    return True, "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:]), "success"
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     """Core transaction loop extracted to reduce cyclomatic complexity and deep nesting."""
     from insetu.sdk import ExtensionContext
@@ -439,7 +437,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     if temp_content is None: continue
                     cand_success = True
                     for b in blocks:
-                        success, _ = apply_block_in_memory(temp_content, b, silent=True)
+                        success, _, _ = apply_block_in_memory(temp_content, b, silent=True)
                         if not success:
                             cand_success = False
                             break
@@ -497,10 +495,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
         original_content = working_content
         file_success = True
         for idx, b in enumerate(blocks):
-            success, updated_content = apply_block_in_memory(working_content, b)
+            success, updated_content, chunk_status = apply_block_in_memory(working_content, b)
             if success: 
                 working_content = updated_content
-                print(f"  [✓] Chunk {idx + 1}/{len(blocks)} integrated successfully.")
+                if chunk_status in ("success", "genesis"):
+                    print(f"  [✓] Chunk {idx + 1}/{len(blocks)} integrated successfully.")
             else:
                 if not dry_run:
                     print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1}/{len(blocks)} failed.")

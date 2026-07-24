@@ -223,10 +223,10 @@ export class InSetuExtBridge extends InSetuElement {
                     const rawData = statusData.message || "";
                     let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     // Format raw log text into elegant inSetu cards
-                    safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE (.*?) ===/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
-                    safeData = safeData.replace(/^Targeting: (.*?)$/gm, '<yenvui-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono);">');
-                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.$/gm, '</div></yenvui-card>');
-                    safeData = safeData.replace(/^=== PULSE .*? COMPLETE ===/gm, '');
+                    safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE ([^\r\n]+) ===[ \t]*\r?\n?/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
+                    safeData = safeData.replace(/^Targeting: ([^\r\n]+)[ \t]*\r?\n?/gm, '<yenvui-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono); margin-top: -5px; padding-bottom: 10px;">');
+                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.[ \t]*\r?\n?/gm, '</div></yenvui-card>');
+                    safeData = safeData.replace(/^=== PULSE ([^\r\n]+) COMPLETE ===[ \t]*\r?\n?/gm, '');
                     // Embellish semantic tags
                     safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
                     safeData = safeData.replace(/\[!\]/g, '<span style="color: var(--intent-danger); font-weight: bold;">[!]</span>');
@@ -262,7 +262,8 @@ export class InSetuExtBridge extends InSetuElement {
                         BridgeStore.setState({ cells: [] });
                         // Alert listening extensions (like the Tracker) that files have been modified
                         if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                            savedFiles.forEach(f => window.inSetu.extensions.Registry.executeUIHook('zone:post-file-save', f));
+                            const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
+                            window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations });
                         }
 
                         // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
