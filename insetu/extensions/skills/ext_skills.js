@@ -529,9 +529,7 @@ export class InSetuExtSkills extends InSetuElement {
                         `;
                     })()}
                 </div>
-                <div slot="footer">
-                    <button style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px;" @click=${this._submitPracticeSession}>💾 Flush Session Data</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-success); color: white;" @click=${this._submitPracticeSession}>💾 Flush Session Data</button>
             </insetu-modal>
             <insetu-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'edit'}
@@ -565,11 +563,8 @@ export class InSetuExtSkills extends InSetuElement {
                         <input type="text" .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @input=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.target.value)} style="width:100%;">
                     </div>
                 </div>
-                <div slot="footer" style="display: flex; gap: 10px; width: 100%;">
-<button class="btn-sm" style="background: var(--intent-danger); color: white; font-weight: bold; padding: 12px 18px; 
-border: none; border-radius: 4px;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
-                    <button style="background: var(--intent-primary); font-weight: bold; flex: 1; padding: 12px;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
             </insetu-modal>
             <insetu-modal
                 ?open=${this.newSkillModalOpen}
@@ -745,15 +740,10 @@ window.ExtensionRegistry.registerExtension('skills', {
                 SkillsStore.getState().fetchAllSkills();
             }
         },
-        'zone:post-file-save': (filepath) => {
-            if (filepath && filepath.includes('.insetu/skills/')) {
-                SkillsStore.getState().fetchPlaylist(true);
-                SkillsStore.getState().fetchAllSkills();
-            }
-            return false;
-        },
-        'zone:post-file-delete': (filepath) => {
-            if (filepath && filepath.includes('.insetu/skills/')) {
+        'zone:vfs-mutated': (payload) => {
+            if (!payload || !payload.mutations) return false;
+            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/skills/'));
+            if (touchedSkill) {
                 SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }

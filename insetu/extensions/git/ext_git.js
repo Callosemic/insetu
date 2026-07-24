@@ -462,7 +462,7 @@ disconnectedCallback() {
             return a.localeCompare(b);
         });
         return html`
-            <insetu-standard-toolbar
+            <yenvui-toolbar
                 searchPlaceholder="🔍 Fuzzy search pending diffs..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
@@ -475,14 +475,14 @@ disconnectedCallback() {
                     .activeRepos=${Array.from(this.pinnedRepos)}
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
-            </insetu-standard-toolbar>
+            </yenvui-toolbar>
 
             <div class="git-body">
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
-                    <insetu-category-section titleText=${catName}>
+                    <yenvui-category-section titleText=${catName}>
                         ${categories[catName].map(f => {
                             const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
                             return html`
@@ -515,11 +515,11 @@ ${(() => {
 })()}
                             </insetu-card>
                         `;})}
-                    </insetu-category-section>
+                    </yenvui-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
-                    <insetu-category-section titleText="🧹 Sweepable State">
+                    <yenvui-category-section titleText="🧹 Sweepable State">
                         <button slot="header-actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${this._executeSweepAll}>🚀 Sweep All</button>
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                         ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
@@ -563,7 +563,7 @@ ${(() => {
                             </div>
                         ` : ''}
                     `;})}
-                    </insetu-category-section>
+                    </yenvui-category-section>
                 ` : ''}
 
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
@@ -598,9 +598,7 @@ ${(() => {
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
                     <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._executePush}>🚀 Execute Push</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._executePush}>🚀 Execute Push</button>
             </insetu-modal>
         `;
     }
@@ -1080,20 +1078,27 @@ window.ExtensionRegistry.registerExtension('git', {
     ]
 });
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    const markRepoDirty = (filepath) => {
-        if (!filepath) return false;
-        const repo = filepath.split('/')[0];
-        if (repo) {
-            const { dirtyDiffRepos } = AppStore.getState();
-            const newDirty = new Set(dirtyDiffRepos);
-            newDirty.add(repo);
+    window.inSetu.extensions.Registry.registerUIHook('zone:vfs-mutated', (payload) => {
+        if (!payload || !payload.mutations) return false;
+
+        let reposChanged = false;
+        const { dirtyDiffRepos } = AppStore.getState();
+        const newDirty = new Set(dirtyDiffRepos);
+
+        payload.mutations.forEach(m => {
+            if (!m.filepath) return;
+            const repo = m.filepath.split('/')[0];
+            if (repo) {
+                newDirty.add(repo);
+                reposChanged = true;
+            }
+        });
+
+        if (reposChanged) {
             AppStore.setState({ dirtyDiffRepos: newDirty });
         }
-        return false;
-    };
+    });
 
-    window.inSetu.extensions.Registry.registerUIHook('zone:post-file-save', markRepoDirty);
-    window.inSetu.extensions.Registry.registerUIHook('zone:post-file-delete', markRepoDirty);
     window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
         if (data.parentId === 'context' && data.subId === 'diffs') {
             generateDiffs(data.forceRefresh);

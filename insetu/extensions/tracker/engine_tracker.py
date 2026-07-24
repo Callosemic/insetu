@@ -59,27 +59,29 @@ def init_tracker_db():
             VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
         """, (f"trk_arch_{ws_id}",))
         conn.commit()
-@hooks.on('post_file_save')
-def handle_tracker_file_save(filepath, workspace_id=None):
-    if ".tracker/" in filepath and filepath.endswith(".md"):
-        from insetu.sdk import ExtensionContext
-        ctx = ExtensionContext('tracker', workspace_id)
-        abs_path = ctx.resolve_path(filepath)
-        if os.path.exists(abs_path):
-            _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
+@hooks.on('vfs_mutated')
+def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
+    if not mutations: return
 
-            # Elegant grab: Automatically heal misplaced or malformed tickets immediately upon save
-            try:
-                enforce_declarative_tickets(workspace_id=workspace_id, specific_file=filepath)
-            except Exception as e:
-                print(f"Targeted tracker housekeeping failed: {e}")
-@hooks.on('post_file_delete')
-def handle_tracker_file_delete(filepath, workspace_id=None):
-    if ".tracker/" in filepath and filepath.endswith(".md"):
-        from insetu.sdk import ExtensionContext
-        ctx = ExtensionContext('tracker', workspace_id)
-        ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
-        ctx.db.commit()
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
+
+    for m in mutations:
+        filepath = m.get("filepath", "")
+        op = m.get("operation")
+
+        if ".tracker/" in filepath and filepath.endswith(".md"):
+            if op == "save":
+                abs_path = ctx.resolve_path(filepath)
+                if os.path.exists(abs_path):
+                    _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
+                    try:
+                        enforce_declarative_tickets(workspace_id=workspace_id, specific_file=filepath)
+                    except Exception as e:
+                        print(f"Targeted tracker housekeeping failed: {e}")
+            elif op == "delete":
+                ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
+                ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
     from insetu.sdk import ExtensionContext

@@ -44,11 +44,18 @@ def provide_available_prompts(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies available prompts to the Gather extension's UI dropdowns."""
     ctx = ExtensionContext('prompts', workspace_id)
     prompts = []
-    # VFS Walk natively yields paths relative to the workspace root.
-    for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"]):
-        prompts.append(ws_rel_path)
 
-    return prompts
+    # Read natively from the OS manifest to ensure SSOT synchronization
+    manifest = ctx.manifest
+    if "prompts_context.txt" in manifest:
+        prompts = manifest["prompts_context.txt"].get("files", [])
+    # Fallback to physical disk walk if the manifest hasn't compiled yet
+    if not prompts:
+        for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"]):
+            prompts.append(ws_rel_path)
+
+    # Enforce extension filtering so UI code isn't treated as a prompt
+    return [p for p in prompts if p.lower().endswith(('.md', '.txt'))]
 
 @prompts_bp.route('list', methods=['GET'])
 def api_prompts_list(ctx):

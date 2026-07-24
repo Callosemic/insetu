@@ -395,7 +395,7 @@ export class InSetuExtCitations extends InSetuElement {
             ? window.inSetu.utils.fuzzyFilterObjects(pinnedSet, this.mainSearchQuery, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`)
             : pinnedSet;
         return html`
-            <insetu-standard-toolbar
+            <yenvui-toolbar
                 searchPlaceholder="🔍 Fuzzy search personal library..."
                 .searchQuery=${this.mainSearchQuery}
                 @search-changed=${(e) => { this.mainSearchQuery = e.detail.value; }}
@@ -409,7 +409,7 @@ export class InSetuExtCitations extends InSetuElement {
                         @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
                     </insetu-repo-filter>
                 </div>
-            </insetu-standard-toolbar>
+            </yenvui-toolbar>
             <div>
                 ${this.mainLoading ? html`<div class="spinner" style="display: block;">Loading library...</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -582,14 +582,11 @@ export class InSetuExtCitations extends InSetuElement {
 
                     <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:4px;">Date <span style="font-weight:normal;">(YYYY or YYYY-MM-DD)</span>:</label>
                     <input type="text" style="width: 100%; padding: 8px; margin-bottom: 15px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem;" .value=${this.editForm.dateStr} @input=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, dateStr: e.target.value } }))}>
-
                     <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
                     <textarea style="flex: 1; min-height: 200px; margin-bottom: 15px; font-family: monospace; font-size: 13px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical;" .value=${this.editForm.jsonStr} @input=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: e.target.value } }))}></textarea>
                 </div>
-                <div slot="footer" style="display: flex; width: 100%;">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-danger); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._deleteDynamicCitation}>🗑️ Delete</button>
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this._saveDynamicCitation}>💾 Save Changes</button>
-                </div>
+                <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteDynamicCitation}>🗑️ Delete</button>
+                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._saveDynamicCitation}>💾 Save Changes</button>
             </insetu-modal>
         `;
     }

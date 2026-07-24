@@ -432,9 +432,7 @@ export class InSetuExtResearch extends InSetuElement {
                         </div>
                     </div>
                 </div>
-                <div slot="footer">
-                    <insetu-async-btn style="width: 100%; display: block;" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
-                </div>
+                <insetu-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
             </insetu-modal>
         `;
     }

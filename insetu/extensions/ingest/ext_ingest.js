@@ -127,12 +127,10 @@ export class InSetuExtIngestModals extends InSetuElement {
                     ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
                     ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}
                 </div>
-                <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
-                        ?disabled=${!!this.ingestStatus && this.ingestStatus !== '✅ Success'} @click=${this._executeImportUrl}>
-                        📥 Fetch & Convert
-                    </button>
-                </div>
+                <button slot="footer" style="background: var(--intent-primary); color: white;"
+                    ?disabled=${!!this.ingestStatus && this.ingestStatus !== '✅ Success'} @click=${this._executeImportUrl}>
+                    📥 Fetch & Convert
+                </button>
             </insetu-modal>
         `;
     }

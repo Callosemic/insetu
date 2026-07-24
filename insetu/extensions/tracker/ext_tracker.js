@@ -53,15 +53,10 @@ export const KanbanStore = createExtensionStore('Kanban', {
 window.inSetu.stores.Kanban = KanbanStore;
 // UI Hooks for real-time reactivity
 if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:post-file-save', (filepath) => {
-        if (filepath && filepath.includes('.tracker/') && filepath.endsWith('.md')) {
-            KanbanStore.getState().fetchTasks();
-        }
-    });
-    window.ExtensionRegistry.registerUIHook('zone:post-file-delete', (filepath) => {
-        if (filepath && filepath.includes('.tracker/') && filepath.endsWith('.md')) {
-            KanbanStore.getState().fetchTasks();
-        }
+    window.ExtensionRegistry.registerUIHook('zone:vfs-mutated', (payload) => {
+        if (!payload || !payload.mutations) return;
+        const touchedTracker = payload.mutations.some(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
+        if (touchedTracker) KanbanStore.getState().fetchTasks();
     });
 }
 
@@ -320,9 +315,8 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
             : filteredTasks;
 
         const hasFilters = !this.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
-
         return html`
-            <insetu-standard-toolbar
+            <yenvui-toolbar
                 searchPlaceholder="🔍 Fuzzy search tickets..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
@@ -407,7 +401,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                             </div>
                         ` : ''}
                 </div>
-            </insetu-standard-toolbar>
+            </yenvui-toolbar>
 
             <div class="tracker-body">
                 ${this.activeTab === 'todos' ? this._renderColumns('todos', textFilteredTasks) : ''}
@@ -1043,10 +1037,6 @@ window.ExtensionRegistry.registerExtension('tracker', {
                 window.dispatchEvent(new CustomEvent('insetu:tracker:open-edit-task', { detail: { filepath }, bubbles: true, composed: true }));
                 return true;
             }
-            return false;
-        },
-        'zone:post-file-save': (filepath) => {
-            if (filepath.includes('.tracker/')) KanbanStore.getState().fetchTasks();
             return false;
         },
         'zone:tab-changed': (tabId) => {

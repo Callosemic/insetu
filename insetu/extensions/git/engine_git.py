@@ -544,6 +544,12 @@ def provide_available_diffs(workspace_id=None, **kwargs):
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_diffs.add(f"diffs/{module}_diffs.txt")
+    # Read natively from the OS manifest to ensure SSOT synchronization
+    manifest = ctx.manifest
+    for key in manifest.keys():
+        if key.endswith('_diffs.txt'):
+            expected_diffs.add(f"diffs/{key}")
+
     if os.path.exists(paths["diffs_dir"]):
         for f in os.listdir(paths["diffs_dir"]):
             if f.endswith('_diffs.txt') or '_diffs_part' in f:

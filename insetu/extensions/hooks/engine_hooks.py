@@ -65,13 +65,16 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
             raise RuntimeError(f"Command failed:\n{err_summary}")
     except Exception as e:
         raise RuntimeError(f"Execution Error: {str(e)}")
-@hooks.on('post_file_save', priority=100)
-@hooks.on('post_file_delete', priority=100)
-@hooks.on('vfs_transaction_committed', priority=100)
-def process_vfs_triggers(files=None, filepath=None, workspace_id=None, **kwargs):
+@hooks.on('vfs_mutated', priority=100)
+def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
     """Event Bus Hook: Evaluates active automation rules whenever VFS commits settle."""
-    if not files and filepath:
-        files = [filepath]
+    if not mutations:
+        return
+
+    # Security/Noise Guardrail: Do not trigger automations for system-level ledger-ignored writes
+    # (e.g. CODE_INDEX.md cartography, or contexts/ payload generation)
+    files = [m["filepath"] for m in mutations if not m.get("ignore_ledger")]
+
     if not files:
         return
         
@@ -129,18 +132,20 @@ def process_vfs_triggers(files=None, filepath=None, workspace_id=None, **kwargs)
         elif r_type == 'repo_bucket_update':
             if r_target in touched_buckets or (r_target.startswith('ALL::') and any(b.endswith('::' + r_target.split('::')[1]) for b in touched_buckets)):
                 should_trigger = True
-
         if should_trigger:
+            import time
             from insetu.db import get_connection
             try:
                 w_conn = get_connection("workers", workspace_id=workspace_id)
+                # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds 
+                # due to overlapping individual and transaction-level VFS hooks.
                 recent = w_conn.execute("""
                     SELECT id FROM immediate_jobs 
                     WHERE ext_name = 'hooks' 
                     AND callback_name = 'execute_rule_task' 
-                    AND status = 'processing'
+                    AND (status IN ('pending', 'processing') OR created_at > ?)
                     AND args_json LIKE ?
-                """, (f'%"rule_id": "{rule["id"]}"%',)).fetchone()
+                """, (time.time() - 3.0, f'%"rule_id": "{rule["id"]}"%')).fetchone()
                 if recent:
                     continue
             except Exception:

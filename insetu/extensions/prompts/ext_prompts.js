@@ -211,28 +211,10 @@ window.ExtensionRegistry.registerExtension('prompts', {
             }
             return null;
         },
-        'zone:post-file-save': (filepath) => {
-            if (isPromptPath(filepath)) syncPromptsState();
-            return false;
-        },
-        'zone:post-file-delete': (filepath) => {
-            if (isPromptPath(filepath)) syncPromptsState();
-            return false;
-        },
-        'zone:post-file-move': () => {
-            syncPromptsState();
-            return false;
-        },
-        'zone:post-file-rename': () => {
-            syncPromptsState();
-            return false;
-        },
-        'zone:post-folder-create': (dirpath) => {
-            if (isPromptPath(dirpath)) syncPromptsState();
-            return false;
-        },
-        'zone:post-dir-create': (dirpath) => {
-            if (isPromptPath(dirpath)) syncPromptsState();
+        'zone:vfs-mutated': (payload) => {
+            if (!payload || !payload.mutations) return false;
+            const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
+            if (touchedPrompt) syncPromptsState();
             return false;
         },
         'zone:soft-refresh': () => {

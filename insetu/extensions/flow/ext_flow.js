@@ -266,7 +266,7 @@ export class InSetuExtFlow extends InSetuElement {
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
-                <insetu-standard-toolbar
+                <yenvui-toolbar
                     searchPlaceholder="🔍 Fuzzy search workflows..."
                     .searchQuery=${this.searchQuery}
                     @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
@@ -279,7 +279,7 @@ export class InSetuExtFlow extends InSetuElement {
                         .activeRepos=${Array.from(this.pinnedRepos)}
                         @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                     </insetu-repo-filter>
-                </insetu-standard-toolbar>
+                </yenvui-toolbar>
 
             <div class="flow-body">
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
@@ -433,10 +433,8 @@ export class InSetuExtFlow extends InSetuElement {
                                             ` : ''}
                                     </div>
                             </div>
-                            <div slot="footer">
-                                    ${this._editingBatch?.id ? html`<button style="flex: 1; padding: 15px; background: var(--intent-danger); color: white; border: none; border-right: 1px solid var(--border); font-weight: bold; cursor: pointer;" @click=${this.deleteEditBatch}>🗑️ Delete Batch</button>` : ''}
-                                    <button style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${this.saveEditBatch}>💾 Save Batch</button>
-                            </div>
+                            ${this._editingBatch?.id ? html`<button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this.deleteEditBatch}>🗑️ Delete Batch</button>` : ''}
+                            <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveEditBatch}>💾 Save Batch</button>
                     </insetu-modal>
 
                     <insetu-modal ?open=${this._showSelectContexts} titleText="Select Contexts" @modal-closed=${() => this._showSelectContexts = false}>
@@ -449,14 +447,12 @@ export class InSetuExtFlow extends InSetuElement {
                                             </div>
                                     `)}
                             </div>
-                            <div slot="footer">
-                                    <button style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;" @click=${() => { 
-                                        if (this._selectingFor === 'exists') this._editForm.showIfExists = [...this._tempContexts];
-                                        else if (this._selectingFor === 'missing') this._editForm.showIfMissing = [...this._tempContexts];
-                                        else this._editForm.includes = [...this._tempContexts]; 
-                                        this._showSelectContexts = false; 
-                                    }}>✅ Confirm Selection</button>
-                            </div>
+                            <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => { 
+                                if (this._selectingFor === 'exists') this._editForm.showIfExists = [...this._tempContexts];
+                                else if (this._selectingFor === 'missing') this._editForm.showIfMissing = [...this._tempContexts];
+                                else this._editForm.includes = [...this._tempContexts]; 
+                                this._showSelectContexts = false; 
+                            }}>✅ Confirm Selection</button>
                     </insetu-modal>
                     <insetu-modal ?open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0;">

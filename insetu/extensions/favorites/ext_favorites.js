@@ -125,7 +125,10 @@ export class InSetuExtFavorites extends InSetuElement {
         items: { type: Array },
         loading: { type: Boolean }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
+        .favorites-body { flex: 1; overflow-y: auto; padding: 20px; }
+    `];
 
     constructor() {
         super();
@@ -161,16 +164,15 @@ export class InSetuExtFavorites extends InSetuElement {
             if (this.sys && this.sys.switchSubTab) this.sys.switchSubTab('files');
         }
     }
-
     render() {
-        if (this.loading) return html`<div class="spinner" style="display:block;">Loading bookmarks...</div>`;
-        if (this.items.length === 0) return html`<p style="color: var(--text-muted); font-style: italic;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p>`;
+        if (this.loading) return html`<div class="favorites-body"><div class="spinner" style="display:block; margin-top: 0;">Loading bookmarks...</div></div>`;
+        if (this.items.length === 0) return html`<div class="favorites-body"><p style="color: var(--text-muted); font-style: italic; margin: 0;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></div>`;
 
         return html`
-            <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="favorites-body" style="display: flex; flex-direction: column; gap: 8px;">
                 ${this.items.map(item => {
                     const isContext = item.type === 'file' && (item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
-                    const eType = item.type === 'folder' ? 'repo' : (isContext ? 'file:context' : 'file');
+                    const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
                     return html`
                     <insetu-card
                         .filename=${item.path}
@@ -205,7 +207,13 @@ window.ExtensionRegistry.registerExtension('favorites', {
             targetEntity: 'repo',
             id: 'fave_toggle_repo',
             order: -1,
-            component: (data) => html`<insetu-fav-btn .filepath=${data.repoDir}></insetu-fav-btn>`
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath || data.repoDir}></insetu-fav-btn>`
+        },
+        {
+            targetEntity: 'folder',
+            id: 'fave_toggle_folder',
+            order: -1,
+            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`
         }
     ],
     layoutSlots: [
@@ -226,11 +234,17 @@ window.ExtensionRegistry.registerExtension('favorites', {
         },
         'zone:fs-dropdown-menu': (data) => {
             if (data.currentPath && !data.isPrompts) {
+                const isPinned = FavoritesStore.getState().items.some(i => i.path === data.currentPath);
                 data.menuItems.push({
-                    label: 'Pin Current Directory',
-                    icon: '⭐',
+                    label: isPinned ? 'Unpin Current Directory' : 'Pin Current Directory',
+                    icon: isPinned ? '⭐' : '☆',
                     onClick: async () => {
-                        await FavoritesStore.getState().addFavorite(data.currentPath, 'folder');
+                        if (isPinned) {
+                            const fav = FavoritesStore.getState().items.find(i => i.path === data.currentPath);
+                            if (fav) await FavoritesStore.getState().removeFavorite(fav.id);
+                        } else {
+                            await FavoritesStore.getState().addFavorite(data.currentPath, 'folder');
+                        }
                     }
                 });
             }
