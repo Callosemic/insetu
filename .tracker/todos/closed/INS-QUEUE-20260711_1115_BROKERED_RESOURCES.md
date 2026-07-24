@@ -1,11 +1,11 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-QUEUE-20260711_1115_BROKERED_RESOURCES
 title: "SDK V2 Frontend: Implement Brokered Resource Tracking in InSetuElement Base Class"
 created_at: 2026-07-11T11:15:00
-closed_at: null
+closed_at: 2026-07-23T16:00:00
 sub_bucket: "None"
 tags: ["Architecture", "Frontend", "SDK", "DX"]
 ---

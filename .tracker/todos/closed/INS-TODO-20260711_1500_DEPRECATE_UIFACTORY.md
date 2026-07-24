@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
+status: "closed"
 id: INS-TODO-20260711_1500_DEPRECATE_UIFACTORY
 title: "Deprecate UIFactory and Finalize Declarative Dropdown Web Component"
 created_at: 2026-07-11T15:00:00
-closed_at: null
+closed_at: 2026-07-23T16:00:00
 sub_bucket: "None"
-delivery_date: "2026-08-09"
 tags: ["Frontend", "UI", "LitElement", "Refactor"]
 ---
 
