@@ -451,8 +451,6 @@ disconnectedCallback() {
             });
         });
         const sortedCats = Object.keys(categories).sort((a, b) => {
-            if (a === "Quick-Pack Clipboard") return -1;
-            if (b === "Quick-Pack Clipboard") return 1;
             const iA = this.categoryOrder.indexOf(a) === -1 ? 999 : this.categoryOrder.indexOf(a);
             const iB = this.categoryOrder.indexOf(b) === -1 ? 999 : this.categoryOrder.indexOf(b);
             if (iA !== iB) return iA - iB;
@@ -491,7 +489,7 @@ disconnectedCallback() {
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
                                 entityType="file:diff"
-                                .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: f.isFS }}
+                                .entityData=${{ filepath: `system://diffs/${f.filename}`, repoDir: f.repoDir, isFS: f.isFS }}
                                 @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
 ${(() => {
     const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;

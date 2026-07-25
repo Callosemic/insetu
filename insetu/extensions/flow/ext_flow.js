@@ -222,12 +222,20 @@ export class InSetuExtFlow extends InSetuElement {
         const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, -1);
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this._viewingBatch.response_path.replace('{date}', dStr);
+
+        const allRepos = AppStore.getState().allRepos || [];
+        const isRepoTarget = allRepos.includes(finalPath.split('/')[0]);
+
         const payload = {
-            filepath: `${artifactsDir}/${finalPath}`,
+            filepath: isRepoTarget ? finalPath : `${artifactsDir}/${finalPath}`,
             content: content,
             original_response_path: this._viewingBatch.response_path
         };
-        if (this._viewingBatch.archive_path) payload.archive_path = `${artifactsDir}/${this._viewingBatch.archive_path}`;
+
+        if (this._viewingBatch.archive_path) {
+            const isArchiveRepoTarget = allRepos.includes(this._viewingBatch.archive_path.split('/')[0]);
+            payload.archive_path = isArchiveRepoTarget ? this._viewingBatch.archive_path : `${artifactsDir}/${this._viewingBatch.archive_path}`;
+        }
         this.sys.executeWorkspaceMutation('fs/save', payload, {
             loadingText: 'Saving...',
             onSuccess: () => {
@@ -309,8 +317,8 @@ export class InSetuExtFlow extends InSetuElement {
                                         .detailText=${sizeStr ? `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename} | ${sizeStr}` : `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename}`}
                                         icon=""
                                         intentColor="var(--intent-primary)"
-                                        entityType="workflow_batch"
-                                        .entityData=${b}
+                                        entityType="file:workflow_batch"
+                                        .entityData=${{ ...b, filepath: `system://workflows/workflow_${b.id}_context.txt` }}
                                         @card-clicked=${() => this.openBatchModal(b)}>
                                 </insetu-card>
                                 `;
