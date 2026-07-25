@@ -257,7 +257,48 @@ setInterval(() => {
 import './api.js'; // Mount explicit API client and network interceptors
 
 // Restore UI State on Load
+async function executeSecurityHandshake() {
+    // Attempt a seamless, zero-config Tailscale or Localhost handshake first
+    let res = await fetch('/auth/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    });
+
+    if (res.ok) {
+        const data = await res.json();
+        sessionStorage.setItem('insetu_boot_token', data.token);
+        AppStore.setState({ authToken: data.token });
+        return true;
+    }
+
+    // Fallback: Challenge issued, prompt client for static profile access token
+    if (res.status === 401) {
+        const userToken = prompt("🔑 inSetu Security Gate\nEnter the persistent 'auth_token' defined in your config.json:");
+        if (!userToken) return false;
+
+        let retryRes = await fetch('/auth/bootstrap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: userToken.trim() })
+        });
+
+        if (retryRes.ok) {
+            const data = await retryRes.json();
+            sessionStorage.setItem('insetu_boot_token', data.token);
+            AppStore.setState({ authToken: data.token });
+            return true;
+        }
+    }
+    return false;
+}
+
 window.addEventListener('DOMContentLoaded', async () => {
+    const authenticated = await executeSecurityHandshake();
+    if (!authenticated) {
+        document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
+        return;
+    }
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
@@ -277,6 +318,13 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     await bootExtensions();
+
+    // Load the available multi-tenant workspaces into the UI securely
+    await loadWorkspaces();
+
+    // Wait for configuration and topology to settle before mounting layout
+    await initializeWorkspaceTopology();
+
     // Compile the primary and settings layouts cleanly from the registry blueprints
     if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
         window.ExtensionRegistry.compileLayout();
@@ -352,7 +400,7 @@ async function loadWorkspaces() {
         console.error("Failed to load workspaces:", e);
     }
 }
-loadWorkspaces();
+
 let lastRefreshed = null;
 
 function updateRefreshText() {
@@ -708,51 +756,40 @@ async function fullRefresh() {
         if (btn) btn.innerText = "🔄 Full UI Refresh";
     }
 }
-/* ==========================================================================
-    BRIDGE LOGIC (Extracted to bridge.js)
-    ========================================================================== */
-const initialWs = AppStore.getState().activeWorkspace || 'default';
-fetch(`/api/${initialWs}/repos`).then(r => r.json()).then(d => {
-AppStore.setState({
-    allRepos: d.repos,
-    targetConfigs: d.targets || [],
-    virtualContexts: d.virtual_contexts || [],
-    categoryOrder: d.category_order || [],
-    tabOrder: d.tab_order || [],
-    hiddenOutputs: d.hidden_outputs || []
-});
-if (d.config_missing) {
-    const banner = document.createElement('div');
-    banner.id = 'missing-config-banner';
-    banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
-    banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
-    document.body.appendChild(banner);
-}
-});
-
-/* ==========================================================================
-    TRACKER LOGIC (Extracted to kanban.js)
-    ========================================================================== */
-/* ==========================================================================
-    AUTO-HYDRATION (RUNS ON PAGE LOAD)
-    ========================================================================== */
-(async function hydrateEcosystem() {
+async function initializeWorkspaceTopology() {
+    // 1. Fetch Repository Configurations
     try {
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        const rRes = await window.inSetu.api.workspace('repos');
+        if (rRes.ok) {
+            const d = await rRes.json();
+            AppStore.setState({
+                allRepos: d.repos,
+                targetConfigs: d.targets || [],
+                virtualContexts: d.virtual_contexts || [],
+                categoryOrder: d.category_order || [],
+                tabOrder: d.tab_order || [],
+                hiddenOutputs: d.hidden_outputs || []
+            });
+            if (d.config_missing) {
+                const banner = document.createElement('div');
+                banner.id = 'missing-config-banner';
+                banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
+                banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
+                document.body.appendChild(banner);
+            }
+        }
+    } catch(e) { console.error("Topology fetch failed:", e); }
 
-        // Lazy Hydration: Attempt to fetch existing manifest first to prevent N+1 compiler thrashing
+    // 2. Auto-Hydrate Manifest
+    try {
         let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
-        // Only compile context if the manifest is genuinely empty (e.g., first daemon boot)
         if (Object.keys(manifestData).length === 0) {
             await executeSystemCompile();
             manifestData = AppStore.getState().manifest;
         }
-
-        if (mRes.ok) {
+        if (mRes.ok || manifestData) {
             AppStore.setState({ manifest: manifestData });
-
-            // Emit a global hydrate event so extensions can refresh their states
             if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
                 const activeTab = document.querySelector('.tab-content.active');
                 if (activeTab) {
@@ -764,7 +801,7 @@ if (d.config_missing) {
     } catch (e) {
         console.error("Auto-hydration failed:", e);
     }
-})();
+}
 
 /* ==========================================================================
             ES6 MODULE PREPARATION (WINDOW BRIDGE)

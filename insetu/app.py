@@ -34,10 +34,24 @@ from insetu.routes_fs import fs_bp
 from insetu.routes_bridge import bridge_bp
 from insetu.routes_system import system_bp
 from insetu.engine_gather import gather_bp
+from insetu.auth import auth_bp, BOOT_TOKEN
 app.register_blueprint(fs_bp)
 app.register_blueprint(bridge_bp.bp if hasattr(bridge_bp, 'bp') else bridge_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(gather_bp.bp if hasattr(gather_bp, 'bp') else gather_bp)
+app.register_blueprint(auth_bp)
+@app.before_request
+def enforce_token_gate():
+    """Universal interceptor enforcing token verification on all REST paths."""
+    # Always allow core landing, public assets, and the auth route to bypass checks
+    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap'] or request.path.startswith('/static/'):
+        return None
+
+    # Check header first, fallback to query parameter for WebSockets
+    client_token = request.headers.get('X-InSetu-Token') or request.args.get('token')
+    if not client_token or client_token != BOOT_TOKEN:
+        return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
+
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
     from insetu.utils_core import load_config, _cwd

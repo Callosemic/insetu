@@ -279,7 +279,6 @@ window.inSetu.utils.pollJob = function(jobId, options = {}) {
         try {
             const res = await window.inSetu.api.system(`jobs/${jobId}`);
             if (!res.ok) {
-                if (res.status === 404) return onError(new Error("Job not found (404)."));
                 throw new Error(`HTTP ${res.status}`);
             }
             const data = await res.json();
@@ -295,7 +294,13 @@ window.inSetu.utils.pollJob = function(jobId, options = {}) {
                 onError(new Error(data.message || "Job failed."));
             }
         } catch (e) {
-            onError(e);
+            // Silent retry for network interruptions and brief 404/502s during reboot
+            if (retries < maxRetries) {
+                retries++;
+                setTimeout(poll, interval);
+            } else {
+                onError(e);
+            }
         }
     };
     setTimeout(poll, 500);

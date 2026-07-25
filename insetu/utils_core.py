@@ -358,6 +358,17 @@ def generate_text_chunks(blocks, chunk_limit=400000):
         current_length += block_len
     if current_chunk:
         yield "".join(current_chunk)
+def evaluate_circuit_breaker(touched_count, total_count, threshold=0.5):
+    """
+    Centralized Circuit Breaker Evaluation (ADR 0018 / Ecosystem Generalization).
+    Determines whether a differential processing operation (e.g., RAG context compilation)
+    exceeds the touched item ratio threshold and should escalate to a full sweep.
+    """
+    if not total_count or total_count <= 0:
+        return False
+    return (touched_count / total_count) > threshold
+
+
 def build_tree_dict(file_paths):
     tree = {}
     for path in file_paths:

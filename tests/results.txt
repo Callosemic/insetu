@@ -3,6 +3,51 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:36
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:75
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:131
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: PULL_TIMEOUT_CIRCUIT_BREAKER] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/git/engine_git.py:826
+   ↳ Subprocess 'git pull' invoked without an explicit timeout circuit breaker.
+
+❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:52
+   ↳ Subprocess call outside of designated engines.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:137
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:240
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:90
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/research/engine_research.py:11
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/tracker/engine_tracker.py:10
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
+❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/tracker/engine_tracker.py:55
+   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, or ctx.db instead.
+
 🔍 Sweeping JavaScript Frontend (Regex Analysis)...
+❌ [VIOLATION: DROPDOWN_CLICK_OUTSIDE_VIOLATION] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/bridge.js:1
+   ↳ Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.
+
+❌ [VIOLATION: LEGACY_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1150
+   ↳ Legacy modal layout class detected. Migrate to <yenvui-modal> or <insetu-modal> primitives.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_primitives.js:156
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: DROPDOWN_CLICK_OUTSIDE_VIOLATION] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:1
+   ↳ Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.
+
 ============================================================
-✅ SUCCESS: Codebase complies with all engineering standards.
+❌ FAILED: Found 15 architectural violations.

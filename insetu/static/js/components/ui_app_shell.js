@@ -191,6 +191,7 @@ export class InSetuAppShell extends InSetuElement {
                         ${this.subTabs[pTab.id] && this.subTabs[pTab.id].length > 0 ? html`
                             <yenvui-tabs 
                                 variant="sub"
+                                ?cacheViews=${true}
                                 .tabs=${this.subTabs[pTab.id]} 
                                 .activeTab=${this.activeSubs[pTab.id]} 
                                 @yenvui-tab-selected=${(e) => this._handleSubSelect(pTab.id, e)}>
@@ -201,15 +202,6 @@ export class InSetuAppShell extends InSetuElement {
                                         </div>
                                     `)}
                                 </div>
-
-                                <div class="nested-tab-container">
-                                    ${this.subTabs[pTab.id].map(sTab => html`
-                                        <div id="sub-${sTab.id}" style="display: ${this.activeSubs[pTab.id] === sTab.id ? 'flex' : 'none'}; flex-direction: column; flex: 1; height: 100%; min-height: 0;" data-ext="${sTab.ext}" class="screen active">
-                                            ${this._renderDynamicComponent(sTab.component, sTab.id)}
-                                        </div>
-                                    `)}
-                                </div>
-
                             </yenvui-tabs>
                         ` : html`
                             <div class="nested-tab-container">

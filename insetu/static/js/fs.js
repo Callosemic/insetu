@@ -1409,7 +1409,7 @@ export class InSetuVFSModals extends InSetuElement {
         const m = this.modals;
         if (!m) return '';
         return html`
-            <insetu-modal ?open=${m.move?.open} ?fullscreen=${true} titleText="Move File to..." zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
+            <insetu-modal ?open=${m.move?.open} ?fullscreen=${true} titleText="Move File to..." @modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; min-height: 0;">
                     <input type="text" .value=${m.move?.destPath || ''} @input=${e => {
                         const newDest = e.target.value;
@@ -1429,7 +1429,7 @@ export class InSetuVFSModals extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${executeMove}>🚚 Move File</button>
             </insetu-modal>
-            <insetu-modal ?open=${m.newFile?.open} ?fullscreen=${true} titleText="Create New Workspace File" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+            <insetu-modal ?open=${m.newFile?.open} ?fullscreen=${true} titleText="Create New Workspace File" @modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
                     <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1439,7 +1439,7 @@ export class InSetuVFSModals extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>
             </insetu-modal>
-            <insetu-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
+            <insetu-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFolder?.basePath}</span></label>
                     <input type="text" placeholder="Directory name..." .value=${m.newFolder?.folderName || ''} @input=${e => FsStore.getState().setModal('newFolder', { folderName: e.target.value })} style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1470,7 +1470,7 @@ export class InSetuVFSModals extends InSetuElement {
                     ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
                 </button>
             </insetu-modal>
-            <insetu-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
+            <insetu-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" @modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
                         <div class="sub-tabs">
@@ -1519,7 +1519,7 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
             </insetu-modal>
-<insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} zIndex="3100" @modal-closed=${closeBrowseModal}>
+<insetu-modal ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} @modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         <insetu-file-tree 
             basePath=""
@@ -1537,7 +1537,7 @@ export class InSetuVFSModals extends InSetuElement {
         <button slot="footer" style="background: var(--intent-success); color: white;" @click=${confirmFolderSelection}>✅ Select This Folder</button>
     ` : ''}
 </insetu-modal>
-            <insetu-modal ?open=${m.quickPack?.open} ?fullscreen=${true} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" zIndex="3100" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
+            <insetu-modal ?open=${m.quickPack?.open} ?fullscreen=${true} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0; overflow-y: auto; padding-right: 10px;">
                     ${m.quickPack?.files?.map(f => html`
                         <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">

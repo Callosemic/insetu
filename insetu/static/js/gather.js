@@ -170,11 +170,16 @@ export class InSetuExtGather extends InSetuElement {
         this.manifestFiles = Object.keys(aState.manifest || {});
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
         this.allRepos = aState.allRepos || [];
-
         const gState = GatherStore.getState();
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
+
+        this.registerGlobalListener('insetu:gather:view-parts', window, (e) => {
+            this.activeChunkFile = e.detail.filepath;
+            this.chunkModalOpen = true;
+            this.requestUpdate();
+        });
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -347,13 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return chunks && chunks.length > 1;
                 },
                 onClick: (data, e) => {
-                    const shell = document.querySelector('insetu-app-shell');
-                    const gatherEl = shell ? shell.shadowRoot.querySelector('insetu-ext-gather') : document.querySelector('insetu-ext-gather');
-                    if (gatherEl) {
-                        gatherEl.activeChunkFile = data.filepath;
-                        gatherEl.chunkModalOpen = true;
-                        gatherEl.requestUpdate();
-                    }
+                    window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: data.filepath } }));
                 }
             }
         ],

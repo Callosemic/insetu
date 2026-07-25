@@ -119,6 +119,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
 
+    def visit_Compare(self, node):
+        if self.filename.startswith("engine_") and self.filename != "utils_core.py":
+            if isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Div):
+                for op, comparator in zip(node.ops, node.comparators):
+                    if isinstance(op, (ast.Gt, ast.GtE)) and isinstance(comparator, ast.Constant):
+                        if isinstance(comparator.value, float) and 0.0 < comparator.value < 1.0:
+                            report_violation("CIRCUIT_BREAKER_CENTRALIZATION", self.filepath, node.lineno, "Inline ratio threshold math detected. Use utils_core.evaluate_circuit_breaker() instead.")
+        self.generic_visit(node)
+
     def visit_With(self, node):
         for item in node.items:
             if isinstance(item.context_expr, ast.Call):
@@ -208,6 +217,14 @@ def check_python_files():
 
                         if visitor.has_save_json and not visitor.has_cache_clear and file in ["routes_system.py", "extension.py", "app.py"]:
                             report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_file for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
+
+                        if file == "app.py":
+                            has_token_gate = any(
+                                isinstance(n, ast.FunctionDef) and n.name == "enforce_token_gate"
+                                for n in ast.walk(tree)
+                            )
+                            if not has_token_gate:
+                                report_violation("REST_SECURITY_GATE_MANDATE", filepath, 1, "Core app.py is missing the mandatory enforce_token_gate() before_request hook.")
 
                         # 4. Extension DAG Compliance
                         is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
@@ -362,8 +379,8 @@ def check_javascript_files():
                     # 14. Global Fetch Interceptor Bypass
                     if is_extension and local_fetch_wrapper_pattern.search(line):
                         report_violation("GLOBAL_UTILITY_BYPASS", filepath, line_num, "Localized API fetch wrapper detected. Utilize the centralized window.inSetu.fetch utility to ensure global interceptor compliance.")
-                    # 15. Explicit API Client Mandate in Extensions (ADR 0016)
-                    if is_extension and raw_fetch_pattern.search(line):
+                    # 15. Explicit API Client Mandate in Extensions & Store (ADR 0016)
+                    if (is_extension or file == "store.js") and raw_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Raw fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
 
                     # 28. Banned Chassis Import in Extensions (ADR 0024)

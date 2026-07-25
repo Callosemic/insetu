@@ -4,7 +4,7 @@ import json
 import datetime
 import subprocess
 from flask import jsonify
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, generate_ascii_tree
+from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, generate_ascii_tree, evaluate_circuit_breaker
 from insetu.sdk import InSetuExtension
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
@@ -271,8 +271,8 @@ def _process_vfs_ledger(workspace_id="default"):
         return
     last_mut = row['last_mut']
     now = time.time()
-    # Macro Slew Limiter: 0.5-second silence window to balance batching with UI responsiveness
-    if now - last_mut < 0.5:
+    # Macro Slew Limiter: 5.0-second silence window to balance batching with UI responsiveness
+    if now - last_mut < 5.0:
         return
 
     events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
@@ -319,9 +319,16 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         for f in files:
             parts = f.split('/', 1)
             if len(parts) > 0: affected_repos.add(parts[0])
-
         dirty = False
         all_touched_buckets = set()
+
+        # --- Bucket Ratio Circuit Breaker ---
+        total_known_buckets = 0
+        for r in cfg.get("target_repos", []):
+            if not r.get("exclude_from_context"):
+                total_known_buckets += 1 + len(r.get("sub_buckets", []))
+
+        total_touched_count = 0
 
         for repo_dir in affected_repos:
             repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
@@ -346,8 +353,15 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                         touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
                 else:
                     touched_buckets.add(repo_cfg.get("out_file", f"{safe_r_dir}_context.txt"))
-
             all_touched_buckets.update(touched_buckets)
+            total_touched_count += len(touched_buckets)
+            # Circuit Breaker Evaluation
+            if evaluate_circuit_breaker(total_touched_count, total_known_buckets, threshold=0.5):
+                print(f"⚠️ Circuit Breaker Tripped: {total_touched_count}/{total_known_buckets} buckets touched. Promoting to Full Sweep.")
+                generate_context_file(workspace_id=workspace_id, target_repos=list(affected_repos))
+                # Ledger wipe handled natively by the full sweep pipeline
+                return
+
             # Compile ONLY the touched buckets for this repo using the DRY helper
             if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
                 dirty = True

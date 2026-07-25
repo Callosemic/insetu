@@ -56,6 +56,19 @@ def _vfs_commit_worker():
                         import shutil
                         shutil.move(resolved_src, resolved_dest)
                     ignore_ledger = bool(data.get("is_absolute_artifact") or data.get("ignore_ledger"))
+                    if not ignore_ledger:
+                        import time
+                        from insetu.db import get_connection
+                        db_conn = get_connection("workers", workspace_id=workspace_id)
+                        db_conn.execute(
+                            "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                            (filepath, 'deleted', time.time())
+                        )
+                        db_conn.execute(
+                            "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                            (dest_path, 'added', time.time())
+                        )
+                        db_conn.commit()
                     hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[
                         {"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger},
                         {"filepath": dest_path, "operation": "save", "ignore_ledger": ignore_ledger}

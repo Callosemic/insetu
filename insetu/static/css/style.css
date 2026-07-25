@@ -166,7 +166,7 @@ body:has(#file-modal[style*="display: block"]) {
 }
 /* iOS Modal Fixes */
 .fullscreen-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: calc(100dvh - 30px); background: rgba(0,0,0,0.85);
-padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); box-sizing: border-box; z-index: 1000; }
+padding: 15px; padding-bottom: calc(15px + env(safe-area-inset-bottom, 20px)); box-sizing: border-box; }
 
 /* Force ALL other modals to act as native edge-to-edge parallel views */
 .fullscreen-modal { background: var(--bg) !important; padding: 0 !important; }

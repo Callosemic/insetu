@@ -16,6 +16,7 @@ export const AppStore = createStore(
     devtools(
         subscribeWithSelector((set, get) => ({
             activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
+            authToken: sessionStorage.getItem('insetu_boot_token') || '',
             manifest: {},
             allRepos: [],
             targetConfigs: [],
@@ -106,7 +107,7 @@ window.inSetu.extensions.Registry = {
         debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
             this.debounce(`verify_${filepath}`, async () => {
                 try {
-                    const res = await fetch(`/api/${workspaceId}/fs/exists?file=` + encodeURIComponent(filepath));
+                    const res = await window.inSetu.api.workspace(`fs/exists?file=${encodeURIComponent(filepath)}`);
                     if (res.ok) {
                         const data = await res.json();
                         callback(data.exists, filepath);
