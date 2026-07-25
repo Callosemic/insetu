@@ -76,11 +76,8 @@ def background_sync(ctx, force_all=False):
 
 ### 2.5 Multi-Track Event Parity
 When building performance-optimized extensions that cache filesystem metadata into an SQLite layer (CQRS), do not assume all workspace updates arrive in batch arrays. 
-
-Cache-rebuilding functions must listen to the complete lifecycle triad:
-1. `vfs_transaction_committed` (For multi-file bridge syncs).
-2. `post_file_save` (For individual UI editor/modal saves).
-3. `post_file_delete` (For individual UI deletion actions).
+Cache-rebuilding functions must listen to the unified VFS lifecycle hook:
+1. `vfs_mutated` (Receives an array of mutation objects covering saves, deletes, moves, and multi-file transactions).
 ### The Typed Event Bus (Hook Signatures)
 When subscribing to OS lifecycle events via `@hooks.on()`, always cross-reference the `TypedDict` definitions at the top of `insetu/hooks.py`. These structural contracts (e.g., `HookPayload_FileMutation`) guarantee the exact `kwargs` available, eliminating payload hallucination.
 

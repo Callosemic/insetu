@@ -56,10 +56,29 @@ Once these primitives exist, the SDK can safely orchestrate forms without violat
 ### VIII. Universal Date & Time Formatters
 *   **Concept:** Eliminate the scattered, manual `new Date(...).toLocaleString()` implementations found across multiple extensions[cite: 5, 6].
 *   **The yenVUI Integration:** The `InSetuElement` base class will expose `this.utils.formatDate()` and `this.utils.timeAgo()`. This ensures that any temporal data projected into `yenVUI` cards or modals maintains strict visual consistency across the entire ecosystem.
-
 ### IX. Automated Concurrency Guards & Event Debouncing
 *   **Concept:** Extension makers should never have to manually manage race conditions, write `if (jobRunning) return;` guard clauses, or debounce UI lifecycle hooks.
 *   **The yenVUI Integration:** The SDK will automatically debounce overlapping `ExtensionRegistry` UI hooks to prevent concurrent hydration thrashing. Furthermore, the new `bindJobAction()` orchestrator will act as an automatic mutex—silently dropping duplicate triggers from `<yenvui-async-btn>` primitives while a job is actively processing in the background.
+### X. Declarative VFS Mutation Filtering (`this.onVFSMutate`)
+*   **Concept:** Eliminate repetitive `.some(m => m.filepath.includes(...))` evaluation boilerplate inside `zone:vfs-mutated` UI hook listeners across extensions.
+*   **The yenVUI Integration:** The `InSetuElement` base class will expose a managed helper `this.onVFSMutate(pathPattern, callback)`. The SDK will subscribe to the `zone:vfs-mutated` event, evaluate the target path string or regex pattern against incoming mutation arrays, and trigger the callback only when relevant filesystem mutations occur, automatically managing listener teardown upon component disconnection.
+
+### XI. Declarative Event Action Schema & SDK Event Bus (`emitEvent` / `window.inSetu.events`)
+*   **Concept:** `entityActions` configurations live outside Lit element instances during registration, forcing authors to write repetitive `onClick: (data) => window.dispatchEvent(new CustomEvent('insetu:ext:action', { detail: { id: data.id } }))` boilerplate for decoupled event dispatching.
+*   **The yenVUI Integration:** 
+    1. **Global SDK Helper:** Expose `window.inSetu.events.emit(eventName, detailData)` to simplify manual custom event broadcasts anywhere in the client environment.
+    2. **Declarative Schema Support:** Update `ExtensionRegistry` action resolution so `entityActions` can declare an `emitEvent` resolver property instead of a manual `onClick` / `asyncAction` callback:
+        ```javascript
+        {
+            targetEntity: 'freshdesk_ticket',
+            id: 'fd-take',
+            label: 'Take',
+            icon: '🙋',
+            intent: 'success',
+            emitEvent: (data) => ({ name: 'insetu:freshdesk:take', detail: { id: data.id } })
+        }
+        ```
+    The framework will natively handle constructing and broadcasting the CustomEvent over `window`, reducing action registration boilerplate to a pure data mapping.
 
 ---
 **Status:** Approved for execution. Pending `yenVUI` form primitive construction.

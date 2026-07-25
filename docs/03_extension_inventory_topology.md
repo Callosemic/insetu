@@ -49,7 +49,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
 * **Injection Surfaces:**
     * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer.
-    * VFS Hooks: Uses `post_file_save` and `post_file_delete` to instantly sync the UI SQLite index.
+    * VFS Hooks: Uses `vfs_mutated` to instantly sync the UI SQLite index.
 
 ### E. Document Formatting (`engine_format.py`)
 * **Status:** Active Extension.
@@ -95,7 +95,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`[cite: 2]
 * **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table) and `workers.db` execution logs[cite: 2].
 * **Injection Surfaces:**
-    * VFS Hooks: `@hooks.on('post_file_save')`, `@hooks.on('post_file_delete')`, `@hooks.on('vfs_transaction_committed')`[cite: 2].
+    * VFS Hooks: `@hooks.on('vfs_mutated')`[cite: 2].
     * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`)[cite: 2].
     * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities[cite: 2].
 

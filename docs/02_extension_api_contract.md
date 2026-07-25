@@ -22,7 +22,7 @@ Extensions cannot hardcode themselves into `engine_gather.py` or the `bridge_syn
 * `@hooks.on('mutate_workspace_config')`: Allows an extension to intercept the configuration load phase and dynamically inject virtual `sub_buckets`, append to `managed_dirs`, or define isolated extension payloads in `virtual_contexts` (e.g., the Kanban tracker injecting its `.tracker` sub-bucket).
 The RAG compiler and Cartographer will then natively process these environments without bespoke logic.
 * `@hooks.on('compile_contexts')`: Fires during the RAG context compilation phase. Extensions receive the `manifest` dictionary and should inject their custom `.txt` artifacts natively, bypassing the core Cartographer sweep.
-* `@hooks.on('post_file_save')`: Fires after the VFS atomic commit, allowing an extension to update an SQLite cache instantly.
+* `@hooks.on('vfs_mutated')`: Fires after VFS mutations (saves, deletes, moves), passing a normalized array of mutation objects (`[{ filepath, operation, ignore_ledger }]`).
     * `@hooks.on('system_boot')`: Fires immediately after the core OS micro-kernel boots. Extensions must use this hook to execute their SQLite schema initializations (`CREATE TABLE`) and migrations (`ALTER TABLE`), guaranteeing that the runtime API routes remain fast, stateless, and free of inline database generation locks.
     * `@hooks.on('system_shutdown')`: Fires prior to a workspace swap (`os.execv`), signaling all active `threading.Event()` locks to commit SQLite transactions and release RAM before the process terminates.
 ## 3. The Frontend Injection Surface (Declarative Schema)
