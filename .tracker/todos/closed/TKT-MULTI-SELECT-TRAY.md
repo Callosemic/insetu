@@ -1,11 +1,11 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
-id: "TKT-MULTI-SELECT-TRAY"
-title: "Global Multi-Select Selection Tray ('Shopping Cart')"
+status: "closed"
+id: TKT-MULTI-SELECT-TRAY
+title: "Global Multi-Select Selection Tray & Polymorphic Batch Actions"
 created_at: 2026-07-20T17:55:00
-closed_at: null
+closed_at: 2026-07-24T23:55:41
 sub_bucket: "None"
 tags: ["UI", "yenVUI", "UX"]
 ---
@@ -29,3 +29,10 @@ Implement a "Shopping Cart" style global selection tray to allow users to multi-
 * Expand the `ExtensionRegistry` to accept `batchActions`.
 * Example: The Files extension registers "Download as Zip" (valid if all selected items are `isFS: true`).
 * Example: The Gather extension registers "Download as Quick-Pack" (valid for any heterogeneous mix).
+
+## Notes / Execution Log
+* **Resolution (2026-07-24):** 
+    - Implemented `SelectionStore` in `store.js` using Zustand with a reactive `selectedItems` Map (`toggleSelection`, `clearSelection`).
+    - Added `<insetu-selection-tray>` in `app.js` and mounted it in `<insetu-app-shell>` header actions.
+    - Upgraded `<yenvui-card>` and `<insetu-card>` with Lit properties `selected` and `disableSelection` plus `@yenvui-card-select-toggled` event dispatching.
+    - Registered declarative `batchActions` (`Download` and `Share`) on `ExtensionRegistry`, backed by off-thread background worker task `@gather_bp.worker("pack_selection_task")`.
