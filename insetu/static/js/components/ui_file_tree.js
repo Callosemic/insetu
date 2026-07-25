@@ -105,7 +105,15 @@ export class InSetuCard extends LitElement {
                 // Delegate to the OS-managed insetu-async-btn to natively inherit async status feedback mechanics
                 return html`<insetu-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${(e) => act.asyncAction(this.entityData, e)}></insetu-async-btn>`;
             }
-            return html`<button class="btn-sm" style="background: var(--intent-${intent}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 99};" @click=${(e) => act.onClick(this.entityData, e)}>${icon} ${label}</button>`;
+            return html`<button class="btn-sm" style="background: var(--intent-${intent}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 99};" @click=${(e) => {
+                e.stopPropagation();
+                if (act.emitEvent) {
+                    const payload = act.emitEvent(this.entityData);
+                    if (window.inSetu?.events?.emit) window.inSetu.events.emit(payload.name, payload.detail);
+                } else if (act.onClick) {
+                    act.onClick(this.entityData, e);
+                }
+            }}>${icon} ${label}</button>`;
         });
     }
     _handleMainClick(e) {
@@ -281,11 +289,15 @@ constructor() {
                     const isDir = !item._isFile;
                     if (!isDir && (key === '.gitkeep' || key === '.keep')) return '';
                     if (isDir) {
+                        const pathPrefix = this.currentPath.length > 0 ? this.currentPath.join('/') + '/' : '';
+                        const folderPath = `${this.basePath}${pathPrefix}${key}`;
                         return html`
                             <insetu-card
                                 .titleText=${key}
                                 icon="📁"
                                 intentColor="var(--intent-warning)"
+                                .entityType=${'folder'}
+                                .entityData=${{ id: folderPath, folderpath: folderPath, isDir: true }}
                                 @card-clicked=${(e) => { e.stopPropagation(); this._setPath([...this.currentPath, key]); }}>
                             </insetu-card>
                         `;

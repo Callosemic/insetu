@@ -255,16 +255,13 @@ export class InSetuExtBridge extends InSetuElement {
                         <button type="button" data-action="download-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
                     </div>`;
                     });
-
                     BridgeStore.setState({ consoleOutput: safeData });
                     if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
                         const savedFiles = BridgeStore.getState().getActiveFiles();
                         BridgeStore.setState({ cells: [] });
                         // Alert listening extensions (like the Tracker) that files have been modified
-                        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                            const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
-                            window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations });
-                        }
+                        const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
+                        window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
 
                         // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
                         if (window.inSetu.sys.executeSystemCompile) {

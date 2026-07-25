@@ -18,30 +18,7 @@ window.inSetu.stores.Gather = GatherStore;
 export class InSetuExtGatherActions extends InSetuElement {
     static styles = [sharedStyles];
     render() {
-        return html`
-            <yenvui-dropdown align="right" .items=${[
-                { 
-                    label: 'Clear Quickpacks', 
-                    icon: '🧹', 
-                    intent: 'danger',
-                    onClick: async () => {
-                        try {
-                            const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
-                            if (res.ok) {
-                                const data = await res.json();
-                                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-                                if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
-                            }
-                        } catch(e) {
-                            alert("Failed to clear quickpacks: " + e.message);
-                        }
-                    }
-                }
-            ]}>
-                <button slot="trigger" class="system-action-btn">☰</button>
-            </yenvui-dropdown>
-        `;
+        return html``;
     }
 }
 customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
@@ -164,14 +141,11 @@ export class InSetuExtGather extends InSetuElement {
                         sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
                 }
                 let repoDir = meta.repo || null;
-
-                if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                        const extMeta = window.ExtensionRegistry.executeUIHook('zone:context-metadata', file);
-                        if (extMeta) {
-                                finalCat = extMeta.cat;
-                                finalDesc = extMeta.desc;
-                                finalTitle = extMeta.displayName;
-                        }
+                const extMeta = window.inSetu.events.emitHook('zone:context-metadata', file);
+                if (extMeta) {
+                        finalCat = extMeta.cat;
+                        finalDesc = extMeta.desc;
+                        finalTitle = extMeta.displayName;
                 }
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
@@ -228,7 +202,28 @@ export class InSetuExtGather extends InSetuElement {
                     .items=${filteredFiles}
                     categoryKey="finalCat"
                     .categoryOrder=${categoryOrder}
-                    .renderCategoryHeader=${(cat) => ''}
+                    .renderCategoryHeader=${(cat) => {
+                        if (cat === 'Quickpacks') {
+                            return html`
+                                <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
+                                    <insetu-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
+                                        try {
+                                            const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
+                                            if (res.ok) {
+                                                const data = await res.json();
+                                                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
+                                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                                                if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                                            }
+                                        } catch(e) {
+                                            alert("Failed to clear quickpacks: " + e.message);
+                                        }
+                                    }}></insetu-async-btn>
+                                </div>
+                            `;
+                        }
+                        return '';
+                    }}
                     .renderItem=${(f) => html`
                         <insetu-card
                             .filename=${f.filename}
@@ -284,9 +279,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     const chunks = window.inSetu.stores.App.getState().manifest[basename]?.meta?.chunks;
                     return chunks && chunks.length > 1;
                 },
-                onClick: (data, e) => {
+                emitEvent: (data) => {
                     const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                    window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: basename } }));
+                    return { name: 'insetu:gather:view-parts', detail: { filepath: basename } };
                 }
             }
         ],

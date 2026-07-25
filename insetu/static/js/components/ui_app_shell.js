@@ -42,15 +42,20 @@ export class InSetuAppShell extends InSetuElement {
         this._compileListener = this._compileFromRegistry.bind(this);
         this._componentCache = new Map();
     }
-
     connectedCallback() {
         super.connectedCallback();
         window.addEventListener('insetu-layout-recompile', this._compileListener);
-        
-        // Restore active states from storage
-        const ws = this.workspaceId || 'default';
-        this.activePrimary = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
-        
+
+        this.subscribe(AppStore, state => {
+            this.activePrimary = state.activeTab || 'context';
+            this.activeSubs = state.activeSubTabs || {};
+            this.requestUpdate();
+        });
+
+        const state = AppStore.getState();
+        this.activePrimary = state.activeTab || 'context';
+        this.activeSubs = state.activeSubTabs || {};
+
         // Rebuild layout on boot
         setTimeout(() => this._compileFromRegistry(), 0);
     }
@@ -111,15 +116,13 @@ export class InSetuAppShell extends InSetuElement {
             return a.order - b.order;
         });
         Object.keys(sTabs).forEach(parent => sTabs[parent].sort((a, b) => a.order - b.order));
-        
-        // Restore active sub-tabs from storage statelessly
-        const ws = this.workspaceId || 'default';
+        // Fallback for missing sub-tabs if not explicitly set by the router
+        const activeSubTabs = AppStore.getState().activeSubTabs || {};
         Object.keys(sTabs).forEach(parent => {
-            const savedSub = localStorage.getItem(`insetu_subtab_${parent}`);
-            if (savedSub && sTabs[parent].find(s => s.id === savedSub)) {
-                this.activeSubs[parent] = savedSub;
-            } else if (sTabs[parent].length > 0) {
+            if (!activeSubTabs[parent] && sTabs[parent].length > 0) {
                 this.activeSubs[parent] = sTabs[parent][0].id;
+            } else if (activeSubTabs[parent]) {
+                this.activeSubs[parent] = activeSubTabs[parent];
             }
         });
 
@@ -134,18 +137,16 @@ export class InSetuAppShell extends InSetuElement {
         const tabId = e.detail.tabId;
         const isAlreadyActive = this.activePrimary === tabId;
 
-        this.activePrimary = tabId;
+        // Drive routing purely via the URL hash
         const ws = this.workspaceId || 'default';
-        localStorage.setItem(`insetu_tab_${ws}`, tabId);
-        localStorage.setItem('insetu_tab', tabId);
+        const subId = this.activeSubs[tabId] || '';
+        window.location.hash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tabId)}/${encodeURIComponent(subId)}`;
 
         if (isAlreadyActive) {
             const activeSub = this.activeSubs[tabId];
-            if (activeSub && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId: tabId, subId: activeSub, forceRefresh: true });
-            }
-        } else if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-            window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
+            if (activeSub) window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId: activeSub, forceRefresh: true });
+        } else {
+            window.inSetu.events.emitHook('zone:tab-changed', tabId);
         }
     }
 
@@ -154,26 +155,17 @@ export class InSetuAppShell extends InSetuElement {
         const subId = e.detail.tabId;
         const isAlreadyActive = this.activeSubs[parentId] === subId;
 
-        this.activeSubs = { ...this.activeSubs, [parentId]: subId };
-        localStorage.setItem(`insetu_subtab_${parentId}`, subId);
+        const ws = this.workspaceId || 'default';
+        window.location.hash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(parentId)}/${encodeURIComponent(subId)}`;
 
-        if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-            window.ExtensionRegistry.executeUIHook('zone:subtab-changed', { parentId, subId, forceRefresh: isAlreadyActive });
-        }
+        window.inSetu.events.emitHook('zone:subtab-changed', { parentId, subId, forceRefresh: isAlreadyActive });
     }
 
     // A helper method bound to the global window object to catch legacy programmatic routing
     forceSwitch(tabId, subId = null) {
-        if (this.primaryTabs.find(t => t.id === tabId)) {
-            this.activePrimary = tabId;
-            const ws = this.workspaceId || 'default';
-            localStorage.setItem(`insetu_tab_${ws}`, tabId);
-        }
-        if (subId && this.subTabs[tabId] && this.subTabs[tabId].find(s => s.id === subId)) {
-            this.activeSubs = { ...this.activeSubs, [tabId]: subId };
-            localStorage.setItem(`insetu_subtab_${tabId}`, subId);
-        }
-        this.requestUpdate();
+        const ws = this.workspaceId || 'default';
+        const finalSub = subId || this.activeSubs[tabId] || '';
+        window.location.hash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tabId)}/${encodeURIComponent(finalSub)}`;
     }
 
     render() {
@@ -235,10 +227,16 @@ customElements.define('insetu-app-shell', InSetuAppShell);
 window.inSetu = window.inSetu || {};
 window.inSetu.sys = window.inSetu.sys || {};
 window.inSetu.sys.switchTab = (e, tabId) => {
-    const shell = document.querySelector('insetu-app-shell');
-    if (shell) shell.forceSwitch(tabId);
+    const targetTab = typeof e === 'string' ? e : tabId;
+    if (!targetTab) return;
+    const { activeSubTabs, globalBrowsePath } = AppStore.getState();
+    const subId = activeSubTabs[targetTab] || '';
+    const deepStr = (globalBrowsePath && globalBrowsePath.length > 0) ? '/' + globalBrowsePath.map(encodeURIComponent).join('/') : '';
+    window.location.hash = `#/${encodeURIComponent(window.inSetu.utils.getActiveWorkspace())}/${encodeURIComponent(targetTab)}/${encodeURIComponent(subId)}${deepStr}`;
 };
 window.inSetu.sys.switchSubTab = (subId, forceRefresh = false, isProgrammatic = false) => {
-    const shell = document.querySelector('insetu-app-shell');
-    if (shell) shell.forceSwitch(shell.activePrimary, subId);
+    if (!subId) return;
+    const { activeTab, globalBrowsePath } = AppStore.getState();
+    const deepStr = (globalBrowsePath && globalBrowsePath.length > 0) ? '/' + globalBrowsePath.map(encodeURIComponent).join('/') : '';
+    window.location.hash = `#/${encodeURIComponent(window.inSetu.utils.getActiveWorkspace())}/${encodeURIComponent(activeTab)}/${encodeURIComponent(subId)}${deepStr}`;
 };

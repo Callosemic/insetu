@@ -275,6 +275,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                 await this._loadWorkspacesManifest();
                 if (window.inSetu.sys.loadWorkspaces) window.inSetu.sys.loadWorkspaces();
                 if (wsId === this.activeWorkspace) {
+                    sessionStorage.setItem('insetu_workspace', 'default');
+                    localStorage.setItem('insetu_workspace', 'default');
                     window.location.reload();
                 }
             } else {
@@ -287,9 +289,8 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     render() {
         if (!this.open) return '';
-
         return html`
-            <insetu-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${() => { this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+            <insetu-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <div>

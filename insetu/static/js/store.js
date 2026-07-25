@@ -47,7 +47,8 @@ export const AppStore = createStore(
                 set({ pinnedRepos: repos });
             },
             gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
-
+            activeTab: 'context',
+            activeSubTabs: {},
             globalBrowsePath: [],
             currentBrowsePath: [],
             browserConfig: { mode: 'view', callback: null },
@@ -62,7 +63,20 @@ export const AppStore = createStore(
             dirtyDiffRepos: new Set(["ALL"]),
             cachedDiffFiles: null,
 
+            setActiveRoute: (tab, subTab, deepPath = null) => set(state => {
+                const updates = { activeTab: tab };
+                if (subTab) {
+                    updates.activeSubTabs = { ...state.activeSubTabs, [tab]: subTab };
+                }
+                if (deepPath !== null) {
+                    updates.globalBrowsePath = deepPath;
+                }
+                return updates;
+            }),
+
             resetState: () => set({
+                activeTab: 'context',
+                activeSubTabs: {},
                 globalBrowsePath: [],
                 currentBrowsePath: [],
                 browserConfig: { mode: 'view', callback: null },
@@ -149,6 +163,18 @@ window.inSetu.extensions.Registry = {
         if (config.entityActions) {
             config.entityActions.forEach(act => {
                 act.extName = extName;
+
+                // Normalize declarative emitEvent schemas into standard onClick callbacks
+                if (act.emitEvent && !act.onClick && !act.asyncAction) {
+                    act.onClick = (data, e) => {
+                        if (e) e.stopPropagation();
+                        const payload = act.emitEvent(data);
+                        if (window.inSetu?.events?.emit) {
+                            window.inSetu.events.emit(payload.name, payload.detail);
+                        }
+                    };
+                }
+
                 const target = act.targetEntity;
                 if (!this._entityActions.has(target)) this._entityActions.set(target, []);
                 this._entityActions.get(target).push(act);

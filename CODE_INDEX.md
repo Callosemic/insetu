@@ -36,7 +36,8 @@ insetu/
 │   │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # [comment required]
 │   │   ├── 0025-declarative-app-shell-and-brokered-resource-management.md # [comment required]
 │   │   ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # [comment required]
-│   │   └── 0027-global-multi-select-and-batch-action-registry.md # [comment required]
+│   │   ├── 0027-global-multi-select-and-batch-action-registry.md # [comment required]
+│   │   └── 0028-native-hash-routing-and-event-bus.md # [comment required]
 │   └── standups/                   # R&D scratchpads and engineering notes.
 │       ├── 2026-07-08-insetu-release-timeline.md # [comment required]
 │       ├── 2026-07-08-insetu-security-model.md # [comment required]

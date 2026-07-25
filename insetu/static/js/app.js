@@ -85,13 +85,12 @@ window.addEventListener('keydown', (e) => {
 
     const combo = prefix + (keyStr === ' ' ? 'space' : keyStr);
     const contexts = ['global'];
-
     // 1. Active Tab Hierarchy
-    const activeTab = document.querySelector('.tab-content.active');
+    const { activeTab, activeSubTabs } = AppStore.getState();
     if (activeTab) {
-        contexts.unshift('tab:' + activeTab.id.replace('tab-', ''));
-        const activeSub = activeTab.querySelector('.sub-tab-content.active');
-        if (activeSub) contexts.unshift('subtab:' + activeSub.id.replace('sub-', ''));
+        contexts.unshift('tab:' + activeTab);
+        const activeSub = activeSubTabs[activeTab];
+        if (activeSub) contexts.unshift('subtab:' + activeSub);
     }
 
     // 2. Active Element
@@ -170,9 +169,11 @@ window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () 
 });
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
     const packSelectionPayload = async (items) => {
-        const payloadItems = items.map(i => ({
-            filepath: i.data?.filepath
-        })).filter(i => i.filepath);
+        const payloadItems = items.map(i => {
+            if (i.data?.folderpath) return { folderpath: i.data.folderpath };
+            if (i.data?.filepath) return { filepath: i.data.filepath };
+            return null;
+        }).filter(i => i !== null);
 
         if (payloadItems.length === 0) throw new Error("No valid items to pack.");
 
@@ -208,7 +209,7 @@ window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s',
                 icon: '⬇️',
                 intent: 'primary',
                 order: 20,
-                match: (items) => items.length > 0 && items.every(i => i.data?.filepath),
+                match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
                 asyncAction: async (items) => {
                     try {
                         const artifact = await packSelectionPayload(items);
@@ -235,7 +236,7 @@ window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s',
                 icon: '📤',
                 intent: 'neutral',
                 order: 30,
-                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath),
+                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
                 asyncAction: async (items) => {
                     try {
                         const artifact = await packSelectionPayload(items);
@@ -324,9 +325,9 @@ export class InSetuSelectionTray extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${itemsArray.map(item => html`
                         <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 4px;">
-                            <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${item.data?.filepath || item.data?.id || 'Unknown Item'}</span>
+                            <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${item.data?.filepath || item.data?.folderpath || item.data?.id || 'Unknown Item'}</span>
                             <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 4px 8px; font-size: 1rem; cursor: pointer; margin: 0;" @click=${() => {
-                                const id = item.data?.filepath || item.data?.id;
+                                const id = item.data?.filepath || item.data?.folderpath || item.data?.id;
                                 if (id) window.inSetu.stores.Selection.getState().toggleSelection(id, item.entityType, item.data);
                             }}>✕</button>
                         </div>
@@ -503,22 +504,59 @@ window.addEventListener('DOMContentLoaded', async () => {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     await bootExtensions();
-
     // Load the available multi-tenant workspaces into the UI securely
     await loadWorkspaces();
 
+    // Initialize Zero-Bundler SPA Router (Native Hash Routing)
+    const handleHashChange = () => {
+        const hash = window.location.hash.replace(/^#\/?/, '');
+        const parts = hash.split('/').map(decodeURIComponent);
+
+        const ws = parts[0] || 'default';
+        const tab = parts[1] || 'context';
+        const sub = parts[2] || '';
+        const deepPath = parts.slice(3);
+
+        if (ws !== window.inSetu.utils.getActiveWorkspace()) {
+            if (window.inSetu.sys.executeWorkspaceSwap && ws) {
+                window.inSetu.sys.executeWorkspaceSwap(ws);
+            }
+        }
+
+        AppStore.getState().setActiveRoute(tab, sub, deepPath.length > 0 ? deepPath : null);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+
+    // Bootstrap initial route from URL or set default
+    if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
+        const ws = window.inSetu.utils.getActiveWorkspace();
+        window.location.hash = `#/${encodeURIComponent(ws)}/context/`;
+    } else {
+        handleHashChange();
+    }
+
+    // UDF Subscription: State -> URL mapping
+    AppStore.subscribe(
+        state => [state.activeWorkspace, state.activeTab, state.activeSubTabs, state.globalBrowsePath],
+        ([ws, tab, subs, deep]) => {
+            if (!ws || !tab) return;
+            const currentSub = subs[tab] || '';
+            const deepStr = (deep && deep.length > 0) ? '/' + deep.map(encodeURIComponent).join('/') : '';
+            const newHash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tab)}/${encodeURIComponent(currentSub)}${deepStr}`;
+
+            // Silently update URL without triggering a hashchange event reload loop
+            if (window.location.hash !== newHash && window.location.hash !== newHash.replace(/\/$/, '')) {
+                history.replaceState(null, '', newHash);
+            }
+        }
+    );
+
     // Wait for configuration and topology to settle before mounting layout
     await initializeWorkspaceTopology();
-
     // Compile the primary and settings layouts cleanly from the registry blueprints
     if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
         window.ExtensionRegistry.compileLayout();
-    }
-
-    const ws = window.inSetu.utils.getActiveWorkspace();
-    const savedTab = localStorage.getItem(`insetu_tab_${ws}`) || localStorage.getItem('insetu_tab') || 'context';
-    if (window.inSetu.sys && window.inSetu.sys.switchTab) {
-        window.inSetu.sys.switchTab(null, savedTab);
     }
 });
 // Evade iOS PWA suspension timeout races by clearing the panic switch immediately upon JS evaluation
@@ -802,9 +840,8 @@ async function performSoftRefresh() {
         if (store.getState().resetState) store.getState().resetState();
     });
 
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        window.inSetu.extensions.Registry.executeUIHook('zone:soft-refresh', currentWs);
-    }
+    window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
+
     try {
         // 1. Update routing topology for the new tenant
         const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
@@ -886,12 +923,10 @@ async function performSoftRefresh() {
             if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
                 window.ExtensionRegistry.compileLayout();
             }
-
             // Re-render subtab navigation lists natively from scratch using the fresh registry state
-            const activeTab = document.querySelector('.tab-content.active');
-            if (activeTab && window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const tabId = activeTab.id.replace('tab-', '');
-                window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
+            const { activeTab } = AppStore.getState();
+            if (activeTab) {
+                window.inSetu.events.emitHook('zone:tab-changed', activeTab);
             }
         }
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
@@ -912,8 +947,8 @@ async function performSoftRefresh() {
             // no need to thrash the compiler heavily on every UI tab swap.
         }
         // 4. Hydrate active DOM views using native routing
-        let targetTab = localStorage.getItem(`insetu_tab_${currentWsSafe}`) || 'context';
-        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, targetTab);
+        const { activeTab } = AppStore.getState();
+        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, activeTab || 'context');
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {
@@ -975,12 +1010,9 @@ async function initializeWorkspaceTopology() {
         }
         if (mRes.ok || manifestData) {
             AppStore.setState({ manifest: manifestData });
-            if (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) {
-                const activeTab = document.querySelector('.tab-content.active');
-                if (activeTab) {
-                    const tabId = activeTab.id.replace('tab-', '');
-                    window.ExtensionRegistry.executeUIHook('zone:tab-changed', tabId);
-                }
+            const { activeTab } = AppStore.getState();
+            if (activeTab) {
+                window.inSetu.events.emitHook('zone:tab-changed', activeTab);
             }
         }
     } catch (e) {

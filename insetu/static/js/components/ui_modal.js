@@ -34,12 +34,12 @@ export class InSetuModal extends LitElement {
             --btn-border-radius: 6px;
         }
     `];
-
     constructor() {
         super();
         this.open = false;
     }
-    close() {
+    close(e) {
+        if (e && e.target !== e.currentTarget) return;
         const event = new CustomEvent('modal-closing', { bubbles: true, composed: true, cancelable: true });
         this.dispatchEvent(event);
         if (event.defaultPrevented) return;

@@ -456,19 +456,27 @@ def _pack_selection_worker(ctx, items, job_id=None):
     import time
     import os
     from pathlib import Path
-
     if not items:
         raise ValueError("No items provided.")
 
-    files = [item['filepath'] for item in items]
+    files = []
+    with VFSTransaction(ctx.workspace_id) as vfs:
+        for item in items:
+            if 'filepath' in item:
+                files.append(item['filepath'])
+            elif 'folderpath' in item:
+                for f in vfs.walk(item['folderpath']):
+                    files.append(f)
+
+    files = sorted(list(set(files)))
+
     header_str = "============================================================\n"
     header_str += "INSETU AD-HOC CONTEXT PAYLOAD (Selection)\n"
     header_str += "============================================================\n\n"
     header_str += generate_ascii_tree(files) + "\n\n"
     text_blocks = []
     with VFSTransaction(ctx.workspace_id) as vfs:
-        for item in sorted(items, key=lambda x: x['filepath']):
-            filepath = item['filepath']
+        for filepath in files:
             try:
                 is_artifact = False
                 read_path = filepath
@@ -483,6 +491,9 @@ def _pack_selection_worker(ctx, items, job_id=None):
                     read_path = Path(target_dir).joinpath(filename).as_posix()
                     is_artifact = True
                 elif filepath.startswith(".insetu/"):
+                    is_artifact = True
+                elif filepath.startswith("data/"):
+                    read_path = Path(ctx.paths["control_dir"]).joinpath(filepath).as_posix()
                     is_artifact = True
 
                 content = vfs.read(read_path, is_absolute_artifact=is_artifact)

@@ -37,12 +37,9 @@ document.addEventListener('dragstart', (e) => {
     if (dragEl) {
         const filename = dragEl.dataset.filename;
         let fetchUrl = dragEl.dataset.fetchUrl;
-
         // Resolve dynamic extension overrides natively
-        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filename);
-            if (overrideUrl) fetchUrl = overrideUrl;
-        }
+        const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filename);
+        if (overrideUrl) fetchUrl = overrideUrl;
 
         if (filename && fetchUrl) {
             bindDownloadDrag(e, filename, fetchUrl);
@@ -116,10 +113,8 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         if (explicitUrl) {
             res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
         } else {
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-                if (overrideUrl) res = await fetch(overrideUrl);
-            }
+            const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filePath);
+            if (overrideUrl) res = await fetch(overrideUrl);
 
             if (!res) {
                 res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filePath)}`);
@@ -139,15 +134,12 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
 export async function fetchAndDownloadState(filePath, explicitUrl = null) {
     try {
         let fetchUrl = explicitUrl;
-
         if (!fetchUrl) {
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
 
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filePath);
-                if (override) fetchUrl = override;
-            }
+            const override = window.inSetu.events.emitHook('zone:file-fetch-url', filePath);
+            if (override) fetchUrl = override;
         }
         await downloadFile(fetchUrl, filePath.split('/').pop());
         window.inSetu.ui.setGlobalStatus("✅ Downloaded!", 2000);
@@ -161,13 +153,9 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
     const shareFilesArray = [];
-
     try {
         for (const filepath of filesToFetch) {
-            let fetchUrl = null;
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', filepath);
-            }
+            let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filepath);
 
             if (!fetchUrl) {
                 const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
@@ -262,11 +250,10 @@ export async function viewAndCopy(filename) {
 }
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        const mutations = [{ filepath: oldPath, operation: 'delete' }];
-        if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
-        window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations });
-    }
+
+    const mutations = [{ filepath: oldPath, operation: 'delete' }];
+    if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
+    window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
 
     // Trigger a proactive compile to let the Cartographer map the renamed/moved/deleted files
     if (window.inSetu.sys.executeSystemCompile) {
@@ -324,8 +311,8 @@ async function saveModalFile(autoSave = false) {
         silent: autoSave,
         onSuccess: () => {
             FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
-            if (autoSave && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
+            if (autoSave) {
+                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
             }
 
             // File modifications can drastically alter chunk boundaries; force a resync
@@ -338,14 +325,12 @@ async function saveModalFile(autoSave = false) {
 async function copyFromModal() {
     const state = FsStore.getState().fileModal;
     let text = state.content;
-    if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-        const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
-        if (overrideUrl) {
-            try {
-                const res = await fetch(overrideUrl, { headers: window.inSetu.api._getHeaders(true) });
-                if (res.ok) text = await res.text();
-            } catch (e) { }
-        }
+    const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
+    if (overrideUrl) {
+        try {
+            const res = await fetch(overrideUrl, { headers: window.inSetu.api._getHeaders(true) });
+            if (res.ok) text = await res.text();
+        } catch (e) { }
     }
     navigator.clipboard.writeText(text).then(() => {
         window.inSetu.ui.setGlobalStatus("✅ Copied!", 2000);
@@ -405,9 +390,8 @@ export async function deleteEmptyFolder(dirPath) {
             const parts = dirPath.split('/');
             parts.pop();
             AppStore.setState({ globalBrowsePath: parts });
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
-            }
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
+
             const manifest = AppStore.getState().manifest;
             let changed = false;
             const newManifest = { ...manifest };
@@ -477,10 +461,9 @@ async function downloadFromModal() {
             a.remove();
         } else {
             let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
-            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                const overrideUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', state.filename);
-                if (overrideUrl) fetchUrl = overrideUrl;
-            }
+            const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
+            if (overrideUrl) fetchUrl = overrideUrl;
+
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
                 await downloadFile(fetchUrl, state.filename.split('/').pop());
             } else {
@@ -671,9 +654,7 @@ export class InSetuVFSExplorerActions extends InSetuElement {
             }
         }
 
-        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-            window.inSetu.extensions.Registry.executeUIHook('zone:fs-dropdown-menu', { currentPath, isPrompts: false, menuItems: items });
-        }
+        window.inSetu.events.emitHook('zone:fs-dropdown-menu', { currentPath, isPrompts: false, menuItems: items });
         return items;
     }
 
@@ -705,10 +686,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 return !chunks || chunks.length <= 1;
             },
             asyncAction: async (data, e) => {
-                let fetchUrl = null;
-                if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                    fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', data.filepath);
-                }
+                let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                 if (!fetchUrl) {
@@ -768,10 +746,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 return !chunks || chunks.length <= 1;
             },
             asyncAction: async (data, e) => {
-                let fetchUrl = null;
-                if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                    fetchUrl = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', data.filepath);
-                }
+                let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                 if (!fetchUrl) {
@@ -852,9 +827,8 @@ async function saveNewFile() {
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
 
-    if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-        content = await window.inSetu.extensions.Registry.executeUIHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
-    }
+    content = await window.inSetu.events.emitHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
+
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
         filepath,
         content
@@ -863,9 +837,7 @@ async function saveNewFile() {
         onSuccess: async () => {
             FsStore.getState().setModal('newFile', { open: false });
 
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
-            }
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
 
             // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
             if (window.inSetu.sys.executeSystemCompile) {
@@ -938,9 +910,7 @@ async function saveNewFolder() {
             }
             FsStore.getState().setModal('newFolder', { open: false });
 
-            if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                window.inSetu.extensions.Registry.executeUIHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
-            }
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
 
             // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
             if (window.inSetu.sys.executeSystemCompile) {
@@ -950,9 +920,7 @@ async function saveNewFolder() {
     });
 }
 export async function viewSourceFile(filepath, isFS = false) {
-    if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-        if (window.inSetu.extensions.Registry.executeUIHook('zone:file-edit-override', filepath)) return;
-    }
+    if (window.inSetu.events.emitHook('zone:file-edit-override', filepath)) return;
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
 
@@ -1135,13 +1103,12 @@ export class InSetuFileModal extends InSetuElement {
     render() {
         const m = this.fileModal;
         if (!m || !m.open) return html``;
-
         const shouldBeReadOnly = !(m.isFS || m.forceEdit);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
 
         let extMenuItems = [];
-        if (m.isFS && window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-            window.inSetu.extensions.Registry.executeUIHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
+        if (m.isFS) {
+            window.inSetu.events.emitHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
         }
         return html`
             <div class="fullscreen-modal" style="display: block; z-index: 3000; padding: 0;">
@@ -1203,10 +1170,9 @@ export class InSetuFileModal extends InSetuElement {
                     <div class="modal-footer" style="padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0;">
                         <button class="ui-draggable-export" draggable="true" @dragstart=${(e) => {
                             let fetchUrl = m.isFS ? `fs/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
-                            if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-                                const override = window.inSetu.extensions.Registry.executeUIHook('zone:file-fetch-url', m.filename);
-                                if (override) fetchUrl = override;
-                            }
+                            const override = window.inSetu.events.emitHook('zone:file-fetch-url', m.filename);
+                            if (override) fetchUrl = override;
+
                             bindDownloadDrag(e, m.filename, fetchUrl);
                         }} @click=${async () => {
                             this._isDownloading = true;
@@ -1431,7 +1397,7 @@ export class InSetuVFSModals extends InSetuElement {
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
                     <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
                     <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
-                    ${window.inSetu.extensions.Registry?.executeUIHook('zone:new-file-options-lit', null) || ''}
+                    ${window.inSetu.events.emitHook('zone:new-file-options-lit', null) || ''}
                     <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-width: 0; min-height: 200px; resize: vertical;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>

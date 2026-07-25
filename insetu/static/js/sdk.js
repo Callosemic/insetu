@@ -139,13 +139,16 @@ export class InSetuElement extends LitElement {
         targetNode.addEventListener(eventType, callback, options);
         this._managedListeners.push({ eventType, targetNode, callback, options });
     }
-
     dispatch(eventName, detail = null) {
-        window.dispatchEvent(new CustomEvent(eventName, { 
-            detail, 
-            bubbles: true, 
-            composed: true 
-        }));
+        if (window.inSetu?.events?.emit) {
+            window.inSetu.events.emit(eventName, detail);
+        } else {
+            window.dispatchEvent(new CustomEvent(eventName, { 
+                detail, 
+                bubbles: true, 
+                composed: true 
+            }));
+        }
     }
 
     connectedCallback() {
@@ -263,13 +266,25 @@ export function fuzzyFilterObjects(items, query, getSearchString = (item) => Str
     }
     return scoredItems.sort((a, b) => b.score - a.score).map(res => res.item);
 }
-
 // Safely initialize nested global namespaces individually
 window.inSetu = window.inSetu || {};
 window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.extensions = window.inSetu.extensions || {};
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.utils = window.inSetu.utils || {};
+
+// Abstracted Event Bus & Fail-Safe Hook Emitter
+window.inSetu.events = window.inSetu.events || {
+    emit: function(eventName, detail = null) {
+        window.dispatchEvent(new CustomEvent(eventName, { detail, bubbles: true, composed: true }));
+    },
+    emitHook: function(zoneName, payload = null) {
+        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
+            return window.inSetu.extensions.Registry.executeUIHook(zoneName, payload);
+        }
+        return null;
+    }
+};
 
 // Define the Job Polling Subroutine
 window.inSetu.utils.pollJob = function(jobId, options = {}) {
