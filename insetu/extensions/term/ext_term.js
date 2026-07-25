@@ -27,6 +27,14 @@ export class InSetuExtTerm extends InSetuElement {
         window.addEventListener('resize', this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
+
+        // Decouple from static uiHooks DOM sniffing
+        this.registerGlobalListener('insetu:term:resize', window, () => {
+            if (this._handleResize) setTimeout(() => this._handleResize(), 50);
+        });
+        this.registerGlobalListener('insetu:term:restart', window, () => {
+            this.onWorkspaceChanged(this.workspaceId);
+        });
     }
 
     disconnectedCallback() {
@@ -107,7 +115,8 @@ export class InSetuExtTerm extends InSetuElement {
     _connectWebSocket() {
         if (!this.isConnected) return;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/${this.workspaceId}/term/stream`;
+        const token = window.inSetu.stores.App.getState().authToken || sessionStorage.getItem('insetu_boot_token');
+        const wsUrl = `${protocol}//${window.location.host}/api/${this.workspaceId}/term/stream?token=${token}`;
 
         // Xterm WebSocket attachment
         this._ws = new WebSocket(wsUrl);
@@ -182,8 +191,7 @@ export class InSetuExtTermActions extends InSetuElement {
     render() {
         return html`
             <button title="Restart Terminal" @click=${() => {
-                const termEl = document.querySelector('insetu-ext-term');
-                if (termEl) termEl.onWorkspaceChanged(termEl.workspaceId);
+                this.dispatch('insetu:term:restart');
             }}>🔄</button>
         `;
     }
@@ -219,32 +227,20 @@ window.ExtensionRegistry.registerExtension('term', {
     uiHooks: {
         'zone:force-refresh': (tabId) => {
             if (tabId === 'ctrl') {
-                const termEl = document.querySelector('insetu-ext-term');
-                if (termEl) {
-                    termEl.onWorkspaceChanged(termEl.workspaceId);
-                }
+                window.dispatchEvent(new CustomEvent('insetu:term:restart'));
             }
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'ctrl') {
-                const termEl = document.querySelector('insetu-ext-term');
-                if (termEl && termEl._handleResize) {
-                    setTimeout(() => termEl._handleResize(), 50);
-                }
+                window.dispatchEvent(new CustomEvent('insetu:term:resize'));
             }
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'ctrl' && data.subId === 'term') {
-                const termEl = document.querySelector('insetu-ext-term');
-                if (termEl) {
-                    // Tap-to-restart behavior for active tabs
-                    if (data.forceRefresh) {
-                        termEl.onWorkspaceChanged(termEl.workspaceId);
-                    }
-                    if (termEl._handleResize) {
-                        setTimeout(() => termEl._handleResize(), 50);
-                    }
+                if (data.forceRefresh) {
+                    window.dispatchEvent(new CustomEvent('insetu:term:restart'));
                 }
+                window.dispatchEvent(new CustomEvent('insetu:term:resize'));
             }
         }
     }

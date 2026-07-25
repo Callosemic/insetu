@@ -194,19 +194,16 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activePushJobId = state.activePushJobId;
         this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         this.allRepos = state.allRepos || [];
-
         // Secure boundary event listeners to allow external triggers (e.g. from file cards)
-        this._boundHandleOpenPush = this._handleOpenPush.bind(this);
-        this._boundRefreshSweep = this._fetchSweepStatusSilent.bind(this);
-        window.addEventListener('open-push-modal', this._boundHandleOpenPush);
-        window.addEventListener('git-diffs-refreshed', this._boundRefreshSweep);
+        this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
+        this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
+        this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
+
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
 }
 disconnectedCallback() {
         super.disconnectedCallback();
-        window.removeEventListener('open-push-modal', this._boundHandleOpenPush);
-        window.removeEventListener('git-diffs-refreshed', this._boundRefreshSweep);
 }
 
     onWorkspaceChanged(newWorkspaceId) {
@@ -1025,10 +1022,7 @@ window.ExtensionRegistry.registerExtension('git', {
             icon: '🚀',
             intent: 'highlight',
             order: 10,
-            onClick: (data, e) => {
-                const gitEl = document.querySelector('insetu-ext-git-diffs');
-                if (gitEl) gitEl._executeRepoSweep(data.repoDir);
-            }
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:git:sweep-repo', { detail: { repoDir: data.repoDir } }))
         },
         {
             targetEntity: 'repo',

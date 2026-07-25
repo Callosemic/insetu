@@ -102,6 +102,12 @@ export class InSetuExtCitations extends InSetuElement {
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
         });
+
+        this.registerGlobalListener('insetu:citations:notes', window, (e) => this._openCitationNotes(e.detail.id));
+        this.registerGlobalListener('insetu:citations:edit', window, (e) => this._openEditModal(e.detail.data));
+        this.registerGlobalListener('insetu:citations:pin', window, (e) => this._openAttachModal(e.detail.data));
+        this.registerGlobalListener('insetu:citations:import', window, (e) => this._importExploreCitation(e.detail.data));
+
         const cState = CitationStore.getState();
         this.localLibrary = cState.localLibrary || [];
         this.pinnedRepos = cState.pinnedRepos || new Set(['ALL']);
@@ -704,10 +710,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '📝',
             intent: 'highlight',
             order: 10,
-            onClick: (data, e) => {
-                const el = document.querySelector('insetu-ext-citations');
-                if (el) el._openCitationNotes(data.id);
-            }
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:notes', { detail: { id: data.id } }))
         },
         {
             targetEntity: 'citation',
@@ -716,10 +719,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '✏️',
             intent: 'warning',
             order: 20,
-            onClick: (data, e) => {
-                const el = document.querySelector('insetu-ext-citations');
-                if (el) el._openEditModal(data);
-            }
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:edit', { detail: { data } }))
         },
         {
             targetEntity: 'citation',
@@ -728,10 +728,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '📌',
             intent: 'primary',
             order: 30,
-            onClick: (data, e) => {
-                const el = document.querySelector('insetu-ext-citations');
-                if (el) el._openAttachModal(data);
-            }
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:pin', { detail: { data } }))
         },
         {
             targetEntity: 'explore_citation',
@@ -741,10 +738,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             intent: (data) => data.alreadyExists ? 'warning' : 'success',
             order: 10,
             match: (data) => !data.isImporting,
-            asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-citations');
-                if (el) await el._importExploreCitation(data);
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:import', { detail: { data } }))
         }
     ],
     layoutSlots: [

@@ -66,7 +66,6 @@ export class InSetuExtResearch extends InSetuElement {
             this.newJobModalOpen = state.newJobModalOpen;
             this.searchForm = state.searchForm;
         });
-
         // Initial sync
         const state = ResearchStore.getState();
         this.jobs = state.jobs;
@@ -77,6 +76,10 @@ export class InSetuExtResearch extends InSetuElement {
         this.aiTriageMode = state.aiTriageMode;
         this.newJobModalOpen = state.newJobModalOpen;
         this.searchForm = state.searchForm;
+
+        this.registerGlobalListener('insetu:research:action', window, (e) => this.handleJobAction(e.detail.id, e.detail.action));
+        this.registerGlobalListener('insetu:research:fetch', window, () => this.fetchState());
+
         this.fetchState();
     }
     disconnectedCallback() {
@@ -470,10 +473,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'warning',
             order: 10,
             match: (data) => data.status === 'running',
-            asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-research');
-                if (el) await el.handleJobAction(data.id, 'pause');
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'pause' } }))
         },
         {
             targetEntity: 'research_job',
@@ -483,10 +483,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'success',
             order: 10,
             match: (data) => data.status === 'paused',
-            asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-research');
-                if (el) await el.handleJobAction(data.id, 'resume');
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'resume' } }))
         },
         {
             targetEntity: 'research_job',
@@ -496,23 +493,26 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'highlight',
             order: 10,
             match: (data) => data.status === 'failed',
-            asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-research');
-                if (el) await el.handleJobAction(data.id, 'retry');
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'retry' } }))
         },
         {
             targetEntity: 'research_job',
             id: 'rs-cancel',
             label: 'Cancel',
-            icon: '🗑️',
-            intent: 'danger',
+            icon: '⏹️',
+            intent: 'neutral',
             order: 20,
             match: (data) => ['running', 'paused', 'gathering', 'failed'].includes(data.status),
-            asyncAction: async (data, e) => {
-                const el = document.querySelector('insetu-ext-research');
-                if (el) await el.handleJobAction(data.id, 'cancel');
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'cancel' } }))
+        },
+        {
+            targetEntity: 'research_job',
+            id: 'rs-delete',
+            label: 'Delete',
+            icon: '🗑️',
+            intent: 'danger',
+            order: 30,
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'delete' } }))
         }
     ],
     layoutSlots: [
@@ -535,23 +535,20 @@ window.ExtensionRegistry.registerExtension('research', {
     uiHooks: {
         'zone:tab-changed': (tabId) => {
             if (tabId === 'research') {
-                const el = document.querySelector('insetu-ext-research');
-                if (el) el.fetchState();
+                window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
             }
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'edit' && data.subId === 'research') {
                 ResearchStore.setState({ isTabActive: true });
-                const el = document.querySelector('insetu-ext-research');
-                if (el) el.fetchState();
+                window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
             } else {
                 ResearchStore.setState({ isTabActive: false });
             }
         },
         'zone:soft-refresh': (ws) => {
             ResearchStore.setState({ jobs: [], inbox: [] });
-            const el = document.querySelector('insetu-ext-research');
-            if (el) el.fetchState();
+            window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
             return false;
         }
     }

@@ -88,10 +88,15 @@ export class InSetuExtHooks extends InSetuElement {
             this.allRepos = state.allRepos || [];
             this.targetConfigs = state.targetConfigs || [];
         });
-
         const aState = AppStore.getState();
         this.allRepos = aState.allRepos || [];
         this.targetConfigs = aState.targetConfigs || [];
+
+        this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
+        this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));
+        this.registerGlobalListener('insetu:hooks:edit', window, (e) => this.openCreateModal(e.detail.data));
+        this.registerGlobalListener('insetu:hooks:delete', window, (e) => this.deleteRule(e.detail.id));
+
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
     }
@@ -362,11 +367,7 @@ export class InSetuExtHooksActions extends InSetuElement {
     ];
     render() {
         return html`
-            <button title="New Rule" @click=${() => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
-                if (el) el.openCreateModal(null);
-            }}>➕</button>
+            <button title="New Rule" @click=${() => this.dispatch('insetu:hooks:edit', { data: null })}>➕</button>
         `;
     }
 }
@@ -382,11 +383,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: (data) => data.enabled ? '⏸️' : '▶️',
             intent: (data) => data.enabled ? 'warning' : 'success',
             order: 10,
-            asyncAction: async (data, e) => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
-                if (el) await el.toggleRule(data);
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:toggle', { detail: { data } }))
         },
         {
             targetEntity: 'hook_rule',
@@ -395,11 +392,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '⚡',
             intent: 'highlight',
             order: 15,
-            asyncAction: async (data, e) => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
-                if (el) await el.executeRule(data.id);
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:execute', { detail: { id: data.id } }))
         },
         {
             targetEntity: 'hook_rule',
@@ -408,11 +401,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '✏️',
             intent: 'primary',
             order: 20,
-            onClick: (data, e) => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
-                if (el) el.openCreateModal(data);
-            }
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:edit', { detail: { data } }))
         },
         {
             targetEntity: 'hook_rule',
@@ -421,11 +410,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '🗑️',
             intent: 'danger',
             order: 30,
-            asyncAction: async (data, e) => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-hooks') : document.querySelector('insetu-ext-hooks');
-                if (el) await el.deleteRule(data.id);
-            }
+            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:delete', { detail: { id: data.id } }))
         }
     ],
     layoutSlots: [

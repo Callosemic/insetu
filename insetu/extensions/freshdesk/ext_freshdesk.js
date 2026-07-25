@@ -70,6 +70,13 @@ export class InSetuExtFreshdesk extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
+
+        // Decouple from static UI hooks
+        this.registerGlobalListener('insetu:freshdesk:take', window, (e) => this.takeTicket(e.detail.id));
+        this.registerGlobalListener('insetu:freshdesk:resolve', window, (e) => this.resolveTicket(e.detail.id));
+        this.registerGlobalListener('insetu:freshdesk:ignore', window, (e) => this.ignoreTicket(e.detail.id));
+        this.registerGlobalListener('insetu:freshdesk:fetch', window, () => this.fetchTickets());
+
         // The SDK automatically cleans up this subscription on unmount
         this.subscribe(FreshdeskStore, state => {
             this.tickets = state.tickets;
@@ -483,24 +490,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-freshdesk', InSetuExtFreshdesk);
-
 // 3. Declarative OS Extension Mapping
-// Establish pure SDK-bound store invokers to remove DOM reading elements entirely
-export const FreshdeskActions = {
-    take: (id) => {
-        const el = document.querySelector('insetu-ext-freshdesk');
-        if (el) el.takeTicket(id);
-    },
-    resolve: (id) => {
-        const el = document.querySelector('insetu-ext-freshdesk');
-        if (el) el.resolveTicket(id);
-    },
-    ignore: (id) => {
-        const el = document.querySelector('insetu-ext-freshdesk');
-        if (el) el.ignoreTicket(id);
-    }
-};
-
 window.ExtensionRegistry.registerExtension('freshdesk', {
     name: "Freshdesk Support",
     version: "2.0.0",
@@ -517,7 +507,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
                 const myId = FreshdeskStore.getState().myAgentId;
                 return !myId || data.responder_id !== myId;
             },
-            onClick: (data, e) => FreshdeskActions.take(data.id)
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:take', { detail: { id: data.id } }))
         },
         {
             targetEntity: 'freshdesk_ticket',
@@ -529,7 +519,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             match: (data) => {
                 return data.status !== 4 && data.status !== 5;
             },
-            onClick: (data, e) => FreshdeskActions.resolve(data.id)
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:resolve', { detail: { id: data.id } }))
         },
         {
             targetEntity: 'freshdesk_ticket',
@@ -539,7 +529,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             intent: 'danger',
             order: 40,
             match: (data) => true,
-            onClick: (data, e) => FreshdeskActions.ignore(data.id)
+            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:ignore', { detail: { id: data.id } }))
         }
     ],
 
@@ -560,15 +550,13 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             if (data.parentId === 'edit' && data.subId === 'freshdesk') {
                 if (data.forceRefresh) {
                     FreshdeskStore.setState({ tickets: [] });
-                    const el = document.querySelector('insetu-ext-freshdesk');
-                    if (el) el.fetchTickets();
+                    window.dispatchEvent(new CustomEvent('insetu:freshdesk:fetch'));
                 }
             }
         },
         'zone:soft-refresh': (ws) => {
             FreshdeskStore.setState({ tickets: [] });
-            const el = document.querySelector('insetu-ext-freshdesk');
-            if (el) el.fetchTickets();
+            window.dispatchEvent(new CustomEvent('insetu:freshdesk:fetch'));
             return false;
         }
     }
