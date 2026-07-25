@@ -383,7 +383,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: (data) => data.enabled ? '⏸️' : '▶️',
             intent: (data) => data.enabled ? 'warning' : 'success',
             order: 10,
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:toggle', { detail: { data } }))
+            emitEvent: (data) => ({ name: 'insetu:hooks:toggle', detail: { data } })
         },
         {
             targetEntity: 'hook_rule',
@@ -392,7 +392,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '⚡',
             intent: 'highlight',
             order: 15,
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:execute', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:hooks:execute', detail: { id: data.id } })
         },
         {
             targetEntity: 'hook_rule',
@@ -401,7 +401,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '✏️',
             intent: 'primary',
             order: 20,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:edit', { detail: { data } }))
+            emitEvent: (data) => ({ name: 'insetu:hooks:edit', detail: { data } })
         },
         {
             targetEntity: 'hook_rule',
@@ -410,7 +410,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             icon: '🗑️',
             intent: 'danger',
             order: 30,
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:hooks:delete', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:hooks:delete', detail: { id: data.id } })
         }
     ],
     layoutSlots: [

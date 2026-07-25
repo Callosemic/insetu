@@ -710,7 +710,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '📝',
             intent: 'highlight',
             order: 10,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:notes', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:citations:notes', detail: { id: data.id } })
         },
         {
             targetEntity: 'citation',
@@ -719,7 +719,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '✏️',
             intent: 'warning',
             order: 20,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:edit', { detail: { data } }))
+            emitEvent: (data) => ({ name: 'insetu:citations:edit', detail: { data } })
         },
         {
             targetEntity: 'citation',
@@ -728,7 +728,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             icon: '📌',
             intent: 'primary',
             order: 30,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:pin', { detail: { data } }))
+            emitEvent: (data) => ({ name: 'insetu:citations:pin', detail: { data } })
         },
         {
             targetEntity: 'explore_citation',
@@ -738,7 +738,7 @@ window.ExtensionRegistry.registerExtension('citations', {
             intent: (data) => data.alreadyExists ? 'warning' : 'success',
             order: 10,
             match: (data) => !data.isImporting,
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:citations:import', { detail: { data } }))
+            emitEvent: (data) => ({ name: 'insetu:citations:import', detail: { data } })
         }
     ],
     layoutSlots: [
@@ -760,7 +760,7 @@ window.ExtensionRegistry.registerExtension('citations', {
                         }
                     } catch(e) {}
                 }});
-                data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: () => window.dispatchEvent(new CustomEvent('insetu:citations:sync')) });
+                data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: () => window.inSetu.events.emit('insetu:citations:sync') });
             }
             return false;
         },
@@ -770,7 +770,7 @@ window.ExtensionRegistry.registerExtension('citations', {
                     reposExpanded: false,
                     bucketsExpanded: {}
                 });
-                document.dispatchEvent(new CustomEvent('citations-load-main'));
+                window.inSetu.events.emit('citations-load-main');
             }
         }
     }

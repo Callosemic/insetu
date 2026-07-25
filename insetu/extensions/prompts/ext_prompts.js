@@ -5,12 +5,10 @@ import { sharedStyles } from '../shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
-
 export const PromptsStore = createExtensionStore('Prompts', {
     prompts: [],
     loading: false,
     searchQuery: '',
-    currentPromptsPath: [],
     fetchPrompts: async () => {
         PromptsStore.setState({ loading: true });
         try {
@@ -31,19 +29,18 @@ export class InSetuExtPrompts extends InSetuElement {
         loading: { type: Boolean },
         prompts: { type: Array },
         searchQuery: { type: String },
-        currentPromptsPath: { type: Array }
+        globalBrowsePath: { type: Array }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
         .prompts-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
     `];
-
     constructor() {
         super();
         this.loading = false;
         this.prompts = [];
         this.searchQuery = '';
-        this.currentPromptsPath = [];
+        this.globalBrowsePath = [];
     }
 
     connectedCallback() {
@@ -52,9 +49,15 @@ export class InSetuExtPrompts extends InSetuElement {
             this.prompts = state.prompts || [];
             this.loading = state.loading || false;
             this.searchQuery = state.searchQuery || '';
-            this.currentPromptsPath = state.currentPromptsPath || [];
             this.requestUpdate();
         });
+        this.subscribe(AppStore, state => {
+            this.globalBrowsePath = state.globalBrowsePath || [];
+            this.requestUpdate();
+        });
+
+        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
+
         this.subscribe(AppStore, state => state.promptsForceRefreshTick, (tick) => {
             if (tick) PromptsStore.getState().fetchPrompts();
         });
@@ -105,9 +108,9 @@ export class InSetuExtPrompts extends InSetuElement {
                         basePath=".insetu/prompts/"
                         .enableSearch=${true}
                         searchPlaceholder="🔍 Fuzzy search prompts..."
-                        .currentPath=${this.currentPromptsPath}
+                        .currentPath=${this.globalBrowsePath}
                         entityType="file:prompt"
-                        @path-changed=${(e) => PromptsStore.setState({ currentPromptsPath: e.detail.path })}>
+                        @path-changed=${(e) => AppStore.setState({ globalBrowsePath: e.detail.path })}>
                     </insetu-file-tree>
                 `}
             </div>
@@ -115,17 +118,33 @@ export class InSetuExtPrompts extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-prompts', InSetuExtPrompts);
-
 export class InSetuExtPromptsActions extends InSetuElement {
     get extName() { return 'prompts'; }
+    static properties = {
+        globalBrowsePath: { type: Array }
+    };
     static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.globalBrowsePath = [];
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(AppStore, state => {
+            this.globalBrowsePath = state.globalBrowsePath || [];
+        });
+        this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
+    }
+
     get _menuItems() {
         return [
             { 
                 label: 'New Folder', 
                 icon: '📁', 
                 onClick: () => { 
-                    const cpPath = PromptsStore.getState().currentPromptsPath || []; 
+                    const cpPath = this.globalBrowsePath || []; 
                     const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
                     if (this.ui && this.ui.openNewFolderModal) this.ui.openNewFolderModal(prefix); 
                 } 
@@ -134,7 +153,7 @@ export class InSetuExtPromptsActions extends InSetuElement {
                 label: 'New Prompt', 
                 icon: '📄', 
                 onClick: () => { 
-                    const cpPath = PromptsStore.getState().currentPromptsPath || []; 
+                    const cpPath = this.globalBrowsePath || []; 
                     const prefix = cpPath.length > 0 ? ".insetu/prompts/" + cpPath.join('/') + "/" : ".insetu/prompts/"; 
                     if (this.ui && this.ui.openNewFileModal) this.ui.openNewFileModal(prefix); 
                 } 

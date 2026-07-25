@@ -564,9 +564,7 @@ window.ExtensionRegistry.registerExtension('flow', {
             icon: '✏️',
             intent: 'primary',
             order: 10,
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('insetu:flow:edit-batch', { detail: data, bubbles: true, composed: true }));
-            }
+            emitEvent: (data) => ({ name: 'insetu:flow:edit-batch', detail: data })
         }
     ],
     layoutSlots: [

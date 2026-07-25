@@ -66,10 +66,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                         const shouldOverwrite = currentContent.trim() !== '' ? confirm("Overwrite existing content with imported markdown?") : false;
                         const newContent = (shouldOverwrite || currentContent.trim() === '') ? statusData.artifact.markdown : currentContent + '\n\n' + statusData.artifact.markdown;
                         fsState.setModal('newFile', { content: newContent });
-
-                        if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.executeUIHook) {
-                            window.inSetu.extensions.Registry.executeUIHook('zone:post-import-url', statusData.artifact);
-                        }
+                        window.inSetu.events.emitHook('zone:post-import-url', statusData.artifact);
 
                         const currentFileName = fsState.modals.newFile?.fileName || '';
                         if (currentFileName.trim() === '') {

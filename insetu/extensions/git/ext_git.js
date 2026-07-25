@@ -67,7 +67,7 @@ export async function generateDiffs(force = false) {
                         diffJobMessage: null,
                         diffJobError: null
                     });
-                window.dispatchEvent(new CustomEvent('git-diffs-refreshed'));
+                window.inSetu.events.emit('git-diffs-refreshed');
                 // Hydrate the global manifest explicitly so downstream extensions (like Flow) reflect the new batch chunks
                 window.inSetu.api.workspace('manifest?t=' + Date.now())
                     .then(mRes => mRes.ok ? mRes.json() : null)
@@ -265,7 +265,7 @@ disconnectedCallback() {
                     } catch (refreshErr) {
                         console.warn("Background refresh failed:", refreshErr);
                     } finally {
-                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
+                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
                     }
                 },
                 onError: (err) => {
@@ -345,9 +345,9 @@ disconnectedCallback() {
 
                     alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
                     if (this.sys && this.sys.executeSystemCompile) {
-                        this.sys.executeSystemCompile().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
+                        this.sys.executeSystemCompile().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
                     } else {
-                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
+                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
                     }
                 },
                 onError: (err) => {
@@ -387,9 +387,9 @@ disconnectedCallback() {
 
                     alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
                     if (this.sys && this.sys.executeSystemCompile) {
-                        this.sys.executeSystemCompile().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
+                        this.sys.executeSystemCompile().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
                     } else {
-                        window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
+                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
                     }
                 },
                 onError: (err) => {
@@ -423,10 +423,7 @@ disconnectedCallback() {
 
             const contextMeta = contextManifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
             const diffMeta = diffManifestObj.meta || {};
-
-            const extMeta = (window.ExtensionRegistry && window.ExtensionRegistry.executeUIHook) 
-                ? window.ExtensionRegistry.executeUIHook('zone:context-metadata', baseFile) 
-                : null;
+            const extMeta = window.inSetu.events.emitHook('zone:context-metadata', baseFile);
             const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
             const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
             const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + " (Diffs)";
@@ -1009,9 +1006,7 @@ window.ExtensionRegistry.registerExtension('git', {
             icon: '🚀',
             intent: 'highlight',
             order: 10,
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('open-push-modal', { detail: { diffFile: data.filepath, repo: data.repoDir } }));
-            }
+            emitEvent: (data) => ({ name: 'open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } })
         },
         {
             targetEntity: 'repo',
@@ -1020,7 +1015,7 @@ window.ExtensionRegistry.registerExtension('git', {
             icon: '🚀',
             intent: 'highlight',
             order: 10,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:git:sweep-repo', { detail: { repoDir: data.repoDir } }))
+            emitEvent: (data) => ({ name: 'insetu:git:sweep-repo', detail: { repoDir: data.repoDir } })
         },
         {
             targetEntity: 'repo',
@@ -1098,8 +1093,8 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         return false;
     });
     window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
-        const diffsTab = document.getElementById('sub-diffs');
-        if (tabId === 'context' && diffsTab && diffsTab.classList.contains('active')) {
+        const { activeSubTabs } = AppStore.getState();
+        if (tabId === 'context' && activeSubTabs['context'] === 'diffs') {
             generateDiffs();
         }
         return false;

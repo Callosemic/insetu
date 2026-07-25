@@ -29,12 +29,19 @@ export const FavoritesStore = createExtensionStore('Favorites', {
             FavoritesStore.setState({ loading: false });
         }
     },
-    addFavorite: async (path, typeOverride = null) => {
-        const isFolder = typeOverride === 'folder' || path.endsWith('/') || !path.includes('.');
+    addFavorite: async (targetPath, typeOverride = null) => {
+        const isFolder = typeOverride === 'folder' || targetPath.endsWith('/') || !targetPath.includes('.');
         const type = typeOverride || (isFolder ? 'folder' : 'file');
-        const name = path.split('/').pop() || path;
+        const name = targetPath.split('/').pop() || targetPath;
         const tempId = 'temp_' + Date.now();
-        const newItem = { id: tempId, path, type, name };
+        const newItem = { 
+            id: tempId, 
+            path: targetPath,
+            folderpath: isFolder ? targetPath : undefined,
+            filepath: !isFolder ? targetPath : undefined,
+            type, 
+            name 
+        };
 
         FavoritesStore.setState(state => ({ items: [...state.items, newItem] }));
 
@@ -77,7 +84,7 @@ export class InSetuFavBtn extends InSetuElement {
     static extensionName = 'favorites';
     get extName() { return 'favorites'; }
 
-    static properties = { filepath: { type: String }, _isPinned: { type: Boolean }, _favId: { type: String } };
+    static properties = { filepath: { type: String }, folderpath: { type: String }, _isPinned: { type: Boolean }, _favId: { type: String } };
     static styles = [sharedStyles];
 
     constructor() { super(); this._isPinned = false; this._favId = null; }
@@ -89,13 +96,14 @@ export class InSetuFavBtn extends InSetuElement {
 
     updated(changedProperties) {
         super.updated(changedProperties);
-        if (changedProperties.has('filepath')) {
+        if (changedProperties.has('filepath') || changedProperties.has('folderpath')) {
             this._evaluateState(FavoritesStore.getState());
         }
     }
     _evaluateState(state) {
-        if (!this.filepath) return;
-        const fav = state.items.find(i => i.path === this.filepath);
+        const targetPath = this.folderpath || this.filepath;
+        if (!targetPath) return;
+        const fav = state.items.find(i => i.path === targetPath);
         this._isPinned = !!fav;
         this._favId = fav ? fav.id : null;
     }
@@ -104,7 +112,8 @@ export class InSetuFavBtn extends InSetuElement {
         if (this._isPinned && this._favId) {
             await FavoritesStore.getState().removeFavorite(this._favId);
         } else {
-            await FavoritesStore.getState().addFavorite(this.filepath);
+            const targetPath = this.folderpath || this.filepath;
+            await FavoritesStore.getState().addFavorite(targetPath, this.folderpath ? 'folder' : 'file');
         }
     }
     render() {
@@ -213,7 +222,7 @@ window.ExtensionRegistry.registerExtension('favorites', {
             targetEntity: 'folder',
             id: 'fave_toggle_folder',
             order: -1,
-            component: (data) => html`<insetu-fav-btn .filepath=${data.filepath}></insetu-fav-btn>`
+            component: (data) => html`<insetu-fav-btn .folderpath=${data.folderpath || data.filepath}></insetu-fav-btn>`
         }
     ],
     layoutSlots: [
@@ -231,24 +240,6 @@ window.ExtensionRegistry.registerExtension('favorites', {
             if (data.parentId === 'edit' && data.subId === 'favorites') {
                 FavoritesStore.getState().fetchFavorites();
             }
-        },
-        'zone:fs-dropdown-menu': (data) => {
-            if (data.currentPath && !data.isPrompts) {
-                const isPinned = FavoritesStore.getState().items.some(i => i.path === data.currentPath);
-                data.menuItems.push({
-                    label: isPinned ? 'Unpin Current Directory' : 'Pin Current Directory',
-                    icon: isPinned ? '⭐' : '☆',
-                    onClick: async () => {
-                        if (isPinned) {
-                            const fav = FavoritesStore.getState().items.find(i => i.path === data.currentPath);
-                            if (fav) await FavoritesStore.getState().removeFavorite(fav.id);
-                        } else {
-                            await FavoritesStore.getState().addFavorite(data.currentPath, 'folder');
-                        }
-                    }
-                });
-            }
-            return false;
         }
     }
 });

@@ -227,12 +227,12 @@ window.ExtensionRegistry.registerExtension('term', {
     uiHooks: {
         'zone:force-refresh': (tabId) => {
             if (tabId === 'ctrl') {
-                window.dispatchEvent(new CustomEvent('insetu:term:restart'));
+                window.inSetu.events.emit('insetu:term:restart');
             }
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'ctrl') {
-                window.dispatchEvent(new CustomEvent('insetu:term:resize'));
+                window.inSetu.events.emit('insetu:term:resize');
             }
         },
         'zone:subtab-changed': (data) => {

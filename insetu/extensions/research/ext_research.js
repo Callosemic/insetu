@@ -535,20 +535,20 @@ window.ExtensionRegistry.registerExtension('research', {
     uiHooks: {
         'zone:tab-changed': (tabId) => {
             if (tabId === 'research') {
-                window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
+                window.inSetu.events.emit('insetu:research:fetch');
             }
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'edit' && data.subId === 'research') {
                 ResearchStore.setState({ isTabActive: true });
-                window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
+                window.inSetu.events.emit('insetu:research:fetch');
             } else {
                 ResearchStore.setState({ isTabActive: false });
             }
         },
         'zone:soft-refresh': (ws) => {
             ResearchStore.setState({ jobs: [], inbox: [] });
-            window.dispatchEvent(new CustomEvent('insetu:research:fetch'));
+            window.inSetu.events.emit('insetu:research:fetch');
             return false;
         }
     }

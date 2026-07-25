@@ -1034,7 +1034,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             if (filepath.includes('.tracker/')) {
                 window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
                 if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'tasks');
-                window.dispatchEvent(new CustomEvent('insetu:tracker:open-edit-task', { detail: { filepath }, bubbles: true, composed: true }));
+                window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
                 return true;
             }
             return false;

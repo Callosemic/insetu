@@ -24,16 +24,20 @@ def list_favorites(ctx):
         return jsonify({"favorites": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @favorites_bp.route('add', methods=['POST'])
 def add_favorite(ctx):
     data = ctx.req.json or {}
-    path = data.get('path', '').strip()
-    fav_type = data.get('type', 'file').strip()
+
+    # Support both legacy paths and the new explicit folderpath/filepath paradigm
+    folderpath = data.get('folderpath', '').strip()
+    filepath = data.get('filepath', '').strip()
+
+    path = folderpath if folderpath else (filepath or data.get('path', '').strip())
+    fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
     name = data.get('name', '').strip() or path.split('/')[-1]
 
     if not path:
-        return jsonify({"error": "Path is required"}), 400
+        return jsonify({"error": "Filepath or folderpath is required"}), 400
 
     try:
         # Prevent duplication entries

@@ -507,7 +507,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
                 const myId = FreshdeskStore.getState().myAgentId;
                 return !myId || data.responder_id !== myId;
             },
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:take', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:freshdesk:take', detail: { id: data.id } })
         },
         {
             targetEntity: 'freshdesk_ticket',
@@ -519,7 +519,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             match: (data) => {
                 return data.status !== 4 && data.status !== 5;
             },
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:resolve', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:freshdesk:resolve', detail: { id: data.id } })
         },
         {
             targetEntity: 'freshdesk_ticket',
@@ -529,7 +529,7 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             intent: 'danger',
             order: 40,
             match: (data) => true,
-            onClick: (data, e) => window.dispatchEvent(new CustomEvent('insetu:freshdesk:ignore', { detail: { id: data.id } }))
+            emitEvent: (data) => ({ name: 'insetu:freshdesk:ignore', detail: { id: data.id } })
         }
     ],
 
@@ -550,13 +550,13 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             if (data.parentId === 'edit' && data.subId === 'freshdesk') {
                 if (data.forceRefresh) {
                     FreshdeskStore.setState({ tickets: [] });
-                    window.dispatchEvent(new CustomEvent('insetu:freshdesk:fetch'));
+                    window.inSetu.events.emit('insetu:freshdesk:fetch');
                 }
             }
         },
         'zone:soft-refresh': (ws) => {
             FreshdeskStore.setState({ tickets: [] });
-            window.dispatchEvent(new CustomEvent('insetu:freshdesk:fetch'));
+            window.inSetu.events.emit('insetu:freshdesk:fetch');
             return false;
         }
     }
