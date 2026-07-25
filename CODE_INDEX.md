@@ -35,7 +35,8 @@ insetu/
 │   │   ├── 0023-polymorphic-entity-action-card-registry.md # [comment required]
 │   │   ├── 0024-frontend-sdk-decoupling-and-domain-accessors.md # [comment required]
 │   │   ├── 0025-declarative-app-shell-and-brokered-resource-management.md # [comment required]
-│   │   └── 0026-unified-token-gatehouse-and-tailscale-auth.md # [comment required]
+│   │   ├── 0026-unified-token-gatehouse-and-tailscale-auth.md # [comment required]
+│   │   └── 0027-global-multi-select-and-batch-action-registry.md # [comment required]
 │   └── standups/                   # R&D scratchpads and engineering notes.
 │       ├── 2026-07-08-insetu-release-timeline.md # [comment required]
 │       ├── 2026-07-08-insetu-security-model.md # [comment required]
@@ -141,6 +142,11 @@ insetu/
 ├── pyproject.toml                  # [comment required]
 ├── readme.md                       # [comment required]
 └── tests/                          # [comment required]
+    ├── fitness/                    # [comment required]
+    │   ├── __init__.py             # [comment required]
+    │   ├── core.py                 # [comment required]
+    │   ├── rules_javascript.py     # [comment required]
+    │   └── rules_python.py         # [comment required]
     ├── fitness_functions.py        # [comment required]
     └── results.txt                 # [comment required]
 ```

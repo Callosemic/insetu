@@ -327,12 +327,16 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         for r in cfg.get("target_repos", []):
             if not r.get("exclude_from_context"):
                 total_known_buckets += 1 + len(r.get("sub_buckets", []))
-
         total_touched_count = 0
 
         for repo_dir in affected_repos:
             repo_cfg = next((r for r in cfg.get("target_repos", []) if r.get("repo_dir") == repo_dir), None)
-            if not repo_cfg or repo_cfg.get("exclude_from_context"): continue
+            if not repo_cfg: continue
+
+            # Ensure custom extension payloads (like prompts) still trigger compilation hooks
+            if repo_cfg.get("exclude_from_context"):
+                dirty = True
+                continue
 
             safe_r_dir = get_safe_repo_id(repo_dir)
             sub_buckets = repo_cfg.get("sub_buckets", [])
@@ -430,7 +434,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
             # Ensure it aligns with the new schema
             manifest[f_name] = {
                 "files": [f"data/contexts/{f_name}"],
-                "meta": {"type": "gather", "title": f"📦 {f_name.replace('.txt','')}", "domain": "Quick-Pack Clipboard", "desc": "Ad-hoc context payload.", "size_bytes": size_bytes}
+                "meta": {"type": "gather", "title": f"📦 {f_name.replace('.txt','')}", "domain": "Exported Contexts", "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
             }
     manifest_out_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     execute_vfs_save(workspace_id, manifest_out_path, json.dumps(manifest, indent=2), data={"is_absolute_artifact": True})
@@ -442,140 +446,121 @@ def generate_context_file(workspace_id=None, target_repos=None):
         "last_full_compile_time": time.time()
     }
     execute_vfs_save(workspace_id, cache_path, json.dumps(cache_data, indent=2), data={"is_absolute_artifact": True})
-
     # Block until the manifest and workflows are flushed so the UI can fetch them instantly
     _VFS_WRITE_QUEUE.join()
-from insetu.workers import update_immediate_job_status, register_callback, submit_immediate_job
-
-def _background_quick_pack(job_id, workspace_id, **kwargs):
-    try:
-        target_dir = kwargs.get('target_dir', '').strip()
-        recursive = kwargs.get('recursive', False)
-        specific_files = kwargs.get('specific_files', None)
-
-        update_immediate_job_status(job_id, 'processing', "Sweeping files for Quick-Pack...", workspace_id=workspace_id)
-
-        from insetu.utils_core import get_omniscient_workspace_files, get_workspace_physics
-        from insetu.context import VFSTransaction
-        repo = target_dir.split('/')[0]
-
-        all_files = get_omniscient_workspace_files(workspace_id, [repo])
-        matched_files = []
-        target_prefix = target_dir + '/' if target_dir else ''
-
-        for filename, rel_path in all_files:
-            if not rel_path.startswith(target_prefix) and target_dir != repo: 
-                continue
-            if specific_files is not None:
-                if rel_path in specific_files:
-                    matched_files.append(rel_path)
-                continue
-            if not recursive:
-                target_depth = target_dir.count('/')
-                file_depth = rel_path.count('/')
-                if file_depth > target_depth + (1 if target_dir else 0):
-                    continue
-            matched_files.append(rel_path)
-
-        if not matched_files:
-            update_immediate_job_status(job_id, 'failed', "No valid tracked files found in the specified path.", workspace_id=workspace_id)
-            return
-
-        update_immediate_job_status(job_id, 'processing', f"Packing {len(matched_files)} files...", workspace_id=workspace_id)
-
-        _, ws_root, _ = get_workspace_physics(workspace_id)
-        out_lines = []
-        out_lines.append("="*60)
-        out_lines.append(f"INSETU AD-HOC CONTEXT PAYLOAD ({target_dir})")
-        out_lines.append("="*60)
-        out_lines.append("")
-        out_lines.append(generate_ascii_tree(matched_files))
-        out_lines.append("\n")
-
-        with VFSTransaction(workspace_id) as vfs:
-            for rel_path in sorted(matched_files):
-                try:
-                    content = vfs.read(rel_path)
-                    if content is not None:
-                        out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n{content}\n\n")
-                    else:
-                        out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: Not found]\n\n")
-                except Exception as e:
-                    out_lines.append(f"{'='*60}\n>>>NEW FILE :: {rel_path} | Ad-Hoc Payload\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
-            import time
-            from insetu.sdk import ExtensionContext
-            from insetu.utils_core import load_json_file, save_json_file
-            ctx = ExtensionContext('gather', workspace_id)
-            safe_name = target_dir.replace('/', '_').replace('\\', '_') if target_dir else 'workspace'
-            filename = f"quick_pack_{int(time.time())}_{safe_name}.txt"
-            paths = ctx.paths
-            out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
-
-            vfs.save(out_path, "\n".join(out_lines), data={"is_absolute_artifact": True})
-
-        from insetu.routes_fs import _VFS_WRITE_QUEUE
-        _VFS_WRITE_QUEUE.join()
-        from insetu.workers import register_ephemeral_artifact
-        register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=workspace_id)
-        manifest = ctx.manifest
-        size_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
-        manifest[filename] = {
-            "files": [f"data/contexts/{filename}"],
-            "meta": {"type": "gather", "title": f"📦 {target_dir or 'Workspace'}", "domain": "Quick-Pack Clipboard", "desc": f"Ad-hoc context packed on {datetime.datetime.now().strftime('%Y-%m-%d')} (24h TTL)", "size_bytes": size_bytes}
-        }
-        ctx.save_manifest(manifest)
-
-        update_immediate_job_status(job_id, 'completed', "Quick-Pack generated successfully.", artifact={"filename": filename}, workspace_id=workspace_id)
-    except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Error generating Quick-Pack: {str(e)}", workspace_id=workspace_id)
-
-register_callback("gather", "quick_pack_task", _background_quick_pack)
-@gather_bp.route('quick-pack', methods=['POST'])
-def api_gather_quick_pack(ctx):
-    """Stateless generator for ephemeral, ad-hoc context payloads without disk pollution."""
-    data = ctx.req.json or {}
-    target_dir = data.get('target_dir', '').strip()
-
-    if not target_dir:
-        return jsonify({"error": "Target directory required."}), 400
-
-    job_id = ctx.jobs.submit("quick_pack_task", **data)
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
-@gather_bp.route('quick-pack/clear', methods=['POST'])
-def api_gather_quick_pack_clear(ctx):
+@gather_bp.worker("pack_selection_task")
+def _pack_selection_worker(ctx, items, job_id=None):
+    ctx.jobs.update_progress("Compiling selected files into context payload...")
+    from insetu.utils_core import generate_ascii_tree
+    from insetu.context import VFSTransaction
+    import time
     import os
+    from pathlib import Path
+
+    if not items:
+        raise ValueError("No items provided.")
+
+    files = [item['filepath'] for item in items]
+    header_str = "============================================================\n"
+    header_str += "INSETU AD-HOC CONTEXT PAYLOAD (Selection)\n"
+    header_str += "============================================================\n\n"
+    header_str += generate_ascii_tree(files) + "\n\n"
+    text_blocks = []
+    with VFSTransaction(ctx.workspace_id) as vfs:
+        for item in sorted(items, key=lambda x: x['filepath']):
+            filepath = item['filepath']
+            try:
+                is_artifact = False
+                read_path = filepath
+                # Deterministic Virtual URI Routing
+                if filepath.startswith("system://"):
+                    parts = filepath.replace("system://", "").split("/")
+                    bucket = parts[0]
+                    filename = parts[-1]
+
+                    # Programmatically resolve the bucket by matching the directory name against registered OS paths
+                    target_dir = next((p for p in ctx.paths.values() if isinstance(p, str) and p.endswith(f"/{bucket}")), ctx.paths["artifacts_base"])
+                    read_path = Path(target_dir).joinpath(filename).as_posix()
+                    is_artifact = True
+                elif filepath.startswith(".insetu/"):
+                    is_artifact = True
+
+                content = vfs.read(read_path, is_absolute_artifact=is_artifact)
+
+                # Fallback for standard files
+                if content is None and not is_artifact:
+                    content = vfs.read(filepath, is_absolute_artifact=True)
+
+                if content is not None:
+                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n{content}\n\n")
+                else:
+                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: Not found]\n\n")
+            except Exception as e:
+                text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
+
+    base_filename = f"quickpack_{int(time.time())}_context.txt"
+
+    manifest_entry = compile_context_payload(
+        ctx.workspace_id,
+        ctx.paths["contexts_dir"],
+        base_filename,
+        header_str,
+        text_blocks,
+        files,
+        {"type": "gather", "title": "⚡ Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}
+    )
+
+    manifest_data = ctx.manifest
+    manifest_data[base_filename] = manifest_entry
+    ctx.save_manifest(manifest_data)
+
+    from insetu.routes_fs import _VFS_WRITE_QUEUE
+    _VFS_WRITE_QUEUE.join()
+
+    from insetu.workers import register_ephemeral_artifact
+    chunks = manifest_entry.get("meta", {}).get("chunks", [base_filename])
+    for chunk in chunks:
+        out_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
+        register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
+
+    return {"message": "Compilation successful.", "artifact": {"base_filename": base_filename, "chunks": chunks}}
+@gather_bp.route('clear_quickpacks', methods=['POST'])
+def api_clear_quickpacks(ctx):
+    manifest_data = ctx.manifest
+    keys_to_delete = [k for k in manifest_data.keys() if k.startswith('quickpack_') or k.startswith('selection_')]
+
+    if not keys_to_delete:
+        return jsonify({"status": "success", "message": "No quickpacks to clear."})
+
+    for k in keys_to_delete:
+        meta = manifest_data[k].get("meta", {})
+        chunks = meta.get("chunks", [k])
+        for chunk in chunks:
+            chunk_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
+            try:
+                os.remove(chunk_path)
+            except Exception:
+                pass
+        del manifest_data[k]
+
+    ctx.save_manifest(manifest_data)
+
+    # Clean up the garbage collector ledger synchronously
     from insetu.db import get_connection
-    from insetu.utils_core import load_json_file, save_json_file
-
     conn = get_connection("workers", workspace_id=ctx.workspace_id)
-    cursor = conn.execute("SELECT id, filepath FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
-
-    count = 0
-    ephemeral_basenames = []
-    from insetu.routes_fs import execute_vfs_delete
-    from insetu.utils_core import get_workspace_physics
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
-
-    for row in cursor.fetchall():
-        try:
-            if os.path.exists(row['filepath']):
-                try:
-                    rel_path = os.path.relpath(row['filepath'], ws_root).replace('\\', '/')
-                except ValueError:
-                    rel_path = row['filepath']
-                execute_vfs_delete(ctx.workspace_id, rel_path)
-            ephemeral_basenames.append(Path(row['filepath']).name)
-            conn.execute("DELETE FROM ephemeral_artifacts WHERE id=?", (row['id'],))
-            count += 1
-        except Exception: 
-            pass
+    conn.execute("DELETE FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
     conn.commit()
 
-    manifest = ctx.manifest
-    keys_to_remove = [k for k in manifest.keys() if k in ephemeral_basenames]
-    if keys_to_remove:
-        for k in keys_to_remove:
-            del manifest[k]
-        ctx.save_manifest(manifest)
+    return jsonify({"status": "success", "message": f"Cleared {len(keys_to_delete)} quickpacks."})
 
-    return jsonify({"status": "success", "cleared": count})
+@gather_bp.route('pack_selection', methods=['POST'])
+def api_gather_pack_selection(ctx):
+    data = ctx.req.json or {}
+    items = data.get('items', [])
+    if not items:
+        return jsonify({"error": "Items list required."}), 400
+    job_id = ctx.jobs.submit("pack_selection_task", items=items)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+
+

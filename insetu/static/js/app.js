@@ -169,6 +169,191 @@ window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () 
     if (el) el._saveEditTask();
 });
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
+    const packSelectionPayload = async (items) => {
+        const payloadItems = items.map(i => ({
+            filepath: i.data?.filepath
+        })).filter(i => i.filepath);
+
+        if (payloadItems.length === 0) throw new Error("No valid items to pack.");
+
+        const res = await window.inSetu.api.workspace('gather/pack_selection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: payloadItems })
+        });
+        if (!res.ok) throw new Error("Failed to queue compilation.");
+        const data = await res.json();
+        return new Promise((resolve, reject) => {
+            window.inSetu.utils.pollJob(data.job_id, {
+                onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
+                onComplete: async (statusData) => {
+                    // Update global manifest manually so downstream modals can find the chunk metadata
+                    try {
+                        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                        if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                    } catch(e) {}
+                    resolve(statusData.artifact);
+                },
+                onError: (err) => reject(err)
+            });
+        });
+    };
+
+    window.ExtensionRegistry.registerExtension('batch-actions', {
+        name: "Batch Actions",
+        batchActions: [
+            {
+                id: 'batch-download',
+                label: 'Download',
+                icon: '⬇️',
+                intent: 'primary',
+                order: 20,
+                match: (items) => items.length > 0 && items.every(i => i.data?.filepath),
+                asyncAction: async (items) => {
+                    try {
+                        const artifact = await packSelectionPayload(items);
+                        window.inSetu.stores.Selection.getState().clearSelection();
+                        if (artifact.chunks && artifact.chunks.length > 1) {
+                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
+                            // Switch to context tab to ensure modal renders
+                            if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
+                            window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: artifact.base_filename } }));
+                        } else {
+                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
+                            if (window.inSetu.vfs.fetchAndDownloadState) {
+                                await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
+                            }
+                        }
+                    } catch (err) {
+                        alert("Packing failed: " + err.message);
+                    }
+                }
+            },
+            {
+                id: 'batch-share',
+                label: 'Share',
+                icon: '📤',
+                intent: 'neutral',
+                order: 30,
+                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath),
+                asyncAction: async (items) => {
+                    try {
+                        const artifact = await packSelectionPayload(items);
+                        window.inSetu.stores.Selection.getState().clearSelection();
+
+                        if (window.inSetu.vfs.shareFiles) {
+                            await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                        }
+                    } catch (err) {
+                        alert("Packing failed: " + err.message);
+                    }
+                }
+            }
+        ]
+    });
+import { LitElement, html, css } from 'lit';
+import { InSetuElement } from './sdk.js';
+
+export class InSetuSelectionTray extends InSetuElement {
+    static properties = { 
+        selectedItems: { type: Object },
+        modalOpen: { type: Boolean }
+    };
+
+    static styles = css`
+        .cart-btn {
+            background: var(--intent-highlight);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 28px;
+            height: 28px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            transition: transform 0.2s;
+            padding: 0;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .cart-btn:hover {
+            transform: scale(1.1);
+        }
+    `;
+
+    constructor() {
+        super();
+        this.selectedItems = new Map();
+        this.modalOpen = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.Selection, state => {
+            this.selectedItems = state.selectedItems;
+            if (this.selectedItems.size === 0) this.modalOpen = false;
+            this.requestUpdate();
+        });
+        this.selectedItems = window.inSetu.stores.Selection.getState().selectedItems;
+    }
+
+    render() {
+        const count = this.selectedItems.size;
+        const itemsArray = Array.from(this.selectedItems.values());
+
+        let batchActions = [];
+        if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+            window.ExtensionRegistry._manifests.forEach(config => {
+                if (config.batchActions) {
+                    config.batchActions.forEach(act => {
+                        if (act.match(itemsArray)) batchActions.push(act);
+                    });
+                }
+            });
+        }
+        batchActions.sort((a, b) => (a.order || 99) - (b.order || 99));
+        return html`
+            ${count > 0 ? html`
+                <button class="cart-btn" title="View Selected Items" @click=${() => this.modalOpen = true}>${count}</button>
+            ` : ''}
+
+            <insetu-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="Selected Items (${count})" @modal-closed=${() => this.modalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
+                    ${itemsArray.map(item => html`
+                        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 4px;">
+                            <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${item.data?.filepath || item.data?.id || 'Unknown Item'}</span>
+                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 4px 8px; font-size: 1rem; cursor: pointer; margin: 0;" @click=${() => {
+                                const id = item.data?.filepath || item.data?.id;
+                                if (id) window.inSetu.stores.Selection.getState().toggleSelection(id, item.entityType, item.data);
+                            }}>✕</button>
+                        </div>
+                    `)}
+                </div>
+                <insetu-async-btn 
+                    slot="footer" 
+                    label="🗑️ Clear" 
+                    intent="danger" 
+                    .onClick=${() => window.inSetu.stores.Selection.getState().clearSelection()}>
+                </insetu-async-btn>
+                ${batchActions.map(act => html`
+                    <insetu-async-btn   
+                        slot="footer"
+                        label="${act.icon} ${act.label}" 
+                        intent="${act.intent || 'primary'}" 
+                        .onClick=${async (e) => {
+                            await act.asyncAction(itemsArray, e);
+                        }}>
+                    </insetu-async-btn>
+                `)}
+            </insetu-modal>
+        `;
+    }
+}
+customElements.define('insetu-selection-tray', InSetuSelectionTray);
+
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};

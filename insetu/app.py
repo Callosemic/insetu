@@ -474,9 +474,8 @@ def download_file(filename):
         from insetu.utils_core import resolve_workspace_path
         resolved = resolve_workspace_path(filename, workspace_id)
         if os.path.exists(resolved): file_path = resolved
-
     if not file_path: return jsonify({"error": "File not found"}), 404
-    base, ext = os.path.splitext(filename)
+    base, ext = os.path.splitext(safe_basename)
     dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
 
     # If explicitly requested as inline view, let the browser handle the mime type natively

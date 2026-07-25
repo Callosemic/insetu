@@ -11,6 +11,19 @@ window.inSetu.utils.getActiveWorkspace = function() {
         return sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     } catch(e) { return 'default'; }
 };
+export const SelectionStore = createStore(
+    devtools(subscribeWithSelector((set, get) => ({
+        selectedItems: new Map(),
+        toggleSelection: (id, entityType, data) => set(state => {
+            const newMap = new Map(state.selectedItems);
+            if (newMap.has(id)) newMap.delete(id);
+            else newMap.set(id, { entityType, data });
+            return { selectedItems: newMap };
+        }),
+        clearSelection: () => set({ selectedItems: new Map() })
+    })), { name: 'SelectionStore' })
+);
+window.inSetu.stores.Selection = SelectionStore;
 
 export const AppStore = createStore(
     devtools(

@@ -13,6 +13,7 @@ export class InSetuAsyncBtn extends LitElement {
     };
     static styles = [sharedStyles, css`
         :host { display: inline-block; }
+        yenvui-async-btn { display: block; width: 100%; height: 100%; }
     `];
     constructor() {
         super();

@@ -179,9 +179,9 @@ export class InSetuAppShell extends InSetuElement {
     render() {
         return html`
             <yenvui-tabs .tabs=${this.primaryTabs} .activeTab=${this.activePrimary} @yenvui-tab-selected=${this._handlePrimarySelect}>
-                
                 <!-- Project the generic settings button to the far right of the primary header -->
                 <div slot="header-actions" style="display: flex; align-items: center;">
+                    <insetu-selection-tray></insetu-selection-tray>
                     <insetu-system-settings></insetu-system-settings>
                 </div>
 

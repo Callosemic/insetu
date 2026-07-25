@@ -279,6 +279,23 @@ window.inSetu.utils.pollJob = function(jobId, options = {}) {
         try {
             const res = await window.inSetu.api.system(`jobs/${jobId}`);
             if (!res.ok) {
+                if (res.status === 401) {
+                    // Server likely rebooted and rotated its boot token. Attempt a seamless re-handshake.
+                    const authRes = await fetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+                    if (authRes.ok) {
+                        const authData = await authRes.json();
+                        sessionStorage.setItem('insetu_boot_token', authData.token);
+                        if (window.inSetu.stores.App) window.inSetu.stores.App.setState({ authToken: authData.token });
+                    }
+                } else if (res.status === 404) {
+                    try {
+                        const errData = await res.clone().json();
+                        if (errData.error === "Job not found") {
+                            onError(new Error("Job not found."));
+                            return;
+                        }
+                    } catch(e) {}
+                }
                 throw new Error(`HTTP ${res.status}`);
             }
             const data = await res.json();

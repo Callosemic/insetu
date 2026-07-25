@@ -3,105 +3,8 @@ import { AppStore } from './store.js';
 import { fetchAndDownloadState, fetchAndCopy, buildFileTree, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
 import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
-export async function executeQuickPack(targetDir, recursive = false, specificFiles = null) {
-    window.inSetu.ui.setGlobalStatus("⏳ Generating Ad-Hoc Context...", null);
-    try {
-        const res = await window.inSetu.api.workspace('gather/quick-pack', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_dir: targetDir,
-                recursive: recursive,
-                specific_files: specificFiles
-            })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Failed to queue quick-pack.");
-
-        let filename = data.filename;
-        if (res.status === 202) {
-            const jobId = data.job_id;
-            while (true) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
-                if (!pollRes.ok) throw new Error("Quick-Pack job failed");
-                const pollData = await pollRes.json();
-                if (pollData.status === 'processing' || pollData.status === 'pending') {
-                    window.inSetu.ui.setGlobalStatus(`⏳ ${pollData.message || "Generating..."}`, null);
-                } else if (pollData.status === 'completed') {
-                    filename = pollData.artifact?.filename;
-                    break;
-                } else if (pollData.status === 'failed') {
-                    throw new Error(pollData.message);
-                }
-            }
-        }
-        // Open the physical file that was just written to disk natively
-        viewAndCopy(filename);
-
-        // Fetch the updated manifest to render the new Quick-Pack in the UI list
-        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-        if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
-
-        window.inSetu.ui.setGlobalStatus("✅ Ad-Hoc Context added to Clipboard!", 3000);
-    } catch (e) {
-        alert("Error creating quick-pack: " + e.message);
-        window.inSetu.ui.setGlobalStatus("❌ Quick-Pack failed", 3000, true);
-    }
-}
-export async function openQuickPackModal(targetDir) {
-    const fullTree = buildFileTree(getGlobalManifest());
-    let current = fullTree;
-    const gbPath = AppStore.getState().globalBrowsePath || [];
-    for (const p of gbPath) {
-        if (current[p]) current = current[p];
-        else break;
-    }
-
-    const fileKeys = Object.keys(current).filter(k => k !== '_isFile' && current[k]._isFile).sort();
-
-    if (fileKeys.length === 0) {
-        alert("No files available in this directory to pack.");
-        return;
-    }
-
-    const selectedFiles = new Set(fileKeys.map(k => current[k].fullPath));
-    FsStore.getState().setModal('quickPack', { open: true, targetDir, files: fileKeys.map(k => ({ key: k, path: current[k].fullPath })), selectedFiles });
-}
-
-const executeQuickPackSelected = function() {
-    const { targetDir, selectedFiles } = FsStore.getState().modals.quickPack;
-    const selectedArray = Array.from(selectedFiles);
-    if (selectedArray.length === 0) {
-        alert("Please select at least one file.");
-        return;
-    }
-    executeQuickPack(targetDir, false, selectedArray);
-    FsStore.getState().setModal('quickPack', { open: false });
-};
-export async function clearQuickPacks() {
-    if (!confirm("Clear all Quick-Pack clipboard items?")) return;
-    window.inSetu.ui.setGlobalStatus("⏳ Clearing Clipboard...", null);
-    try {
-        const res = await window.inSetu.api.workspace('gather/quick-pack/clear', { method: 'POST' });
-        if (!res.ok) throw new Error("Failed to clear quick-packs.");
-
-        // Fetch the updated manifest to clear the Quick-Packs from the UI list
-        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-        if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
-
-        window.inSetu.ui.setGlobalStatus("✅ Clipboard cleared!", 2000);
-    } catch (e) {
-        alert("Error clearing clipboard: " + e.message);
-        window.inSetu.ui.setGlobalStatus("❌ Clear failed", 3000, true);
-    }
-}
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
-window.inSetu.vfs.executeQuickPack = executeQuickPack;
-window.inSetu.vfs.clearQuickPacks = clearQuickPacks;
-window.inSetu.ui.openQuickPackModal = openQuickPackModal;
-window.inSetu.ui.executeQuickPackSelected = executeQuickPackSelected;
 
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
@@ -112,6 +15,36 @@ export const GatherStore = createExtensionStore('Gather', {
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Gather = GatherStore;
+export class InSetuExtGatherActions extends InSetuElement {
+    static styles = [sharedStyles];
+    render() {
+        return html`
+            <yenvui-dropdown align="right" .items=${[
+                { 
+                    label: 'Clear Quickpacks', 
+                    icon: '🧹', 
+                    intent: 'danger',
+                    onClick: async () => {
+                        try {
+                            const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
+                            if (res.ok) {
+                                const data = await res.json();
+                                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
+                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                                if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                            }
+                        } catch(e) {
+                            alert("Failed to clear quickpacks: " + e.message);
+                        }
+                    }
+                }
+            ]}>
+                <button slot="trigger" class="system-action-btn">☰</button>
+            </yenvui-dropdown>
+        `;
+    }
+}
+customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
 
 export class InSetuExtGather extends InSetuElement {
     static properties = {
@@ -290,13 +223,12 @@ export class InSetuExtGather extends InSetuElement {
 
             <div class="gather-body">
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
-
                 <div style="display: ${this.loading ? 'none' : 'block'};">
                     <insetu-categorized-list
                     .items=${filteredFiles}
                     categoryKey="finalCat"
                     .categoryOrder=${categoryOrder}
-                    .renderCategoryHeader=${(cat) => cat === "Quick-Pack Clipboard" ? html`<insetu-async-btn slot="header-actions" label="🗑️ Clear" intent="danger" .onClick=${async (e) => { e.stopPropagation(); if(window.inSetu.vfs.clearQuickPacks) await window.inSetu.vfs.clearQuickPacks(); }}></insetu-async-btn>` : ''}
+                    .renderCategoryHeader=${(cat) => ''}
                     .renderItem=${(f) => html`
                         <insetu-card
                             .filename=${f.filename}
@@ -306,7 +238,7 @@ export class InSetuExtGather extends InSetuElement {
                             icon="📦"
                             intentColor="var(--intent-highlight)"
                             entityType="file:context"
-                            .entityData=${{ filepath: f.filename, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton }}
+                            .entityData=${{ filepath: `system://contexts/${f.filename}`, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton }}
                             @card-clicked=${() => { if(!f.isSkeleton && window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f.filename); }}>
 
                             ${f.isSkeleton ? html`
@@ -348,11 +280,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 order: 100,
                 match: (data) => {
                     if (data.isSkeleton) return false;
-                    const chunks = window.inSetu.stores.App.getState().manifest[data.filepath]?.meta?.chunks;
+                    const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                    const chunks = window.inSetu.stores.App.getState().manifest[basename]?.meta?.chunks;
                     return chunks && chunks.length > 1;
                 },
                 onClick: (data, e) => {
-                    window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: data.filepath } }));
+                    const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                    window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: basename } }));
                 }
             }
         ],
@@ -364,6 +298,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 label: "Gather",
                 order: 1,
                 component: "insetu-ext-gather"
+            },
+            {
+                slot: "slots:sub-navigation-actions",
+                targetParent: "context",
+                targetSub: "gather",
+                component: "insetu-ext-gather-actions",
+                order: 1
             }
         ],
         uiHooks: {

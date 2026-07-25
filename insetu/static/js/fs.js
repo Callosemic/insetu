@@ -73,8 +73,7 @@ export const FsStore = createStore(
                 newFile: { open: false, basePath: '', fileName: '', content: '' },
                 newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
                 linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
-                browser: { open: false, title: '', manifest: [], searchQuery: '' },
-                quickPack: { open: false, targetDir: '', files: [], selectedFiles: new Set() }
+                browser: { open: false, title: '', manifest: [], searchQuery: '' }
             },
             setSearchQuery: (q) => set({ searchQuery: q }),
             setModal: (modalName, data) => set(state => ({
@@ -662,11 +661,6 @@ export class InSetuVFSExplorerActions extends InSetuElement {
             items.push({ label: 'New Folder', icon: '📁', onClick: () => openNewFolderModal(prefix) });
             items.push({ label: 'New File', icon: '📄', onClick: () => openNewFileModal(prefix) });
             items.push({ label: 'Upload File', icon: '📤', onClick: () => uploadFileToWorkspace(currentPath) });
-            items.push({ divider: true });
-            items.push({ label: `Quick-Pack: Folder`, icon: '📦', onClick: () => executeQuickPack(currentPath, false) });
-            items.push({ label: `Quick-Pack: Recursive`, icon: '🗂️', onClick: () => executeQuickPack(currentPath, true) });
-            items.push({ divider: true });
-            items.push({ label: `Quick-Pack: Select Files...`, icon: '☑️', onClick: () => openQuickPackModal(currentPath) });
 
             const manifestFiles = getGlobalManifest();
             const prefixWithSlash = currentPath + '/';
@@ -706,7 +700,8 @@ window.ExtensionRegistry.registerExtension('files', {
             match: (data) => {
                 if (data.suppressCopy) return false;
                 if (data.isSkeleton) return false;
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
                 return !chunks || chunks.length <= 1;
             },
             asyncAction: async (data, e) => {
@@ -752,7 +747,8 @@ window.ExtensionRegistry.registerExtension('files', {
                 return !!navigator.share && !!navigator.canShare;
             },
             asyncAction: async (data, e) => {
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
                 await shareFiles(data.filepath, chunks, data.isFS);
             }
         },
@@ -766,7 +762,8 @@ window.ExtensionRegistry.registerExtension('files', {
             match: (data) => {
                 if (data.suppressDownload) return false;
                 if (data.isSkeleton) return false;
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[data.filepath]?.meta?.chunks;
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
                 // If it has multiple chunks, the 'context' subclass takes over download responsibilities
                 return !chunks || chunks.length <= 1;
             },
@@ -1537,30 +1534,6 @@ export class InSetuVFSModals extends InSetuElement {
         <button slot="footer" style="background: var(--intent-success); color: white;" @click=${confirmFolderSelection}>✅ Select This Folder</button>
     ` : ''}
 </insetu-modal>
-            <insetu-modal ?open=${m.quickPack?.open} ?fullscreen=${true} titleText="Quick-Pack Select: ${m.quickPack?.targetDir}" @modal-closed=${() => FsStore.getState().setModal('quickPack', { open: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0; overflow-y: auto; padding-right: 10px;">
-                    ${m.quickPack?.files?.map(f => html`
-                        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
-                            <input type="checkbox" .value=${f.path} style="cursor: pointer; transform: scale(1.2);"
-                                .checked=${m.quickPack.selectedFiles.has(f.path)}
-                                @change=${(e) => {
-                                    const newSet = new Set(m.quickPack.selectedFiles);
-                                    if (e.target.checked) newSet.add(f.path);
-                                    else newSet.delete(f.path);
-                                    FsStore.getState().setModal('quickPack', { selectedFiles: newSet });
-                                }}>
-                            <label style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);"
-                                @click=${() => {
-                                    const newSet = new Set(m.quickPack.selectedFiles);
-                                    if (newSet.has(f.path)) newSet.delete(f.path);
-                                    else newSet.add(f.path);
-                                    FsStore.getState().setModal('quickPack', { selectedFiles: newSet });
-                                }}>${f.key}</label>
-                        </div>
-                    `)}
-                </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => window.inSetu.ui.executeQuickPackSelected()}>📦 Pack Selected</button>
-            </insetu-modal>
         `;
     }
 }

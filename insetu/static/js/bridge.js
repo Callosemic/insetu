@@ -359,6 +359,7 @@ export class InSetuExtBridge extends InSetuElement {
                                             .filename=${file}
                                             .titleText=${""}
                                             icon=""
+                                            ?disableSelection=${true}
                                             intentColor=${allChecked ? "var(--intent-success)" : (someChecked ? "var(--intent-warning)" : "var(--intent-neutral)")}
                                             style="margin-bottom: 12px; display: block;">
                                             <div style="display: flex; flex-direction: column; gap: 4px; margin-top: -5px;">

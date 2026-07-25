@@ -13,7 +13,9 @@ export class InSetuCard extends LitElement {
         icon: { type: String },
         intentColor: { type: String },
         entityType: { type: String },
-        entityData: { type: Object }
+        entityData: { type: Object },
+        selected: { type: Boolean },
+        disableSelection: { type: Boolean }
     };
     static styles = [sharedStyles];
 
@@ -27,7 +29,30 @@ export class InSetuCard extends LitElement {
         this.intentColor = '';
         this.entityType = '';
         this.entityData = {};
+        this.selected = false;
     }
+
+    connectedCallback() {
+        super.connectedCallback();
+        const selStore = window.inSetu.stores.Selection;
+        if (selStore) {
+            this._unsubSel = selStore.subscribe(state => state.selectedItems, items => {
+                const id = this.entityData?.filepath || this.entityData?.id || this.filename;
+                const isSelected = items.has(id);
+                if (this.selected !== isSelected) {
+                    this.selected = isSelected;
+                }
+            });
+            const items = selStore.getState().selectedItems;
+            this.selected = items.has(this.entityData?.filepath || this.entityData?.id || this.filename);
+        }
+    }
+
+    disconnectedCallback() {
+        super.disconnectedCallback();
+        if (this._unsubSel) this._unsubSel();
+    }
+
     render() {
         const dynActions = this._renderDynamicActions();
         const hasDynActions = Array.isArray(dynActions) ? dynActions.length > 0 : !!dynActions;
@@ -40,6 +65,15 @@ export class InSetuCard extends LitElement {
                 .detailText=${this.detailText}
                 .icon=${this.icon}
                 .intentColor=${this.intentColor}
+                ?selected=${this.selected}
+                ?disableSelection=${this.disableSelection}
+                @yenvui-card-select-toggled=${(e) => {
+                    e.stopPropagation();
+                    const id = this.entityData?.filepath || this.entityData?.id || this.filename;
+                    if (window.inSetu.stores.Selection) {
+                        window.inSetu.stores.Selection.getState().toggleSelection(id, this.entityType, this.entityData);
+                    }
+                }}
                 @click=${this._handleMainClick}
                 style="cursor: pointer;">
 
@@ -67,10 +101,9 @@ export class InSetuCard extends LitElement {
             const label = typeof act.label === 'function' ? act.label(this.entityData) : act.label;
             const icon = typeof act.icon === 'function' ? act.icon(this.entityData) : (act.icon || '');
             const intent = typeof act.intent === 'function' ? act.intent(this.entityData) : (act.intent || 'primary');
-
             if (act.asyncAction) {
-                // Correctly map yenVUI's custom @yv-click event wrapper backwards down into the original entityAction handler
-                return html`<yenvui-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" @yv-click=${(e) => act.asyncAction(this.entityData, e.detail.originalEvent)}></yenvui-async-btn>`;
+                // Delegate to the OS-managed insetu-async-btn to natively inherit async status feedback mechanics
+                return html`<insetu-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${(e) => act.asyncAction(this.entityData, e)}></insetu-async-btn>`;
             }
             return html`<button class="btn-sm" style="background: var(--intent-${intent}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 99};" @click=${(e) => act.onClick(this.entityData, e)}>${icon} ${label}</button>`;
         });
