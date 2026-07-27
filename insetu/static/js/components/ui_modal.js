@@ -7,7 +7,8 @@ export class InSetuModal extends LitElement {
         titleText: { type: String },
         open: { type: Boolean, reflect: true },
         maxWidth: { type: String },
-        fullscreen: { type: Boolean, reflect: true }
+        fullscreen: { type: Boolean, reflect: true },
+        flush: { type: Boolean, reflect: true }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -53,10 +54,12 @@ export class InSetuModal extends LitElement {
                 .titleText=${this.titleText}
                 .maxWidth=${this.maxWidth}
                 ?fullscreen=${this.fullscreen}
+                ?flush=${this.flush}
                 @yenvui-modal-closed=${this.close}>
-
                 <slot name="body" slot="body"></slot>
+                <slot></slot>
                 <slot name="footer" slot="footer"></slot>
+
             </yenvui-modal>
         `;
     }

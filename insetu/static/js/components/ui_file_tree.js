@@ -2,6 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { buildFileTree } from '../fs.js';
 import { sharedStyles } from '../shared_styles.js';
 import '../../vendor/yenvui/js/card.js';
+import '../../vendor/yenvui/js/card-group.js';
 import '../../vendor/yenvui/js/async-btn.js';
 
 export class InSetuCard extends LitElement {
@@ -158,17 +159,19 @@ export class InSetuCategorizedList extends LitElement {
                 ${sortedCats.map(cat => html`
                     <yenvui-category-section titleText=${cat}>
                         ${this.renderCategoryHeader ? this.renderCategoryHeader(cat) : ''}
-                        ${categories[cat].map(item => this.renderItem(item))}
+                        <yenvui-card-group>
+                            ${categories[cat].map(item => this.renderItem(item))}
+                        </yenvui-card-group>
                     </yenvui-category-section>
                 `)}
             </div>
         `;
     }
 }
-
 export class InSetuFileTree extends LitElement {
     static properties = {
         files: { type: Array },
+        currentPath: { type: Array },
         stripPrefix: { type: String },
         basePath: { type: String },
         hideFiles: { type: Boolean },
@@ -230,14 +233,17 @@ constructor() {
         } else {
             const tree = this._buildTree();
             current = tree;
-            for (const p of this.currentPath) {
+            const validPath = [];
+            for (const p of (this.currentPath || [])) {
                 if (current[p] && !current[p]._isFile) {
                     current = current[p];
+                    validPath.push(p);
                 } else {
-                    this.currentPath = [];
-                    current = tree;
                     break;
                 }
+            }
+            if (validPath.length !== (this.currentPath || []).length) {
+                this.currentPath = validPath;
             }
             keys = Object.keys(current).filter(k => k !== '_isFile').sort((a, b) => {
                 const aIsDir = !current[a]._isFile;
@@ -268,6 +274,7 @@ constructor() {
                 </div>
             ` : '')}
             <div class="tree-container">
+                <yenvui-card-group>
                 ${isSearching ? flatResults.map(filepath => {
                     const key = filepath.split('/').pop();
                     const fullFilepath = `${this.basePath}${filepath}`;
@@ -318,6 +325,7 @@ constructor() {
                         </insetu-card>
                     `;
                 })}
+                </yenvui-card-group>
             </div>
         `;
     }
