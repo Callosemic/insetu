@@ -53,11 +53,10 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
         generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
-
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None):
     from insetu.sdk import ExtensionContext
     from insetu.utils_core import get_safe_repo_id
-    from insetu.engine_gather import resolve_file_bucket
+    from insetu.core.gather.engine_gather import resolve_file_bucket
 
     ctx = ExtensionContext('git', workspace_id)
     paths = ctx.paths
@@ -214,7 +213,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
                     text_blocks.append("\n".join(block_lines))
                 if text_blocks:
-                    from insetu.engine_gather import compile_context_payload
+                    from insetu.core.gather.engine_gather import compile_context_payload
 
                     # Diff specific manifest integration
                     meta = {
@@ -271,9 +270,8 @@ def _background_sweep_status(ctx):
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
-
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
-    from insetu.engine_gather import resolve_file_bucket
+    from insetu.core.gather.engine_gather import resolve_file_bucket
 
     managed_dirs_global = cfg.get("managed_dirs", [])
     ignore_dirs_global = cfg.get("ignore_dirs", [])
@@ -346,9 +344,8 @@ def _background_sweep_push(ctx, selections, message):
                     repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
                     break
             if not os.path.exists(repo_path): continue
-
             # Guarantee topology is perfectly mapped before staging
-            from insetu.cartographer import map_repositories
+            from insetu.core.cartographer.cartographer import map_repositories
             map_repositories(ctx.workspace_id)
             subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True)
             subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
@@ -412,12 +409,11 @@ def _background_git_push(ctx, repo, message, diff_file):
         if c.get("repo_dir") == repo and c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
             break
-
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
 
     files_to_stage = set()
-    from insetu.engine_gather import resolve_file_bucket
+    from insetu.core.gather.engine_gather import resolve_file_bucket
     from insetu.utils_core import get_safe_repo_id
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
@@ -458,9 +454,8 @@ def _background_git_push(ctx, repo, message, diff_file):
     remote_check = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
     if not remote_check.stdout.strip():
         raise ValueError(f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
-
     try:
-        from insetu.cartographer import map_repositories
+        from insetu.core.cartographer.cartographer import map_repositories
         map_repositories(ctx.workspace_id)
 
         ctx.jobs.update_progress(f"Committing and pushing {repo}...")
@@ -512,48 +507,29 @@ def api_git_push(ctx):
         diff_file=data.get('diff_file')
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @hooks.on('request_available_diffs')
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
     from insetu.sdk import ExtensionContext
-    from insetu.utils_core import get_safe_repo_id
+    from insetu.utils_core import get_available_contexts
     import os
     ctx = ExtensionContext('git', workspace_id)
-    cfg = ctx.config
     paths = ctx.paths
+
+    # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
+    base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"])
     expected_diffs = set()
 
-    for c in cfg.get("target_repos", []):
-        if c.get("exclude_from_diffs"): continue
-        r_dir = c.get("repo_dir", "")
-        safe_r_dir = get_safe_repo_id(r_dir)
-        subs = c.get("sub_buckets", [])
-        out = c.get("out_file", f"{safe_r_dir}_context.txt")
-        expected_diffs.add(f"diffs/{out.replace('_context.txt', '_diffs.txt')}")
-        if subs:
-            for b in subs:
-                if b.get("exclude_from_diffs"): continue
-
-                if not b.get("dynamic_split_prefix"):
-                    sub_out = b.get("out_file", f"{safe_r_dir}_{b.get('id')}_context.txt")
-                    expected_diffs.add(f"diffs/{sub_out.replace('_context.txt', '_diffs.txt')}")
-                else:
-                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                    if os.path.exists(dyn_dir):
-                        for module in os.listdir(dyn_dir):
-                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                                expected_diffs.add(f"diffs/{module}_diffs.txt")
-    # Read natively from the OS manifest to ensure SSOT synchronization
+    # 2. Map SOTU contexts to diff payloads seamlessly
+    for context_path in base_contexts:
+        filename = context_path.split('/')[-1]
+        expected_diffs.add(f"diffs/{filename.replace('_context.txt', '_diffs.txt')}")
+    # 3. Include ad-hoc diffs currently tracked in the manifest
     manifest = ctx.manifest
     for key in manifest.keys():
         if key.endswith('_diffs.txt'):
             expected_diffs.add(f"diffs/{key}")
 
-    if os.path.exists(paths["diffs_dir"]):
-        for f in os.listdir(paths["diffs_dir"]):
-            if f.endswith('_diffs.txt') or '_diffs_part' in f:
-                expected_diffs.add(f"diffs/{f}")
     return list(expected_diffs)
 @git_bp.route('status', methods=['GET'])
 def api_git_status(ctx):

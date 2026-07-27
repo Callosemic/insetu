@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import jsonify
 from insetu.sdk import InSetuExtension, ExtensionContext
 from insetu.hooks import hooks
-from insetu.engine_gather import resolve_file_bucket
+from insetu.core.gather.engine_gather import resolve_file_bucket
 
 HOOKS_SCHEMA = {
     "hooks_rules": {

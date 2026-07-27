@@ -68,15 +68,25 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
     if is_standalone_compile:
         manifest_data = ctx.manifest
 
-    from insetu.engine_gather import compile_context_payload
+    from insetu.core.gather.engine_gather import compile_context_payload
     header_str = f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n"
     text_blocks = []
     resolved_files = []
 
+    # Expand directories into explicit file paths before we enter the compilation matrix
+    expanded_includes = []
+    for inc in includes:
+        inc_path = ctx.resolve_path(inc)
+        if os.path.isdir(inc_path) and not inc.endswith('.txt'):
+            for f in ctx.vfs.walk(inc):
+                expanded_includes.append(f)
+        else:
+            expanded_includes.append(inc)
+
     # Enforce VFS lock sync to survive race conditions during concurrent sweeps
     ctx.sync_vfs_barrier()
     try:
-        for inc in includes:
+        for inc in expanded_includes:
             basename = Path(inc).name
             chunks = []
 
@@ -179,7 +189,7 @@ def api_flow_batches(ctx):
     paths = ctx.paths
 
     from insetu.utils_core import get_available_contexts
-    expected_contexts = get_available_contexts(ctx.workspace_id)
+    expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"])
 
     available_diffs = []
     available_prompts = []
