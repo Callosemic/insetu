@@ -10,7 +10,6 @@ sub_bucket: "None"
 delivery_date: "2026-08-23"
 tags: ["Architecture", "Backend", "Performance", "CQRS"]
 ---
-
 ## Description
 The ecosystem currently relies on a flat `manifest.json` file as the central index for all workspace contexts and topologies. As workspaces scale, this monolithic JSON approach violates several core engineering principles:
 
@@ -19,9 +18,25 @@ The ecosystem currently relies on a flat `manifest.json` file as the central ind
 3. **Frontend Polling Inefficiency:** Following a VFS commit, the frontend blindly re-fetches the entire manifest via `/api/<workspace_id>/manifest` to rehydrate its Zustand state, wasting bandwidth and triggering heavy reconciliation cycles.
 
 ### Action Items
-- [ ] **SQLite VFS Index Migration:** Deprecate the flat `manifest.json` file. Establish a new embedded SQLite ledger (e.g., `vfs_index.db`) initialized during the `@hooks.on('system_boot')` lifecycle phase.
-- [ ] **Surgical Atomic Writes:** Refactor the Gather engine's VFS commit listener (`_surgically_update_manifest`) to execute targeted SQL `UPSERT`/`DELETE` queries for the modified files rather than reconstructing the entire index object.
-- [ ] **Delta Payload Orchestration:** Update the Immediate Jobs background worker to return explicit manifest *deltas* (the specific files added, changed, or removed) in its completion payload.
-- [ ] **Zustand Surgical Rehydration:** Update the frontend Zustand `AppStore` to parse incoming delta payloads and surgically splice the changes into the in-memory manifest tree, eliminating the need for N+1 full-manifest HTTP fetches.
+- [ ] **SQLite VFS Index Migration:** Deprecate the flat `manifest.json` file on disk. Establish a new embedded SQLite ledger (`vfs_index.db`) initialized during `@hooks.on('system_boot')`.
+- [ ] **Surgical Atomic Writes:** Refactor the Gather engine's VFS commit listener (`_surgically_update_manifest`) to execute targeted SQL `UPSERT`/`DELETE` queries for modified files rather than reconstructing the entire index object.
+- [ ] **Version Hash & Delta Endpoints:** Expose `/api/<workspace_id>/manifest/version` (returning `MAX(timestamp)` from `vfs_event_log`) and `/api/<workspace_id>/manifest/deltas?since=<timestamp>` for stateless multi-instance polling.
+- [ ] **Frontend Metronome Synchronization:** Wire a 3-second background metronome tick (`registerTick`) in the frontend SDK to query the version endpoint and pull deltas for passive observer instances.
+- [ ] **Optimistic Zustand Splicing:** Maintain zero-latency snappiness for active actor instances via optimistic `AppStore` manifest splicing, using the background metronome delta fetch as an idempotent true-up.
 
 ## Notes / Execution Log
+### Architectural Decisions & Multi-Instance Synchronization Blueprint (2026-07-25)
+
+1. **Fully Database-Driven Backend (CQRS):**
+    - The flat `manifest.json` file on disk is strictly deprecated on the backend to destroy the monolithic write bottleneck.
+    - All mutations execute targeted SQL `UPSERT`/`DELETE` statements against `vfs_index.db`.
+    - The frontend Zustand `AppStore` retains an in-memory `manifest` object tree for presentation components.
+
+2. **Multi-Instance State Drift Resolution (The "inSetu Way"):**
+    - *Problem:* Returning deltas solely inside worker job completion artifacts (`api.pollJob()`) only notifies the initiating client (Instance A). Idle client tabs (Instance B) suffer silent state drift.
+    - *Decision:* Rejected stateful WebSocket buses to preserve inSetu's stateless multi-tenant architecture (`X-Workspace-ID` headers across workspace swaps).
+    - *Solution (The Polling Ledger):* Leverages the existing `vfs_event_log` SQLite table in `workers.db` and the frontend SDK metronome tick (`registerTick` every ~3 seconds).
+
+3. **Actor vs. Observer Dynamics:**
+    - **Instance A (Actor):** Fires VFS mutations and *optimistically* updates its local `AppStore.manifest` in memory immediately for zero-latency UI responsiveness. The 3-second metronome tick acts as a silent, idempotent "true-up."
+    - **Instance B (Observer):** Sits idle until its 3-second metronome tick detects a newer backend `vfs_event_log` timestamp. It fetches `/manifest/deltas?since=<timestamp>` and surgically splices changes into its local `AppStore.manifest` without requiring full re-fetches or page reloads.

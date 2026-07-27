@@ -1,14 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "active"
-id: "INS-QUEUE-20260707_1938_NATIVE_HASH_ROUTER"
+status: "closed"
+id: INS-QUEUE-20260707_1938_NATIVE_HASH_ROUTER
 title: "Zero-Bundler SPA Router (Native Hash Routing) for Virtual Pathing"
-created_at: "2026-07-07T19:38:26"
-closed_at: null
+created_at: 2026-07-07T19:38:26
+closed_at: 2026-07-25T02:17:51
 sub_bucket: "None"
-delivery_date: "2026-07-26"
-tags: [Architecture, Frontend, Routing, UX]
 ---
 
 ## Description
@@ -23,3 +21,4 @@ Currently, state persistence is highly fragmented. We save the primary tab and s
 3. **Eradicate Fragmented Storage:** Delete the messy \`localStorage.setItem('insetu_tab', ...)\` tracking from \`app.js\`. The URL becomes the sole master of the view.
 
 ## Notes / Execution Log
+* **Resolution (2026-07-25):** Fully implemented the Zero-Bundler SPA Router. `AppStore` tracks `activeTab`, `activeSubTabs`, and `globalBrowsePath` via `setActiveRoute()`. Two-way binding updates `window.location.hash` on store state changes and reacts to `window.onhashchange` events. Fragmented `localStorage` tab tracking was completely eradicated across `app.js` and `ui_app_shell.js`.
