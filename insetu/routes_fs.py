@@ -5,7 +5,7 @@ import threading
 from flask import Blueprint, request, jsonify, send_file
 from insetu.utils_core import resolve_workspace_path
 from insetu.hooks import hooks
-import insetu.engine_gather as engine_gather
+import insetu.core.gather.engine_gather as engine_gather
 
 fs_bp = Blueprint('fs', __name__)
 
@@ -155,9 +155,17 @@ def api_fs_delete(workspace_id):
 def api_fs_fetch(workspace_id):
     filename = request.args.get('file', '').strip()
     is_absolute_artifact = request.args.get('is_absolute_artifact', 'false').lower() == 'true'
-    from insetu.context import VFSTransaction
+    from insetu.vfs import VFSTransaction
     with VFSTransaction(workspace_id) as vfs:
         content = vfs.read(filename, is_absolute_artifact=is_absolute_artifact)
+        if content is None and not is_absolute_artifact:
+            from insetu.utils_core import get_gather_paths
+            paths = get_gather_paths(workspace_id)
+            safe_basename = Path(filename).name
+            search_paths = [Path(d).joinpath(safe_basename).as_posix() for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
+            artifact_path = next((p for p in search_paths if os.path.exists(p)), None)
+            if artifact_path:
+                content = vfs.read(artifact_path, is_absolute_artifact=True)
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404

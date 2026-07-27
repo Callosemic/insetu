@@ -13,10 +13,7 @@ from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
 from insetu.utils_core import resolve_workspace_path, get_sister_repos
-from insetu.engine_bridge import parse_blocks, apply_block_in_memory
-import insetu.engine_gather as engine_gather
 import insetu.workers # Initializes the metronome listeners
-import insetu.cartographer # Registers Event Bus hooks
 app = Flask(__name__)
 
 class ForceHTTPSProxyFix(object):
@@ -29,17 +26,30 @@ class ForceHTTPSProxyFix(object):
         return self.app(environ, start_response)
 
 app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
-
 from insetu.routes_fs import fs_bp
-from insetu.routes_bridge import bridge_bp
 from insetu.routes_system import system_bp
-from insetu.engine_gather import gather_bp
 from insetu.auth import auth_bp, BOOT_TOKEN
+
 app.register_blueprint(fs_bp)
-app.register_blueprint(bridge_bp.bp if hasattr(bridge_bp, 'bp') else bridge_bp)
 app.register_blueprint(system_bp)
-app.register_blueprint(gather_bp.bp if hasattr(gather_bp, 'bp') else gather_bp)
 app.register_blueprint(auth_bp)
+# Dynamically mount Tier 2 Core OS Engines (Graceful Degradation)
+try:
+    from insetu.core.bridge.engine_bridge import bridge_bp
+    app.register_blueprint(bridge_bp.bp if hasattr(bridge_bp, 'bp') else bridge_bp)
+except ImportError:
+    pass
+
+try:
+    from insetu.core.gather.engine_gather import gather_bp
+    app.register_blueprint(gather_bp.bp if hasattr(gather_bp, 'bp') else gather_bp)
+except ImportError:
+    pass
+
+try:
+    import insetu.core.cartographer.cartographer
+except ImportError:
+    pass
 @app.before_request
 def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
@@ -307,7 +317,7 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
     ws_lock = get_compiler_lock(workspace_id)
     try:
         ws_lock.acquire()
-        import insetu.engine_gather as engine_gather
+        import insetu.core.gather.engine_gather as engine_gather
         from insetu.utils_core import get_gather_paths, load_json_file, get_workspace_physics, load_config
         from pathlib import Path
         import os
@@ -358,11 +368,10 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
                             from insetu.workers import submit_immediate_job
                             cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
                             submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=workspace_id)
-
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing
                     changed_files = [e["filepath"] for e in ledger_events]
-                    from insetu.engine_gather import resolve_file_bucket
+                    from insetu.core.gather.engine_gather import resolve_file_bucket
 
                     touched_buckets = set()
 

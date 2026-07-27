@@ -3,6 +3,7 @@ import { html, css } from 'lit';
 import { AppStore } from './store.js';
 import { InSetuElement } from './sdk.js';
 import { sharedStyles } from './shared_styles.js';
+
 export class InSetuExtConfig extends InSetuElement {
     static properties = {
         configForm: { type: Object },
@@ -10,17 +11,29 @@ export class InSetuExtConfig extends InSetuElement {
         _isOpen: { type: Boolean },
         _generalExpanded: { type: Boolean },
         _extExpanded: { type: Boolean },
-        _reposExpanded: { type: Boolean }
+        _reposExpanded: { type: Boolean },
+        _editingRepoIdx: { type: Number },
+        _repoSettingsExpanded: { type: Boolean },
+        _repoBucketsExpanded: { type: Boolean },
+        _expandedBuckets: { type: Object },
+        _repoBackup: { type: Object }
     };
+
     static styles = [sharedStyles];
+
     constructor() {
         super();
         this.configForm = null;
         this.configMeta = null;
         this._isOpen = false;
+        this._editingRepoIdx = null;
         this._generalExpanded = true;
         this._extExpanded = true;
         this._reposExpanded = true;
+        this._repoSettingsExpanded = true;
+        this._repoBucketsExpanded = true;
+        this._expandedBuckets = {};
+        this._repoBackup = null;
     }
 
     connectedCallback() {
@@ -41,6 +54,7 @@ export class InSetuExtConfig extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
+
     async openModal() {
         this._isOpen = true;
         try {
@@ -54,12 +68,12 @@ export class InSetuExtConfig extends InSetuElement {
             console.error("Failed to fetch config", e);
         }
     }
+
     renderExtensions() {
         if (!this.configForm) return '';
         const knownExtensions = this.configMeta?.available_extensions || [];
         const activeExtensions = this.configForm.extensions || ['config'];
 
-        // Merge known objects with raw active strings (for missing/deleted extensions)
         const extMap = new Map();
         knownExtensions.forEach(ext => extMap.set(ext.id, ext));
         activeExtensions.forEach(extId => {
@@ -104,38 +118,53 @@ export class InSetuExtConfig extends InSetuElement {
             </div>
         `;
     }
+
     renderSubBuckets(repo, rIdx) {
         const buckets = repo.sub_buckets || [];
         const visibleBuckets = buckets.filter(b => !b.is_system);
         if (visibleBuckets.length === 0) {
             return html`<span style="color: var(--text-muted); font-size: 0.8rem; font-style: italic;">No sub-buckets defined.</span>`;
         }
-
         return buckets.map((b, bIdx) => {
             if (b.is_system) return '';
             const isImplicit = !!b.dynamic_split_prefix;
+            const headerTitle = b.title || b.dynamic_split_prefix || `Bucket ${bIdx + 1}`;
+            const isExpanded = !!this._expandedBuckets[bIdx]; // Default false
             return html`
-                <div style="background: var(--bg); border: 1px solid var(--border); padding: 10px; border-radius: 4px; display: flex; flex-direction: column; gap: 8px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <select style="padding: 4px; font-size: 0.8rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); width: 200px;"
-                            @change=${(e) => {
-                                if (e.target.value === 'implicit') {
-                                    this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { dynamic_split_prefix: '.', meta_map: {} };
-                                } else {
-                                    this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { title: '', match_prefixes: [] };
-                                }
-                                this.requestUpdate();
-                            }}>
-                            <option value="explicit" ?selected=${!isImplicit}>Explicit (Match Prefixes)</option>
-                            <option value="implicit" ?selected=${isImplicit}>Implicit (Dynamic Folders)</option>
-                        </select>
+                <yenvui-collapsible 
+                    titleText="📦 ${headerTitle}" 
+                    intent="neutral" 
+                    .open=${isExpanded} 
+                    style="--title-weight: normal; --title-size: 0.95rem;"
+                    @yenvui-collapsible-toggled=${(e) => {
+                        e.stopPropagation();
+                        this._expandedBuckets = { ...this._expandedBuckets, [bIdx]: e.detail.open };
+                        this.requestUpdate();
+                    }}>
+                    <div slot="actions">
                         <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
-                            @click=${() => {
+                            @click=${(e) => {
+                                e.stopPropagation();
                                 this.configForm.target_repos[rIdx].sub_buckets.splice(bIdx, 1);
                                 this.requestUpdate();
-                            }}>🗑️</button>
+                            }}>🗑️ Remove</button>
                     </div>
-                    ${!isImplicit ? html`
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <select style="padding: 6px; font-size: 0.85rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; width: 250px;"
+                                @change=${(e) => {
+                                    if (e.target.value === 'implicit') {
+                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { dynamic_split_prefix: '.', meta_map: {} };
+                                    } else {
+                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { title: '', match_prefixes: [] };
+                                    }
+                                    this.requestUpdate();
+                                }}>
+                                <option value="explicit" ?selected=${!isImplicit}>Explicit (Match Prefixes)</option>
+                                <option value="implicit" ?selected=${isImplicit}>Implicit (Dynamic Folders)</option>
+                            </select>
+                        </div>
+                        ${!isImplicit ? html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                             <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" .value=${b.title || ''} placeholder="Display Name" @input=${(e) => { b.title = e.target.value; this.requestUpdate(); }}></div>
                             <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" .value=${b.domain || ''} placeholder="Category" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}></div>
@@ -197,113 +226,194 @@ export class InSetuExtConfig extends InSetuElement {
                             </div>
                         </div>
                     `}
-                </div>
+                    </div>
+                </yenvui-collapsible>
             `;
         });
     }
     renderRepos() {
         if (!this.configForm) return '';
         const repos = this.configForm.target_repos || [];
-        return repos.map((repo, idx) => html`
-            <yenvui-card intentcolor="var(--intent-highlight)" style="display: block; margin-bottom: 15px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 10px;">
-                    <div style="flex: 1; display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 1.2rem;">📦</span>
-                        <input type="text" .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="font-weight: bold; width: 60%; background: var(--input-bg);" @input=${(e) => { repo.repo_dir = e.target.value; this.requestUpdate(); }}>
-                    </div>
-                    <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 4px 8px;" @click=${() => {
-                        if(confirm("Remove this repository from tracking?")) {
-                            this.configForm.target_repos.splice(idx, 1);
-                            this.requestUpdate();
-                        }
-                    }}>🗑️ Remove</button>
-                </div>
-
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                    <div style="flex: 1; min-width: 150px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Title</label>
-                        <input type="text" .value=${repo.title || ''} placeholder="Display Title" @input=${(e) => { repo.title = e.target.value; this.requestUpdate(); }}>
-                    </div>
-                    <div style="flex: 1; min-width: 150px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Domain</label>
-                        <input type="text" .value=${repo.domain || ''} placeholder="Category" @input=${(e) => { repo.domain = e.target.value; this.requestUpdate(); }}>
-                    </div>
-                    <div style="flex: 1; min-width: 150px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Archive Type</label>
-                        <select style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => { repo.archive_type = e.target.value; this.requestUpdate(); }}>
-                            <option value="repo" ?selected=${repo.archive_type === 'repo' || !repo.archive_type}>Standard Repo</option>
-                            <option value="media-vault" ?selected=${repo.archive_type === 'media-vault'}>Media Vault</option>
-                            ${(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault') ? html`<option value="${repo.archive_type}" selected>${repo.archive_type}</option>` : ''}
-                        </select>
-                    </div>
-                </div>
-
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                    <div style="flex: 1; min-width: 200px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Physical Path (Optional Override)</label>
-                        <input type="text" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @input=${(e) => { repo.physical_path = e.target.value; this.requestUpdate(); }}>
-                    </div>
-                    <div style="flex: 1; min-width: 200px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Custom Out File (Optional)</label>
-                        <input type="text" .value=${repo.out_file || ''} placeholder="custom_context.txt" @input=${(e) => { repo.out_file = e.target.value; this.requestUpdate(); }}>
-                    </div>
-                </div>
-
-                <div style="margin-bottom: 10px;">
-                    <label style="font-size: 0.8rem; color: var(--text-muted);">Tracked Extensions (comma separated)</label>
-                    <input type="text" .value=${(repo.exts || []).join(', ')} placeholder=".py, .js, .md" @input=${(e) => { repo.exts = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                </div>
-
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                    <div style="flex: 1; min-width: 200px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Directories (comma separated)</label>
-                        <input type="text" .value=${(repo.repo_ignore_dirs || []).join(', ')} placeholder="node_modules, build" @input=${(e) => { repo.repo_ignore_dirs = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                    </div>
-                    <div style="flex: 1; min-width: 200px;">
-                        <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Files (comma separated)</label>
-                        <input type="text" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @input=${(e) => { repo.repo_ignore_files = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                    </div>
-                </div>
-                <div style="display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
-                    <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_context} @change=${(e) => { repo.exclude_from_context = e.target.checked; this.requestUpdate(); }}> Exclude from Context Compilation</label>
-                    ${(() => {
-                        const templates = [];
-                        if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
-                            for (let cb of window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
-                                const res = cb({ repo, updateCallback: () => this.requestUpdate() });
-                                if (res) templates.push(res);
-                            }
-                        }
-                        return templates;
-                    })()}
-                </div>
-                <div style="background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <label style="font-size: 0.85rem; font-weight: bold; color: var(--intent-highlight);">Sub-Buckets</label>
-                        <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 2px 8px; font-size: 0.75rem;" @click=${() => {
-                            if (!repo.sub_buckets) repo.sub_buckets = [];
-                            repo.sub_buckets.push({ title: '', match_prefixes: [] });
-                            this.requestUpdate();
-                        }}>➕ Add Bucket</button>
-                    </div>
-                    <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${this.renderSubBuckets(repo, idx)}
-                    </div>
-                </div>
-            </yenvui-card>
-        `);
+        return html`
+            <div style="padding: 15px;">
+                <yenvui-card-group>
+                    ${repos.map((repo, idx) => html`
+                        <yenvui-card
+                            titleText=${repo.repo_dir || 'New Repository'}
+                            descriptionText=${repo.title || 'No Title'}
+                            detailText=${repo.domain || 'Workspaces'}
+                            icon="📦"
+                            intentColor="var(--intent-highlight)"
+                            has-actions
+                            ?disableSelection=${true}
+                            style="cursor: pointer;"
+                            @click=${() => { 
+                                this._repoBackup = JSON.parse(JSON.stringify(repo)); 
+                                this._editingRepoIdx = idx; 
+                            }}>
+                            <div slot="actions" style="display: flex; gap: 8px;">
+                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { 
+                                    e.stopPropagation(); 
+                                    this._repoBackup = JSON.parse(JSON.stringify(repo)); 
+                                    this._editingRepoIdx = idx; 
+                                }}>✏️ Edit</button>
+                                <button class="btn-sm" style="background: var(--intent-danger);" @click=${(e) => {
+                                    e.stopPropagation();
+                                    if(confirm("Remove this repository from tracking?")) {
+                                        this.configForm.target_repos.splice(idx, 1);
+                                        this.requestUpdate();
+                                    }
+                                }}>🗑️ Remove</button>
+                            </div>
+                        </yenvui-card>
+                    `)}
+                </yenvui-card-group>
+            </div>
+        `;
     }
+
+    renderRepoEditorModal() {
+        if (this._editingRepoIdx === null || !this.configForm) return '';
+        const idx = this._editingRepoIdx;
+        const repo = this.configForm.target_repos[idx];
+        if (!repo) return '';
+
+        return html`
+            <insetu-modal 
+                ?open=${this._editingRepoIdx !== null} 
+                titleText="Edit Repository: ${repo.repo_dir || 'New'}" 
+                ?fullscreen=${true}
+                ?flush=${true}
+                @modal-closed=${() => { 
+                    if (this._repoBackup && this._editingRepoIdx !== null) {
+                        this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
+                    }
+                    this._editingRepoIdx = null; 
+                    this._repoBackup = null;
+                    this.requestUpdate();
+                }}>
+                <div slot="body" style="display: flex; flex-direction: column;">
+                    <div style="padding: 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.2rem;">📦</span>
+                        <input type="text" .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="font-weight: bold; width: 100%; background: var(--input-bg);" @input=${(e) => { repo.repo_dir = e.target.value; this.requestUpdate(); }}>
+                    </div>
+                    <yenvui-collapsible 
+                        titleText="Repo Settings" 
+                        intent="primary"
+                        .open=${this._repoSettingsExpanded}
+                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
+                        <div style="display: flex; flex-direction: column; gap: 15px;">
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 150px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Title</label>
+                                    <input type="text" .value=${repo.title || ''} placeholder="Display Title" @input=${(e) => { repo.title = e.target.value; this.requestUpdate(); }}>
+                                </div>
+                                <div style="flex: 1; min-width: 150px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Domain</label>
+                                    <input type="text" .value=${repo.domain || ''} placeholder="Category" @input=${(e) => { repo.domain = e.target.value; this.requestUpdate(); }}>
+                                </div>
+                                <div style="flex: 1; min-width: 150px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Archive Type</label>
+                                    <select style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => { repo.archive_type = e.target.value; this.requestUpdate(); }}>
+                                        <option value="repo" ?selected=${repo.archive_type === 'repo' || !repo.archive_type}>Standard Repo</option>
+                                        <option value="media-vault" ?selected=${repo.archive_type === 'media-vault'}>Media Vault</option>
+                                        ${(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault') ? html`<option value="${repo.archive_type}" selected>${repo.archive_type}</option>` : ''}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Physical Path (Optional Override)</label>
+                                    <input type="text" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @input=${(e) => { repo.physical_path = e.target.value; this.requestUpdate(); }}>
+                                </div>
+                                <div style="flex: 1; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Custom Out File (Optional)</label>
+                                    <input type="text" .value=${repo.out_file || ''} placeholder="custom_context.txt" @input=${(e) => { repo.out_file = e.target.value; this.requestUpdate(); }}>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label style="font-size: 0.8rem; color: var(--text-muted);">Tracked Extensions (comma separated)</label>
+                                <input type="text" .value=${(repo.exts || []).join(', ')} placeholder=".py, .js, .md" @input=${(e) => { repo.exts = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Directories (comma separated)</label>
+                                    <input type="text" .value=${(repo.repo_ignore_dirs || []).join(', ')} placeholder="node_modules, build" @input=${(e) => { repo.repo_ignore_dirs = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
+                                </div>
+                                <div style="flex: 1; min-width: 200px;">
+                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Files (comma separated)</label>
+                                    <input type="text" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @input=${(e) => { repo.repo_ignore_files = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
+                                <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_context} @change=${(e) => { repo.exclude_from_context = e.target.checked; this.requestUpdate(); }}> Exclude from Context Compilation</label>
+                                ${(() => {
+                                    const templates = [];
+                                    if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
+                                        for (let cb of window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
+                                            const res = cb({ repo, updateCallback: () => this.requestUpdate() });
+                                            if (res) templates.push(res);
+                                        }
+                                    }
+                                    return templates;
+                                })()}
+                            </div>
+                        </div>
+                    </yenvui-collapsible>
+                    <yenvui-collapsible 
+                        titleText="Sub-Buckets" 
+                        intent="highlight" 
+                        ?flush=${true}
+                        .open=${this._repoBucketsExpanded}
+                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
+                        <div slot="actions">
+                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
+                                e.stopPropagation();
+                                if (!repo.sub_buckets) repo.sub_buckets = [];
+                                repo.sub_buckets.push({ title: '', match_prefixes: [] });
+                                this.requestUpdate();
+                            }}>➕ Add Bucket</button>
+                        </div>
+                        <div style="display: flex; flex-direction: column;">
+                            ${this.renderSubBuckets(repo, idx)}
+                        </div>
+                    </yenvui-collapsible>
+                </div>
+                <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${() => { 
+                    if (this._repoBackup && this._editingRepoIdx !== null) {
+                        this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
+                    }
+                    this._editingRepoIdx = null;
+                    this._repoBackup = null;
+                    this.requestUpdate();
+                }}>
+                    ❌ Cancel
+                </button>
+                <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => { 
+                    this._repoBackup = null;
+                    this._editingRepoIdx = null;
+                    this.requestUpdate();
+                }}>
+                    ✅ Keep Edits
+                </button>
+            </insetu-modal>
+        `;
+    }
+
     render() {
         const bodyContent = !this.configForm 
-            ? html`<div class="spinner" style="display:block;">Loading configuration...</div>`
+            ? html`<div class="spinner" style="display:block; padding: 20px;">Loading configuration...</div>`
             : html`
                 <div style="display: flex; flex-direction: column;">
-                    <div style="display: flex; flex-direction: column;">
-                        <div @click=${() => this._generalExpanded = !this._generalExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: -20px -20px ${this._generalExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
-                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-success);">General Settings</span>
-                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._generalExpanded ? '▼' : '▶'}</span>
-                        </div>
-                        <div style="display: ${this._generalExpanded ? 'flex' : 'none'}; flex-direction: column; gap: 12px; padding-bottom: 20px;">
+                    <yenvui-collapsible 
+                        titleText="General Settings" 
+                        intent="success"
+                        .open=${this._generalExpanded}
+                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 2; min-width: 200px;">
                                     <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Workspace Title</label>
@@ -365,35 +475,26 @@ export class InSetuExtConfig extends InSetuElement {
                                 </div>
                             </div>
                         </div>
-                    </div>
+                    </yenvui-collapsible>
+                    <yenvui-collapsible 
+                        titleText="Active Extensions" 
+                        intent="highlight"
+                        .open=${this._extExpanded}
+                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._extExpanded = e.detail.open; }}>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Enable or disable system extensions. The 'config' extension is locked.</p>
+                        ${this.renderExtensions()}
+                    </yenvui-collapsible>
+                    <yenvui-collapsible 
+                        titleText="Target Repositories" 
+                        intent="primary"
+                        .open=${this._reposExpanded}
+                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
+                        <div slot="actions">
+                            <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 10px; font-size: 0.75rem;"
+                                @click=${async () => {
+                                    if (!this.configForm.target_repos) this.configForm.target_repos = [];
 
-                    <div style="display: flex; flex-direction: column;">
-                        <div @click=${() => this._extExpanded = !this._extExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: 0 -20px ${this._extExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
-                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-highlight);">Active Extensions</span>
-                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._extExpanded ? '▼' : '▶'}</span>
-                        </div>
-                        <div style="display: ${this._extExpanded ? 'block' : 'none'}; padding-bottom: 20px;">
-                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Enable or disable system extensions. The 'config' extension is locked.</p>
-                            ${this.renderExtensions()}
-                        </div>
-                    </div>
-
-                    <div style="display: flex; flex-direction: column;">
-                        <div @click=${() => this._reposExpanded = !this._reposExpanded} style="background: var(--input-bg); padding: 12px 20px; margin: 0 -20px ${this._reposExpanded ? '15px' : '0'} -20px; border-bottom: 1px solid var(--border); border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
-                            <span style="font-weight: bold; font-size: 1rem; color: var(--intent-primary);">Target Repositories</span>
-                            <span style="font-size: 0.8rem; color: var(--text-muted);">${this._reposExpanded ? '▼' : '▶'}</span>
-                        </div>
-                        <div style="display: ${this._reposExpanded ? 'block' : 'none'};">
-                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
-                            <div style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 15px;">
-                                ${this.renderRepos()}
-                            </div>
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;"
-                                    @click=${async () => {
-                                        if (!this.configForm.target_repos) this.configForm.target_repos = [];
-
-                                        let newRepo = {    
+                                    let newRepo = {    
                                         repo_dir: '', title: '', domain: 'Workspaces', 
                                         exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
                                     };
@@ -404,20 +505,21 @@ export class InSetuExtConfig extends InSetuElement {
                                     } catch(e) {}
                                         this.configForm.target_repos.push(newRepo);
                                         this.requestUpdate();
-                                        setTimeout(() => {
-                                            const modal = this.shadowRoot.querySelector('insetu-modal');
-                                            const container = modal?.shadowRoot?.querySelector('.body');
-                                            if (container) container.scrollTo(0, container.scrollHeight);
-                                        }, 50);
-                                    }}>➕ Add Repository</button>
-                            </div>
+                                }}>➕ Add Repository</button>
                         </div>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
+                        ${this.renderRepos()}
+                    </yenvui-collapsible>
+                </div>
             `;
+            
         return html`
+            ${this.renderRepoEditorModal()}
             <insetu-modal 
                 ?open=${this._isOpen} 
                 titleText="Workspace Configuration" 
                 ?fullscreen=${true} 
+                ?flush=${true}
                 @modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
                 <div slot="body">${bodyContent}</div>
 
@@ -427,6 +529,7 @@ export class InSetuExtConfig extends InSetuElement {
             </insetu-modal>
         `;
     }
+
     async saveConfig(e) {
         const btn = e.target;
         const origText = btn.innerText;
@@ -507,4 +610,3 @@ window.ExtensionRegistry.registerExtension('config', {
         }
     ]
 });
-

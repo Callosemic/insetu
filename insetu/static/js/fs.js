@@ -265,19 +265,21 @@ function updateManifestState(oldPath, newPath = null) {
     let changed = false;
     const newManifest = { ...manifest };
 
+    const cleanPath = (p) => p ? p.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
+    const normOldPath = cleanPath(oldPath);
+    const normNewPath = cleanPath(newPath);
+
     Object.keys(newManifest).forEach(key => {
         const obj = newManifest[key];
         if (obj.files) {
-            const index = obj.files.indexOf(oldPath);
+            const index = obj.files.findIndex(f => cleanPath(f) === normOldPath);
             if (index > -1) {
                 changed = true;
                 const newFiles = [...obj.files];
                 newFiles.splice(index, 1);
-
-                // SSOT Guardrail: We do NOT blindly inject newPath into the manifest.
-                // The target configuration might ignore it (e.g., "archived" or ".tracker").
-                // We optimistic-delete the old path to make the UI feel instant, 
-                // then rely on a silent background fetch to let the Cartographer dictate truth.
+                if (normNewPath && !newFiles.includes(normNewPath)) {
+                    newFiles.push(normNewPath);
+                }
 
                 newManifest[key] = { ...obj, files: newFiles };
             }

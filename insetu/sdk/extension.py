@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 import os
 from insetu.db import get_connection, register_schema
 from insetu.utils_core import extension_auth, get_gather_paths, load_config, resolve_workspace_path
-from insetu.context import VFSTransaction
+from insetu.vfs import VFSTransaction
 class JobManager:
     def __init__(self, ext_name, workspace_id, job_id=None):
         self.ext_name = ext_name

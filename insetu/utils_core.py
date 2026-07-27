@@ -391,8 +391,7 @@ def generate_ascii_tree(file_paths):
             lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
         return lines
     return ".\n" + "\n".join(print_tree(tree))
-
-def get_available_contexts(workspace_id=None):
+def get_available_contexts(workspace_id=None, exclusion_flags=None):
     """
     SSOT Helper: Computes all expected and active context artifacts across the workspace.
     This provides a centralized directory map for any extension that needs to
@@ -400,20 +399,27 @@ def get_available_contexts(workspace_id=None):
     """
     cfg = load_config(workspace_id)
     paths = get_gather_paths(workspace_id)
+    flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
 
     expected_contexts = set()
 
     for c in cfg.get("target_repos", []):
+        repo_excluded = any(c.get(flag) for flag in flags)
         r_dir = c.get("repo_dir", "")
         safe_r_dir = get_safe_repo_id(r_dir)
         subs = c.get("sub_buckets", [])
 
         # Every repository inherently has an implicit catch-all bucket for unmapped files.
-        out = c.get("out_file", f"{safe_r_dir}_context.txt")
-        expected_contexts.add(f"contexts/{out}")
+        # Suppress the overarching payload if an explicit catch-all is designated, or if the repo is excluded.
+        if not repo_excluded and not any(b.get("is_catch_all") for b in subs):
+            out = c.get("out_file", f"{safe_r_dir}_context.txt")
+            expected_contexts.add(f"contexts/{out}")
 
         if subs:
             for b in subs:
+                if repo_excluded or any(b.get(flag) for flag in flags):
+                    continue
+
                 if not b.get("dynamic_split_prefix"):
                     sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
                     expected_contexts.add(f"contexts/{sub_out}")

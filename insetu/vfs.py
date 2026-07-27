@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from insetu.routes_fs import execute_vfs_save
 from insetu.utils_core import resolve_workspace_path
 
 class VFSTransaction:

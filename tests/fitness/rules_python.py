@@ -113,9 +113,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         if self.filename not in VFS_WRITE_WHITELIST:
                             report_violation("EVENT_LEDGER_SENTINEL", self.filepath, node.lineno, "Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).")
         self.generic_visit(node)
-
     def visit_Import(self, node):
         self._check_sqlite_import(node)
+        is_core = 'core' in self.filepath.parts
+        if is_core and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
+            report_violation("CORE_TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Core Tier 2 modules cannot import from Tier 3 extensions.")
+
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext and any(alias.name == 'flask' for alias in node.names):
             report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Raw flask import detected in extension engine. Use InSetuExtension framework instead.")
@@ -145,11 +148,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     if isinstance(child, ast.Yield):
                         report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
         self.generic_visit(node)
-
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
+
+        is_core = 'core' in self.filepath.parts
+        if is_core and node.module and (node.module.startswith('insetu.extensions') or node.module.startswith('extensions')):
+            report_violation("CORE_TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Core Tier 2 modules cannot import from Tier 3 extensions.")
 
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
@@ -157,11 +163,11 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
             if node.module == 'socket':
                 report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension.")
-            
             banned_imports = {
                 'load_config', 'resolve_workspace_path', 'get_gather_paths', 'get_connection',
                 'VFSTransaction', 'execute_vfs_save', 'execute_vfs_delete',
-                'submit_immediate_job', 'update_immediate_job_status'
+                'submit_immediate_job', 'update_immediate_job_status',
+                'engine_gather', 'engine_bridge', 'cartographer'
             }
             imported_names = {alias.name for alias in node.names}
             violations = banned_imports.intersection(imported_names)

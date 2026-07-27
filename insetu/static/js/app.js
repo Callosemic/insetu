@@ -1,4 +1,4 @@
-import { BridgeStore } from './bridge.js';
+import { BridgeStore } from './core/bridge.js';
 import { AppStore } from './store.js';
 import { createStore } from 'https://esm.sh/zustand/vanilla';
 import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
@@ -13,9 +13,10 @@ import './components/ui_editor.js';
 import './components/ui_app_shell.js';
 import '../vendor/yenvui/js/toast.js';
 import '../vendor/yenvui/js/category-section.js';
+import '../vendor/yenvui/js/collapsible.js';
 import '../vendor/yenvui/js/toolbar.js';
 import '../vendor/yenvui/js/editor.js';
-import './gather.js';
+import './core/gather.js';
 import './config.js';
 export function getFlattenedBuckets(repoDir, includeSystem = false) {
     const { targetConfigs } = AppStore.getState();
