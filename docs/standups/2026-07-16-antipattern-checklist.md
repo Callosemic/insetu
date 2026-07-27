@@ -36,4 +36,3 @@ async _handleSave() {
 
 ```
 This ensures that the component's state is the *only* thing controlling the UI, and the utility function does nothing but execute the network request.
-**Shall I issue the patch to strip btnId and loadingText from executeWorkspaceMutation in app.js?** This will break the build temporarily for the old components, but I will provide the corresponding fix for those components simultaneously to restore functionality.

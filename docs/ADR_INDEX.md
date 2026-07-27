@@ -6,6 +6,7 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0002: Spatial Physics & Extension Architecture](adrs/0002-workspace-physics-and-extensions.md)** - Anchored execution to `.insetu/config.json` via a global switchboard, formalizing domain-specific capabilities as extensions.
 * **[ADR 0003: Stateless Request-Scoped Multi-Tenant REST Routing](adrs/archived/0003-stateless-multi-tenant-routing.md)** - Replaced heavy `os.execv` reboots with stateless API routing using the `X-Workspace-ID` header.
 * **[ADR 0014: Event Bus Tenant Authorization](adrs/0014-event-bus-tenant-authorization.md)** - Implemented strict `_is_authorized` boundary filters in the Event Bus to prevent disabled extensions from hijacking tenant lifecycles.
+* **[ADR 0029: Core Kernel Extraction and Three-Tier Architecture](adrs/0029-core-kernel-extraction-and-three-tier-architecture.md)** - Enforced physical separation into Tier 1 (Kernel), Tier 2 (Core OS Engines), and Tier 3 (Extensions).
 
 ## Virtual File System (VFS) & I/O Pipelines
 * **[ADR 0004: Asynchronous VFS Commit Pipeline](adrs/0004-asynchronous-vfs-commit-pipeline.md)** - Delegated physical file mutations to an off-thread `_VFS_WRITE_QUEUE` to eliminate HTTP event loop starvation.
@@ -17,6 +18,8 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0007: Stateless UI Factory and Component Decoupling](adrs/archived/0007-stateless-ui-factory-and-component-decoupling.md)** - Centralized generic UI primitives (Modals, Dropdowns) into a `UIFactory` to eradicate imperative DOM generation.
 * **[ADR 0015: CodeMirror 6 Migration & Native ES Modules](adrs/0015-codemirror6-migration.md)** - Replaced EasyMDE with CodeMirror 6 imported natively via `esm.sh` to advance the zero-bundler architecture.
 * **[ADR 0021: Standardized Extension State Isolation & Lifecycle Governance](adrs/0021_standardized_state_isolation.md)** - Standardized frontend state into `createExtensionStore` Zustand slices that namespace properly and garbage-collect memory on workspace swaps.
+* **[ADR 0028: Zero-Bundler Native Hash Router & Fail-Safe Event Bus Substrate](adrs/0028-native-hash-routing-and-event-bus.md)** - Unified UI navigation under `window.location.hash` and established `window.inSetu.events` fail-safe hook emitters.
+
 ## Extension SDK & Network Gateway
 * **[ADR 0005: Transport Shell Decoupling & Pure Logic Extraction](adrs/archived/0005-transport-shell-decoupling.md)** - Separated HTTP REST controllers from pure domain logic functions to allow extension invocation without HTTP overhead.
 * **[ADR 0012: Extension Subdirectory Extraction](adrs/archived/0012-extension-subdirectory-extraction.md)** - Isolated optional extension modules strictly into `insetu/extensions/` and `insetu/static/js/extensions/` to preserve core Micro-Kernel boundaries.

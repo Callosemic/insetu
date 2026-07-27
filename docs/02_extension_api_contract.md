@@ -44,7 +44,8 @@ window.ExtensionRegistry.registerExtension('ext_name', {
             order: 20,
             match: (data) => data.filepath && data.filepath.endsWith('.ext'),
             onClick: (data, e) => { ... },
-            asyncAction: async (data, e) => { ... }
+            asyncAction: async (data, e) => { ... },
+            emitEvent: (data) => ({ name: 'insetu:ext:action', detail: { id: data.id } })
         }
     ],
     layoutSlots: [

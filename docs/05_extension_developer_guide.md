@@ -120,6 +120,7 @@ Directly assigning `window.addEventListener` inside extensions is highly dangero
 *   **`this.registerGlobalListener(eventType, targetNode, callback, options)`**: Securely binds a listener (e.g., to `window` or `document`) that automatically unmounts when the component is destroyed.
 *   **`this.registerInterval(callback, delayMs)`**: Securely spins up a polling loop that is automatically cleared on unmount.
 *   **`this.dispatch(eventName, detailData)`**: A clean helper to broadcast CustomEvents to the `window` to communicate with other disconnected components natively.
+*   **`window.inSetu.events.emit(eventName, detailData)` / `emitHook(zone, payload)`**: Centralized SDK event and hook dispatchers providing safe, fail-safe broadcasts across extension and core boundaries.
 
 ### Network Requests & Domain Accessors
 
