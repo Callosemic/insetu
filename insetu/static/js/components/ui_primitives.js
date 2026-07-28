@@ -174,3 +174,41 @@ export class InSetuStatusBar extends InSetuElement {
     }
 }
 customElements.define('insetu-status-bar', InSetuStatusBar);
+
+export class InSetuToastContainer extends InSetuElement {
+    static get extensionName() { return 'toast'; }
+    static properties = { toasts: { type: Array } };
+    static styles = css`:host { display: block; }`;
+
+    constructor() {
+        super();
+        this.toasts = [];
+    }
+    connectedCallback() {
+        super.connectedCallback();
+        if (window.inSetu.stores.Toast) {
+            this.subscribe(window.inSetu.stores.Toast, state => {
+                this.toasts = state.toasts;
+            });
+        }
+    }
+    render() {
+        return html`
+            <yenvui-toast-container 
+                .toasts=${this.toasts} 
+                @yenvui-toast-dismissed=${(e) => {
+                    if (window.inSetu.stores.Toast) {
+                        window.inSetu.stores.Toast.getState().removeToast(e.detail.id);
+                    }
+                }}>
+            </yenvui-toast-container>
+        `;
+    }
+}
+customElements.define('insetu-toast-container', InSetuToastContainer);
+
+if (!document.getElementById('insetu-toast-root')) {
+    const toastRoot = document.createElement('insetu-toast-container');
+    toastRoot.id = 'insetu-toast-root';
+    document.body.appendChild(toastRoot);
+}

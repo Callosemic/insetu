@@ -48,10 +48,22 @@ export class InSetuCard extends LitElement {
             this.selected = items.has(this.entityData?.filepath || this.entityData?.id || this.filename);
         }
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
         if (this._unsubSel) this._unsubSel();
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        // If Lit reuses this DOM node for a different file due to array filtering, 
+        // immediately true-up the visual selection state against the store.
+        if (changedProperties.has('entityData') || changedProperties.has('filename')) {
+            const selStore = window.inSetu.stores.Selection;
+            if (selStore) {
+                const id = this.entityData?.filepath || this.entityData?.id || this.filename;
+                this.selected = selStore.getState().selectedItems.has(id);
+            }
+        }
     }
 
     render() {

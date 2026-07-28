@@ -10,7 +10,8 @@ export class InSetuAppShell extends InSetuElement {
         primaryTabs: { type: Array },
         subTabs: { type: Object },
         subActions: { type: Object },
-        globalComponents: { type: Array }
+        globalComponents: { type: Array },
+        configMissing: { type: Boolean }
     };
 
     static styles = css`
@@ -39,6 +40,7 @@ export class InSetuAppShell extends InSetuElement {
         this.subTabs = {};
         this.subActions = {};
         this.globalComponents = [];
+        this.configMissing = false;
         this._compileListener = this._compileFromRegistry.bind(this);
         this._componentCache = new Map();
     }
@@ -49,12 +51,14 @@ export class InSetuAppShell extends InSetuElement {
         this.subscribe(AppStore, state => {
             this.activePrimary = state.activeTab || 'context';
             this.activeSubs = state.activeSubTabs || {};
+            this.configMissing = !!state.configMissing;
             this.requestUpdate();
         });
 
         const state = AppStore.getState();
         this.activePrimary = state.activeTab || 'context';
         this.activeSubs = state.activeSubTabs || {};
+        this.configMissing = !!state.configMissing;
 
         // Rebuild layout on boot
         setTimeout(() => this._compileFromRegistry(), 0);
@@ -167,9 +171,14 @@ export class InSetuAppShell extends InSetuElement {
         const finalSub = subId || this.activeSubs[tabId] || '';
         window.location.hash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tabId)}/${encodeURIComponent(finalSub)}`;
     }
-
     render() {
         return html`
+            ${this.configMissing ? html`
+                <div style="background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;">
+                    ⚠️ Configuration file missing. Operating in empty fallback state.
+                    <span style="cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}>Dismiss</span>
+                </div>
+            ` : ''}
             <yenvui-tabs .tabs=${this.primaryTabs} .activeTab=${this.activePrimary} @yenvui-tab-selected=${this._handlePrimarySelect}>
                 <!-- Project the generic settings button to the far right of the primary header -->
                 <div slot="header-actions" style="display: flex; align-items: center;">
