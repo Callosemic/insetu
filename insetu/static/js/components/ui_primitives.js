@@ -154,7 +154,7 @@ export class InSetuStatusBar extends InSetuElement {
     _handleStatusUpdate(e) {
         this.tempMessage = e.detail.msg;
         this.isError = e.detail.isError;
-        if (this._timeout) clearTimeout(this._timeout);
+        if (this._timeout) clearTimeout(this._timeout); // utils.debounce whitelist
         if (e.detail.timeout) {
             this._timeout = setTimeout(() => {
                 this.tempMessage = '';

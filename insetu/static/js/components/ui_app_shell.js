@@ -47,13 +47,17 @@ export class InSetuAppShell extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         window.addEventListener('insetu-layout-recompile', this._compileListener);
-
         this.subscribe(AppStore, state => {
             this.activePrimary = state.activeTab || 'context';
             this.activeSubs = state.activeSubTabs || {};
             this.configMissing = !!state.configMissing;
             this.requestUpdate();
         });
+        if (window.inSetu.stores.Gather) {
+            this.subscribe(window.inSetu.stores.Gather, state => {
+                if (state.tabOrder) this._compileFromRegistry();
+            });
+        }
 
         const state = AppStore.getState();
         this.activePrimary = state.activeTab || 'context';
@@ -109,8 +113,8 @@ export class InSetuAppShell extends InSetuElement {
                 }
             });
         }
-        // Sort arrays, applying user-defined AppStore ordering overrides for primary tabs
-        const tabOrder = AppStore.getState()?.tabOrder || [];
+        // Sort arrays, applying user-defined GatherStore ordering overrides for primary tabs
+        const tabOrder = window.inSetu.stores.Gather?.getState()?.tabOrder || [];
         pTabs.sort((a, b) => {
             let iA = tabOrder.indexOf(a.id);
             let iB = tabOrder.indexOf(b.id);

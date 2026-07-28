@@ -114,19 +114,21 @@ export class InSetuCard extends LitElement {
             const label = typeof act.label === 'function' ? act.label(this.entityData) : act.label;
             const icon = typeof act.icon === 'function' ? act.icon(this.entityData) : (act.icon || '');
             const intent = typeof act.intent === 'function' ? act.intent(this.entityData) : (act.intent || 'primary');
+            let clickHandler;
             if (act.asyncAction) {
-                // Delegate to the OS-managed insetu-async-btn to natively inherit async status feedback mechanics
-                return html`<insetu-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${(e) => act.asyncAction(this.entityData, e)}></insetu-async-btn>`;
+                clickHandler = (e) => act.asyncAction(this.entityData, e);
+            } else {
+                clickHandler = async (e) => {
+                    e.stopPropagation();
+                    if (act.emitEvent) {
+                        const payload = act.emitEvent(this.entityData);
+                        if (window.inSetu?.events?.emit) window.inSetu.events.emit(payload.name, payload.detail);
+                    } else if (act.onClick) {
+                        act.onClick(this.entityData, e);
+                    }
+                };
             }
-            return html`<button class="btn-sm" style="background: var(--intent-${intent}); margin: 0; color: white; border: none; cursor: pointer; order: ${act.order || 99};" @click=${(e) => {
-                e.stopPropagation();
-                if (act.emitEvent) {
-                    const payload = act.emitEvent(this.entityData);
-                    if (window.inSetu?.events?.emit) window.inSetu.events.emit(payload.name, payload.detail);
-                } else if (act.onClick) {
-                    act.onClick(this.entityData, e);
-                }
-            }}>${icon} ${label}</button>`;
+            return html`<insetu-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${clickHandler}></insetu-async-btn>`;
         });
     }
     _handleMainClick(e) {

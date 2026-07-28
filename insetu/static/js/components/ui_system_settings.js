@@ -41,15 +41,13 @@ export class InSetuSystemSettings extends InSetuElement {
             this.workspaces = state.workspaces || {};
             this.emoji = state.instanceEmoji || '⚙️';
         });
-        document.addEventListener('click', this._handleOutsideClick);
-        window.addEventListener('insetu-settings-actions-updated', this._handleActionsUpdate);
+        this.registerGlobalListener('click', document, this._handleOutsideClick);
+        this.registerGlobalListener('insetu-settings-actions-updated', window, this._handleActionsUpdate);
         this.settingsActions = window.ExtensionRegistry?._settingsActions || [];
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('click', this._handleOutsideClick);
-        window.removeEventListener('insetu-settings-actions-updated', this._handleActionsUpdate);
     }
 
     _handleOutsideClick(e) {
@@ -482,7 +480,8 @@ export class InSetuGenericSettingsModal extends InSetuElement {
                                 this.requestUpdate();
                             }}>${strVal}</textarea>`;
                         } else {
-                            inputHtml = html`<input type="text" .value=${val} style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); box-sizing: border-box;" @input=${e => { this.formData = {...this.formData, [field.id]: e.target.value}; this.requestUpdate(); }}>`;
+                            const inputType = field.type === 'password' ? 'password' : 'text';
+                            inputHtml = html`<input type="${inputType}" .value=${val} style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); box-sizing: border-box;" @input=${e => { this.formData = {...this.formData, [field.id]: e.target.value}; this.requestUpdate(); }}>`;
                         }
 
                         const displayLabel = field.title || field.label || field.id;
