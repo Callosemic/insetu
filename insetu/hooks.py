@@ -67,7 +67,7 @@ class HookRegistry:
             if ext_name in ['bridge', 'gather']:
                 return True
             # Utilize the central utility to evaluate extension clearance statelessly
-            from insetu.utils_core import is_extension_enabled
+            from insetu.utils import is_extension_enabled
             return is_extension_enabled(ext_name, workspace_id)
 
         return True

@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from insetu.utils_core import resolve_workspace_path
+from insetu.core.utils_core import resolve_logical_path
 
 class VFSTransaction:
     """Provides atomic-style batching and async queue dispatch for file mutations."""
@@ -19,10 +19,10 @@ class VFSTransaction:
         """Safely resolves and reads a file's contents, returning None if missing."""
         from pathlib import Path
         if is_absolute_artifact and Path(filepath).is_absolute():
-            from insetu.utils_core import resolve_system_artifact_path
+            from insetu.utils import resolve_system_artifact_path
             resolved = resolve_system_artifact_path(filepath, self.workspace_id)
         else:
-            resolved = resolve_workspace_path(filepath, self.workspace_id)
+            resolved = resolve_logical_path(filepath, self.workspace_id)
 
         if not os.path.exists(resolved):
             return None
@@ -50,8 +50,9 @@ class VFSTransaction:
         self._buffer = []
     def walk(self, directory_path, exts=None):
         """Safely sweeps a directory within the workspace bounds, yielding strict workspace-relative file paths."""
-        from insetu.utils_core import get_workspace_physics, load_config, get_valid_workspace_files
-        resolved_dir = resolve_workspace_path(directory_path, self.workspace_id)
+        from insetu.utils import get_workspace_physics, load_config
+        from insetu.core.utils_core import get_valid_workspace_files, resolve_logical_path
+        resolved_dir = resolve_logical_path(directory_path, self.workspace_id)
         if not os.path.exists(resolved_dir):
             return
 

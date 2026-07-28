@@ -18,26 +18,6 @@ import '../vendor/yenvui/js/toolbar.js';
 import '../vendor/yenvui/js/editor.js';
 import './core/gather.js';
 import './config.js';
-export function getFlattenedBuckets(repoDir, includeSystem = false) {
-    const { targetConfigs } = AppStore.getState();
-    const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
-    if (!repoCfg || !repoCfg.sub_buckets) return [];
-
-    const buckets = [];
-    repoCfg.sub_buckets.forEach(b => {
-        if (!includeSystem && b.is_system) return;
-
-        if (b.dynamic_split_prefix && b.meta_map) {
-            Object.keys(b.meta_map).forEach(module => {
-                buckets.push({ id: module, title: b.meta_map[module].title || module, original: b });
-            });
-        } else if (!b.dynamic_split_prefix) {
-            buckets.push({ id: b.id, title: b.title || b.id, original: b });
-        }
-    });
-    return buckets;
-}
-
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').then(reg => {
@@ -144,101 +124,8 @@ document.addEventListener('input', (e) => {
 // Map Cmd/Ctrl + S contextually depending on which modal is currently visible
 window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
 window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
-window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => {
-    const shell = document.querySelector('insetu-app-shell');
-    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-    if (el) el._saveNewTask();
-});
-window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => {
-    const shell = document.querySelector('insetu-app-shell');
-    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-    if (el) el._saveEditTask();
-});
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
-    const packSelectionPayload = async (items) => {
-        const payloadItems = items.map(i => {
-            if (i.data?.folderpath) return { folderpath: i.data.folderpath };
-            if (i.data?.filepath) return { filepath: i.data.filepath };
-            return null;
-        }).filter(i => i !== null);
 
-        if (payloadItems.length === 0) throw new Error("No valid items to pack.");
-
-        const res = await window.inSetu.api.workspace('gather/pack_selection', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items: payloadItems })
-        });
-        if (!res.ok) throw new Error("Failed to queue compilation.");
-        const data = await res.json();
-        return new Promise((resolve, reject) => {
-            window.inSetu.utils.pollJob(data.job_id, {
-                onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
-                onComplete: async (statusData) => {
-                    // Update global manifest manually so downstream modals can find the chunk metadata
-                    try {
-                        const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
-                        if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
-                    } catch(e) {}
-                    resolve(statusData.artifact);
-                },
-                onError: (err) => reject(err)
-            });
-        });
-    };
-
-    window.ExtensionRegistry.registerExtension('batch-actions', {
-        name: "Batch Actions",
-        batchActions: [
-            {
-                id: 'batch-download',
-                label: 'Download',
-                icon: '⬇️',
-                intent: 'primary',
-                order: 20,
-                match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
-                asyncAction: async (items) => {
-                    try {
-                        const artifact = await packSelectionPayload(items);
-                        window.inSetu.stores.Selection.getState().clearSelection();
-                        if (artifact.chunks && artifact.chunks.length > 1) {
-                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
-                            // Switch to context tab to ensure modal renders
-                            if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
-                            window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: artifact.base_filename } }));
-                        } else {
-                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
-                            if (window.inSetu.vfs.fetchAndDownloadState) {
-                                await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
-                            }
-                        }
-                    } catch (err) {
-                        alert("Packing failed: " + err.message);
-                    }
-                }
-            },
-            {
-                id: 'batch-share',
-                label: 'Share',
-                icon: '📤',
-                intent: 'neutral',
-                order: 30,
-                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
-                asyncAction: async (items) => {
-                    try {
-                        const artifact = await packSelectionPayload(items);
-                        window.inSetu.stores.Selection.getState().clearSelection();
-
-                        if (window.inSetu.vfs.shareFiles) {
-                            await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
-                        }
-                    } catch (err) {
-                        alert("Packing failed: " + err.message);
-                    }
-                }
-            }
-        ]
-    });
 import { LitElement, html, css } from 'lit';
 import { InSetuElement } from './sdk.js';
 
@@ -687,9 +574,9 @@ let compilePromiseWs = null;
 export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
-
     // Guardrail: Short-circuit the compilation pipeline instantly if the workspace has no repositories tracked
-    if (!AppStore.getState().targetConfigs || AppStore.getState().targetConfigs.length === 0) {
+    const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
+    if (!gatherState.targetConfigs || gatherState.targetConfigs.length === 0) {
         return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
     }
 
@@ -797,15 +684,17 @@ async function performSoftRefresh() {
         const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
-            AppStore.setState({
-                allRepos: d.repos,
-                targetConfigs: d.targets || [],
-                virtualContexts: d.virtual_contexts || [],
-                categoryOrder: d.category_order || [],
-                tabOrder: d.tab_order || [],
-                hiddenOutputs: d.hidden_outputs || [],
-                configMissing: !!d.config_missing
-            });
+            AppStore.setState({ configMissing: !!d.config_missing });
+            if (window.inSetu.stores.Gather) {
+                window.inSetu.stores.Gather.setState({
+                    allRepos: d.repos,
+                    targetConfigs: d.targets || [],
+                    virtualContexts: d.virtual_contexts || [],
+                    categoryOrder: d.category_order || [],
+                    tabOrder: d.tab_order || [],
+                    hiddenOutputs: d.hidden_outputs || []
+                });
+            }
         }
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
@@ -870,8 +759,8 @@ async function performSoftRefresh() {
 
         let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
-
-        const hasActiveRepos = AppStore.getState().targetConfigs.length > 0;
+        const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
+        const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
         if (Object.keys(manifestData).length === 0 && hasActiveRepos) {
             // Force a blocking build only if no cached topology exists and there are active repos to map
             await executeSystemCompile();
@@ -917,15 +806,17 @@ async function initializeWorkspaceTopology() {
         const rRes = await window.inSetu.api.workspace('repos');
         if (rRes.ok) {
             const d = await rRes.json();
-            AppStore.setState({
-                allRepos: d.repos,
-                targetConfigs: d.targets || [],
-                virtualContexts: d.virtual_contexts || [],
-                categoryOrder: d.category_order || [],
-                tabOrder: d.tab_order || [],
-                hiddenOutputs: d.hidden_outputs || [],
-                configMissing: !!d.config_missing
-            });
+            AppStore.setState({ configMissing: !!d.config_missing });
+            if (window.inSetu.stores.Gather) {
+                window.inSetu.stores.Gather.setState({
+                    allRepos: d.repos,
+                    targetConfigs: d.targets || [],
+                    virtualContexts: d.virtual_contexts || [],
+                    categoryOrder: d.category_order || [],
+                    tabOrder: d.tab_order || [],
+                    hiddenOutputs: d.hidden_outputs || []
+                });
+            }
         }
 } catch(e) { console.error("Topology fetch failed:", e); }
 
@@ -962,7 +853,6 @@ window.inSetu.sys.performSoftRefresh = performSoftRefresh;
 window.inSetu.sys.simulatePanic = simulatePanic;
 window.inSetu.sys.executeSystemCompile = executeSystemCompile;
 window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
-window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
 window.inSetu.sys.loadWorkspaces = loadWorkspaces;
 window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
 window.inSetu.ui.setGlobalStatus = setGlobalStatus;

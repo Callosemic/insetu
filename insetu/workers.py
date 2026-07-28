@@ -17,7 +17,7 @@ def register_callback(ext_name, callback_name, func):
 
 def _prepare_job_payload(args_json, workspace_id):
     if not workspace_id:
-        from insetu.utils_core import sniff_tenant_id
+        from insetu.utils import sniff_tenant_id
         workspace_id = sniff_tenant_id()
     workspace_id = workspace_id or "default"
     _init_worker_schema(workspace_id)
@@ -194,7 +194,7 @@ def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_j
             pass
 def _metronome_loop():
     """The unified Event Loop dispatcher supporting dynamic multi-tenancy."""
-    from insetu.utils_core import _cwd, load_json_file
+    from insetu.utils import _cwd, load_json_file
     while not _shutdown_event.is_set():
         try:
             index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
@@ -283,10 +283,6 @@ def _init_worker_schema(workspace_id="default"):
                 INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
                 VALUES ('sys_garbage_collector', 'workers', 'sweep_ephemeral_artifacts', 300000, 10000, 0, 'pending', '{}')
         """)
-        conn.execute("""
-                INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-                VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
-        """)
         conn.commit()
         _INITIALIZED_WORKSPACES.add(workspace_id)
 
@@ -302,7 +298,7 @@ class NonGitDirectoryWatcher:
         filename = Path(event.src_path).name
         if filename.startswith('.') or filename.endswith('~'): return
 
-        from insetu.utils_core import get_workspace_physics
+        from insetu.utils import get_workspace_physics
         try:
             _, ws_root, _ = get_workspace_physics(self.workspace_id)
             ws_rel_path = os.path.relpath(event.src_path, ws_root).replace('\\', '/')
@@ -323,12 +319,11 @@ class NonGitDirectoryWatcher:
             pass
 import time
 SYSTEM_BOOT_TIME = time.time()
-
 @hooks.on('system_boot')
 def start_workers():
         global _executor, _metronome_thread, _observer
 
-        from insetu.utils_core import _cwd, load_json_file
+        from insetu.utils import _cwd, load_json_file
         import os
         index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
         workspace_ids = ["default"]
@@ -346,10 +341,9 @@ def start_workers():
                 conn = get_connection("workers", workspace_id=ws_id)
                 conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
                 conn.commit()
-
                 # Boot-Time Heuristic: Offline Mutation Guard
                 from insetu.sdk import ExtensionContext
-                from insetu.utils_core import load_json_file
+                from insetu.utils import load_json_file
                 import uuid, json
                 ctx = ExtensionContext('gather', ws_id)
                 cache_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
@@ -382,9 +376,8 @@ def start_workers():
 
             _observer = Observer()
             has_watches = False
-
             for ws_id in workspace_ids:
-                from insetu.utils_core import load_config, get_workspace_physics
+                from insetu.utils import load_config, get_workspace_physics
                 cfg = load_config(ws_id)
                 _, ws_root, _ = get_workspace_physics(ws_id)
 

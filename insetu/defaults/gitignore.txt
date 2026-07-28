@@ -5,6 +5,8 @@ diffs/
 workflows/
 *.db
 *.db-journal
+secrets.json
+*.env
 
 # OS Files
 .DS_Store

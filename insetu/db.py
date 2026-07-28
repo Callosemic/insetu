@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import sqlite3
 import threading
-from insetu.utils_core import get_workspace_physics
+from insetu.utils import get_workspace_physics
 from insetu.hooks import hooks
 
 # Thread-local storage guarantees safe connection pooling across the ASGI / Worker matrix
@@ -45,7 +45,7 @@ register_schema('workers', {
 @hooks.on('system_boot')
 def init_declarative_schemas():
     """Automatically provisions and migrates SQLite schemas for all tenants on boot."""
-    from insetu.utils_core import get_all_workspace_ids
+    from insetu.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
             apply_declarative_schema(ext_name, schema, ws_id)
@@ -58,7 +58,7 @@ def get_connection(db_name, workspace_id=None):
     if not hasattr(_local, 'connections'):
         _local.connections = {}
     if not workspace_id:
-        from insetu.utils_core import sniff_tenant_id
+        from insetu.utils import sniff_tenant_id
         workspace_id = sniff_tenant_id()
 
     cfg_path, _, _ = get_workspace_physics(workspace_id)

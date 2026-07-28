@@ -508,12 +508,13 @@ export function createFileCard(fileInfo, container) {
 }
 export const getGlobalManifest = () => {
     const state = AppStore.getState();
-    const validPrefixes = (state.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+    const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
+    const validPrefixes = (gatherState.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
     const allFiles = Array.from(new Set(Object.values(state.manifest || {}).flatMap(obj => obj.files || [])));
 
     // Inject active prompts directly into the tree to guarantee navigation in Modals (Move, etc)
-    const rawPrompts = state.gatherOptions?.prompts || [];
+    const rawPrompts = gatherState.gatherOptions?.prompts || [];
     if (rawPrompts.length === 0) {
         // Guarantee the prompts folder exists even if completely empty
         allFiles.push('.insetu/prompts/.gitkeep');
@@ -552,10 +553,10 @@ export class InSetuVFSExplorer extends InSetuElement {
         }
         _updateState(state) {
                 const allFiles = new Set();
-
+                const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
                 // UDF Guardrail: Only show files that belong to explicitly tracked repository targets
                 // This prevents OS artifact directories (contexts/, diffs/) from leaking into the visual root
-                const validPrefixes = (state.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+                const validPrefixes = (gatherState.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
                 Object.values(state.manifest || {}).forEach(obj => {
                         if (obj.files) {
@@ -566,8 +567,8 @@ export class InSetuVFSExplorer extends InSetuElement {
                             });
                         }
                 });
-                if (state.targetConfigs) {
-                        state.targetConfigs.forEach(cfg => {
+                if (gatherState.targetConfigs) {
+                        gatherState.targetConfigs.forEach(cfg => {
                                 if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
                                         allFiles.add(cfg.repo_dir + '/.gitkeep');
                                 }
@@ -684,7 +685,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 if (data.suppressCopy) return false;
                 if (data.isSkeleton) return false;
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 return !chunks || chunks.length <= 1;
             },
             asyncAction: async (data, e) => {
@@ -707,9 +708,10 @@ window.ExtensionRegistry.registerExtension('files', {
             icon: '📁',
             intent: 'neutral',
             order: 80,
-            match: (data) => !data.isFS && !data.isSkeleton,
+            match: (data) => !data.suppressBrowse && !data.isFS && !data.isSkeleton,
             onClick: (data, e) => {
-                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(data.filepath);
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(basename);
             }
         },
         {
@@ -722,13 +724,12 @@ window.ExtensionRegistry.registerExtension('files', {
             match: (data) => {
                 if (data.suppressDownload) return false;
                 if (data.isSkeleton) return false;
-
                 // Only render if the device natively supports Web Sharing
                 return !!navigator.share && !!navigator.canShare;
             },
             asyncAction: async (data, e) => {
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 await shareFiles(data.filepath, chunks, data.isFS);
             }
         },
@@ -743,7 +744,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 if (data.suppressDownload) return false;
                 if (data.isSkeleton) return false;
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.stores.App?.getState()?.manifest[basename]?.meta?.chunks;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 // If it has multiple chunks, the 'context' subclass takes over download responsibilities
                 return !chunks || chunks.length <= 1;
             },
@@ -788,7 +789,8 @@ export function checkFileExtension(filename) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     if (gbPath.length > 0) {
         const repoDir = gbPath[0];
-        const { targetConfigs } = AppStore.getState();
+        const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
+        const targetConfigs = gatherState.targetConfigs || [];
         const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
 
         if (repoCfg && repoCfg.exts) {
@@ -1074,21 +1076,16 @@ export function openVirtualFile(filename, content) {
 }
 export class InSetuFileModal extends InSetuElement {
     static properties = {
-        fileModal: { type: Object },
-        _isDownloading: { type: Boolean },
-        _isCopying: { type: Boolean },
-        _isSaving: { type: Boolean }
+        fileModal: { type: Object }
     };
     static styles = [sharedStyles, css`
-        .fullscreen-modal { position: fixed; top: 0; left: 0; width: 100vw; height: calc(100dvh - 30px); }
+        .fs-modal-container { position: fixed; top: 0; left: 0; width: 100vw; height: calc(100dvh - 30px); }
         .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
+        insetu-async-btn { flex: 1; display: block; --btn-padding: 12px; --btn-border-radius: 6px; }
     `];
     constructor() {
         super();
         this.fileModal = {};
-        this._isDownloading = false;
-        this._isCopying = false;
-        this._isSaving = false;
     }
 
     connectedCallback() {
@@ -1113,7 +1110,7 @@ export class InSetuFileModal extends InSetuElement {
             window.inSetu.events.emitHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
         }
         return html`
-            <div class="fullscreen-modal" style="display: block; z-index: 3000; padding: 0;">
+            <div class="fs-modal-container" style="display: block; z-index: 3000; padding: 0;">
                 <div class="fullscreen-wrapper">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
                         <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
@@ -1169,30 +1166,31 @@ export class InSetuFileModal extends InSetuElement {
                             </textarea>
                         `}
                     </div>
-                    <div class="modal-footer" style="padding: 0; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0;">
-                        <button class="ui-draggable-export" draggable="true" @dragstart=${(e) => {
-                            let fetchUrl = m.isFS ? `fs/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
-                            const override = window.inSetu.events.emitHook('zone:file-fetch-url', m.filename);
-                            if (override) fetchUrl = override;
+                    <div class="modal-footer" style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
+                        ${(window.inSetu.stores.App?.getState()?.manifest[m.filename]?.files?.length > 0) ? html`
+                            <insetu-async-btn label="📁 Browse" intent="highlight" .onClick=${() => {
+                                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(m.filename);
+                            }}></insetu-async-btn>
+                        ` : ''}
 
-                            bindDownloadDrag(e, m.filename, fetchUrl);
-                        }} @click=${async () => {
-                            this._isDownloading = true;
-                            try { await downloadFromModal(); } catch(e) {}
-                            setTimeout(() => this._isDownloading = false, 2000);
-                        }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: 1px solid var(--border); cursor: pointer; background: #0284c7; color: white;">${this._isDownloading ? '✅ Downloaded' : '⬇️ Download'}</button>
-                        <button @click=${async () => {
-                            this._isCopying = true;
-                            try { await copyFromModal(); } catch(e) {}
-                            setTimeout(() => this._isCopying = false, 2000);
-                        }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; border-right: ${this.isDirty ? '1px solid var(--border)' : 'none'}; cursor: pointer; background: #10b981; color: white;">${this._isCopying ? '✅ Copied!' : '📋 Copy'}</button>
+                        <insetu-async-btn 
+                            class="ui-draggable-export" 
+                            draggable="true" 
+                            @dragstart=${(e) => {
+                                let fetchUrl = m.isFS ? `fs/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
+                                const override = window.inSetu.events.emitHook('zone:file-fetch-url', m.filename);
+                                if (override) fetchUrl = override;
+                                bindDownloadDrag(e, m.filename, fetchUrl);
+                            }}
+                            label="⬇️ Download" 
+                            intent="primary" 
+                            .onClick=${downloadFromModal}>
+                        </insetu-async-btn>
+
+                        <insetu-async-btn label="📋 Copy" intent="success" .onClick=${copyFromModal}></insetu-async-btn>
 
                         ${this.isDirty ? html`
-                            <button @click=${async () => {
-                                this._isSaving = true;
-                                try { await saveModalFile(); } catch(e) {}
-                                this._isSaving = false;
-                            }} style="flex: 1; margin: 0; padding: 15px; border-radius: 0; font-size: 1.1rem; font-weight: bold; border: none; cursor: pointer; background: #f59e0b; color: #000;">${this._isSaving ? '⏳...' : '💾 Save'}</button>
+                            <insetu-async-btn label="💾 Save" intent="warning" .onClick=${() => saveModalFile(false)}></insetu-async-btn>
                         ` : ''}
                     </div>
                 </div>

@@ -19,7 +19,7 @@ export const StatusStore = createStore(
         timeoutId: null,
         setStatus: (msg, timeout = 3000, isError = false) => {
             const currentTimeout = get().timeoutId;
-            if (currentTimeout) clearTimeout(currentTimeout);
+            if (currentTimeout) clearTimeout(currentTimeout); // utils.debounce whitelist
 
             let newTimeoutId = null;
             if (timeout) {

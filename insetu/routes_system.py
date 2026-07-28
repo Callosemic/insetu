@@ -5,10 +5,37 @@ import json
 import threading
 import time
 from flask import Blueprint, request, jsonify
-from insetu.utils_core import load_config, save_json_file, get_workspace_physics, sniff_tenant_id
-import insetu.utils_core as utils_core
+from insetu.utils import load_config, save_json_file, get_workspace_physics, sniff_tenant_id
+import insetu.utils as utils
+from insetu.hooks import hooks
 
 system_bp = Blueprint('system', __name__)
+
+@hooks.on('pre_file_save')
+def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
+    if data and data.get("is_new_repo") and data.get("repo_dir"):
+        repo_dir = data.get("repo_dir")
+        from insetu.utils import load_json_file, get_workspace_physics, save_json_file
+        from insetu.core.utils_core import sanitize_workspace_config, get_default_repo_template
+        cfg_path, _, _ = get_workspace_physics(workspace_id)
+        cfg = load_json_file(cfg_path, {})
+        cfg = sanitize_workspace_config(cfg)
+
+        targets = cfg.get("target_repos", [])
+        if not any(r.get("repo_dir") == repo_dir for r in targets):
+            ext_str = data.get("repo_exts", "")
+            exts = [e.strip() for e in ext_str.split(",") if e.strip()] if ext_str else None
+
+            new_repo = get_default_repo_template(
+                repo_dir=repo_dir,
+                title=data.get("repo_title"),
+                domain=data.get("repo_domain"),
+                description=data.get("repo_desc"),
+                exts=exts
+            )
+            targets.append(new_repo)
+            cfg["target_repos"] = targets
+            save_json_file(cfg_path, cfg, workspace_id)
 
 @system_bp.route('/api/system/panic', methods=['POST'])
 def api_system_panic():
@@ -39,13 +66,12 @@ def api_system_reboot():
 
     threading.Thread(target=restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Rebooting engine..."})
-
 def get_system_config(workspace_id):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     try:
         with open(cfg_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        from insetu.utils_core import sanitize_workspace_config
+        from insetu.core.utils_core import sanitize_workspace_config
         data = sanitize_workspace_config(data)
     except Exception:
         data = load_config(workspace_id)
@@ -136,13 +162,13 @@ def save_system_config(workspace_id, payload):
     # Security Guardrail: Enforce the core config UI is never locked out
     if "extensions" in payload and "config" not in payload["extensions"]:
         payload["extensions"].insert(0, "config")
-    from insetu.utils_core import sanitize_workspace_config
+    from insetu.core.utils_core import sanitize_workspace_config
 
     payload = sanitize_workspace_config(payload)
     save_json_file(cfg_path, payload, workspace_id)
 
     # Invalidate the mutated config cache so backend physics immediately see changes
-    from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    from insetu.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
 
@@ -174,18 +200,17 @@ def api_system_config(workspace_id=None):
 @system_bp.route('/api/system/repos/template', methods=['GET'])
 def api_repo_template():
     """Serves the SSOT default repository configuration to the frontend UI."""
-    from insetu.utils_core import get_default_repo_template
+    from insetu.core.utils_core import get_default_repo_template
     return jsonify(get_default_repo_template(""))
 
 @system_bp.route('/api/system/workspaces/create', methods=['POST'])
 def api_create_workspace():
     data = request.json or {}
     ws_id = data.get('id', '').strip().lower()
-
     if not ws_id or ws_id in ['default', 'none']:
         return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
 
-    index_path = Path(utils_core._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
     if not os.path.exists(index_path):
         w_data = {"active_workspace": "default", "workspaces": {"default": {"config_path": "config.json"}}}
     else:
@@ -232,11 +257,10 @@ def api_create_workspace():
 def api_delete_workspace():
     data = request.json or {}
     ws_id = data.get('id', '').strip().lower()
-
     if ws_id == 'default':
         return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
 
-    index_path = Path(utils_core._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
     if not os.path.exists(index_path):
         return jsonify({"error": "workspaces.json not found"}), 404
 
@@ -247,11 +271,10 @@ def api_delete_workspace():
         return jsonify({"error": "Target workspace not found."}), 404
 
     del w_data["workspaces"][ws_id]
-    
     if w_data.get("active_workspace") == ws_id:
         w_data["active_workspace"] = "default"
 
-    local_insetu_dir = Path(utils_core._cwd).joinpath(".insetu").as_posix()
+    local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
     ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
     if os.path.exists(ws_dir.as_posix()):
         from insetu.routes_fs import execute_vfs_delete
@@ -282,20 +305,19 @@ def api_job_status(job_id):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @system_bp.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():
-    index_path = Path(utils_core._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
 
     if request.method == 'GET':
-        return jsonify(utils_core.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))
+        return jsonify(utils.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))
     if request.method == 'POST':
         data = request.json
         new_active = data.get("active_workspace")
         if not os.path.exists(index_path):
             return jsonify({"error": "workspaces.json not found."}), 404
 
-        w_data = utils_core.load_json_file(index_path, {})
+        w_data = utils.load_json_file(index_path, {})
         if new_active not in w_data.get("workspaces", {}):
             return jsonify({"error": "Workspace ID not found."}), 400
 

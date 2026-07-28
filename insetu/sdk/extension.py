@@ -2,7 +2,8 @@ import functools
 from flask import Blueprint, request, jsonify
 import os
 from insetu.db import get_connection, register_schema
-from insetu.utils_core import extension_auth, get_gather_paths, load_config, resolve_workspace_path
+from insetu.utils import extension_auth, load_config
+from insetu.core.utils_core import get_gather_paths, resolve_logical_path
 from insetu.vfs import VFSTransaction
 class JobManager:
     def __init__(self, ext_name, workspace_id, job_id=None):
@@ -33,74 +34,137 @@ class SettingsManager:
         self.ext_name = ext_name
         self.workspace_id = workspace_id
         self.filename = f"{ext_name}.settings.json"
+        self.secrets_filename = "secrets.json"
         self.schema = schema(workspace_id) if callable(schema) else (schema or [])
+
+    def _is_secure(self, key):
+        for field in self.schema:
+            if field.get('id') == key:
+                return field.get('secure', False)
+        return False
+
     def get(self, key, default=None):
-        from insetu.utils_core import load_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
-        filepath = Path(control_dir).joinpath(self.filename).as_posix()
-        data = load_json_file(filepath, {})
 
-        if key in data:
-            return data[key]
+        if self._is_secure(key):
+            filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
+            data = load_json_file(filepath, {})
+            ext_secrets = data.get(self.ext_name, {})
+            if key in ext_secrets:
+                return ext_secrets[key]
+        else:
+            filepath = Path(control_dir).joinpath(self.filename).as_posix()
+            data = load_json_file(filepath, {})
+            if key in data:
+                return data[key]
 
         for field in self.schema:
             if field.get('id') == key and 'default' in field:
                 return field['default']
 
         return default
+
     def set(self, key, value):
-        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
-        filepath = Path(control_dir).joinpath(self.filename).as_posix()
-        data = load_json_file(filepath, {})
-        data[key] = value
+
+        if self._is_secure(key):
+            filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
+            data = load_json_file(filepath, {})
+            if self.ext_name not in data:
+                data[self.ext_name] = {}
+            data[self.ext_name][key] = value
+        else:
+            filepath = Path(control_dir).joinpath(self.filename).as_posix()
+            data = load_json_file(filepath, {})
+            data[key] = value
+
         save_json_file(filepath, data, self.workspace_id)
+        _MUTATED_CONFIG_CACHE.clear()
+        _MUTATED_CONFIG_MTIME.clear()
+
     def get_all(self):
-        from insetu.utils_core import load_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
+
         filepath = Path(control_dir).joinpath(self.filename).as_posix()
         data = load_json_file(filepath, {})
 
+        secrets_filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
+        secrets_data = load_json_file(secrets_filepath, {}).get(self.ext_name, {})
+
+        result = {}
         for field in self.schema:
             fid = field.get('id')
-            if fid and fid not in data and 'default' in field:
-                data[fid] = field['default']
+            if not fid: continue
 
-        return data
+            if field.get('secure'):
+                result[fid] = secrets_data.get(fid, field.get('default'))
+            else:
+                result[fid] = data.get(fid, field.get('default'))
+
+        return result
+
     def update(self, payload_dict):
-        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
+
         filepath = Path(control_dir).joinpath(self.filename).as_posix()
+        secrets_filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
+
         data = load_json_file(filepath, {})
-        valid_keys = {f.get('id') for f in self.schema} if self.schema else None
-        for k, v in payload_dict.items():
-            if valid_keys is None or k in valid_keys:
+        secrets_data = load_json_file(secrets_filepath, {})
+        ext_secrets = secrets_data.get(self.ext_name, {})
+
+        dirty_normal = False
+        dirty_secrets = False
+
+        for field in self.schema:
+            k = field.get('id')
+            if not k or k not in payload_dict: continue
+
+            v = payload_dict[k]
+            if field.get('secure'):
+                ext_secrets[k] = v
+                dirty_secrets = True
+            else:
                 data[k] = v
-        save_json_file(filepath, data, self.workspace_id)
+                dirty_normal = True
+
+        if dirty_normal:
+            save_json_file(filepath, data, self.workspace_id)
+        if dirty_secrets:
+            secrets_data[self.ext_name] = ext_secrets
+            save_json_file(secrets_filepath, secrets_data, self.workspace_id)
+
+        if dirty_normal or dirty_secrets:
+            _MUTATED_CONFIG_CACHE.clear()
+            _MUTATED_CONFIG_MTIME.clear()
 class StoreManager:
     def __init__(self, workspace_id):
         self.workspace_id = workspace_id
-
     def get(self, filename, key, default=None):
-        from insetu.utils_core import load_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
         filepath = Path(control_dir).joinpath(filename).as_posix()
         data = load_json_file(filepath, {})
         return data.get(key, default)
-
     def set(self, filename, key, value):
-        from insetu.utils_core import load_json_file, save_json_file, get_tenant_control_dir
+        from insetu.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
         filepath = Path(control_dir).joinpath(filename).as_posix()
         data = load_json_file(filepath, {})
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
+        _MUTATED_CONFIG_CACHE.clear()
+        _MUTATED_CONFIG_MTIME.clear()
 class DatabaseWrapper:
     """Lightweight ORM/CRUD wrapper for centralized SQLite access."""
     def __init__(self, conn):
@@ -165,18 +229,18 @@ class ExtensionContext:
         return load_config(self.workspace_id)
     def resolve_path(self, filepath):
         """Safely anchors a relative path to the physical workspace bounds."""
-        return resolve_workspace_path(filepath, self.workspace_id)
+        from insetu.core.utils_core import resolve_logical_path
+        return resolve_logical_path(filepath, self.workspace_id)
     @property
     def manifest(self):
         """Reads the centralized context manifest statelessly."""
-        from insetu.utils_core import load_json_file
+        from insetu.utils import load_json_file
         from pathlib import Path
         manifest_path = Path(self.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         return load_json_file(manifest_path, {})
-
     def get_manifest_files(self, target_key=None):
         """SSOT Helper to extract polymorphic lists of files or chunks from the manifest."""
-        from insetu.utils_core import extract_manifest_files
+        from insetu.core.utils_core import extract_manifest_files
         return extract_manifest_files(self.manifest, target_key)
     def expand_selection(self, items):
         """
@@ -212,10 +276,9 @@ class ExtensionContext:
                 seen.add(f)
                 unique_files.append(f)
         return unique_files
-
     def save_manifest(self, manifest_data, is_full_compile=False):
         """Writes updates to the centralized context manifest."""
-        from insetu.utils_core import save_json_file, load_json_file
+        from insetu.utils import save_json_file, load_json_file
         from pathlib import Path
         import time
         manifest_path = Path(self.paths["contexts_dir"]).joinpath("manifest.json").as_posix()

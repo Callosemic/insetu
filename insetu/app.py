@@ -12,7 +12,7 @@ import datetime
 from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
-from insetu.utils_core import resolve_workspace_path, get_sister_repos
+from insetu.core.utils_core import get_sister_repos
 import insetu.workers # Initializes the metronome listeners
 app = Flask(__name__)
 
@@ -61,10 +61,9 @@ def enforce_token_gate():
     client_token = request.headers.get('X-InSetu-Token') or request.args.get('token')
     if not client_token or client_token != BOOT_TOKEN:
         return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
-
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from insetu.utils_core import load_config, _cwd
+    from insetu.utils import load_config, _cwd
     import importlib
     import json
     import os
@@ -166,7 +165,7 @@ def load_workspace_extensions():
     # Purge the config cache. Because the bootloader called load_config() 
     # to discover extensions, the mutate_workspace_config hook fired into a void.
     # Clearing the cache ensures the fully-mounted Extension DAG gets a chance to inject.
-    from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    from insetu.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
 
@@ -198,7 +197,7 @@ def sw():
 def manifest():
     import json
     import os
-    from insetu.utils_core import load_config
+    from insetu.utils import load_config
 
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath('manifest.json').as_posix()
@@ -212,12 +211,11 @@ def manifest():
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
     manifest_data["short_name"] = instance_title.split()[0] if instance_title else "inSetu"
-
     # Establish complete PWA isolation using local instance scopes
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
     cfg_path, _, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
     ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
@@ -237,7 +235,7 @@ def intercept_local_static_assets():
     """
     import os
     from flask import send_file
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
 
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
@@ -250,7 +248,7 @@ def intercept_local_static_assets():
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
 def favicon():
-    from insetu.utils_core import load_config, get_workspace_physics
+    from insetu.utils import load_config, get_workspace_physics
     import os
     cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
@@ -266,7 +264,8 @@ def favicon():
     return send_file(Path(app.static_folder).joinpath('favicon.ico').as_posix(), mimetype='image/vnd.microsoft.icon')
 @app.route('/api/<workspace_id>/repos', methods=['GET'])
 def api_repos(workspace_id):
-    from insetu.utils_core import get_sister_repos, load_config, get_workspace_physics
+    from insetu.core.utils_core import get_sister_repos
+    from insetu.utils import load_config, get_workspace_physics
     import os
     cfg = load_config(workspace_id)
     targets = cfg.get("target_repos", [])
@@ -297,7 +296,7 @@ def api_repos(workspace_id):
     })
 @app.route('/')
 def index():
-    from insetu.utils_core import load_config
+    from insetu.utils import load_config
     cfg = load_config()
     instance_title = cfg.get("instance_title", "inSetu Developer OS")
     instance_emoji = cfg.get("instance_emoji", "⚙️")
@@ -318,7 +317,8 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
     try:
         ws_lock.acquire()
         import insetu.core.gather.engine_gather as engine_gather
-        from insetu.utils_core import get_gather_paths, load_json_file, get_workspace_physics, load_config
+        from insetu.core.utils_core import get_gather_paths
+        from insetu.utils import load_json_file, get_workspace_physics, load_config
         from pathlib import Path
         import os
         import subprocess
@@ -431,9 +431,9 @@ def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
 register_callback("gather", "compile_contexts", _background_compile)
 @app.route('/submit', methods=['POST'])
 def submit():
-    from insetu.utils_core import sniff_tenant_id
+    from insetu.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
-    from insetu.utils_core import get_gather_paths
+    from insetu.core.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
     data = request.json or {}
     force_full = data.get("force_full", False)
@@ -456,7 +456,7 @@ def submit():
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @app.route('/api/<workspace_id>/manifest', methods=['GET'])
 def api_manifest(workspace_id):
-    from insetu.utils_core import get_gather_paths
+    from insetu.core.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     headers = {
@@ -469,9 +469,9 @@ def api_manifest(workspace_id):
     return jsonify({}), 200, headers
 @app.route('/download/<path:filename>')
 def download_file(filename):
-    from insetu.utils_core import sniff_tenant_id
+    from insetu.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
-    from insetu.utils_core import get_gather_paths
+    from insetu.core.utils_core import get_gather_paths
     paths = get_gather_paths(workspace_id)
 
     # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
@@ -480,8 +480,8 @@ def download_file(filename):
     file_path = next((p for p in search_paths if os.path.exists(p)), None)
     # Fallback to resolving against the workspace root for media-vault files
     if not file_path:
-        from insetu.utils_core import resolve_workspace_path
-        resolved = resolve_workspace_path(filename, workspace_id)
+        from insetu.core.utils_core import resolve_logical_path
+        resolved = resolve_logical_path(filename, workspace_id)
         if os.path.exists(resolved): file_path = resolved
     if not file_path: return jsonify({"error": "File not found"}), 404
     base, ext = os.path.splitext(safe_basename)
@@ -493,7 +493,7 @@ def download_file(filename):
 
     return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
 def run_app():
-    from insetu.utils_core import load_config
+    from insetu.utils import load_config
     from insetu.hooks import hooks
     import os
 
