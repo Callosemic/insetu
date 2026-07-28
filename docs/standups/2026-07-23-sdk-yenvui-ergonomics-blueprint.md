@@ -80,5 +80,17 @@ Once these primitives exist, the SDK can safely orchestrate forms without violat
         ```
     The framework will natively handle constructing and broadcasting the CustomEvent over `window`, reducing action registration boilerplate to a pure data mapping.
 
+### XII. Universal Selection Resolution (`ctx.expand_selection`)
+*   **Concept:** Extension developers should never manually parse frontend `items` payloads (e.g., checking if it's a file, expanding a folder, or unpacking virtual `system://` chunks).
+*   **The yenVUI Integration:** The `ExtensionContext` base class will expose `ctx.expand_selection(items)`. The SDK must natively handle all polymorphic expansion (directories, virtual URIs, manifest chunks) and stable deduplication. Workers simply receive a flat array of valid physical/logical paths, fully decoupling the backend from UI payload structures.
+
+### XIII. Cross-Extension Configuration Bridging
+*   **Concept:** Extensions frequently need to read topologies or configurations owned by sibling extensions (e.g., Hooks needing Gather's target repos), leading to local state queries that fail or return empty.
+*   **The yenVUI Integration:** Introduce a standard inter-extension configuration bridge, such as `ctx.get_peer_config('gather')`. This establishes a safe, read-only bridge between extension domains without tightly coupling their underlying databases or forcing developers to manually instantiate foreign SDK contexts.
+
+### XIV. Self-Healing Stateful Wrappers
+*   **Concept:** When `yenVUI` tabs or lists utilize `cacheViews` or DOM recycling to save memory, traditional `connectedCallback` initializations drop their state hooks, causing components to render stale data.
+*   **The yenVUI Integration:** Establish the "Self-Healing Orchestrator" pattern for all stateful `insetu-*` wrappers. The SDK guidelines must mandate that consuming components use the Lit `updated(changedProperties)` lifecycle hook to instantly catch DOM property changes from the parent and re-verify their internal state against the `AppStore` or `SelectionStore`, guaranteeing they gracefully survive highly optimized rendering loops.
+
 ---
 **Status:** Approved for execution. Pending `yenVUI` form primitive construction.

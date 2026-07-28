@@ -7,6 +7,7 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0003: Stateless Request-Scoped Multi-Tenant REST Routing](adrs/archived/0003-stateless-multi-tenant-routing.md)** - Replaced heavy `os.execv` reboots with stateless API routing using the `X-Workspace-ID` header.
 * **[ADR 0014: Event Bus Tenant Authorization](adrs/0014-event-bus-tenant-authorization.md)** - Implemented strict `_is_authorized` boundary filters in the Event Bus to prevent disabled extensions from hijacking tenant lifecycles.
 * **[ADR 0029: Core Kernel Extraction and Three-Tier Architecture](adrs/0029-core-kernel-extraction-and-three-tier-architecture.md)** - Enforced physical separation into Tier 1 (Kernel), Tier 2 (Core OS Engines), and Tier 3 (Extensions).
+* **[ADR 0030: Kernel Utility Bisect and Domain Helper Relocation](adrs/0030-kernel-utility-bisect-and-domain-relocation.md)** - Split `utils_core.py` into Tier 1 (`utils.py`) and Tier 2 (`core/utils_core.py`), and relocated `getFlattenedBuckets` to `gather.js`.
 
 ## Virtual File System (VFS) & I/O Pipelines
 * **[ADR 0004: Asynchronous VFS Commit Pipeline](adrs/0004-asynchronous-vfs-commit-pipeline.md)** - Delegated physical file mutations to an off-thread `_VFS_WRITE_QUEUE` to eliminate HTTP event loop starvation.
