@@ -3,7 +3,6 @@ import os
 import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
-from insetu.utils_core import load_workflows, save_json_file
 from insetu.hooks import hooks
 flow_bp = InSetuExtension(
     'flow', 
@@ -26,11 +25,9 @@ def compile_flow_batches(manifest, workspace_id=None, **kwargs):
     ctx = ExtensionContext('flow', workspace_id)
     cfg = ctx.config
     if "flow" not in cfg.get("extensions", []): return
-
     is_full_sweep = kwargs.get('is_full_sweep', True)
     touched_buckets = kwargs.get('touched_buckets')
-    w_cfg = load_workflows(workspace_id)
-    context_batches = w_cfg.get("context_batches", [])
+    context_batches = ctx.store.get("workflows.json", "context_batches", [])
 
     for batch in context_batches:
         is_partial = (is_full_sweep is False) or isinstance(is_full_sweep, list)
@@ -172,16 +169,15 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
     )
     # Update central manifest so UI can read chunk metadata
     manifest_data[f"workflow_{batch_id}_context.txt"] = manifest_entry
-
     if is_standalone_compile:
         ctx.save_manifest(manifest_data)
 
     # Strip artifacts array from workflow config if it exists
-    w_cfg = load_workflows(workspace_id)
-    for b in w_cfg.get("context_batches", []):
+    context_batches = ctx.store.get("workflows.json", "context_batches", [])
+    for b in context_batches:
         if b["id"] == batch_id and "artifacts" in b:
             del b["artifacts"]
-            ctx.store.set("workflows.json", "context_batches", w_cfg["context_batches"])
+            ctx.store.set("workflows.json", "context_batches", context_batches)
             break
 @flow_bp.route('batches', methods=['GET'])
 def api_flow_batches(ctx):
@@ -193,13 +189,12 @@ def api_flow_batches(ctx):
 
     available_diffs = []
     available_prompts = []
-
     try:
-        diff_results = hooks.emit('request_available_diffs', workspace_id=ctx.workspace_id)
+        diff_results = ctx.emit('request_available_diffs')
         for res in diff_results:
             if res: available_diffs.extend(res)
 
-        prompt_results = hooks.emit('request_available_prompts', workspace_id=ctx.workspace_id)
+        prompt_results = ctx.emit('request_available_prompts')
         for res in prompt_results:
             if res: available_prompts.extend(res)
     except Exception:
@@ -243,7 +238,6 @@ def api_flow_batches_delete(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
     ctx.store.set("workflows.json", "context_batches", [b for b in batches if b.get("id") != batch_id])
     try:
-        from insetu.routes_fs import execute_vfs_delete
         manifest_data = ctx.manifest
         manifest_key = f"workflow_{batch_id}_context.txt"
 
@@ -259,7 +253,7 @@ def api_flow_batches_delete(ctx):
 
         for chunk_file in chunks:
             out_path = Path(ctx.paths["gather_dir"]).joinpath(chunk_file).as_posix()
-            execute_vfs_delete(ctx.workspace_id, out_path)
+            ctx.vfs.save(out_path, "", data={"action": "delete", "ignore_ledger": True})
     except Exception:
         pass
 

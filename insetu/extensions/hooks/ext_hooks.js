@@ -195,8 +195,7 @@ export class InSetuExtHooks extends InSetuElement {
                     <h3 style="margin: 0; color: var(--text);">Automation Rules</h3>
                     <span style="font-size: 0.85rem; color: var(--text-muted);">Trigger local commands automatically when repositories or buckets update.</span>
                 </div>
-
-                ${this.loading ? html`<div class="spinner" style="display:block;">Loading automation rules...</div>` : ''}
+                ${this.loading ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">⏳ Loading automation rules...</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${this.rules.length === 0 && !this.loading ? html`<p style="color: var(--text-muted); font-style: italic;">No automation rules configured. Click "+ New Rule" to create one.</p>` : ''}
 
@@ -343,8 +342,7 @@ export class InSetuExtHooks extends InSetuElement {
                         <label style="font-size: 0.9rem; color: var(--text); font-weight: bold; cursor: pointer;">Enable Rule Immediately</label>
                     </div>
                 </div>
-
-                <insetu-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></insetu-async-btn>
+                <yenvui-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></yenvui-async-btn>
             </insetu-modal>
         `;
     }

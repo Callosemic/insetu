@@ -20,7 +20,6 @@ export const CitationStore = createExtensionStore('Citations', {
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';
 import { sharedStyles } from '../shared_styles.js';
-
 export class InSetuExtCitations extends InSetuElement {
     static properties = {
         importingIds: { type: Object },
@@ -608,7 +607,7 @@ export class InSetuExtCitations extends InSetuElement {
 }
 customElements.define('insetu-ext-citations', InSetuExtCitations);
 export class InSetuExtCitationsModals extends InSetuElement {
-    get extName() { return 'citations'; }
+    static get extensionName() { return 'citations'; }
     static properties = {
         citationModalOpen: { type: Boolean },
         citationSearchQuery: { type: String },

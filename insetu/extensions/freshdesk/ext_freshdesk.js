@@ -25,10 +25,8 @@ export const FreshdeskStore = createExtensionStore('Freshdesk', {
 });
 
 window.inSetu.stores.Freshdesk = FreshdeskStore;
-
 // 2. The Declarative Lit Component
 export class InSetuExtFreshdesk extends InSetuElement {
-    get extName() { return 'freshdesk'; }
     static properties = {
         tickets: { type: Array },
         loadingMsg: { type: String },

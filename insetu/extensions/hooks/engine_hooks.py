@@ -77,13 +77,9 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
 
     if not files:
         return
-        
     from insetu.sdk import ExtensionContext
     ctx = ExtensionContext('hooks', workspace_id)
-    
-    if not ctx.config:
-        return
-        
+
     # Fetch enabled rules for this workspace
     try:
         active_rules = ctx.db.execute(
@@ -95,8 +91,9 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
     if not active_rules:
         return
 
-    cfg = ctx.config
-    target_repos = cfg.get("target_repos", [])
+    # Topology is defined in the Gather extension, not the Hooks extension
+    gather_ctx = ExtensionContext('gather', workspace_id)
+    target_repos = gather_ctx.config.get("target_repos", [])
     
     # Analyze mutated files
     touched_repos = set()

@@ -12,8 +12,8 @@ export const FormatStore = createExtensionStore('Format', {
 });
 
 window.inSetu.stores.Format = FormatStore;
-
 export class InSetuExtFormatModals extends InSetuElement {
+    static get extensionName() { return 'format'; }
     static properties = {
         formatModalOpen: { type: Boolean },
         currentFormatTarget: { type: String },

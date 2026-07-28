@@ -568,16 +568,24 @@ ${(() => {
             </div>
             </div>
             <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
-                    ${(this.activeChunkFile ? (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunks || []) : []).map((chunk, idx) => html`
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                            <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text);">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
-                            <div style="display: flex; gap: 8px;">
-                                <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
-                                <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
-                            </div>
-                        </div>
-                    `)}
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
+                    ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
+                        const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
+                            ? `${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb` 
+                            : '';
+                        return html`
+                            <yenvui-card 
+                                titleText="Part ${idx + 1}"
+                                detailText=${sizeKb}
+                                icon="📄"
+                                disableSelection=${true}>
+                                <div style="display: flex; gap: 8px; margin-top: 10px; padding-bottom: 10px;">
+                                    <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
+                                    <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
+                                </div>
+                            </yenvui-card>
+                        `;
+                    })}
                 </div>
             </insetu-modal>
             <insetu-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
