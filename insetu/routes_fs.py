@@ -15,14 +15,18 @@ _VFS_WORKER_THREAD = None
 _VFS_SHUTDOWN_SIGNAL = threading.Event()
 def _vfs_commit_worker():
     """Consumes write payloads sequentially off-thread to guard the Flask event loop."""
-    while not _VFS_SHUTDOWN_SIGNAL.is_set():
+    while True:
+        # Prevent data loss: Forcefully drain the queue before honoring the shutdown signal
+        if _VFS_SHUTDOWN_SIGNAL.is_set() and _VFS_WRITE_QUEUE.empty():
+            break
+
         try:
             # Short timeout allows the loop to periodically check for shutdown signals
             task = _VFS_WRITE_QUEUE.get(timeout=1.0)
 
             if task is None:
                 _VFS_WRITE_QUEUE.task_done()
-                break
+                continue
 
             workspace_id, filepath, content, data = task
             try:

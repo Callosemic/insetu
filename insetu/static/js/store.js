@@ -11,6 +11,46 @@ window.inSetu.utils.getActiveWorkspace = function() {
         return sessionStorage.getItem('insetu_workspace') || localStorage.getItem('insetu_workspace') || 'default';
     } catch(e) { return 'default'; }
 };
+
+export const StatusStore = createStore(
+    devtools(subscribeWithSelector((set, get) => ({
+        message: '',
+        isError: false,
+        timeoutId: null,
+        setStatus: (msg, timeout = 3000, isError = false) => {
+            const currentTimeout = get().timeoutId;
+            if (currentTimeout) clearTimeout(currentTimeout);
+
+            let newTimeoutId = null;
+            if (timeout) {
+                newTimeoutId = setTimeout(() => {
+                    set({ message: '', isError: false, timeoutId: null });
+                }, timeout);
+            }
+            set({ message: msg, isError, timeoutId: newTimeoutId });
+        }
+    })), { name: 'StatusStore' })
+);
+window.inSetu.stores.Status = StatusStore;
+
+export const ToastStore = createStore(
+    devtools(subscribeWithSelector((set, get) => ({
+        toasts: [],
+        addToast: (message, intent = 'danger', duration = 6000) => {
+            const id = `toast_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            set(state => {
+                if (state.toasts.some(t => t.message === message)) return state;
+                return { toasts: [...state.toasts, { id, message, intent }] };
+            });
+            setTimeout(() => {
+                set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }));
+            }, duration);
+        },
+        removeToast: (id) => set(state => ({ toasts: state.toasts.filter(t => t.id !== id) }))
+    })), { name: 'ToastStore' })
+);
+window.inSetu.stores.Toast = ToastStore;
+
 export const SelectionStore = createStore(
     devtools(subscribeWithSelector((set, get) => ({
         selectedItems: new Map(),
@@ -39,6 +79,7 @@ export const AppStore = createStore(
             hiddenOutputs: [],
             isConfigOpen: false,
             isWorkspaceEditorOpen: false,
+            configMissing: false,
 
             pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
             setPinnedRepos: (repos) => {
@@ -91,7 +132,8 @@ export const AppStore = createStore(
                 dirtyDiffRepos: new Set(["ALL"]),
                 cachedDiffFiles: null,
                 isConfigOpen: false,
-                isWorkspaceEditorOpen: false
+                isWorkspaceEditorOpen: false,
+                configMissing: false
             })
         })),
         { name: 'AppStore' }

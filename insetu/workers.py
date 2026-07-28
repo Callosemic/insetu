@@ -64,6 +64,12 @@ def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", worksp
             if "shutdown" not in str(e).lower():
                 raise
     return True
+def update_immediate_job_meta(job_id, meta_dict, workspace_id="default"):
+    """Helper for workers to safely update discrete metrics without altering stream status."""
+    import json
+    conn = get_connection("workers", workspace_id=workspace_id)
+    conn.execute("UPDATE immediate_jobs SET meta_json=? WHERE id=?", (json.dumps(meta_dict), job_id))
+    conn.commit()
 
 def update_immediate_job_status(job_id, status, message=None, artifact=None, workspace_id="default"):
     """Helper for workers to update their streaming status."""
@@ -260,6 +266,7 @@ def _init_worker_schema(workspace_id="default"):
                         status TEXT,
                         status_message TEXT,
                         artifact_json TEXT,
+                        meta_json TEXT,
                         created_at REAL,
                         updated_at REAL,
                         args_json TEXT
@@ -267,6 +274,7 @@ def _init_worker_schema(workspace_id="default"):
         """)
         try:
                 conn.execute("ALTER TABLE jobs ADD COLUMN jitter_ms INTEGER DEFAULT 0")
+                conn.execute("ALTER TABLE immediate_jobs ADD COLUMN meta_json TEXT")
                 conn.commit()
         except Exception:
                 pass

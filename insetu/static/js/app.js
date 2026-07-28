@@ -116,27 +116,13 @@ window.addEventListener('keydown', (e) => {
         }
     }
 });
-
 // Default OS Shortcut Registrations
 window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
-    // 1. Check for dynamic Factory Modals first
-    const dynamicModals = Array.from(document.querySelectorAll('.dynamic-modal'));
-    if (dynamicModals.length > 0) {
-        const topModal = dynamicModals[dynamicModals.length - 1]; // Get last appended
-        window.inSetu.ui.Factory.closeModal(topModal.id);
-        return;
-    }
-    // 2. Fallback for legacy hardcoded modals
-    const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
-    if (activeModal) {
-        if (activeModal.id === 'file-modal' && window.inSetu.ui.closeFileModal) {
-            window.inSetu.ui.closeFileModal();
-            return;
-        }
-        // Trigger specific close/cancel buttons to ensure teardown logic fires natively
-        const closeBtn = activeModal.querySelector(`button[style*="dc2626"], button[onclick*="display='none'"]`);
-        if (closeBtn) closeBtn.click();
-        else activeModal.style.display = 'none';
+    // Components utilizing <insetu-modal> (which wraps <yenvui-modal>) natively handle Escape key teardowns via the HTML5 <dialog> API.
+    // For the global VFS file modal, we ensure its state syncs to closed in the Zustand store.
+    const fsStore = window.inSetu?.stores?.Fs;
+    if (fsStore && fsStore.getState().fileModal?.open) {
+        fsStore.getState().setModal('fileModal', { open: false });
     }
 });
 window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
@@ -643,51 +629,15 @@ export function setGlobalStatus(msg, timeout = 3000, isError = false) {
 }
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
-let activeToasts = [];
-let toastIdCounter = 0;
-
 window.alert = function(msg, intent = 'danger') {
-    let container = document.querySelector('yenvui-toast-container');
-    if (!container) {
-        container = document.createElement('yenvui-toast-container');
-        document.body.appendChild(container);
-
-        // Listen for internal dismissals from the yenVUI component
-        container.addEventListener('yenvui-toast-dismissed', (e) => {
-            activeToasts = activeToasts.filter(t => t.id !== e.detail.id);
-            container.toasts = [...activeToasts];
-        });
+    if (window.inSetu && window.inSetu.stores && window.inSetu.stores.Toast) {
+        window.inSetu.stores.Toast.getState().addToast(msg, intent);
+    } else {
+        console.warn("Alert:", msg); // Graceful fallback
     }
-
-    // Anti-spam constraint: Prevent stacking identical active toasts
-    if (activeToasts.some(t => t.message === msg)) {
-        return;
-    }
-
-    const id = `toast_${toastIdCounter++}`;
-    const newToast = { id, message: msg, intent };
-    activeToasts = [...activeToasts, newToast];
-    container.toasts = [...activeToasts];
-
-    setTimeout(() => {
-        activeToasts = activeToasts.filter(t => t.id !== id);
-        if (container) container.toasts = [...activeToasts];
-    }, 6000);
 };
 export async function executeWorkspaceMutation(path, payload, options = {}) {
-    const {
-        btnId,
-        loadingText = "Processing...",
-        silent = false,
-        onSuccess = () => {}
-    } = options;
-    const btn = btnId ? document.getElementById(btnId) : null;
-    let origText = "";
-    if (btn && !silent) {
-        origText = btn.innerText;
-        btn.innerText = loadingText;
-        window.inSetu.ui.setGlobalStatus(loadingText, null);
-    }
+    const { silent = false, onSuccess } = options;
 
     try {
         // Strip legacy prefixes if extensions haven't been updated yet
@@ -706,9 +656,8 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
             headers,
             body
         });
-        if (res.ok) {
-            await onSuccess(res);
-        } else if (!silent) {
+
+        if (!res.ok) {
             let errMsg = res.statusText;
             try {
                 const errData = await res.clone().json();
@@ -717,20 +666,20 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
                 const rawText = await res.text();
                 errMsg = `Raw Server Error (${res.status}):\n\n${rawText.substring(0, 500)}`;
             }
-            alert(`Operation failed.\nReason: ${errMsg}`);
+            throw new Error(errMsg);
         }
-        return res.ok;
+
+        const data = await res.json();
+        if (onSuccess) await onSuccess(data);
+        return data;
     } catch (e) {
         if (!silent) {
-            alert(`Network error: ${e.message}`);
-            window.inSetu.ui.setGlobalStatus(`❌ Error: ${e.message}`, 5000);
+            alert(`Operation failed.\nReason: ${e.message}`);
+            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus(`❌ Error: ${e.message}`, 5000, true);
+            }
         }
-        return false;
-    } finally {
-        if (btn && !silent) {
-            btn.innerText = origText;
-            window.inSetu.ui.setGlobalStatus("✅ Success!", 2000);
-        }
+        throw e;
     }
 }
 let compilePromise = null;
@@ -854,24 +803,9 @@ async function performSoftRefresh() {
                 virtualContexts: d.virtual_contexts || [],
                 categoryOrder: d.category_order || [],
                 tabOrder: d.tab_order || [],
-
-                hiddenOutputs: d.hidden_outputs || []
+                hiddenOutputs: d.hidden_outputs || [],
+                configMissing: !!d.config_missing
             });
-
-            let banner = document.getElementById('missing-config-banner');
-            if (d.config_missing) {
-                if (!banner) {
-                    banner = document.createElement('div');
-                    banner.id = 'missing-config-banner';
-                    banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
-                    banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
-                    document.body.appendChild(banner);
-                } else {
-                    banner.style.display = 'block';
-                }
-            } else if (banner) {
-                banner.style.display = 'none';
-            }
         }
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
@@ -989,17 +923,11 @@ async function initializeWorkspaceTopology() {
                 virtualContexts: d.virtual_contexts || [],
                 categoryOrder: d.category_order || [],
                 tabOrder: d.tab_order || [],
-                hiddenOutputs: d.hidden_outputs || []
+                hiddenOutputs: d.hidden_outputs || [],
+                configMissing: !!d.config_missing
             });
-            if (d.config_missing) {
-                const banner = document.createElement('div');
-                banner.id = 'missing-config-banner';
-                banner.style.cssText = "background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;";
-                banner.innerHTML = "⚠️ Configuration file missing. Operating in empty fallback state. <span style='cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;' onclick='this.parentElement.style.display=\"none\"'>Dismiss</span>";
-                document.body.appendChild(banner);
-            }
         }
-    } catch(e) { console.error("Topology fetch failed:", e); }
+} catch(e) { console.error("Topology fetch failed:", e); }
 
     // 2. Auto-Hydrate Manifest
     try {

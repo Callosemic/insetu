@@ -50,7 +50,7 @@ class VFSTransaction:
         self._buffer = []
     def walk(self, directory_path, exts=None):
         """Safely sweeps a directory within the workspace bounds, yielding strict workspace-relative file paths."""
-        from insetu.utils_core import get_workspace_physics, load_config
+        from insetu.utils_core import get_workspace_physics, load_config, get_valid_workspace_files
         resolved_dir = resolve_workspace_path(directory_path, self.workspace_id)
         if not os.path.exists(resolved_dir):
             return
@@ -58,18 +58,26 @@ class VFSTransaction:
         _, ws_root, _ = get_workspace_physics(self.workspace_id)
         cfg = load_config(self.workspace_id)
 
-        # Pit of Success: Consolidate ignore rules so all SDK extensions respect workspace filters natively
-        ignore_dirs = set(cfg.get("ignore_dirs", []))
-        for repo in cfg.get("target_repos", []):
-            ignore_dirs.update(repo.get("repo_ignore_dirs", []))
+        # Identify if this directory maps to a known repository to inherit its specific rules
+        target_repo_cfg = {}
+        for r_cfg in cfg.get("target_repos", []):
+            r_dir = r_cfg.get("repo_dir", "")
+            if r_dir and (directory_path == r_dir or directory_path.startswith(r_dir + "/")):
+                target_repo_cfg = r_cfg
+                break
 
-        for root, dirs, files in os.walk(resolved_dir):
-            # Prune directories in-place to prevent os.walk from descending into them
-            dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.git')]
-            for f in files:
-                if exts and not any(f.endswith(ext) for ext in exts):
-                    continue
+        # Delegate entirely to the Cartographer's SSOT utility
+        valid_files = get_valid_workspace_files(resolved_dir, target_repo_cfg, self.workspace_id)
+        if not valid_files:
+            return
 
-                abs_path = Path(root).joinpath(f).as_posix()
-                # Pit of Success: Calculate relative to the true workspace root natively
+        for f in valid_files:
+            if exts and not any(f.endswith(ext) for ext in exts):
+                continue
+
+            abs_path = Path(resolved_dir).joinpath(f).as_posix()
+            # Pit of Success: Calculate relative to the true workspace root natively
+            try:
                 yield os.path.relpath(abs_path, ws_root).replace('\\', '/')
+            except ValueError:
+                yield abs_path

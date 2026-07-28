@@ -68,19 +68,38 @@ export class InSetuElement extends LitElement {
         this._managedListeners = [];
     }
     get extName() {
-        // 1. Explicit static class definition (Strict OOP)
+        // 1. SSOT Registry Lookup (Identify which extension mapped this component)
+        const myTag = this.tagName.toLowerCase();
+        if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+            for (const [extName, config] of window.ExtensionRegistry._manifests.entries()) {
+                if (config.layoutSlots && config.layoutSlots.some(s => s.component === myTag)) {
+                    return extName;
+                }
+            }
+        }
+
+        // 2. Contextual DOM Inheritance (Piercing Shadow DOM boundaries)
+        let currentNode = this;
+        while (currentNode) {
+            if (currentNode.dataset && currentNode.dataset.ext) return currentNode.dataset.ext;
+
+            if (currentNode.closest) {
+                const ancestor = currentNode.closest('[data-ext]');
+                if (ancestor) return ancestor.dataset.ext;
+            }
+
+            // Pierce the Shadow DOM boundary upwards
+            const root = currentNode.getRootNode();
+            currentNode = (root instanceof ShadowRoot) ? root.host : null;
+        }
+
+        // 3. Explicit static class definition (Manual override)
         if (this.constructor.extensionName) return this.constructor.extensionName;
 
-        // 2. Contextual DOM Inheritance (Inherit from parent extension view)
-        const parentExt = this.closest('[data-ext]');
-        if (parentExt && parentExt.dataset.ext) return parentExt.dataset.ext;
-
-        // 3. Fallback to tag name inference (Legacy support)
-        const inferred = this.tagName.toLowerCase().replace('insetu-ext-', '');
-
-        // Throw a warning so the developer knows to fix their component
-        if (inferred && !this.tagName.toLowerCase().startsWith('insetu-ext-')) {
-            console.warn(`[SDK Warning] Component <${this.tagName.toLowerCase()}> is relying on implicit tag-name routing and may fail. Please define 'static extensionName = "${inferred}";' on the class.`);
+        // 4. Fallback to tag name inference (Convention over configuration)
+        const inferred = myTag.replace('insetu-ext-', '');
+        if (myTag === inferred) {
+            console.warn(`[SDK Warning] Component <${myTag}> is unmapped and lacks the 'insetu-ext-' prefix. API routing may fail.`);
         }
 
         return inferred;
@@ -364,6 +383,48 @@ window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("❌ Error copying text", 3000, true);
         throw e;
     }
+};
+
+window.inSetu.utils.parseFrontmatter = function(text) {
+    const match = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n/);
+    if (!match) return { meta: {}, content: text, rawFrontmatter: '' };
+
+    const rawFrontmatter = match[1];
+    const content = text.slice(match[0].length);
+    const meta = {};
+
+    rawFrontmatter.split('\n').forEach(line => {
+        const parts = line.split(':');
+        if (parts.length >= 2) {
+            const key = parts[0].trim();
+            const val = parts.slice(1).join(':').trim().replace(/^['"](.*)['"]$/, '$1');
+            meta[key] = val;
+        }
+    });
+
+    return { meta, content, rawFrontmatter: match[0] };
+};
+window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null) {
+    const extract = (data) => {
+        if (Array.isArray(data)) return data;
+        if (typeof data === 'object' && data !== null) {
+            return data.chunks || data.files || [];
+        }
+        return [];
+    };
+
+    if (targetKey) {
+        return extract(manifestData[targetKey]);
+    }
+
+    const allFiles = new Set();
+    Object.entries(manifestData).forEach(([k, v]) => {
+        if (typeof k === 'string' && k.endsWith('.txt')) allFiles.add(k);
+        extract(v).forEach(f => {
+            if (typeof f === 'string') allFiles.add(f);
+        });
+    });
+    return Array.from(allFiles);
 };
 
 // Global backwards compatibility proxies for HTML click handlers and legacy extensions

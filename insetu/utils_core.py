@@ -391,6 +391,30 @@ def generate_ascii_tree(file_paths):
             lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
         return lines
     return ".\n" + "\n".join(print_tree(tree))
+def extract_manifest_files(manifest_data, target_key=None):
+    """
+    SSOT: Flattens polymorphic manifest objects into a clean list of file paths.
+    Handles raw lists, dicts with 'files', and dicts with 'chunks'.
+    """
+    def _extract(data):
+        if isinstance(data, dict):
+            return data.get("chunks", data.get("files", []))
+        elif isinstance(data, list):
+            return data
+        return []
+
+    if target_key:
+        return _extract(manifest_data.get(target_key, {}))
+
+    all_files = set()
+    for k, v in manifest_data.items():
+        if isinstance(k, str) and k.endswith('.txt'):
+            all_files.add(k)
+        for f in _extract(v):
+            if isinstance(f, str):
+                all_files.add(f)
+    return sorted(list(all_files))
+
 def get_available_contexts(workspace_id=None, exclusion_flags=None):
     """
     SSOT Helper: Computes all expected and active context artifacts across the workspace.
@@ -432,9 +456,10 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None):
     # Read the active manifest for dynamic/ephemeral contexts
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest_data = load_json_file(manifest_path, {})
-    for key in manifest_data.keys():
-        if key.endswith('_context.txt'):
-            expected_contexts.add(f"contexts/{key}")
+
+    for f in extract_manifest_files(manifest_data):
+        if f.endswith('.txt'):
+            expected_contexts.add(f"contexts/{f}")
 
     return expected_contexts
 
@@ -654,18 +679,15 @@ def search_workspace_files(workspace_id, query):
 
     import json
     paths = get_gather_paths(workspace_id)
-
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     md_files = set()
     if os.path.exists(manifest_path):
         with open(manifest_path, 'r', encoding='utf-8') as f:
             try:
                 manifest = json.load(f)
-                for data in manifest.values():
-                    file_list = data.get("files", []) if isinstance(data, dict) else data
-                    for filepath in file_list:
-                        if filepath.lower().endswith('.md'):
-                            md_files.add(filepath)
+                for filepath in extract_manifest_files(manifest):
+                    if filepath.lower().endswith('.md'):
+                        md_files.add(filepath)
             except Exception:
                 pass
     results = []

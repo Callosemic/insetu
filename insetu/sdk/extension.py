@@ -18,11 +18,15 @@ class JobManager:
         args_json = json.dumps(kwargs)
         submit_immediate_job(job_id, self.ext_name, task_name, args_json, self.workspace_id)
         return job_id
-
     def update_progress(self, message, artifact=None):
         if self.current_job_id:
             from insetu.workers import update_immediate_job_status
             update_immediate_job_status(self.current_job_id, 'processing', message, artifact, workspace_id=self.workspace_id)
+
+    def update_meta(self, meta_dict):
+        if self.current_job_id:
+            from insetu.workers import update_immediate_job_meta
+            update_immediate_job_meta(self.current_job_id, meta_dict, workspace_id=self.workspace_id)
 _REGISTERED_SETTINGS_SCHEMAS = {}
 class SettingsManager:
     def __init__(self, ext_name, workspace_id, schema=None):
@@ -53,10 +57,6 @@ class SettingsManager:
         data = load_json_file(filepath, {})
         data[key] = value
         save_json_file(filepath, data, self.workspace_id)
-
-        from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
-        _MUTATED_CONFIG_CACHE.clear()
-        _MUTATED_CONFIG_MTIME.clear()
     def get_all(self):
         from insetu.utils_core import load_json_file, get_tenant_control_dir
         from pathlib import Path
@@ -80,13 +80,7 @@ class SettingsManager:
         for k, v in payload_dict.items():
             if valid_keys is None or k in valid_keys:
                 data[k] = v
-
         save_json_file(filepath, data, self.workspace_id)
-
-        # Cache invalidation: Updating extension settings might affect the OS config topology
-        from insetu.utils_core import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
-        _MUTATED_CONFIG_CACHE.clear()
-        _MUTATED_CONFIG_MTIME.clear()
 class StoreManager:
     def __init__(self, workspace_id):
         self.workspace_id = workspace_id
@@ -121,7 +115,6 @@ class DatabaseWrapper:
             query += f" ORDER BY {order_by}"
         cursor = self._conn.execute(query)
         return [dict(row) for row in cursor.fetchall()]
-
     def insert_or_replace(self, table, data):
         keys = list(data.keys())
         values = tuple(data[k] for k in keys)
@@ -129,6 +122,18 @@ class DatabaseWrapper:
         cols = ", ".join(keys)
         self._conn.execute(f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({placeholders})", values)
         self._conn.commit()
+
+    def update(self, table, data, where_col, where_val):
+        keys = list(data.keys())
+        values = tuple(data[k] for k in keys) + (where_val,)
+        set_clause = ", ".join([f"{k} = ?" for k in keys])
+        self._conn.execute(f"UPDATE {table} SET {set_clause} WHERE {where_col} = ?", values)
+        self._conn.commit()
+
+    def get_by_id(self, table, id_val, id_col="id"):
+        cursor = self._conn.execute(f"SELECT * FROM {table} WHERE {id_col} = ?", (id_val,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     def delete(self, table, where_col, where_val):
         self._conn.execute(f"DELETE FROM {table} WHERE {where_col} = ?", (where_val,))
@@ -161,7 +166,6 @@ class ExtensionContext:
     def resolve_path(self, filepath):
         """Safely anchors a relative path to the physical workspace bounds."""
         return resolve_workspace_path(filepath, self.workspace_id)
-
     @property
     def manifest(self):
         """Reads the centralized context manifest statelessly."""
@@ -169,6 +173,46 @@ class ExtensionContext:
         from pathlib import Path
         manifest_path = Path(self.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         return load_json_file(manifest_path, {})
+
+    def get_manifest_files(self, target_key=None):
+        """SSOT Helper to extract polymorphic lists of files or chunks from the manifest."""
+        from insetu.utils_core import extract_manifest_files
+        return extract_manifest_files(self.manifest, target_key)
+    def expand_selection(self, items):
+        """
+        SSOT: Expands polymorphic frontend selection items into a flat, 
+        deduplicated, and stable-sorted list of physical or logical filepaths.
+        Handles folder traversal and manifest chunk expansion.
+        """
+        from insetu.vfs import VFSTransaction
+
+        files = []
+        with VFSTransaction(self.workspace_id) as vfs:
+            for item in items:
+                if 'filepath' in item:
+                    filepath = item['filepath']
+                    if filepath.startswith("system://contexts/"):
+                        base_filename = filepath.replace("system://contexts/", "")
+                        chunks = self.get_manifest_files(target_key=base_filename)
+                        if chunks and len(chunks) > 0:
+                            for chunk in chunks:
+                                files.append(f"system://contexts/{chunk}")
+                        else:
+                            files.append(filepath)
+                    else:
+                        files.append(filepath)
+                elif 'folderpath' in item:
+                    for f in vfs.walk(item['folderpath']):
+                        files.append(f)
+
+        unique_files = []
+        seen = set()
+        for f in files:
+            if f not in seen:
+                seen.add(f)
+                unique_files.append(f)
+        return unique_files
+
     def save_manifest(self, manifest_data, is_full_compile=False):
         """Writes updates to the centralized context manifest."""
         from insetu.utils_core import save_json_file, load_json_file
@@ -186,11 +230,22 @@ class ExtensionContext:
             cache_data["last_full_compile_time"] = old_cache.get("last_full_compile_time", 0)
 
         save_json_file(cache_path, cache_data, self.workspace_id)
-
     def sync_vfs_barrier(self):
         """Halts the current thread until all pending VFS writes are physically flushed to disk."""
         from insetu.routes_fs import _VFS_WRITE_QUEUE
         _VFS_WRITE_QUEUE.join()
+
+    def emit(self, event_name, *args, **kwargs):
+        """Emits a synchronous event, automatically injecting the tenant's workspace ID."""
+        from insetu.hooks import hooks
+        kwargs['workspace_id'] = self.workspace_id
+        return hooks.emit(event_name, *args, **kwargs)
+
+    def emit_background(self, event_name, *args, **kwargs):
+        """Emits a background event, automatically injecting the tenant's workspace ID."""
+        from insetu.hooks import hooks
+        kwargs['workspace_id'] = self.workspace_id
+        return hooks.emit_background(event_name, *args, **kwargs)
 
 class InSetuExtension:
     """
@@ -241,28 +296,11 @@ class InSetuExtension:
             def wrapper(job_id=None, workspace_id=None, **kwargs):
                 ctx = ExtensionContext(self.name, workspace_id, settings_schema=self.settings_schema, job_id=job_id)
                 update_immediate_job_status(job_id, 'processing', "Initializing task...", workspace_id=workspace_id)
-
                 try:
                     # Execute the domain logic
                     if 'job_id' in inspect.signature(f).parameters:
                         kwargs['job_id'] = job_id
                     result = f(ctx, **kwargs)
-
-                    # Handle generator yields for progress updates
-                    if inspect.isgenerator(result):
-                        last_yield = None
-                        while True:
-                            try:
-                                progress_msg = next(result)
-                                if isinstance(progress_msg, str):
-                                    update_immediate_job_status(job_id, 'processing', progress_msg, workspace_id=workspace_id)
-                                    last_yield = progress_msg
-                                elif isinstance(progress_msg, dict):
-                                    update_immediate_job_status(job_id, 'processing', progress_msg.get('message'), artifact=progress_msg.get('artifact'), workspace_id=workspace_id)
-                                    last_yield = progress_msg
-                            except StopIteration as e:
-                                result = e.value if e.value is not None else last_yield
-                                break
 
                     # Evaluate final completion payload
                     msg = "Task complete."
