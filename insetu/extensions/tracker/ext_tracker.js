@@ -144,10 +144,12 @@ constructor() {
         const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
         this.subscribe(AppStore, (state) => {
-            this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         });
-        this.allRepos = AppStore.getState().allRepos || [];
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
+            this.allRepos = state.allRepos || [];
+        });
+        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
         this.pinnedRepos = AppStore.getState().pinnedRepos || new Set(['ALL']);
         this.subscribe(KanbanStore, (state) => {
             this.tasks = state.tasks || [];
@@ -545,8 +547,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(AppStore, (state) => {
-            this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+        });
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
+            this.allRepos = state.allRepos || [];
+            this.requestUpdate();
         });
         this.subscribe(KanbanStore, (state) => {
             this.pinnedTags = state.pinnedTags;
@@ -554,8 +559,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
             this.requestUpdate();
         });
         const aState = AppStore.getState();
-        this.allRepos = aState.allRepos || [];
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
+        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
         const kState = KanbanStore.getState();
         this.pinnedTags = kState.pinnedTags;
         this._modals = kState.modals;
@@ -890,6 +895,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
+
+window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => {
+    const shell = document.querySelector('insetu-app-shell');
+    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
+    if (el) el._saveNewTask();
+});
+window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => {
+    const shell = document.querySelector('insetu-app-shell');
+    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
+    if (el) el._saveEditTask();
+});
 
 // OS Registration Hook
 window.ExtensionRegistry.registerExtension('tracker', {

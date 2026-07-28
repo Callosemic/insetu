@@ -5,9 +5,8 @@ import uuid
 import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
-from insetu.utils_core import get_workspace_physics
+from insetu.utils import get_workspace_physics
 from insetu.hooks import hooks
-from insetu.workers import submit_immediate_job
 
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
@@ -55,7 +54,7 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None):
     from insetu.sdk import ExtensionContext
-    from insetu.utils_core import get_safe_repo_id
+    from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.gather.engine_gather import resolve_file_bucket
 
     ctx = ExtensionContext('git', workspace_id)
@@ -66,13 +65,12 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
     if diffs_dir_path.exists():
-        from insetu.routes_fs import execute_vfs_delete
         for f_path in diffs_dir_path.iterdir():
             if f_path.is_file() and ('_diffs.txt' in f_path.name or '_diffs_part' in f_path.name):
                 f = f_path.name
                 if not target_repos or any(f == f"{st}_diffs.txt" or f.startswith(f"{st}_") for st in safe_targets):
                     try:
-                        execute_vfs_delete(workspace_id, f_path.as_posix())
+                        ctx.vfs.save(f_path.as_posix(), "", data={"action": "delete"})
                     except Exception as e:
                         print(f"Warning: Failed to clear old diff file {f_path}: {e}")
     # Prune stale diff entries from the manifest to prevent ghost references
@@ -264,7 +262,7 @@ def api_generate_diffs(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
@@ -326,7 +324,7 @@ def api_git_sweep_status(ctx):
 def _background_sweep_push(ctx, selections, message):
     import os
     import subprocess
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     output_log = ""
@@ -395,7 +393,7 @@ def api_git_changelogs(ctx):
 def _background_git_push(ctx, repo, message, diff_file):
     import os
     import subprocess
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
 
     ctx.jobs.update_progress(f"Preparing to push {repo}...")
 
@@ -408,10 +406,9 @@ def _background_git_push(ctx, repo, message, diff_file):
             break
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
-
     files_to_stage = set()
     from insetu.core.gather.engine_gather import resolve_file_bucket
-    from insetu.utils_core import get_safe_repo_id
+    from insetu.core.utils_core import get_safe_repo_id
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
     safe_r_dir = get_safe_repo_id(repo)
@@ -508,7 +505,7 @@ def api_git_push(ctx):
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
     from insetu.sdk import ExtensionContext
-    from insetu.utils_core import get_available_contexts
+    from insetu.core.utils_core import get_available_contexts
     import os
     ctx = ExtensionContext('git', workspace_id)
     paths = ctx.paths
@@ -643,9 +640,8 @@ def _background_git_fetch_preview(ctx, repo):
 
         # Prevent SSH prompts from hanging the background process indefinitely
         git_env = get_headless_git_env()
-
         # Fetch and prune dead tracking branches to prevent ghost upstream checks
-        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
         # Check if an upstream branch is actually configured
         up_res = subprocess.run(['git', 'rev-parse', '--verify', '@{u}'], cwd=repo_path, capture_output=True)
         if up_res.returncode != 0:
@@ -796,7 +792,7 @@ def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
             ctx.jobs.update_progress("Pulling and merging unrelated histories...")
             # Fetch first, then merge allowing unrelated histories
             curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip() or 'main'
-            subprocess.run(['git', 'pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            subprocess.run(['git', 'pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
 
             ctx.jobs.update_progress("Pushing merged history to remote...")
             push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)

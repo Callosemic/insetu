@@ -30,11 +30,11 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     if "virtual_contexts" not in cfg:
         cfg["virtual_contexts"] = []
     v_ctxs = cfg["virtual_contexts"]
-
     # Dynamically inject mappings for repo-specific citation buckets
     try:
-        from insetu.db import get_connection
-        conn = get_connection("citations", workspace_id=workspace_id)
+        from insetu.sdk import ExtensionContext
+        ctx = ExtensionContext('citations', workspace_id)
+        conn = ctx.db
         cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
         citation_scopes = set()
         for row in cursor.fetchall():
@@ -72,11 +72,10 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         if not is_full_sweep:
             return
         from insetu.sdk import ExtensionContext
-        from insetu.db import get_connection
         ctx = ExtensionContext('citations', workspace_id)
         paths = ctx.paths
 
-        conn = get_connection("citations", workspace_id=workspace_id)
+        conn = ctx.db
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
         rows = cursor.fetchall()
         if rows:
@@ -127,9 +126,6 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
 
     except Exception as e:
         print(f"Extension Hook Error (citations compile): {e}")
-def get_db(workspace_id=None):
-    from insetu.db import get_connection
-    return get_connection("citations", workspace_id=workspace_id)
 @citations_bp.route('index', methods=['GET'])
 def get_metadata_index(ctx):
     """Leverages SQLite JSON1 C-extensions to calculate aggregates instantly, eliminating Python RAM caching."""
@@ -172,11 +168,10 @@ def attach_citation(ctx, csl_id):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-from insetu.workers import update_immediate_job_status, register_callback
-
-def _background_citation_search(job_id, workspace_id, query, source, field, category, page):
+@citations_bp.worker("search_task")
+def _background_citation_search(ctx, query, source, field, category, page):
     try:
-        update_immediate_job_status(job_id, 'processing', "Querying global academic catalogs...", workspace_id=workspace_id)
+        ctx.jobs.update_progress("Querying global academic catalogs...")
         import urllib.parse, urllib.request, json
         safe_query = urllib.parse.quote(query) if query else ""
         csl_items = []
@@ -188,8 +183,7 @@ def _background_citation_search(job_id, workspace_id, query, source, field, cate
             elif safe_query:
                 url = f"https://api.crossref.org/works?query={safe_query}&rows=20&offset={offset}"
             else:
-                update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": []}, workspace_id=workspace_id)
-                return
+                return {"message": "Search complete.", "artifact": {"citations": []}}
 
             req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
             with urllib.request.urlopen(req) as response:
@@ -204,8 +198,7 @@ def _background_citation_search(job_id, workspace_id, query, source, field, cate
                 })
         elif source == 'semanticscholar':
             if not safe_query: 
-                update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": []}, workspace_id=workspace_id)
-                return
+                return {"message": "Search complete.", "artifact": {"citations": []}}
             url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={safe_query}&limit=20&offset={offset}&fields=title,authors,year,externalIds,isOpenAccess"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req) as response:
@@ -256,11 +249,9 @@ def _background_citation_search(job_id, workspace_id, query, source, field, cate
                     "open_access": work.get('open_access', {}).get('is_oa', False)
                 })
 
-        update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"citations": csl_items}, workspace_id=workspace_id)
+        return {"message": "Search complete.", "artifact": {"citations": csl_items}}
     except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Catalog Search Failed: {str(e)}", workspace_id=workspace_id)
-
-register_callback("citations", "search_task", _background_citation_search)
+        raise RuntimeError(f"Catalog Search Failed: {str(e)}")
 
 @citations_bp.route('search', methods=['POST'])
 def search_global_citations(ctx):
@@ -356,7 +347,9 @@ def inject_citation_middleware(text, workspace_id=None, **kwargs):
 
     csl_items = []
     try:
-        conn = get_db(workspace_id)
+        from insetu.sdk import ExtensionContext
+        ctx = ExtensionContext('citations', workspace_id)
+        conn = ctx.db
         placeholders = ','.join(['?'] * len(true_ids))
         cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))
         for row in cursor.fetchall():

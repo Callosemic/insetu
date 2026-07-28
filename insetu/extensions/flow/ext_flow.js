@@ -14,7 +14,7 @@ export const FlowStore = createExtensionStore('Flow', {
             const res = await window.inSetu.api.workspace('flow/batches');
             if (res.ok) {
                 const data = await res.json();
-                window.inSetu.stores.App.setState(state => ({
+                window.inSetu.stores.Gather.setState(state => ({
                     gatherOptions: {
                         ...state.gatherOptions,
                         contexts: data.available_contexts || [],
@@ -97,12 +97,15 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
         this.subscribe(AppStore, state => {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.requestUpdate();
+        });
+        this.subscribe(window.inSetu.stores.Gather, state => {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
         const aState = AppStore.getState();
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = aState.allRepos || [];
+        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
 
         FlowStore.getState().fetchBatches();
     }
@@ -112,7 +115,7 @@ export class InSetuExtFlow extends InSetuElement {
     openEditBatchModal(batch = null) {
         this._editingBatch = batch;
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
-        const gatherOptions = AppStore.getState().gatherOptions || {};
+        const gatherOptions = window.inSetu.stores.Gather.getState().gatherOptions || {};
 
         const cleanSavedPrompt = savedPrompt.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, '');
         const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''));
@@ -154,7 +157,7 @@ export class InSetuExtFlow extends InSetuElement {
         this._responseContent = '';
         this._viewModalOpen = true;
         this.requestUpdate();
-        const { gatherOptions, activeWorkspace } = AppStore.getState();
+        const { gatherOptions } = window.inSetu.stores.Gather.getState();
         if (batch.include_prompt) {
             let promptPath = batch.include_prompt;
             const prompts = gatherOptions.prompts || [];
@@ -219,7 +222,7 @@ export class InSetuExtFlow extends InSetuElement {
         const content = this._responseContent || '';
         if (!content.trim()) return alert('Please paste a response.');
 
-        const { gatherOptions, activeWorkspace } = AppStore.getState();
+        const { gatherOptions } = window.inSetu.stores.Gather.getState();
         const artifactsDir = gatherOptions.artifactsDir || ".insetu/profiles/default/data";
 
         const now = new Date();
@@ -227,8 +230,7 @@ export class InSetuExtFlow extends InSetuElement {
         const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, -1);
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this._viewingBatch.response_path.replace('{date}', dStr);
-
-        const allRepos = AppStore.getState().allRepos || [];
+        const allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
         const isRepoTarget = allRepos.includes(finalPath.split('/')[0]);
 
         const payload = {

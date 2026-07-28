@@ -5,9 +5,8 @@ import re
 import json
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from insetu.utils_core import sniff_tenant_id
+from insetu.utils import sniff_tenant_id
 from insetu.hooks import hooks
-from insetu.db import get_connection
 from insetu.sdk import InSetuExtension
 TRACKER_SCHEMA = {
     "tracker_tickets": {
@@ -44,7 +43,6 @@ def _background_archive_stale_tickets(ctx):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
-
 @hooks.on('system_boot')
 def init_tracker_db():
     from insetu.utils_core import get_all_workspace_ids
@@ -52,8 +50,9 @@ def init_tracker_db():
         _sync_disk_to_db(workspace_id=ws_id)
 
         # Schedule background archiving to run silently every 1 hour
-        from insetu.db import get_connection
-        conn = get_connection("workers", workspace_id=ws_id)
+        from insetu.sdk import ExtensionContext
+        w_ctx = ExtensionContext('workers', ws_id)
+        conn = w_ctx.db
         conn.execute("""
             INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
             VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
@@ -185,7 +184,7 @@ def _sync_disk_to_db(workspace_id=None):
 def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
-    from insetu.utils_core import get_safe_repo_id
+    from insetu.core.utils_core import get_safe_repo_id
     from insetu.sdk import ExtensionContext
 
     ctx = ExtensionContext('tracker', workspace_id)
@@ -292,7 +291,7 @@ def get_tracker_path(repo, ticket_type, status):
     return f"{base}/{folder_type}/{status}"
 def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None):
     """Generates the physical Markdown file with YAML frontmatter."""
-    from insetu.utils_core import update_frontmatter
+    from insetu.core.utils_core import update_frontmatter
 
     repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
     if not repo_prefix: repo_prefix = "TKT"
@@ -347,7 +346,7 @@ def _extract_closed_date(content):
     return None
 def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
-    from insetu.utils_core import update_frontmatter, parse_frontmatter
+    from insetu.core.utils_core import update_frontmatter, parse_frontmatter
 
     abs_current = ctx.resolve_path(current_rel_path)
     if not os.path.exists(abs_current):

@@ -1,9 +1,17 @@
 import { createExtensionStore } from '../sdk.js';
 
 const AppStore = window.inSetu.stores.App;
-
 export const GitStore = createExtensionStore('Git', {
     reposStatus: {},
+    currentPushRepo: '',
+    currentPushDiffFile: '',
+    activeSweepJobId: null,
+    activePushJobId: null,
+    activeDiffJobId: null,
+    diffJobMessage: null,
+    diffJobError: null,
+    dirtyDiffRepos: new Set(["ALL"]),
+    cachedDiffFiles: null,
     fetchStatus: async () => {
         try {
             const res = await window.inSetu.api.workspace('git/status');
@@ -16,7 +24,7 @@ export const GitStore = createExtensionStore('Git', {
 });
 window.inSetu.stores.Git = GitStore;
 export async function generateDiffs(force = false) {
-    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = AppStore.getState();
+    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = GitStore.getState();
     if (activeDiffJobId) return; // Prevent concurrent diff generation loops
 
     const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
@@ -37,15 +45,15 @@ export async function generateDiffs(force = false) {
             throw new Error(err.error || "Diff generation request failed.");
         }
         const data = await res.json();
-        AppStore.setState({ activeDiffJobId: data.job_id, diffJobError: null });
+        GitStore.setState({ activeDiffJobId: data.job_id, diffJobError: null });
 
         window.inSetu.utils.pollJob(data.job_id, {
-            onProgress: (msg) => AppStore.setState({ diffJobMessage: msg }),
+            onProgress: (msg) => GitStore.setState({ diffJobMessage: msg }),
             onComplete: (statusData) => {
                 const newFiles = statusData.artifact.files || [];
                 const targetReposRes = statusData.artifact.target_repos;
-                const prevCachedFiles = AppStore.getState().cachedDiffFiles || [];
-                const updatedDirtyRepos = new Set(AppStore.getState().dirtyDiffRepos);
+                const prevCachedFiles = GitStore.getState().cachedDiffFiles || [];
+                const updatedDirtyRepos = new Set(GitStore.getState().dirtyDiffRepos);
 
                 const updatedCachedFiles = (() => {
                         if (!targetReposRes) {
@@ -60,7 +68,7 @@ export async function generateDiffs(force = false) {
                                 return filtered.concat(newFiles);
                         }
                 })();
-                AppStore.setState({  
+                GitStore.setState({  
                         activeDiffJobId: null, 
                         cachedDiffFiles: updatedCachedFiles,
                         dirtyDiffRepos: updatedDirtyRepos,
@@ -76,11 +84,11 @@ export async function generateDiffs(force = false) {
                     });
             },
             onError: (err) => {
-                AppStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
+                GitStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
             }
         });
     } catch (error) {
-        AppStore.setState({ diffJobError: error.message });
+        GitStore.setState({ diffJobError: error.message });
     }
 }
 window.addEventListener('insetu:git:generate-diffs', (e) => generateDiffs(e.detail?.force));
@@ -155,22 +163,28 @@ export class InSetuExtGitDiffs extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(AppStore, (state) => {
-            // Hydrate natively from the persistent manifest if the runtime cache is uninitialized
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.requestUpdate();
+        });
+        this.subscribe(GitStore, (state) => {
             let cached = state.cachedDiffFiles;
-            if (!cached && state.manifest) {
-                cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+            const manifest = AppStore.getState().manifest || {};
+            if (!cached && manifest) {
+                cached = Object.keys(manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
                     filename: k,
-                    repo: state.manifest[k].meta?.repo
+                    repo: manifest[k].meta?.repo
                 }));
             }
             this.cachedDiffFiles = cached || [];
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobMessage = state.diffJobMessage;
             this.diffJobError = state.diffJobError;
+            this.activePushJobId = state.activePushJobId;
+            this.requestUpdate();
+        });
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
-            this.activePushJobId = state.activePushJobId;
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
@@ -178,7 +192,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.requestUpdate();
         });
         const state = AppStore.getState();
-        let cached = state.cachedDiffFiles;
+        const gitState = GitStore.getState();
+        const gatherState = window.inSetu.stores.Gather.getState();
+        let cached = gitState.cachedDiffFiles;
         if (!cached && state.manifest) {
             cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
                 filename: k,
@@ -186,14 +202,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
             }));
         }
         this.cachedDiffFiles = cached || [];
-        this.activeDiffJobId = state.activeDiffJobId;
-        this.diffJobMessage = state.diffJobMessage;
-        this.diffJobError = state.diffJobError;
-        this.categoryOrder = state.categoryOrder || [];
-        this.hiddenOutputs = state.hiddenOutputs || [];
-        this.activePushJobId = state.activePushJobId;
+        this.activeDiffJobId = gitState.activeDiffJobId;
+        this.diffJobMessage = gitState.diffJobMessage;
+        this.diffJobError = gitState.diffJobError;
+        this.activePushJobId = gitState.activePushJobId;
+        this.categoryOrder = gatherState.categoryOrder || [];
+        this.hiddenOutputs = gatherState.hiddenOutputs || [];
+        this.allRepos = gatherState.allRepos || [];
         this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        this.allRepos = state.allRepos || [];
         // Secure boundary event listeners to allow external triggers (e.g. from file cards)
         this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
@@ -246,17 +262,17 @@ disconnectedCallback() {
                 throw new Error(err.error || "Push request failed.");
             }
             const data = await res.json();
-            AppStore.setState({ activePushJobId: data.job_id });
+            GitStore.setState({ activePushJobId: data.job_id });
             this.pushModalOpen = false;
             this.api.pollJob(data.job_id, {
                 onProgress: (progressMsg) => {
                     this.gitPushMessage = progressMsg || "Pushing to remote... please wait.";
                 },
                 onComplete: async (statusData) => {
-                    const { currentPushRepo, dirtyDiffRepos } = AppStore.getState();
+                    const { currentPushRepo, dirtyDiffRepos } = GitStore.getState();
                     const newDirty = new Set(dirtyDiffRepos);
                     newDirty.add(currentPushRepo);
-                    AppStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
+                    GitStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
 
                     alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                     this.pushModalOpen = false;
@@ -269,7 +285,7 @@ disconnectedCallback() {
                     }
                 },
                 onError: (err) => {
-                    AppStore.setState({ activePushJobId: null });
+                    GitStore.setState({ activePushJobId: null });
                     alert(`❌ Push failed:\n\n${err.message}`);
                 }
             });
@@ -338,10 +354,10 @@ disconnectedCallback() {
                     if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping workspaces...");
                 },
                 onComplete: async (statusData) => {
-                    const { dirtyDiffRepos } = AppStore.getState();
+                    const { dirtyDiffRepos } = GitStore.getState();
                     const newDirty = new Set(dirtyDiffRepos);
                     newDirty.add("ALL");
-                    AppStore.setState({ dirtyDiffRepos: newDirty });
+                    GitStore.setState({ dirtyDiffRepos: newDirty });
 
                     alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
                     if (this.sys && this.sys.executeSystemCompile) {
@@ -380,10 +396,10 @@ disconnectedCallback() {
                     if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping repo...");
                 },
                 onComplete: async (statusData) => {
-                    const { dirtyDiffRepos } = AppStore.getState();
+                    const { dirtyDiffRepos } = GitStore.getState();
                     const newDirty = new Set(dirtyDiffRepos);
                     newDirty.add("ALL");
-                    AppStore.setState({ dirtyDiffRepos: newDirty });
+                    GitStore.setState({ dirtyDiffRepos: newDirty });
 
                     alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
                     if (this.sys && this.sys.executeSystemCompile) {
@@ -489,7 +505,7 @@ disconnectedCallback() {
                                 .entityData=${{ filepath: `system://diffs/${f.filename}`, repoDir: f.repoDir, isFS: f.isFS }}
                                 @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
 ${(() => {
-    const chunks = AppStore.getState().manifest[f.filename]?.meta?.chunks;
+    const chunks = window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, f.filename);
     const hasChunks = chunks && chunks.length > 1;
     if (hasChunks) {
         return html`
@@ -653,11 +669,11 @@ export class InSetuExtGitCtrl extends InSetuElement {
             this.reposStatus = reposStatus || {};
             this.requestUpdate();
         });
-        this.subscribe(AppStore, state => state.allRepos, (allRepos) => {
-            this.allRepos = allRepos || [];
+        this.subscribe(window.inSetu.stores.Gather, state => {
+            this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
-        this.allRepos = AppStore.getState().allRepos || [];
+        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
         this._loadSettings();
@@ -1075,9 +1091,8 @@ window.ExtensionRegistry.registerExtension('git', {
 if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
     window.inSetu.extensions.Registry.registerUIHook('zone:vfs-mutated', (payload) => {
         if (!payload || !payload.mutations) return false;
-
         let reposChanged = false;
-        const { dirtyDiffRepos } = AppStore.getState();
+        const { dirtyDiffRepos } = GitStore.getState();
         const newDirty = new Set(dirtyDiffRepos);
 
         payload.mutations.forEach(m => {
@@ -1090,7 +1105,7 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
         });
 
         if (reposChanged) {
-            AppStore.setState({ dirtyDiffRepos: newDirty });
+            GitStore.setState({ dirtyDiffRepos: newDirty });
         }
     });
 

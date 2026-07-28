@@ -8,7 +8,6 @@ import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
 from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
-from insetu.db import get_connection
 from insetu.workers import submit_job, register_callback
 from insetu.hooks import hooks
 RESEARCH_SCHEMA = {
@@ -32,12 +31,12 @@ RESEARCH_SCHEMA = {
         "scraped_at": "TEXT"
     }
 }
-
 RESEARCH_SETTINGS_SCHEMA = [
     {
         "id": "serper_api_key",
         "label": "Serper.dev API Key",
-        "type": "text",
+        "type": "password",
+        "secure": True,
         "default": "",
         "description": "Required for Google Search provider. Obtain a free key at serper.dev."
     }
@@ -186,14 +185,15 @@ class GooglePlaywrightProvider(SearchProvider):
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    from insetu.utils_core import get_workspace_physics
+                    from insetu.utils import get_workspace_physics
                     import time, os
                     cfg_path, _, _ = get_workspace_physics()
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    from insetu.routes_fs import execute_vfs_save
-                    execute_vfs_save("default", dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
+                    from insetu.sdk import ExtensionContext
+                    dump_ctx = ExtensionContext('research', 'default')
+                    dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
                     pass
@@ -270,11 +270,14 @@ def get_provider(provider_name):
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
 def gather_next_page(job_id, workspace_id=None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
-  conn = get_connection("research", workspace_id=workspace_id)
+  from insetu.sdk import ExtensionContext
+  ctx = ExtensionContext('research', workspace_id)
+  conn = ctx.db
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
   if not job or job['status'] != 'gathering':
-    w_conn = get_connection("workers", workspace_id=workspace_id)
+    w_ctx = ExtensionContext('workers', workspace_id)
+    w_conn = w_ctx.db
     w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
     w_conn.commit()
     return
@@ -292,9 +295,8 @@ def gather_next_page(job_id, workspace_id=None):
       exists = conn.execute("SELECT id FROM research_inbox WHERE job_id=? AND url=?", (job_id, link['url'])).fetchone()
       if not exists:
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
-
         prior_cit = None
-        from insetu.utils_core import is_extension_enabled
+        from insetu.utils import is_extension_enabled
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
             cit_conn = get_connection("citations", workspace_id=workspace_id)
@@ -315,10 +317,10 @@ def gather_next_page(job_id, workspace_id=None):
 
     conn.execute("UPDATE research_jobs SET total_links = total_links + ? WHERE id=?", (new_links_count, job_id))
     current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (job_id,)).fetchone()['total_links']
-
     if new_links_count == 0 or current_total >= max_results:
       conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
-      w_conn = get_connection("workers", workspace_id=workspace_id)
+      w_ctx = ExtensionContext('workers', workspace_id)
+      w_conn = w_ctx.db
       w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
       w_conn.commit()
     else:
@@ -331,17 +333,21 @@ def gather_next_page(job_id, workspace_id=None):
       meta['error'] = str(e)
       conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), job_id))
       conn.commit()
-      w_conn = get_connection("workers", workspace_id=workspace_id)
+      w_ctx = ExtensionContext('workers', workspace_id)
+      w_conn = w_ctx.db
       w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
       w_conn.commit()
 def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
-    conn = get_connection("research", workspace_id=workspace_id)
+    from insetu.sdk import ExtensionContext
+    ctx = ExtensionContext('research', workspace_id)
+    conn = ctx.db
 
     job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
     if not job_status or job_status['status'] in ('paused', 'cancelled', 'completed', 'failed'):
         # Terminate the job in the metronome ledger
-        w_conn = get_connection("workers", workspace_id=workspace_id)
+        w_ctx = ExtensionContext('workers', workspace_id)
+        w_conn = w_ctx.db
         w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
         w_conn.commit()
         return
@@ -352,7 +358,8 @@ def scrape_next_link(job_id, workspace_id=None):
 
         conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, job_id,))
         conn.commit()
-        w_conn = get_connection("workers", workspace_id=workspace_id)
+        w_ctx = ExtensionContext('workers', workspace_id)
+        w_conn = w_ctx.db
         w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
         w_conn.commit()
         print(f"✅ [Research] Job {job_id} finished scraping (Status: {final_status}).")
@@ -417,7 +424,7 @@ def start_job(ctx):
         "target_dir": target_dir
       })
 
-      conn = get_connection("research", workspace_id=workspace_id)
+      conn = ctx.db
       conn.execute("INSERT INTO research_jobs (id, query, provider, status, total_links, created_at, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (job_id, query, provider_name, 'gathering', 0, now_str, meta_json))
       conn.commit()
@@ -436,7 +443,7 @@ def job_action(ctx, job_id):
     data = ctx.req.json
     action = data.get('action') # 'pause', 'resume', 'cancel'
 
-    conn = get_connection("research", workspace_id=workspace_id)
+    conn = ctx.db
     job = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
     if not job:
@@ -475,7 +482,9 @@ def job_action(ctx, job_id):
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
 
-        w_conn = get_connection("workers", workspace_id=workspace_id)
+        from insetu.sdk import ExtensionContext
+        w_ctx = ExtensionContext('workers', workspace_id)
+        w_conn = w_ctx.db
         w_conn.execute("DELETE FROM jobs WHERE id IN (?, ?)", (f"research_{job_id}", f"research_gather_{job_id}"))
         w_conn.commit()
 

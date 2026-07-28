@@ -86,11 +86,10 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
         for inc in expanded_includes:
             basename = Path(inc).name
             chunks = []
-
             if manifest_data and basename in manifest_data:
-                meta = manifest_data[basename].get("meta", {})
-                if "chunks" in meta and isinstance(meta["chunks"], list):
-                    chunks = meta["chunks"]
+                entry = manifest_data[basename]
+                if isinstance(entry, dict) and "chunks" in entry and isinstance(entry["chunks"], list):
+                    chunks = entry["chunks"]
             if not chunks:
                 chunks = [inc]
 
@@ -135,7 +134,7 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
                             if os.path.exists(parent):
                                 verbose_debug += f"- Parent contents (first 10): {os.listdir(parent)[:10]}\n"
                         if manifest_data and basename in manifest_data:
-                            verbose_debug += f"- Manifest chunks: {manifest_data[basename].get('meta', {}).get('chunks', 'None')}\n"
+                            verbose_debug += f"- Manifest chunks: {manifest_data[basename].get('chunks', 'None')}\n"
                         verbose_debug += "\n\n"
                         text_blocks.append(verbose_debug)
                 except Exception as e:
@@ -184,7 +183,7 @@ def api_flow_batches(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
     paths = ctx.paths
 
-    from insetu.utils_core import get_available_contexts
+    from insetu.core.utils_core import get_available_contexts
     expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"])
 
     available_diffs = []
@@ -208,6 +207,34 @@ def api_flow_batches(ctx):
         "artifacts_dir": paths["artifacts_base"],
         "profile_dir": Path(paths["config_path"]).parent.as_posix()
     })
+@hooks.on('pre_file_save')
+def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
+    if data:
+        archive_path = data.get("archive_path")
+        original_response_path = data.get("original_response_path")
+        if archive_path and original_response_path and "{date}" in original_response_path:
+            import os, shutil
+            from pathlib import Path
+            from insetu.sdk import ExtensionContext
+            ctx = ExtensionContext('flow', workspace_id)
+
+            resolved_archive = ctx.resolve_path(archive_path)
+            os.makedirs(resolved_archive, exist_ok=True)
+
+            basename = Path(original_response_path).name
+            prefix = basename.split("{date}")[0]
+
+            resolved_path = ctx.resolve_path(filepath)
+            if data.get("is_absolute_artifact"):
+                from insetu.utils import resolve_system_artifact_path
+                resolved_path = resolve_system_artifact_path(filepath, workspace_id)
+
+            resolved_target_dir = Path(resolved_path).parent.as_posix()
+            if os.path.exists(resolved_target_dir):
+                for f in os.listdir(resolved_target_dir):
+                    if f.startswith(prefix) and os.path.isfile(Path(resolved_target_dir).joinpath(f).as_posix()):
+                        shutil.move(Path(resolved_target_dir).joinpath(f).as_posix(), Path(resolved_archive).joinpath(f).as_posix())
+
 @flow_bp.route('batches/save', methods=['POST'])
 def api_flow_batches_save(ctx):
     data = ctx.req.json
@@ -240,11 +267,9 @@ def api_flow_batches_delete(ctx):
     try:
         manifest_data = ctx.manifest
         manifest_key = f"workflow_{batch_id}_context.txt"
-
         chunks = []
         if manifest_key in manifest_data:
-            meta = manifest_data[manifest_key].get("meta", {})
-            chunks = meta.get("chunks", [manifest_key])
+            chunks = manifest_data[manifest_key].get("chunks", [manifest_key])
             del manifest_data[manifest_key]
             ctx.save_manifest(manifest_data)
 

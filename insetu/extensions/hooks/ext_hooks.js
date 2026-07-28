@@ -84,13 +84,13 @@ export class InSetuExtHooks extends InSetuElement {
             this.editingRule = state.editingRule;
             this.ruleForm = state.ruleForm;
         });
-        this.subscribe(AppStore, state => {
+        this.subscribe(window.inSetu.stores.Gather, state => {
             this.allRepos = state.allRepos || [];
             this.targetConfigs = state.targetConfigs || [];
         });
-        const aState = AppStore.getState();
-        this.allRepos = aState.allRepos || [];
-        this.targetConfigs = aState.targetConfigs || [];
+        const gState = window.inSetu.stores.Gather.getState();
+        this.allRepos = gState.allRepos || [];
+        this.targetConfigs = gState.targetConfigs || [];
 
         this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));

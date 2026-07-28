@@ -5,7 +5,7 @@ import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension, ExtensionContext
 from insetu.hooks import hooks
-from insetu.utils_core import get_all_workspace_ids
+from insetu.utils import get_all_workspace_ids
 
 try:
     from flask_sock import Sock
@@ -47,7 +47,7 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
 @sock.route('/api/<workspace_id>/term/stream')
 def term_stream(ws, workspace_id):
     """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
-    from insetu.utils_core import is_extension_enabled
+    from insetu.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
         ws.close()
         return

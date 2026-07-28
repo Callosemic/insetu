@@ -21,7 +21,7 @@ __depends__ = []
 @hooks.on('compile_contexts')
 def compile_prompts_context(manifest, workspace_id=None, **kwargs):
     """Injects the prompt library into the UI manifest without dumping redundant RAG text payloads."""
-    from insetu.utils_core import get_valid_workspace_files
+    from insetu.core.utils_core import get_valid_workspace_files
     ctx = ExtensionContext('prompts', workspace_id)
 
     for config in ctx.config.get("target_repos", []):
@@ -69,7 +69,7 @@ def api_prompts_list(ctx):
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):
     """Fetches a prompt and recursively resolves {{include: ...}} macros."""
-    from insetu.utils_core import resolve_macro_includes
+    from insetu.core.utils_core import resolve_macro_includes
 
     filename = ctx.req.args.get('file', '')
     if not filename:

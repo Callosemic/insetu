@@ -70,7 +70,7 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     static openPromptEmbedModal() {
         if (window.inSetu.ui && window.inSetu.ui.openWorkspaceBrowser) {
-            const gatherOptions = AppStore.getState().gatherOptions || {};
+            const gatherOptions = window.inSetu.stores.Gather.getState().gatherOptions || {};
             const rawPrompts = gatherOptions.prompts || [];
             if (rawPrompts.length === 0) {
                 alert("No prompts available to embed. Compile contexts first.");
@@ -254,7 +254,7 @@ async function syncPromptsState() {
                 return match ? match[1] : p.split('/').pop();
             });
             PromptsStore.setState({ prompts: cleanPrompts });
-            AppStore.setState(state => ({
+            window.inSetu.stores.Gather.setState(state => ({
                 gatherOptions: {
                     ...(state.gatherOptions || {}),
                     prompts: rawPrompts,

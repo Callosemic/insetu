@@ -98,7 +98,7 @@ export class InSetuExtCitations extends InSetuElement {
             this.editForm = state.editForm || { type: 'document', title: '', pubTitle: '', dateStr: '', jsonStr: '{}', authorInput: '' };
             this.importingIds = state.importingIds || new Set();
         });
-        this.subscribe(AppStore, state => {
+        this.subscribe(window.inSetu.stores.Gather, state => {
             this.allRepos = state.allRepos || [];
         });
 
@@ -110,7 +110,7 @@ export class InSetuExtCitations extends InSetuElement {
         const cState = CitationStore.getState();
         this.localLibrary = cState.localLibrary || [];
         this.pinnedRepos = cState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = AppStore.getState().allRepos || [];
+        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
         this.loadMainLibrary();
     }
 

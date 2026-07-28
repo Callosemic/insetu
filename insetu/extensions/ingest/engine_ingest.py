@@ -4,30 +4,22 @@ import uuid
 import json
 from flask import jsonify
 from insetu.sdk import InSetuExtension
-from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
 
-def _background_ingest(job_id, workspace_id, url, method):
-    try:
-        update_immediate_job_status(job_id, 'processing', 'Fetching and converting URL content...', workspace_id=workspace_id)
-        extracted = extract_markdown_from_url(url, method)
-        safe_title = extracted["title"].replace('"', "'")
-        update_immediate_job_status(
-            job_id, 
-            'completed', 
-            'Ingestion successful.', 
-            artifact={
-                "markdown": extracted["clean_markdown"],
-                "title": safe_title,
-                "resolved_url": extracted["resolved_url"]
-            }, 
-            workspace_id=workspace_id
-        )
-    except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Ingestion failed: {str(e)}", workspace_id=workspace_id)
-
-register_callback("ingest", "ingest_task", _background_ingest)
+@ingest_bp.worker("ingest_task")
+def _background_ingest(ctx, url, method):
+    ctx.jobs.update_progress('Fetching and converting URL content...')
+    extracted = extract_markdown_from_url(url, method)
+    safe_title = extracted["title"].replace('"', "'")
+    return {
+        "message": "Ingestion successful.", 
+        "artifact": {
+            "markdown": extracted["clean_markdown"],
+            "title": safe_title,
+            "resolved_url": extracted["resolved_url"]
+        }
+    }
 
 def extract_markdown_from_url(target_url, method="jina"):
     # Intercept and unwrap Google search redirect links

@@ -49,17 +49,16 @@ SKILLS_SETTINGS_SCHEMA = [
 ]
 skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", description="Spaced-repetition tracking for musical and technical skills.", schema=SKILLS_SCHEMA, settings_schema=SKILLS_SETTINGS_SCHEMA)
 __depends__ = []
-
 def _get_user_skills_dir(workspace_id=None):
     """Resolves and commands the localized workspace skills directory structure."""
-    from insetu.utils_core import get_workspace_physics
+    from insetu.utils import get_workspace_physics
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     base_dir = Path(cfg_path).parent.joinpath("data", "skills").as_posix()
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
     try:
-        from insetu.utils_core import parse_frontmatter
+        from insetu.core.utils_core import parse_frontmatter
         from insetu.sdk import ExtensionContext
         ctx = ExtensionContext('skills', workspace_id)
         content = ctx.vfs.read(abs_path) or ""
@@ -75,7 +74,6 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
         interval_days = int(yaml_data.get('interval_days', 1))
         next_review = yaml_data.get('next_review', datetime.date.today().isoformat())
         if str(next_review).lower() == 'null': next_review = datetime.date.today().isoformat()
-
         metrics = {}
         for k, v in yaml_data.items():
             if k not in ['id', 'domain', 'tags', 'group', 'name', 'status', 'last_practiced', 'interval_days', 'next_review']:
@@ -87,8 +85,7 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
                     except (ValueError, TypeError):
                         metrics[k] = v
 
-        from insetu.db import get_connection
-        conn = get_connection("skills", workspace_id=workspace_id)
+        conn = ctx.db
         conn.execute("""
             INSERT OR REPLACE INTO skills_ledger  
             (id, domain, tags, group_name, name, status, last_practiced, interval_days, next_review, filepath, metrics_json)
@@ -139,10 +136,10 @@ def log_skill_practice(ctx):
             else: next_interval = int(current_interval * 1.5)
         else:
             next_interval = 1
-
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
-        from insetu.utils_core import update_frontmatter, slugify
+        from insetu.core.utils_core import update_frontmatter
+        from insetu.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -167,20 +164,17 @@ def log_skill_practice(ctx):
 
         final_content = update_frontmatter(content, yaml_data)
         final_filename = filename
-
         if name.lower() != row['name'].lower():
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                from insetu.routes_fs import execute_vfs_delete
-                execute_vfs_delete(ctx.workspace_id, abs_path)
+                ctx.vfs.save(abs_path, "", data={"action": "delete"})
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
 
-        from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
 
         _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
@@ -198,7 +192,8 @@ def update_skill_structure(ctx):
         row = conn.execute("SELECT * FROM skills_ledger WHERE filepath = ?", (filename,)).fetchone()
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
-        from insetu.utils_core import update_frontmatter, slugify
+        from insetu.core.utils_core import update_frontmatter
+        from insetu.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -225,20 +220,17 @@ def update_skill_structure(ctx):
 
         final_content = update_frontmatter(content, yaml_data)
         final_filename = filename
-
         if name.lower() != row['name'].lower():
             new_filename = f"{slugify(name)}.md"
             new_abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(new_filename).as_posix()
             if os.path.exists(abs_path):
-                from insetu.routes_fs import execute_vfs_delete
-                execute_vfs_delete(ctx.workspace_id, abs_path)
+                ctx.vfs.save(abs_path, "", data={"action": "delete"})
             abs_path = new_abs_path
             final_filename = new_filename
             conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
             conn.commit()
 
-        from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
 
         _parse_and_upsert_skill(abs_path, final_filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "filepath": final_filename})
@@ -256,8 +248,7 @@ def delete_skill_item(ctx):
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
 
         if os.path.exists(abs_path):
-            from insetu.routes_fs import execute_vfs_delete
-            execute_vfs_delete(ctx.workspace_id, abs_path)
+            ctx.vfs.save(abs_path, "", data={"action": "delete"})
 
         conn.execute("DELETE FROM skills_ledger WHERE filepath = ?", (filename,))
         conn.commit()
@@ -293,7 +284,8 @@ def create_new_skill(ctx):
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
-        from insetu.utils_core import slugify, update_frontmatter
+        from insetu.utils import slugify
+        from insetu.core.utils_core import update_frontmatter
         filename = f"{slugify(name)}.md"
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         s_id = "SKL-" + uuid.uuid4().hex[:8].upper()
@@ -314,12 +306,10 @@ def create_new_skill(ctx):
         if parts:
             yaml_data["parts"] = parts
             yaml_data["completed_parts"] = ""
-
         raw_content = f"## Practice Logs: {name}\n"
         final_content = update_frontmatter(raw_content, yaml_data)
 
-        from insetu.routes_fs import execute_vfs_save
-        execute_vfs_save(ctx.workspace_id, abs_path, final_content, data={"is_absolute_artifact": True})
+        ctx.vfs.save(abs_path, final_content, data={"is_absolute_artifact": True})
 
         _parse_and_upsert_skill(abs_path, filename, workspace_id=ctx.workspace_id)
         return jsonify({"status": "success", "filepath": filename})

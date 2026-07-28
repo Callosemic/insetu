@@ -5,7 +5,7 @@ import json
 import uuid
 from flask import jsonify, send_file
 from insetu.sdk import InSetuExtension
-from insetu.workers import submit_immediate_job, register_ephemeral_artifact
+from insetu.workers import register_ephemeral_artifact
 format_bp = InSetuExtension('format', __name__, title="Document Formatting", description="Document compilation (Pandoc) and JavaScript code formatting.")
 __depends__ = []
 @format_bp.worker("compile_task")
@@ -56,11 +56,9 @@ def compile_document_payload(workspace_id, filepath, target_format):
     # 1. Initialize generic compiler payload
     temp_files = {}
     compiler_flags = []
-
     # 2. Broadcast to all extensions: "Inject your middleware now"
-    from insetu.hooks import hooks
     try:
-        results = hooks.emit('pre_compile_document', filepath=filepath, text=doc_text, workspace_id=workspace_id)
+        results = ctx.emit('pre_compile_document', filepath=filepath, text=content)
         for res in results:
             if res and isinstance(res, dict):
                 temp_files.update(res.get('temp_files', {}))
@@ -112,11 +110,10 @@ def run_formatter():
     opts.indent_size = 4
     opts.space_in_empty_paren = True
     opts.end_with_newline = True
-
     # Resolve workspace root dynamically via utils_core
     sys.path.append(Path(__file__).resolve().parent.as_posix())
     try:
-        import insetu.utils_core as utils_core
+        import insetu.core.utils_core as utils_core
         paths = utils_core.get_gather_paths()
         workspace_root = paths["workspace_root"]
         manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
