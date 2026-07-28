@@ -1,6 +1,6 @@
 import uuid
 from flask import jsonify
-from insetu.utils_core import generate_idempotency_hash
+from insetu.utils import generate_idempotency_hash
 from insetu.db import get_connection
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.sdk import InSetuExtension

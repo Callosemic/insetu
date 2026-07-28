@@ -4,7 +4,8 @@ import json
 import datetime
 import subprocess
 from flask import jsonify
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, generate_ascii_tree, evaluate_circuit_breaker
+from insetu.utils import get_workspace_physics
+from insetu.core.utils_core import get_valid_workspace_files, generate_ascii_tree, evaluate_circuit_breaker
 from insetu.sdk import InSetuExtension
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
@@ -137,7 +138,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
     return manifest_entry
 def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buckets=None):
     from insetu.sdk import ExtensionContext
-    from insetu.utils_core import get_valid_workspace_files, get_safe_repo_id
+    from insetu.core.utils_core import get_valid_workspace_files, get_safe_repo_id
 
     ctx = ExtensionContext('gather', workspace_id)
     safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
@@ -309,10 +310,21 @@ def _process_vfs_ledger(workspace_id="default"):
     })
     # Dispatch to the UI-visible Job Queue for processing
     submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
-
 from insetu.workers import register_callback
 register_callback("gather", "process_vfs_ledger", _process_vfs_ledger)
 
+@hooks.on('system_boot')
+def init_gather_workers():
+    from insetu.utils import get_all_workspace_ids
+    for ws_id in get_all_workspace_ids():
+        from insetu.sdk import ExtensionContext
+        w_ctx = ExtensionContext('workers', ws_id)
+        conn = w_ctx.db
+        conn.execute("""
+            INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+            VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
+        """)
+        conn.commit()
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files and not filepath: return
@@ -321,7 +333,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
     from insetu.app import get_compiler_lock
     with get_compiler_lock(workspace_id or "default"):
         from insetu.sdk import ExtensionContext
-        from insetu.utils_core import load_json_file, save_json_file, get_safe_repo_id
+        from insetu.utils import load_json_file, save_json_file
+        from insetu.core.utils_core import get_safe_repo_id
         ctx = ExtensionContext('gather', workspace_id)
         paths = ctx.paths
         manifest = ctx.manifest
@@ -334,7 +347,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         dirty = False
         all_touched_buckets = set()
         # --- Bucket Ratio Circuit Breaker ---
-        from insetu.utils_core import get_available_contexts
+        from insetu.core.utils_core import get_available_contexts
         total_known_buckets = len(get_available_contexts(workspace_id, exclusion_flags=["exclude_from_context"]))
         total_touched_count = 0
 
@@ -471,7 +484,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items, job_id=None):
     ctx.jobs.update_progress("Compiling selected files into context payload...")
-    from insetu.utils_core import generate_ascii_tree
+    from insetu.core.utils_core import generate_ascii_tree
     from insetu.vfs import VFSTransaction
     import time
     import os

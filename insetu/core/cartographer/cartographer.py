@@ -1,7 +1,8 @@
 import os
 import subprocess
 from pathlib import Path
-from insetu.utils_core import get_valid_workspace_files, get_workspace_physics, load_config, build_tree_dict
+from insetu.utils import get_workspace_physics, load_config
+from insetu.core.utils_core import get_valid_workspace_files, build_tree_dict
 from insetu.hooks import hooks
 from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid

@@ -144,7 +144,7 @@ export class InSetuExtBridge extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        document.addEventListener('click', this._docClickListener);
+        this.registerGlobalListener('click', document, this._docClickListener);
         this.subscribe(BridgeStore, (state) => {
             this.cells = state.cells || [];
             this.consoleOutput = state.consoleOutput;
@@ -176,7 +176,6 @@ export class InSetuExtBridge extends InSetuElement {
     }
     disconnectedCallback() {
         super.disconnectedCallback();
-        document.removeEventListener('click', this._docClickListener);
     }
     _verifyFiles(files, force = false) {
         const activeWs = AppStore.getState().activeWorkspace || 'default';

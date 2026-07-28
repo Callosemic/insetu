@@ -9,7 +9,8 @@ import base64
 from pathlib import Path
 from contextlib import redirect_stdout
 
-from insetu.utils_core import get_sister_repos, get_workspace_physics, get_omniscient_workspace_files
+from insetu.utils import get_workspace_physics
+from insetu.core.utils_core import get_sister_repos, get_omniscient_workspace_files
 from insetu.vfs import VFSTransaction
 from .bridge_parser import parse_blocks
 from .bridge_fuzzy import apply_block_in_memory

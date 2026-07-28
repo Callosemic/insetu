@@ -5,16 +5,77 @@ import { createExtensionStore, InSetuElement } from '../sdk.js';
 import { sharedStyles } from '../shared_styles.js';
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
-
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
     loadingMessage: "Compiling ecosystem contexts... please wait.",
     searchQuery: '',
+    allRepos: [],
+    targetConfigs: [],
+    virtualContexts: [],
+    categoryOrder: [],
+    tabOrder: [],
+    hiddenOutputs: [],
+    gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
     setSearchQuery: (q) => GatherStore.setState({ searchQuery: q })
 });
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Gather = GatherStore;
+
+export function getFlattenedBuckets(repoDir, includeSystem = false) {
+    const { targetConfigs } = AppStore.getState();
+    const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
+    if (!repoCfg || !repoCfg.sub_buckets) return [];
+
+    const buckets = [];
+    repoCfg.sub_buckets.forEach(b => {
+        if (!includeSystem && b.is_system) return;
+
+        if (b.dynamic_split_prefix && b.meta_map) {
+            Object.keys(b.meta_map).forEach(module => {
+                buckets.push({ id: module, title: b.meta_map[module].title || module, original: b });
+            });
+        } else if (!b.dynamic_split_prefix) {
+            buckets.push({ id: b.id, title: b.title || b.id, original: b });
+        }
+    });
+    return buckets;
+}
+
+window.inSetu.sys = window.inSetu.sys || {};
+window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
+
+const packSelectionPayload = async (items) => {
+    const payloadItems = items.map(i => {
+        if (i.data?.folderpath) return { folderpath: i.data.folderpath };
+        if (i.data?.filepath) return { filepath: i.data.filepath };
+        return null;
+    }).filter(i => i !== null);
+
+    if (payloadItems.length === 0) throw new Error("No valid items to pack.");
+
+    const res = await window.inSetu.api.workspace('gather/pack_selection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: payloadItems })
+    });
+    if (!res.ok) throw new Error("Failed to queue compilation.");
+    const data = await res.json();
+    return new Promise((resolve, reject) => {
+        window.inSetu.utils.pollJob(data.job_id, {
+            onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
+            onComplete: async (statusData) => {
+                try {
+                    const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                    if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                } catch(e) {}
+                resolve(statusData.artifact);
+            },
+            onError: (err) => reject(err)
+        });
+    });
+};
+
 export class InSetuExtGatherActions extends InSetuElement {
     static get extensionName() { return 'gather'; }
     static styles = [sharedStyles];
@@ -68,6 +129,9 @@ export class InSetuExtGather extends InSetuElement {
         this.subscribe(AppStore, state => {
             this.manifestFiles = Object.keys(state.manifest || {});
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.requestUpdate();
+        });
+        this.subscribe(GatherStore, state => {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
@@ -75,12 +139,11 @@ export class InSetuExtGather extends InSetuElement {
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext();
         });
-
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest || {});
         this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = aState.allRepos || [];
         const gState = GatherStore.getState();
+        this.allRepos = gState.allRepos || [];
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
@@ -124,7 +187,8 @@ export class InSetuExtGather extends InSetuElement {
 
     render() {
         const categories = {};
-        const { categoryOrder, manifest } = AppStore.getState();
+        const manifest = AppStore.getState().manifest;
+        const { categoryOrder } = GatherStore.getState();
         // 1. Enrich data with metadata for searching
         const enrichedFiles = this.manifestFiles.map(file => {
                 const manifestObj = manifest[file] || {};
@@ -151,9 +215,8 @@ export class InSetuExtGather extends InSetuElement {
                 }
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
-
         if (this.loading) {
-            const { targetConfigs } = AppStore.getState();
+            const { targetConfigs } = GatherStore.getState();
             if (targetConfigs) {
                 targetConfigs.forEach(cfg => {
                     if (cfg.exclude_from_context) return;
@@ -236,7 +299,7 @@ export class InSetuExtGather extends InSetuElement {
                             icon="📦"
                             intentColor="var(--intent-highlight)"
                             entityType="file:context"
-                            .entityData=${{ filepath: `system://contexts/${f.filename}`, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton }}
+                            .entityData=${{ filepath: `system://contexts/${f.filename}`, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton, suppressCopy: true, suppressBrowse: true }}
                             @card-clicked=${() => { if(!f.isSkeleton && window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f.filename); }}>
 
                             ${f.isSkeleton ? html`
@@ -267,6 +330,11 @@ export class InSetuExtGather extends InSetuElement {
                         `;
                     })}
                 </div>
+                ${(this.activeChunkFile && window.inSetu.stores.App?.getState()?.manifest[this.activeChunkFile]?.files?.length > 0) ? html`
+                    <button slot="footer" style="background: var(--intent-highlight); color: white;" @click=${() => {
+                        if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(this.activeChunkFile);
+                    }}>📁 Browse Context Files</button>
+                ` : ''}
             </insetu-modal>
         `;
     }
@@ -311,6 +379,53 @@ document.addEventListener('DOMContentLoaded', () => {
                 targetSub: "gather",
                 component: "insetu-ext-gather-actions",
                 order: 1
+            }
+        ],
+        batchActions: [
+            {
+                id: 'batch-download',
+                label: 'Download',
+                icon: '⬇️',
+                intent: 'primary',
+                order: 20,
+                match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+                asyncAction: async (items) => {
+                    try {
+                        const artifact = await packSelectionPayload(items);
+                        window.inSetu.stores.Selection.getState().clearSelection();
+                        if (artifact.chunks && artifact.chunks.length > 1) {
+                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
+                            if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
+                            window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: artifact.base_filename } }));
+                        } else {
+                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
+                            if (window.inSetu.vfs.fetchAndDownloadState) {
+                                await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
+                            }
+                        }
+                    } catch (err) {
+                        alert("Packing failed: " + err.message);
+                    }
+                }
+            },
+            {
+                id: 'batch-share',
+                label: 'Share',
+                icon: '📤',
+                intent: 'neutral',
+                order: 30,
+                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+                asyncAction: async (items) => {
+                    try {
+                        const artifact = await packSelectionPayload(items);
+                        window.inSetu.stores.Selection.getState().clearSelection();
+                        if (window.inSetu.vfs.shareFiles) {
+                            await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+                        }
+                    } catch (err) {
+                        alert("Packing failed: " + err.message);
+                    }
+                }
             }
         ],
         uiHooks: {
