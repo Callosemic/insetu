@@ -16,13 +16,13 @@ export const GatherStore = createExtensionStore('Gather', {
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Gather = GatherStore;
 export class InSetuExtGatherActions extends InSetuElement {
+    static get extensionName() { return 'gather'; }
     static styles = [sharedStyles];
     render() {
         return html``;
     }
 }
 customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
-
 export class InSetuExtGather extends InSetuElement {
     static properties = {
         loading: { type: Boolean },
@@ -208,7 +208,7 @@ export class InSetuExtGather extends InSetuElement {
                         if (cat === 'Quickpacks') {
                             return html`
                                 <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-                                    <insetu-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
+                                    <yenvui-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
                                         try {
                                             const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
                                             if (res.ok) {
@@ -218,9 +218,10 @@ export class InSetuExtGather extends InSetuElement {
                                                 if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
                                             }
                                         } catch(e) {
-                                            alert("Failed to clear quickpacks: " + e.message);
+                                            // yenVUI prefers toast containers over window.alert
+                                            console.error("Failed to clear quickpacks: " + e.message);
                                         }
-                                    }}></insetu-async-btn>
+                                    }}></yenvui-async-btn>
                                 </div>
                             `;
                         }
@@ -248,15 +249,23 @@ export class InSetuExtGather extends InSetuElement {
             </div>
             <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${(this.activeChunkFile ? (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunks || []) : []).map((chunk, idx) => html`
-                        <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; flex-wrap: wrap; gap: 10px;">
-                            <span style="font-weight: bold; font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">📄 Part ${idx + 1} ${(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) ? `(${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb)` : ''}</span>
-                            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
-                                <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
-                            </div>
-                        </div>
-                    `)}
+                    ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
+                        const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
+                            ? `${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb` 
+                            : '';
+                        return html`
+                            <yenvui-card 
+                                titleText="Part ${idx + 1}"
+                                detailText=${sizeKb}
+                                icon="📄"
+                                disableSelection=${true}>
+                                <div style="display: flex; gap: 8px; margin-top: 10px; padding-bottom: 10px;">
+                                    <yenvui-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></yenvui-async-btn>
+                                    <yenvui-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></yenvui-async-btn>
+                                </div>
+                            </yenvui-card>
+                        `;
+                    })}
                 </div>
             </insetu-modal>
         `;
@@ -278,7 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 match: (data) => {
                     if (data.isSkeleton) return false;
                     const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                    const chunks = window.inSetu.stores.App.getState().manifest[basename]?.meta?.chunks;
+                    const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App.getState().manifest, basename);
                     return chunks && chunks.length > 1;
                 },
                 emitEvent: (data) => {

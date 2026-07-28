@@ -99,10 +99,10 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
 
     manifest_entry = {
         "files": files,
+        "chunks": chunks,
         "meta": meta_copy
     }
     manifest_entry["meta"]["size_bytes"] = sum(chunk_sizes)
-    manifest_entry["meta"]["chunks"] = chunks
     manifest_entry["meta"]["chunk_sizes"] = chunk_sizes
     manifest_entry["meta"]["file"] = base_filename
     manifest_entry["meta"]["filename"] = base_filename
@@ -422,9 +422,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
     # Set Analysis: Prune only orphaned context files that were not regenerated
     if target_repos is None:
         valid_basenames = set(manifest.keys())
-        for data in manifest.values():
-            for chunk in data.get("meta", {}).get("chunks", []):
-                valid_basenames.add(chunk)
+        for chunk in ctx.get_manifest_files():
+            valid_basenames.add(chunk)
         for ws_rel_path in vfs.walk(paths["contexts_dir"]):
             f_path = ctx.resolve_path(ws_rel_path)
             f_basename = Path(f_path).name
@@ -444,7 +443,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
             base_path = Path(paths["contexts_dir"]).joinpath(k).as_posix()
             if base_path in active_ephemerals:
                 manifest[k] = v
-                for chunk in v.get("meta", {}).get("chunks", [k]):
+                for chunk in ctx.get_manifest_files(target_key=k):
                     chunk_path = Path(paths["contexts_dir"]).joinpath(chunk).as_posix()
                     restored_ephemerals.add(chunk_path)
 
@@ -479,17 +478,7 @@ def _pack_selection_worker(ctx, items, job_id=None):
     from pathlib import Path
     if not items:
         raise ValueError("No items provided.")
-
-    files = []
-    with VFSTransaction(ctx.workspace_id) as vfs:
-        for item in items:
-            if 'filepath' in item:
-                files.append(item['filepath'])
-            elif 'folderpath' in item:
-                for f in vfs.walk(item['folderpath']):
-                    files.append(f)
-
-    files = sorted(list(set(files)))
+    files = ctx.expand_selection(items)
 
     header_str = "============================================================\n"
     header_str += "INSETU AD-HOC CONTEXT PAYLOAD (Selection)\n"
@@ -545,12 +534,11 @@ def _pack_selection_worker(ctx, items, job_id=None):
     manifest_data = ctx.manifest
     manifest_data[base_filename] = manifest_entry
     ctx.save_manifest(manifest_data)
-
     from insetu.routes_fs import _VFS_WRITE_QUEUE
     _VFS_WRITE_QUEUE.join()
 
     from insetu.workers import register_ephemeral_artifact
-    chunks = manifest_entry.get("meta", {}).get("chunks", [base_filename])
+    chunks = manifest_entry.get("chunks", [base_filename])
     for chunk in chunks:
         out_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
@@ -572,13 +560,13 @@ def _pack_selection_worker(ctx, items, job_id=None):
 def api_clear_quickpacks(ctx):
     manifest_data = ctx.manifest
     keys_to_delete = [k for k in manifest_data.keys() if k.startswith('quickpack_') or k.startswith('selection_')]
-
     if not keys_to_delete:
         return jsonify({"status": "success", "message": "No quickpacks to clear."})
 
     for k in keys_to_delete:
-        meta = manifest_data[k].get("meta", {})
-        chunks = meta.get("chunks", [k])
+        chunks = ctx.get_manifest_files(target_key=k)
+        if not chunks:
+            chunks = [k]
         for chunk in chunks:
             chunk_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
             try:

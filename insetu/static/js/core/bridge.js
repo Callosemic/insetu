@@ -494,6 +494,7 @@ export class InSetuExtBridge extends InSetuElement {
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuExtBridgeActions extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
     render() {
         return html``;
     }
