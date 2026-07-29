@@ -253,11 +253,11 @@ export class InSetuExtHooks extends InSetuElement {
                     </div>
                 </div>
             </div>
-            <insetu-modal  
+            <yenvui-modal  
                 ?open=${this.ruleModalOpen} 
                 ?fullscreen=${true}
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
-                @modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
+                @yenvui-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
 
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
@@ -343,7 +343,7 @@ export class InSetuExtHooks extends InSetuElement {
                     </div>
                 </div>
                 <yenvui-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></yenvui-async-btn>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }

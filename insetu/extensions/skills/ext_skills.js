@@ -484,11 +484,11 @@ export class InSetuExtSkills extends InSetuElement {
                     </div>
                 ` : this._renderGroupsTab()}
             </div>
-            <insetu-modal
+            <yenvui-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'train'}
                 ?fullscreen=${true}
                 titleText="⏱️ Practice Session: ${this.selectedItem?.name}"
-                @modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
+                @yenvui-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Quality Rating Scale (SM-2 Algorithm)</label>
@@ -530,12 +530,12 @@ export class InSetuExtSkills extends InSetuElement {
                     })()}
                 </div>
                 <button slot="footer" style="background: var(--intent-success); color: white;" @click=${this._submitPracticeSession}>💾 Flush Session Data</button>
-            </insetu-modal>
-            <insetu-modal
+            </yenvui-modal>
+            <yenvui-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'edit'}
                 ?fullscreen=${true}
                 titleText="✏️ Edit Skill Architecture & Structure"
-                @modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
+                @yenvui-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <div>
@@ -565,12 +565,12 @@ export class InSetuExtSkills extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
-            </insetu-modal>
-            <insetu-modal
+            </yenvui-modal>
+            <yenvui-modal
                 ?open=${this.newSkillModalOpen}
                 ?fullscreen=${true}
                 titleText="Add New Training Skill Item"
-                @modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
+                @yenvui-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
                 <form slot="body" @submit=${this._handleCreateSkill} style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <div>
@@ -663,7 +663,7 @@ export class InSetuExtSkills extends InSetuElement {
                     })()}
                     <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin-top: 10px;">➕ Initialize Track on Disk</button>
                 </form>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }

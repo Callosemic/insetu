@@ -509,9 +509,8 @@ def provide_available_diffs(workspace_id=None, **kwargs):
     import os
     ctx = ExtensionContext('git', workspace_id)
     paths = ctx.paths
-
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
-    base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"])
+    base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"], include_types=["gather"])
     expected_diffs = set()
 
     # 2. Map SOTU contexts to diff payloads seamlessly

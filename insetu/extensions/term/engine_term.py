@@ -43,10 +43,21 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except Exception:
         pass
-
 @sock.route('/api/<workspace_id>/term/stream')
 def term_stream(ws, workspace_id):
     """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
+    try:
+        _run_term_stream(ws, workspace_id)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc().replace('\n', '\r\n')
+        try:
+            ws.send(f"\r\n\x1b[31m[Fatal Terminal Error]\r\n{err}\x1b[0m\r\n")
+            ws.close()
+        except:
+            pass
+
+def _run_term_stream(ws, workspace_id):
     from insetu.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
         ws.close()
@@ -94,27 +105,31 @@ def term_stream(ws, workspace_id):
         ws.send(f"\r\n\x1b[31m[Terminal Error] {str(e)}\x1b[0m\r\n")
         ws.close()
         return
-
     os.close(slave_fd)
+    ws_lock = threading.Lock()
+    is_closing = False
+
+    def safe_send(payload):
+        if is_closing: return
+        try:
+            with ws_lock:
+                ws.send(payload)
+        except Exception:
+            pass
+
     def read_from_pty():
         try:
-            while True:
+            while not is_closing:
                 r, _, _ = select.select([master_fd], [], [], 0.1)
                 if master_fd in r:
                     data = os.read(master_fd, 4096)
                     if not data:
                         break
-                    ws.send(data)
+                    safe_send(data)
         except OSError:
             pass  # Expected standard exception when PTY gracefully closes
         except Exception as e:
-            try: ws.send(f"\r\n\x1b[31m[PTY Read Error] {str(e)}\x1b[0m\r\n")
-            except: pass
-        finally:
-            try:
-                ws.close()
-            except:
-                pass
+            safe_send(f"\r\n\x1b[31m[PTY Read Error] {str(e)}\x1b[0m\r\n")
 
     t = threading.Thread(target=read_from_pty, daemon=True)
     t.start()
@@ -136,9 +151,9 @@ def term_stream(ws, workspace_id):
                 # Pipe raw input directly to the kernel
                 os.write(master_fd, data if isinstance(data, bytes) else data.encode('utf-8'))
     except Exception as e:
-        try: ws.send(f"\r\n\x1b[31m[WS Receive Error] {str(e)}\x1b[0m\r\n")
-        except: pass
+        safe_send(f"\r\n\x1b[31m[WS Receive Error] {str(e)}\x1b[0m\r\n")
     finally:
+        is_closing = True
         try:
             os.close(master_fd)
             p.terminate()

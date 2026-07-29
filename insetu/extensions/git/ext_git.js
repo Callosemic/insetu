@@ -573,7 +573,6 @@ ${(() => {
                     `;})}
                     </yenvui-category-section>
                 ` : ''}
-
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
                     <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin-top: 20px;">
                         <div style="font-size: 2.5rem; margin-bottom: 10px;">✨</div>
@@ -583,7 +582,7 @@ ${(() => {
                 ` : ''}
             </div>
             </div>
-            <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
+            <yenvui-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @yenvui-modal-closed=${() => this.chunkModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
                         const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
@@ -603,8 +602,8 @@ ${(() => {
                         `;
                     })}
                 </div>
-            </insetu-modal>
-            <insetu-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @modal-closed=${() => this.pushModalOpen = false}>
+            </yenvui-modal>
+            <yenvui-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @yenvui-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
                     <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold; flex-shrink: 0;" @change=${(e) => this.gitPushMessage = e.target.value}>
@@ -615,7 +614,7 @@ ${(() => {
                     <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._executePush}>🚀 Execute Push</button>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }
@@ -930,7 +929,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     `;
                 })}
             </div>
-            <insetu-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @modal-closed=${() => this.branchModalOpen = false}>
+            <yenvui-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @yenvui-modal-closed=${() => this.branchModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Switch to Existing Branch:</label>
@@ -953,8 +952,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         </div>
                     </div>
                 </div>
-            </insetu-modal>
-            <insetu-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @modal-closed=${() => this.previewModalOpen = false}>
+            </yenvui-modal>
+            <yenvui-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @yenvui-modal-closed=${() => this.previewModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
 
@@ -979,8 +978,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
-            </insetu-modal>
-            <insetu-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @modal-closed=${() => this.remoteModalOpen = false}>
+            </yenvui-modal>
+            <yenvui-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @yenvui-modal-closed=${() => this.remoteModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${this.remoteConflict ? html`
                         <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
@@ -1014,7 +1013,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 ` : html`
                     <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote()}>☁️ Connect & Push</button>
                 `}
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }

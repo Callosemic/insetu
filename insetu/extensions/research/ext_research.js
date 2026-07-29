@@ -376,7 +376,7 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-            <insetu-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
+            <yenvui-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @yenvui-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%; padding: 0;">
                     ${activeItem ? html`
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
@@ -398,8 +398,8 @@ export class InSetuExtResearch extends InSetuElement {
                         <div tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;" .innerHTML=${activeItem.raw_markdown ? marked.parse(activeItem.raw_markdown) : '<span style="color: var(--intent-warning); font-style: italic;">Awaiting extraction...</span>'}></div>
                     ` : ''}
                 </div>
-            </insetu-modal>
-            <insetu-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+            </yenvui-modal>
+            <yenvui-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @yenvui-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; box-sizing: border-box;' })}
                     <div style="display: flex; gap: 10px;">
@@ -436,7 +436,7 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 </div>
                 <insetu-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }

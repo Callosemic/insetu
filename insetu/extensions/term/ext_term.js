@@ -23,7 +23,6 @@ export class InSetuExtTerm extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this._initTimer = setTimeout(() => this._initTerminal(), 0);
         window.addEventListener('resize', this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
@@ -36,7 +35,6 @@ export class InSetuExtTerm extends InSetuElement {
             this.onWorkspaceChanged(this.workspaceId);
         });
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
         clearTimeout(this._initTimer);
@@ -45,7 +43,11 @@ export class InSetuExtTerm extends InSetuElement {
         if (this._themeObserver) this._themeObserver.disconnect();
         if (this._ws) {
             this._ws.onclose = null;
-            this._ws.close();
+            if (this._ws.readyState === WebSocket.CONNECTING) {
+                this._ws.onopen = function() { this.close(); };
+            } else {
+                this._ws.close();
+            }
             this._ws = null;
         }
         if (this._term) {
@@ -54,24 +56,30 @@ export class InSetuExtTerm extends InSetuElement {
         }
     }
     onWorkspaceChanged(newWorkspaceId) {
+        clearTimeout(this._initTimer);
+        clearTimeout(this._wsTimer);
+
         if (this._ws) {
             this._ws.onclose = null;
-            this._ws.close();
+            if (this._ws.readyState === WebSocket.CONNECTING) {
+                this._ws.onopen = function() { this.close(); };
+            } else {
+                this._ws.close();
+            }
             this._ws = null;
         }
         if (this._term) {
             try { this._term.dispose(); } catch (e) {}
             this._term = null;
         }
-
         // Defer complete terminal recreation to avoid race conditions during DOM teardown
-        setTimeout(() => {
+        this._initTimer = setTimeout(() => {
             if (this.isConnected) {
                 const container = this.shadowRoot.getElementById('terminal-container');
                 if (container) container.innerHTML = '';
                 this._initTerminal();
             }
-        }, 150);
+        }, 300);
     }
     _handleResize = () => {
         // Only calculate geometry if the component is actively visible on the screen
@@ -86,6 +94,8 @@ export class InSetuExtTerm extends InSetuElement {
     };
     _initTerminal() {
         if (!this.isConnected) return;
+        if (this._term) return; // Prevent double-initialization on load
+
         const container = this.shadowRoot.getElementById('terminal-container');
         if (!container) return;
 
@@ -114,6 +124,8 @@ export class InSetuExtTerm extends InSetuElement {
     }
     _connectWebSocket() {
         if (!this.isConnected) return;
+        if (this._ws && (this._ws.readyState === WebSocket.CONNECTING || this._ws.readyState === WebSocket.OPEN)) return;
+
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const token = window.inSetu.stores.App.getState().authToken || sessionStorage.getItem('insetu_boot_token');
         const wsUrl = `${protocol}//${window.location.host}/api/${this.workspaceId}/term/stream?token=${token}`;
@@ -123,7 +135,12 @@ export class InSetuExtTerm extends InSetuElement {
         this._ws.binaryType = 'arraybuffer';
         this._ws.onopen = () => {
             if (this._term) {
-                this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+                // Delay initial resize payload to prevent full-duplex proxy collisions on boot
+                setTimeout(() => {
+                    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                        this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+                    }
+                }, 100);
             }
         };
 

@@ -182,9 +182,8 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
 def api_flow_batches(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
     paths = ctx.paths
-
     from insetu.core.utils_core import get_available_contexts
-    expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"])
+    expected_contexts = get_available_contexts(ctx.workspace_id, exclusion_flags=["exclude_from_context"], exclude_types=["diff", "flow"])
 
     available_diffs = []
     available_prompts = []

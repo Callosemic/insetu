@@ -771,7 +771,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
             throw new Error(err.error || "Failed to save changes.");
         }
     }
-
     render() {
         const { newTaskForm } = KanbanStore.getState();
         const selectedRepoNew = newTaskForm.repo || this.allRepos[0];
@@ -783,11 +782,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
         return html`
             <!-- New Task Modal -->
-            <insetu-modal 
+            <yenvui-modal 
                 ?open=${this._modals?.new} 
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
-                @modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
+                @yenvui-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
 
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -806,14 +805,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     try { await this._saveNewTask(); } catch(err) {}
                     this._isSaving = false;
                 }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
-            </insetu-modal>
+            </yenvui-modal>
             <!-- Edit Task Modal -->
-            <insetu-modal 
+            <yenvui-modal 
                 ?open=${this._modals?.edit} 
                 titleText="Edit Ticket"
                 ?fullscreen=${true}
-                @modal-closing=${this._handleModalClosing}
-                @modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
+                @yenvui-modal-closing=${this._handleModalClosing}
+                @yenvui-modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
 
                 <div slot="body" style="margin: -20px; height: calc(100% + 40px); display: flex; flex-direction: column; overflow: hidden; background: var(--bg);">
                     <div style="padding: 6px 20px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg);">
@@ -890,7 +889,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         this._isSaving = false;
                     }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
                 ` : ''}
-            </insetu-modal>
+            </yenvui-modal>
 `;
     }
 }

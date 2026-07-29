@@ -178,6 +178,7 @@ export class InSetuExtFlow extends InSetuElement {
                 FlowStore.setState(s => ({ batches: s.batches.filter(b => b.id !== this._editingBatch.id) }));
                 this._editingBatch = null;
                 this._editModalOpen = false;
+                this.requestUpdate();
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -213,6 +214,7 @@ export class InSetuExtFlow extends InSetuElement {
                 }
                 this._editingBatch = null;
                 this._editModalOpen = false;
+                this.requestUpdate();
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -255,7 +257,8 @@ export class InSetuExtFlow extends InSetuElement {
         }
     }
     render() {
-            const { categoryOrder, gatherOptions, manifest } = AppStore.getState();
+            const { categoryOrder, manifest } = AppStore.getState();
+            const { gatherOptions } = window.inSetu.stores.Gather.getState();
             const repoFilteredBatches = this.batches.map(b => {
                 const filename = `workflow_${b.id}_context.txt`;
                 const manifestObj = manifest[filename] || {};
@@ -343,12 +346,12 @@ export class InSetuExtFlow extends InSetuElement {
                         </insetu-categorized-list>
                     </div>
             </div>
-                    <insetu-modal  
-                            ?open=${this._editModalOpen} 
+                    <yenvui-modal  
+                            .open=${this._editModalOpen} 
                             ?fullscreen=${true}
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
-                            @modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
-                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px;">
+                            @yenvui-modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
+                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                             <div style="flex: 1; min-width: 150px;">
                                                     <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Batch Title</label>
@@ -474,8 +477,8 @@ export class InSetuExtFlow extends InSetuElement {
                             </div>
                             ${this._editingBatch?.id ? html`<button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this.deleteEditBatch}>🗑️ Delete Batch</button>` : ''}
                             <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveEditBatch}>💾 Save Batch</button>
-                    </insetu-modal>
-                    <insetu-modal ?open=${this._showSelectContexts} titleText="Select Contexts" @modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
+                    </yenvui-modal>
+                    <yenvui-modal .open=${this._showSelectContexts} titleText="Select Contexts" @yenvui-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0;">
                                     <input type="text" placeholder="🔍 Fuzzy search contexts..." style="padding: 8px; margin-bottom: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this._contextSearchQuery} @input=${(e) => { this._contextSearchQuery = e.target.value; }}>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
@@ -495,9 +498,9 @@ export class InSetuExtFlow extends InSetuElement {
                                 this._showSelectContexts = false; 
                                 this._contextSearchQuery = '';
                             }}>✅ Confirm Selection</button>
-                    </insetu-modal>
-                    <insetu-modal ?open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
-                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0;">
+                    </yenvui-modal>
+                    <yenvui-modal .open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @yenvui-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
+                            <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                                     ${this._viewingBatch ? html`
                                             <div>
                                                     <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>
@@ -551,8 +554,8 @@ export class InSetuExtFlow extends InSetuElement {
                                             ` : ''}
                                     ` : ''}
                             </div>
-                    </insetu-modal>
-                    <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Batch Parts" maxWidth="500px" @modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
+                    </yenvui-modal>
+                    <yenvui-modal .open=${this.chunkModalOpen} titleText="📦 Batch Parts" maxWidth="500px" @yenvui-modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                             ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
                                 const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
@@ -572,7 +575,7 @@ export class InSetuExtFlow extends InSetuElement {
                                 `;
                             })}
                         </div>
-                </insetu-modal>
+                </yenvui-modal>
     `;
 }
 }

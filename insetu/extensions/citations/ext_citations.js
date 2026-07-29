@@ -501,11 +501,10 @@ export class InSetuExtCitations extends InSetuElement {
             </div>
         `;
     }
-
     _renderModals() {
         return html`
             <!-- Attach Modal -->
-            <insetu-modal ?open=${!!this.activeAttachCitation} ?fullscreen=${true} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
+            <yenvui-modal ?open=${!!this.activeAttachCitation} ?fullscreen=${true} titleText="Pin to Repo: [@${this.activeAttachCitation?.id}]" @yenvui-modal-closed=${() => CitationStore.setState({ activeAttachCitation: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <select style="flex:1; padding:8px; border-radius:4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" .value=${this.attachForm.repo} @change=${e => { CitationStore.setState(s => ({ attachForm: { ...s.attachForm, repo: e.target.value, bucket: 'None' } })); }}>
@@ -531,9 +530,9 @@ export class InSetuExtCitations extends InSetuElement {
                         `)}
                     </div>
                 </div>
-            </insetu-modal>
+            </yenvui-modal>
             <!-- Edit Modal -->
-            <insetu-modal ?open=${!!this.activeEditCitation} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
+            <yenvui-modal ?open=${!!this.activeEditCitation} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @yenvui-modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 12px;">
                         <div style="flex: 1;">
@@ -592,7 +591,7 @@ export class InSetuExtCitations extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteDynamicCitation}>🗑️ Delete</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._saveDynamicCitation}>💾 Save Changes</button>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
     render() {
@@ -638,7 +637,7 @@ export class InSetuExtCitationsModals extends InSetuElement {
         const results = q ? window.inSetu.utils.fuzzyFilterObjects(this.citationLibraryCache, q, c => `${c.title || ''} ${c.id || ''} ${c.author ? c.author.map(a => a.family).join(" ") : ''}`).slice(0, 30) : [];
 
         return html`
-            <insetu-modal ?open=${this.citationModalOpen} ?fullscreen=${true} titleText="Insert Citation" @modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
+            <yenvui-modal ?open=${this.citationModalOpen} ?fullscreen=${true} titleText="Insert Citation" @yenvui-modal-closed=${() => CitationStore.setState({ citationModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <input type="text" placeholder="Search library by author, title, or ID..." style="padding: 8px; margin-bottom: 10px;" .value=${this.citationSearchQuery} @input=${(e) => CitationStore.setState({ citationSearchQuery: e.target.value })}>
                     <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1; gap: 5px;">
@@ -654,7 +653,7 @@ export class InSetuExtCitationsModals extends InSetuElement {
                         })}
                     </div>
                 </div>
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
     _insertCitationToEditor(citation) {
