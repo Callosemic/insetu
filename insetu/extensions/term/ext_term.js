@@ -1,8 +1,8 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
-import { Terminal } from 'https://esm.sh/xterm@5.3.0';
-import { FitAddon } from 'https://esm.sh/xterm-addon-fit@0.8.0';
+import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const TerminalStore = createExtensionStore('Terminal', {});
@@ -185,10 +185,9 @@ export class InSetuExtTerm extends InSetuElement {
             };
         }
     }
-
     render() {
         return html`
-            <link rel="stylesheet" href="https://esm.sh/xterm@5.3.0/css/xterm.css" />
+            <link rel="stylesheet" href="/static/extensions/term/vendor/xterm.css" />
             <div id="terminal-container"></div>
         `;
     }

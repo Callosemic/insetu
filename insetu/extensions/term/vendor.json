@@ -1,0 +1,14 @@
+{
+    "imports": {
+        "xterm": {
+            "path": "vendor/xterm.js",
+            "version": "5.3.0",
+            "range": ">=5.0.0 && <6.0.0"
+        },
+        "xterm-addon-fit": {
+            "path": "vendor/xterm-addon-fit.js",
+            "version": "0.8.0",
+            "range": "=0.8.0"
+        }
+    }
+}
