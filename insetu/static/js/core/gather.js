@@ -2,7 +2,7 @@ import { html, css } from 'lit';
 import { AppStore } from '../store.js';
 import { fetchAndDownloadState, fetchAndCopy, buildFileTree, getGlobalManifest, viewAndCopy, FsStore } from '../fs.js';
 import { createExtensionStore, InSetuElement } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
 export const GatherStore = createExtensionStore('Gather', {
@@ -310,7 +310,7 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-categorized-list>
                 </div>
             </div>
-            <insetu-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @modal-closed=${() => this.chunkModalOpen = false}>
+            <yenvui-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @yenvui-modal-closed=${() => this.chunkModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
                         const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
@@ -335,14 +335,13 @@ export class InSetuExtGather extends InSetuElement {
                         if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(this.activeChunkFile);
                     }}>📁 Browse Context Files</button>
                 ` : ''}
-            </insetu-modal>
+            </yenvui-modal>
         `;
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
-document.addEventListener('DOMContentLoaded', () => {
-    window.ExtensionRegistry.registerExtension('gather', {
-        name: "Context Gatherer",
+window.ExtensionRegistry.registerExtension('gather', {
+    name: "Context Gatherer",
         version: "2.0.0",
         entityActions: [
             {
@@ -437,5 +436,4 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
-    });
 });

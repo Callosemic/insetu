@@ -172,31 +172,39 @@ def generate_ascii_tree(file_paths):
             lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
         return lines
     return ".\n" + "\n".join(print_tree(tree))
-
-def extract_manifest_files(manifest_data, target_key=None):
+def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, include_types=None):
     def _extract(data):
         if isinstance(data, dict):
+            item_type = data.get("meta", {}).get("type", "unknown")
+            if exclude_types and item_type in exclude_types:
+                return []
+            if include_types and item_type not in include_types:
+                return []
             return data.get("chunks", data.get("files", []))
         elif isinstance(data, list):
+            if include_types: return []
             return data
         return []
+
     if target_key:
         return _extract(manifest_data.get(target_key, {}))
+
     all_files = set()
     for k, v in manifest_data.items():
-        if isinstance(k, str) and k.endswith('.txt'):
-            all_files.add(k)
-        for f in _extract(v):
-            if isinstance(f, str):
-                all_files.add(f)
+        extracted = _extract(v)
+        if extracted:
+            if isinstance(k, str) and k.endswith('.txt'):
+                all_files.add(k)
+            for f in extracted:
+                if isinstance(f, str):
+                    all_files.add(f)
     return sorted(list(all_files))
 
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
-
-def get_available_contexts(workspace_id=None, exclusion_flags=None):
+def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
     cfg = load_config(workspace_id)
     paths = get_gather_paths(workspace_id)
     flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
@@ -225,12 +233,13 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None):
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_contexts.add(f"contexts/{module}_context.txt")
-
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest_data = load_json_file(manifest_path, {})
-    for f in extract_manifest_files(manifest_data):
+
+    for f in extract_manifest_files(manifest_data, exclude_types=exclude_types, include_types=include_types):
         if f.endswith('.txt'):
             expected_contexts.add(f"contexts/{f}")
+
     return expected_contexts
 
 def get_omniscient_workspace_files(workspace_id, allowed_repos):

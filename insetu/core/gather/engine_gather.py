@@ -330,7 +330,6 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
     if not files and not filepath: return
     if filepath: files = [filepath]
 
-    from insetu.app import get_compiler_lock
     with get_compiler_lock(workspace_id or "default"):
         from insetu.sdk import ExtensionContext
         from insetu.utils import load_json_file, save_json_file
@@ -605,6 +604,143 @@ def api_gather_pack_selection(ctx):
     if not items:
         return jsonify({"error": "Items list required."}), 400
     job_id = ctx.jobs.submit("pack_selection_task", items=items)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
+import threading
+_COMPILER_LOCKS = {}
+_COMPILER_GLOBAL_LOCK = threading.Lock()
+
+def get_compiler_lock(wid):
+    with _COMPILER_GLOBAL_LOCK:
+        if wid not in _COMPILER_LOCKS:
+            _COMPILER_LOCKS[wid] = threading.RLock()
+        return _COMPILER_LOCKS[wid]
+
+@gather_bp.worker("compile_contexts")
+def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
+    ws_lock = get_compiler_lock(ctx.workspace_id)
+    try:
+        ws_lock.acquire()
+        paths = ctx.paths
+        manifest_data = ctx.manifest
+
+        forced_repos = []
+        if isinstance(force_full, list):
+            forced_repos = force_full
+            needs_full_compile = False
+        else:
+            needs_full_compile = force_full or not manifest_data
+
+        ctx.jobs.update_progress("Running pre-compile hooks...")
+        try:
+            ctx.emit('pre_compile', is_full_sweep=needs_full_compile, forced_repos=forced_repos)
+            ctx.sync_vfs_barrier()
+        except Exception as e:
+            print(f"Warning: Pre-compile hooks failed: {str(e)}")
+
+        if not needs_full_compile and not forced_repos:
+            try:
+                live_cfg = ctx.config
+                # Proactive Ledger Flush: If manual UI refresh, grab any pending VFS mutations instantly
+                if ledger_events is None:
+                    from insetu.db import get_connection
+                    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+                    try:
+                        events = w_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
+                    except Exception:
+                        events = []
+
+                    if events:
+                        ledger_events = [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
+                        w_conn.execute("DELETE FROM vfs_event_log")
+                        try:
+                            w_conn._conn.commit()
+                        except AttributeError:
+                            w_conn.commit()
+                        
+                        # Decouple Cartographer: Dispatch asynchronously so it doesn't block Gather
+                        touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
+                        if touched_repos:
+                            import uuid, json
+                            from insetu.workers import submit_immediate_job
+                            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+                            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=ctx.workspace_id)
+                
+                if ledger_events:
+                    # Phase 3: Pure Event Sourced Differential Routing
+                    changed_files = [e["filepath"] for e in ledger_events]
+                    touched_buckets = set()
+
+                    for repo_cfg in live_cfg.get("target_repos", []):
+                        if repo_cfg.get("exclude_from_context"): continue
+                        repo_dir = repo_cfg.get("repo_dir")
+                        subs = repo_cfg.get("sub_buckets", [])
+
+                        repo_files = [f for f in changed_files if f.startswith(f"{repo_dir}/")]
+                        for f in repo_files:
+                            rel_path = f[len(repo_dir)+1:]
+                            if subs:
+                                b, module = resolve_file_bucket(rel_path, subs)
+                                if b and module: touched_buckets.add(f"{repo_dir}__{module}")
+                                elif b: touched_buckets.add(f"{repo_dir}__{b.get('id')}")
+                                else: touched_buckets.add(f"{repo_dir}__catch_all")
+                            else:
+                                touched_buckets.add(f"{repo_dir}__main")
+
+                    ctx.jobs.update_progress(f"Surgically compiling {len(touched_buckets)} touched bucket(s)...")
+                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None)
+                else:
+                    ctx.jobs.update_progress("No pending changes. Syncing extensions...")
+                    all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
+                    ctx.emit('compile_contexts', manifest=manifest_data, target_repos=all_repo_dirs, touched_buckets=[], is_full_sweep=False)
+                    ctx.save_manifest(manifest_data)
+            except Exception as e:
+                import traceback
+                print(f"Warning: Differential compile failed, falling back to full sweep: {e}\\n{traceback.format_exc()}")
+                needs_full_compile = True
+        
+        if needs_full_compile or forced_repos:
+            # Fire Cartographer asynchronously
+            import uuid, json
+            from insetu.workers import submit_immediate_job
+            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": None if needs_full_compile else forced_repos}), workspace_id=ctx.workspace_id)
+
+            sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
+            ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
+            generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
+
+        import os
+        manifest_keys = list(ctx.manifest.keys())
+        if not manifest_keys and os.path.exists(paths["contexts_dir"]):
+            manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
+
+        return {
+            "message": "Context successfully synchronized!",
+            "artifact": {"files": sorted(manifest_keys)}
+        }
+    except Exception as e:
+        import traceback
+        print(f"CRITICAL COMPILER ERROR:\\n{traceback.format_exc()}")
+        raise e
+    finally:
+        ws_lock.release()
+@gather_bp.route('submit', methods=['POST'])
+def api_gather_submit(ctx):
+    data = ctx.req.get_json(force=True, silent=True) or {}
+    force_full = data.get("force_full", False)
+
+    from insetu.db import get_connection
+    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+    existing_job = w_conn.execute(
+        "SELECT id FROM immediate_jobs WHERE ext_name='gather' AND callback_name='compile_contexts' AND status IN ('pending', 'processing')"
+    ).fetchone()
+
+    from flask import jsonify
+    if existing_job:
+        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing compilation."}), 202
+
+    job_id = ctx.jobs.submit("compile_contexts", force_full=force_full)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 
