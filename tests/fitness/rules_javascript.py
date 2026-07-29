@@ -41,6 +41,7 @@ def check_javascript_files():
     banned_localstorage_tab_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_(?:tab|subtab)")
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
+    banned_cdn_import_pattern = re.compile(r'from\s+[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -154,11 +155,13 @@ def check_javascript_files():
                     
                     if is_extension and is_lit_component and manual_unsub_pattern.search(line):
                         report_violation("SDK_SUBSCRIPTION_MANDATE", filepath, line_num, "Manual store un-subscription detected. Use this.subscribe() from the InSetuElement SDK.")
-                    
                     if is_extension and zustand_create_store_pattern.search(line):
                         report_violation("SDK_STORE_MANDATE", filepath, line_num, "Standard Zustand createStore detected. Use createExtensionStore() from the OS SDK instead.")
                     if is_extension and zustand_direct_import_pattern.search(line):
                         report_violation("BANNED_ZUSTAND_IMPORT", filepath, line_num, "Direct import from external Zustand distributions found. Extensions must use createExtensionStore() from the local SDK to preserve multi-tenant tracking.")
+
+                    if banned_cdn_import_pattern.search(line):
+                        report_violation("BANNED_CDN_IMPORT", filepath, line_num, "Hardcoded CDN import detected. Extensions must utilize vendor.json and local vendor subdirectories.")
 
                     if is_extension and lit_element_class_pattern.search(line):
                         report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")
@@ -197,9 +200,10 @@ def check_javascript_files():
                         report_violation("DECLARATIVE_EMIT_EVENT_MANDATE", filepath, line_num, "Imperative CustomEvent dispatch in entityAction detected. Use declarative emitEvent: (data) => ({ name, detail }) instead.")
                     if is_extension and ("zone:post-file-save" in line or "zone:post-file-delete" in line):
                         report_violation("LEGACY_UI_HOOK_BAN", filepath, line_num, "Deprecated UI hook (post-file-save/delete) detected. Use unified 'zone:vfs-mutated' instead.")
-
                     if banned_localstorage_tab_pattern.search(line):
                         report_violation("BANNED_LOCALSTORAGE_TAB_ROUTING", filepath, line_num, "Direct localStorage tab state reads/writes are banned. Use AppStore routing and window.location.hash.")
+                    if re.search(r'window\.executeSystemCompile\b', line):
+                        report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of window.executeSystemCompile detected. Use SDK domain accessor window.inSetu.sys.executeSystemCompile instead (ADR 0024).")
                     if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                         report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
 

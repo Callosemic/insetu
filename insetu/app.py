@@ -160,6 +160,133 @@ def load_workspace_extensions():
 
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
+import operator
+import re
+
+OPERATORS = {
+    '=':  operator.eq,
+    '==': operator.eq,
+    '>=': operator.ge,
+    '<=': operator.le,
+    '>':  operator.gt,
+    '<':  operator.lt,
+}
+
+def parse_semver(v_str):
+    """Converts a SemVer string into a comparable integer tuple (major, minor, patch)."""
+    clean_v = str(v_str).split('-')[0].split('+')[0]
+    parts = [int(p) for p in clean_v.split('.') if p.isdigit()]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts[:3])
+
+def eval_single_clause(v_tuple, clause):
+    """Evaluates a single comparison clause against a version tuple."""
+    clause = clause.strip()
+    match = re.match(r'^(>=|<=|==|=|>|<)\s*(.+)$', clause)
+    if not match:
+        return v_tuple == parse_semver(clause)
+    op_str, target_str = match.groups()
+    op_func = OPERATORS[op_str]
+    return op_func(v_tuple, parse_semver(target_str))
+
+def satisfies_range(version_str, range_str):
+    """Evaluates compound range expressions (e.g., '>=5.0.0 && <6.0.0')."""
+    v_tuple = parse_semver(version_str)
+    clauses = [c.strip() for c in re.split(r'&&|\s+', range_str) if c.strip()]
+    return all(eval_single_clause(v_tuple, clause) for clause in clauses)
+def build_dynamic_importmap():
+    """Statelessly scans core static/vendor.json and active extension vendor.json manifests with compound SemVer resolution."""
+    import json
+    from insetu.utils import load_config
+
+    imports = {}
+    scopes = {}
+    candidates = {}
+
+    # 1. Read Core Baseline Manifest
+    core_vendor_file = Path(app.static_folder).joinpath("vendor.json")
+    if core_vendor_file.exists() and core_vendor_file.is_file():
+        try:
+            with open(core_vendor_file, "r", encoding="utf-8") as f:
+                core_decls = json.load(f).get("imports", {})
+            for specifier, meta in core_decls.items():
+                rel_path = meta.get("path", "").lstrip("/")
+                imports[specifier] = f"/static/{rel_path}"
+        except Exception as e:
+            print(f"⚠️ Failed to parse core static/vendor.json: {e}")
+
+    # 2. Sweep Active Extensions for vendor.json Declarations
+    cfg = load_config()
+    active_exts = cfg.get("extensions", [])
+    ext_base = Path(app.root_path).joinpath("extensions")
+
+    for ext in active_exts:
+        vendor_file = ext_base.joinpath(ext, "vendor.json")
+        if vendor_file.exists() and vendor_file.is_file():
+            try:
+                with open(vendor_file, "r", encoding="utf-8") as f:
+                    declarations = json.load(f).get("imports", {})
+
+                for specifier, meta in declarations.items():
+                    rel_path = meta.get("path", "").lstrip("/")
+                    v_str = meta.get("version", "0.0.0")
+                    r_str = meta.get("range", f"={v_str}")
+                    asset_url = f"/static/extensions/{ext}/{rel_path}"
+
+                    if specifier not in candidates:
+                        candidates[specifier] = []
+                    candidates[specifier].append({
+                        "ext": ext,
+                        "url": asset_url,
+                        "version": v_str,
+                        "range": r_str
+                    })
+            except Exception as e:
+                print(f"⚠️ Failed to parse vendor.json for extension [{ext}]: {e}")
+
+    # 3. Resolve Extension Candidates per Specifier
+    for specifier, items in candidates.items():
+        if specifier in imports:
+            print(f"ℹ️ Importmap Protection: [{specifier}] claimed by Core OS. Skipping extension declarations.")
+            continue
+
+        items.sort(key=lambda x: parse_semver(x["version"]), reverse=True)
+
+        highest_item = items[0]
+        all_satisfied = all(satisfies_range(highest_item["version"], item["range"]) for item in items)
+
+        if all_satisfied:
+            imports[specifier] = highest_item["url"]
+        else:
+            imports[specifier] = highest_item["url"]
+            for item in items:
+                if not satisfies_range(highest_item["version"], item["range"]):
+                    scope_key = f"/static/extensions/{item['ext']}/"
+                    if scope_key not in scopes:
+                        scopes[scope_key] = {}
+                    scopes[scope_key][specifier] = item["url"]
+
+    payload = {"imports": imports}
+    if scopes:
+        payload["scopes"] = scopes
+    return payload
+
+@app.route('/static/extensions/<ext_name>/<path:filename>')
+def serve_extension_static(ext_name, filename):
+    """Serves static assets and vendored dependencies directly from an extension directory."""
+    ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
+    target_path = ext_dir.joinpath(filename).resolve()
+
+    try:
+        target_path.relative_to(ext_dir)
+    except ValueError:
+        return "403 Forbidden: Invalid asset path.", 403
+
+    if target_path.exists() and target_path.is_file():
+        return send_file(target_path.as_posix())
+
+    return "Extension static asset not found", 404
 
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
@@ -302,7 +429,6 @@ def recovery_ui():
     </html>
     """
     return html
-
 @app.route('/')
 def index():
     from insetu.utils import load_config
@@ -310,7 +436,8 @@ def index():
     instance_title = cfg.get("instance_title", "inSetu Developer OS")
     instance_emoji = cfg.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
+    importmap = build_dynamic_importmap()
+    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions, importmap=importmap)
 
 def run_app():
     from insetu.utils import load_config

@@ -25,13 +25,8 @@
     <meta name="theme-color" content="#121212">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" href="/favicon.ico?v={{ title|urlencode }}">
-
     <script type="importmap">
-    {
-        "imports": {
-            "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js"
-        }
-    }
+    {{ importmap|tojson|safe }}
     </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
