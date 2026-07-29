@@ -1,7 +1,7 @@
 import '../../vendor/yenvui/js/pill.js';
 import '../../vendor/yenvui/js/filter-group.js';
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 
 export class InSetuRepoFilter extends LitElement {
     static properties = {

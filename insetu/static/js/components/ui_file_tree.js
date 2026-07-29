@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { buildFileTree } from '../fs.js';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 import '../../vendor/yenvui/js/card.js';
 import '../../vendor/yenvui/js/card-group.js';
 import '../../vendor/yenvui/js/async-btn.js';

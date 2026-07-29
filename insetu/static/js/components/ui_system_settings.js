@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { InSetuElement } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 import { AppStore } from '../store.js';
 export class InSetuSystemSettings extends InSetuElement {
     static properties = {
@@ -42,7 +42,7 @@ export class InSetuSystemSettings extends InSetuElement {
             this.emoji = state.instanceEmoji || '⚙️';
         });
         this.registerGlobalListener('click', document, this._handleOutsideClick);
-        this.registerGlobalListener('insetu-settings-actions-updated', window, this._handleActionsUpdate);
+        this.registerGlobalListener('sutram-settings-actions-updated', window, this._handleActionsUpdate);
         this.settingsActions = window.ExtensionRegistry?._settingsActions || [];
     }
 

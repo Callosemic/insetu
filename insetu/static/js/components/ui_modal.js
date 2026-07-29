@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 import { InSetuElement } from '../sdk.js';
 import '../../vendor/yenvui/js/modal.js';
 export class InSetuModal extends LitElement {

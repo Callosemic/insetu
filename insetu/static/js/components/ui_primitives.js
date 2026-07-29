@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
 import { InSetuElement } from '../sdk.js';
 export class InSetuAsyncBtn extends LitElement {
     static properties = {
@@ -174,6 +174,33 @@ export class InSetuStatusBar extends InSetuElement {
     }
 }
 customElements.define('insetu-status-bar', InSetuStatusBar);
+export class InSetConfigBanner extends InSetuElement {
+    static properties = { configMissing: { type: Boolean } };
+    static styles = css`:host { display: block; }`;
+
+    constructor() {
+        super();
+        this.configMissing = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.App, state => {
+            this.configMissing = !!state.configMissing;
+        });
+    }
+
+    render() {
+        if (!this.configMissing) return html``;
+        return html`
+            <div style="background: var(--intent-warning); color: #000; padding: 8px; text-align: center; font-weight: bold; position: fixed; bottom: 30px; left: 0; right: 0; z-index: 1000; box-shadow: 0 -2px 5px rgba(0,0,0,0.2); font-size: 0.9rem;">
+                ⚠️ Configuration file missing. Operating in empty fallback state.
+                <span style="cursor:pointer; text-decoration:underline; margin-left:15px; opacity:0.8;" @click=${() => window.inSetu.stores.App.setState({ configMissing: false })}>Dismiss</span>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-config-banner', InSetConfigBanner);
 
 export class InSetuToastContainer extends InSetuElement {
     static get extensionName() { return 'toast'; }
