@@ -33,28 +33,12 @@ from insetu.auth import auth_bp, BOOT_TOKEN
 app.register_blueprint(fs_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(auth_bp)
-# Dynamically mount Tier 2 Core OS Engines (Graceful Degradation)
-try:
-    from insetu.core.bridge.engine_bridge import bridge_bp
-    app.register_blueprint(bridge_bp.bp if hasattr(bridge_bp, 'bp') else bridge_bp)
-except ImportError:
-    pass
-
-try:
-    from insetu.core.gather.engine_gather import gather_bp
-    app.register_blueprint(gather_bp.bp if hasattr(gather_bp, 'bp') else gather_bp)
-except ImportError:
-    pass
-
-try:
-    import insetu.core.cartographer.cartographer
-except ImportError:
-    pass
 @app.before_request
 def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
     # Always allow core landing, public assets, and the auth route to bypass checks
-    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap'] or request.path.startswith('/static/'):
+    # Expose the panic endpoint so the recovery OS button works even if JS crashes before the token handshake
+    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic'] or request.path.startswith('/static/'):
         return None
 
     # Check header first, fallback to query parameter for WebSockets
@@ -82,12 +66,15 @@ def load_workspace_extensions():
                     raw_extensions.add(ext)
         except Exception as e:
             print(f"Warning: Failed to parse workspaces for extensions: {e}")
-
     # Fallback to default active config if switchboard is empty/missing
     if not raw_extensions:
         cfg = load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
+
+    # Treat Tier 2 OS engines as implicit system extensions
+    raw_extensions.update(["bridge", "gather", "cartographer"])
+
     # DAG Node Resolution
     modules = {}
     for ext in list(raw_extensions):
@@ -98,13 +85,15 @@ def load_workspace_extensions():
                 try:
                     return importlib.import_module(target), None
                 except ModuleNotFoundError as e:
-                    if e.name == target.split('.')[-1] or e.name == target:
+                    if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
                         return None, None
                     return None, e
                 except Exception as e:
                     return None, e
 
             for target in [
+                f"insetu.core.{ext}.engine_{ext}",
+                f"insetu.core.{ext}.{ext}",
                 f"insetu.extensions.{ext}.engine_{ext}",
                 f"insetu.extensions.engine_{ext}",
                 f"insetu.engine_{ext}"
@@ -290,10 +279,30 @@ def api_repos(workspace_id):
         "targets": targets,
         "virtual_contexts": cfg.get("virtual_contexts", []),
         "category_order": cfg.get("category_order", []),
-        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "research", "term"]),
+        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
         "config_missing": not os.path.exists(cfg_path)
     })
+
+@app.route('/recovery')
+def recovery_ui():
+    """Zero-JS escape hatch in case the frontend bundle is completely bricked."""
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family: monospace; background: #0f172a; color: #f8fafc; text-align: center; padding-top: 100px;">
+        <h2 style="color: #ef4444;">🆘 Manual Recovery Console</h2>
+        <p>Use this page to manually trigger a kernel panic and boot into the Lifeboat FS.</p>
+        <form method="POST" action="/api/system/panic">
+            <button type="submit" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
+                Boot Immutable Recovery OS
+            </button>
+        </form>
+    </body>
+    </html>
+    """
+    return html
+
 @app.route('/')
 def index():
     from insetu.utils import load_config
@@ -302,196 +311,7 @@ def index():
     instance_emoji = cfg.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
-import threading
-from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-_COMPILER_LOCKS = {}
-_COMPILER_GLOBAL_LOCK = threading.Lock()
 
-def get_compiler_lock(wid):
-    with _COMPILER_GLOBAL_LOCK:
-        if wid not in _COMPILER_LOCKS:
-            _COMPILER_LOCKS[wid] = threading.RLock()
-        return _COMPILER_LOCKS[wid]
-def _background_compile(job_id, workspace_id, force_full=False, **kwargs):
-    ws_lock = get_compiler_lock(workspace_id)
-    try:
-        ws_lock.acquire()
-        import insetu.core.gather.engine_gather as engine_gather
-        from insetu.core.utils_core import get_gather_paths
-        from insetu.utils import load_json_file, get_workspace_physics, load_config
-        from pathlib import Path
-        import os
-        import subprocess
-
-        paths = get_gather_paths(workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        manifest_data = load_json_file(manifest_path, {})
-
-        forced_repos = []
-        if isinstance(force_full, list):
-            forced_repos = force_full
-            needs_full_compile = False
-        else:
-            needs_full_compile = force_full or not manifest_data
-
-        update_immediate_job_status(job_id, 'processing', "Running pre-compile hooks...", workspace_id=workspace_id)
-        try:
-            from insetu.hooks import hooks
-            hooks.emit('pre_compile', workspace_id=workspace_id, is_full_sweep=needs_full_compile, forced_repos=forced_repos)
-            from insetu.routes_fs import _VFS_WRITE_QUEUE
-            _VFS_WRITE_QUEUE.join()
-        except Exception as e:
-            print(f"Warning: Pre-compile hooks failed: {str(e)}")
-
-        if not needs_full_compile and not forced_repos:
-            try:
-                live_cfg = load_config(workspace_id)
-                ledger_events = kwargs.get('ledger_events')
-
-                # Proactive Ledger Flush: If manual UI refresh, grab any pending VFS mutations instantly
-                if ledger_events is None:
-                    from insetu.db import get_connection
-                    db_conn = get_connection("workers", workspace_id=workspace_id)
-                    try:
-                        events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
-                    except Exception:
-                        events = []
-
-                    if events:
-                        ledger_events = [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
-                        db_conn.execute("DELETE FROM vfs_event_log")
-                        db_conn.commit()
-                        # Decouple Cartographer: Dispatch asynchronously so it doesn't block Gather
-                        touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
-                        if touched_repos:
-                            import uuid, json
-                            from insetu.workers import submit_immediate_job
-                            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
-                            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=workspace_id)
-                if ledger_events:
-                    # Phase 3: Pure Event Sourced Differential Routing
-                    changed_files = [e["filepath"] for e in ledger_events]
-                    from insetu.core.gather.engine_gather import resolve_file_bucket
-
-                    touched_buckets = set()
-
-                    for repo_cfg in live_cfg.get("target_repos", []):
-                        if repo_cfg.get("exclude_from_context"): continue
-                        repo_dir = repo_cfg.get("repo_dir")
-                        subs = repo_cfg.get("sub_buckets", [])
-
-                        repo_files = [f for f in changed_files if f.startswith(f"{repo_dir}/")]
-                        for f in repo_files:
-                            rel_path = f[len(repo_dir)+1:]
-                            if subs:
-                                b, module = resolve_file_bucket(rel_path, subs)
-                                if b and module: touched_buckets.add(f"{repo_dir}__{module}")
-                                elif b: touched_buckets.add(f"{repo_dir}__{b.get('id')}")
-                                else: touched_buckets.add(f"{repo_dir}__catch_all")
-                            else:
-                                touched_buckets.add(f"{repo_dir}__main")
-
-                    update_immediate_job_status(job_id, 'processing', f"Surgically compiling {len(touched_buckets)} touched bucket(s)...", workspace_id=workspace_id)
-                    engine_gather._surgically_update_manifest(workspace_id=workspace_id, files=changed_files)
-                else:
-                    update_immediate_job_status(job_id, 'processing', "No pending changes. Syncing extensions...", workspace_id=workspace_id)
-                    all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
-                    from insetu.hooks import hooks
-                    hooks.emit('compile_contexts', manifest=manifest_data, workspace_id=workspace_id, target_repos=all_repo_dirs, touched_buckets=[], is_full_sweep=False)
-                    from insetu.utils_core import save_json_file
-                    save_json_file(manifest_path, manifest_data, workspace_id)
-            except Exception as e:
-                import traceback
-                print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
-                needs_full_compile = True
-        if needs_full_compile or forced_repos:
-            # Fire Cartographer asynchronously to prevent bottlenecking the Context Compiler
-            import uuid, json
-            from insetu.workers import submit_immediate_job
-            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
-            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": None if needs_full_compile else forced_repos}), workspace_id=workspace_id)
-
-            sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
-            update_immediate_job_status(job_id, 'processing', f"Compiling context payloads ({sweep_label})...", workspace_id=workspace_id)
-            engine_gather.generate_context_file(workspace_id, target_repos=None if needs_full_compile else forced_repos)
-
-        manifest_data = load_json_file(manifest_path, {})
-        manifest_keys = list(manifest_data.keys())
-        if not manifest_keys and os.path.exists(paths["contexts_dir"]):
-            manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
-
-        update_immediate_job_status(job_id, 'completed', "Context successfully synchronized!", artifact={"files": sorted(manifest_keys)}, workspace_id=workspace_id)
-    except Exception as e:
-        import traceback
-        print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
-        update_immediate_job_status(job_id, 'failed', f"Compilation Error: {str(e)}", workspace_id=workspace_id)
-    finally:
-        ws_lock.release()
-
-register_callback("gather", "compile_contexts", _background_compile)
-@app.route('/submit', methods=['POST'])
-def submit():
-    from insetu.utils import sniff_tenant_id
-    workspace_id = sniff_tenant_id()
-    from insetu.core.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    data = request.json or {}
-    force_full = data.get("force_full", False)
-
-    from insetu.db import get_connection
-    conn = get_connection("workers", workspace_id=workspace_id)
-    existing_job = conn.execute(
-        "SELECT id FROM immediate_jobs WHERE ext_name='gather' AND callback_name='compile_contexts' AND status IN ('pending', 'processing')"
-    ).fetchone()
-
-    if existing_job:
-        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing compilation."}), 202
-
-    import uuid
-    import json
-    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    args_json = json.dumps({"force_full": force_full})
-    submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
-
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
-@app.route('/api/<workspace_id>/manifest', methods=['GET'])
-def api_manifest(workspace_id):
-    from insetu.core.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    headers = {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
-    }
-    if os.path.exists(manifest_path):
-        with open(manifest_path, 'r', encoding='utf-8') as f: 
-            return f.read(), 200, headers
-    return jsonify({}), 200, headers
-@app.route('/download/<path:filename>')
-def download_file(filename):
-    from insetu.utils import sniff_tenant_id
-    workspace_id = sniff_tenant_id()
-    from insetu.core.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-
-    # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
-    safe_basename = Path(filename).name
-    search_paths = [Path(d).joinpath(safe_basename).as_posix() for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
-    file_path = next((p for p in search_paths if os.path.exists(p)), None)
-    # Fallback to resolving against the workspace root for media-vault files
-    if not file_path:
-        from insetu.core.utils_core import resolve_logical_path
-        resolved = resolve_logical_path(filename, workspace_id)
-        if os.path.exists(resolved): file_path = resolved
-    if not file_path: return jsonify({"error": "File not found"}), 404
-    base, ext = os.path.splitext(safe_basename)
-    dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-
-    # If explicitly requested as inline view, let the browser handle the mime type natively
-    if request.args.get('inline') == '1':
-        return send_file(file_path, as_attachment=False)
-
-    return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
 def run_app():
     from insetu.utils import load_config
     from insetu.hooks import hooks

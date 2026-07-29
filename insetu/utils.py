@@ -122,22 +122,17 @@ def load_json_file(filepath, default_fallback=None):
         _JSON_MTIME[filepath] = current_mtime
 
     return _JSON_CACHE[filepath]
-
 def save_json_file(filepath, data, workspace_id=None):
     global _JSON_CACHE, _JSON_MTIME
-    if filepath.endswith('config.json') or filepath.endswith('workflows.json'):
-        from insetu.routes_fs import _VFS_WRITE_QUEUE
-        try:
-            wid = workspace_id or sniff_tenant_id()
-            if not wid:
-                wid = "default"
-            _VFS_WRITE_QUEUE.put((wid, filepath, json.dumps(data, indent=2), {"is_absolute_artifact": True}))
-        except Exception:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-    else:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+    from insetu.vfs import VFSTransaction
+    import json
+
+    wid = workspace_id or sniff_tenant_id()
+    if not wid:
+        wid = "default"
+
+    vfs = VFSTransaction(wid)
+    vfs.save(filepath, json.dumps(data, indent=2), {"is_absolute_artifact": True})
 
     _JSON_CACHE[filepath] = data
     _JSON_MTIME[filepath] = 0

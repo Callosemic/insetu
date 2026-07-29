@@ -3,94 +3,58 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/format/engine_format.py:8
-   ↳ Banned SDK imports detected: {'submit_immediate_job'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:36
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:75
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:131
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/citations/engine_citations.py:175
-   ↳ Banned SDK imports detected: {'update_immediate_job_status'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/ingest/engine_ingest.py:7
-   ↳ Banned SDK imports detected: {'submit_immediate_job', 'update_immediate_job_status'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/git/engine_git.py:10
-   ↳ Banned SDK imports detected: {'submit_immediate_job'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/git/engine_git.py:69
-   ↳ Banned SDK imports detected: {'execute_vfs_delete'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: PULL_TIMEOUT_CIRCUIT_BREAKER] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/git/engine_git.py:802
-   ↳ Subprocess 'git pull' invoked without an explicit timeout circuit breaker.
-
-❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:52
-   ↳ Subprocess call outside of designated engines.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:137
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/hooks/engine_hooks.py:240
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:90
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:175
-   ↳ Banned SDK imports detected: {'execute_vfs_delete'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:182
-   ↳ Banned SDK imports detected: {'execute_vfs_save'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:233
-   ↳ Banned SDK imports detected: {'execute_vfs_delete'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:240
-   ↳ Banned SDK imports detected: {'execute_vfs_save'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:259
-   ↳ Banned SDK imports detected: {'execute_vfs_delete'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/skills/engine_skills.py:321
-   ↳ Banned SDK imports detected: {'execute_vfs_save'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/flow/engine_flow.py:246
-   ↳ Banned SDK imports detected: {'execute_vfs_delete'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/research/engine_research.py:11
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/research/engine_research.py:195
-   ↳ Banned SDK imports detected: {'execute_vfs_save'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/tracker/engine_tracker.py:10
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: SDK_CONTEXT_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/tracker/engine_tracker.py:55
-   ↳ Banned SDK imports detected: {'get_connection'}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.
-
-❌ [VIOLATION: IO_BLOCK_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/core/bridge/bridge_vfs.py:170
-   ↳ Subprocess call outside of designated engines.
+❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/flow/engine_flow.py:235
+   ↳ Synchronous shutil.move/rmtree detected. Route through the async VFS queue.
 
 🔍 Sweeping JavaScript Frontend (Regex Analysis)...
-❌ [VIOLATION: LEGACY_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1116
-   ↳ Legacy modal layout class detected. Migrate to <yenvui-modal> or <insetu-modal> primitives.
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:282
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
 
-❌ [VIOLATION: DROPDOWN_CLICK_OUTSIDE_VIOLATION] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/core/bridge.js:1
-   ↳ Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:287
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
 
-❌ [VIOLATION: DEBOUNCE_MANDATE] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_primitives.js:157
-   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:518
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
 
-❌ [VIOLATION: DROPDOWN_CLICK_OUTSIDE_VIOLATION] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:1
-   ↳ Manual click listener detected for dropdown/filter management. Migrate to <insetu-filter-dropdown>.
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:523
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1368
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1388
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1398
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1429
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1478
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/app.js:180
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_modal.js:89
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:121
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:291
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:307
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:450
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
+
+❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:454
+   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
 
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-❌ FAILED: Found 29 architectural violations.
+❌ FAILED: Found 17 architectural violations.

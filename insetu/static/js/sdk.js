@@ -1,53 +1,14 @@
-import { LitElement, html } from 'lit';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+// insetu/insetu/static/js/sdk.js
+// Tier 1A: inSetu Local OS SDK Wrapper
+
+import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../vendor/sutram/sdk.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce } from '../vendor/sutram/utils.js';
+
+export { bindStoreInput };
+
 export function createExtensionStore(name, initialState, persistKeys = []) {
-    const store = createStore(
-        devtools(
-            subscribeWithSelector((set, get) => ({
-                ...initialState,
-                resetState: () => set(initialState)
-            })),
-            { name: `${name}Store` }
-        )
-    );
-    if (persistKeys && persistKeys.length > 0) {
-        const getWs = () => window.inSetu.utils.getActiveWorkspace();
-
-        const hydrate = (ws) => {
-            const hydrated = {};
-            persistKeys.forEach(k => {
-                const val = localStorage.getItem(`insetu_${name.toLowerCase()}_${k}_${ws}`);
-                if (val) {
-                    try { 
-                        const parsed = JSON.parse(val); 
-                        hydrated[k] = initialState[k] instanceof Set ? new Set(parsed) : parsed;
-                    } catch(e) {}
-                }
-            });
-            if (Object.keys(hydrated).length > 0) store.setState(hydrated);
-        };
-
-        setTimeout(() => hydrate(getWs()), 0);
-
-        setTimeout(() => {
-            const appStore = window.inSetu?.stores?.App;
-            if (appStore) {
-                appStore.subscribe(state => state.activeWorkspace, ws => hydrate(ws));
-            }
-        }, 100);
-        store.subscribe((state, prevState) => {
-            const ws = getWs();
-            persistKeys.forEach(k => {
-                if (state[k] !== prevState[k]) {
-                    const valToSave = state[k] instanceof Set ? Array.from(state[k]) : state[k];
-                    localStorage.setItem(`insetu_${name.toLowerCase()}_${k}_${ws}`, JSON.stringify(valToSave));
-                }
-            });
-        });
-    }
-
-    return store;
+    const getWs = () => window.inSetu.utils.getActiveWorkspace();
+    return createSutramStore(name, initialState, persistKeys, getWs, 'insetu');
 }
 
 export function createIsolatedSlice(store, sliceKey) {
@@ -56,19 +17,18 @@ export function createIsolatedSlice(store, sliceKey) {
         set: (val) => store.setState({ [sliceKey]: typeof val === 'object' && val !== null ? { ...val } : val })
     };
 }
-export class InSetuElement extends LitElement {
+
+export class InSetuElement extends SutramElement {
     static properties = {
         workspaceId: { type: String }
     };
+
     constructor() {
         super();
-        this.workspaceId = window.inSetu.utils.getActiveWorkspace();
-        this._storeUnsubs = [];
-        this._managedIntervals = [];
-        this._managedListeners = [];
+        this.workspaceId = window.inSetu?.utils?.getActiveWorkspace() || 'default';
     }
+
     get extName() {
-        // 1. SSOT Registry Lookup (Identify which extension mapped this component)
         const myTag = this.tagName.toLowerCase();
         if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
             for (const [extName, config] of window.ExtensionRegistry._manifests.entries()) {
@@ -78,32 +38,21 @@ export class InSetuElement extends LitElement {
             }
         }
 
-        // 2. Contextual DOM Inheritance (Piercing Shadow DOM boundaries)
         let currentNode = this;
         while (currentNode) {
             if (currentNode.dataset && currentNode.dataset.ext) return currentNode.dataset.ext;
-
             if (currentNode.closest) {
                 const ancestor = currentNode.closest('[data-ext]');
                 if (ancestor) return ancestor.dataset.ext;
             }
-
-            // Pierce the Shadow DOM boundary upwards
             const root = currentNode.getRootNode();
             currentNode = (root instanceof ShadowRoot) ? root.host : null;
         }
 
-        // 3. Explicit static class definition (Manual override)
         if (this.constructor.extensionName) return this.constructor.extensionName;
-
-        // 4. Fallback to tag name inference (Convention over configuration)
-        const inferred = myTag.replace('insetu-ext-', '');
-        if (myTag === inferred) {
-            console.warn(`[SDK Warning] Component <${myTag}> is unmapped and lacks the 'insetu-ext-' prefix. API routing may fail.`);
-        }
-
-        return inferred;
+        return myTag.replace('insetu-ext-', '');
     }
+
     get vfs() { return window.inSetu.vfs; }
     get ui() { return window.inSetu.ui; }
     get sys() { return window.inSetu.sys; }
@@ -142,31 +91,11 @@ export class InSetuElement extends LitElement {
             }
         };
     }
-    subscribe(store, selectorOrListener, listener = undefined) {
-        const unsub = listener ? store.subscribe(selectorOrListener, listener) : store.subscribe(selectorOrListener);
-        this._storeUnsubs.push(unsub);
-        return unsub;
-    }
-
-    registerInterval(callback, delayMs) {
-        const id = setInterval(callback, delayMs);
-        this._managedIntervals.push(id);
-        return id;
-    }
-
-    registerGlobalListener(eventType, targetNode, callback, options = false) {
-        targetNode.addEventListener(eventType, callback, options);
-        this._managedListeners.push({ eventType, targetNode, callback, options });
-    }
     dispatch(eventName, detail = null) {
         if (window.inSetu?.events?.emit) {
             window.inSetu.events.emit(eventName, detail);
         } else {
-            window.dispatchEvent(new CustomEvent(eventName, { 
-                detail, 
-                bubbles: true, 
-                composed: true 
-            }));
+            super.dispatch(eventName, detail);
         }
     }
 
@@ -182,109 +111,10 @@ export class InSetuElement extends LitElement {
             });
         }
     }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        this._storeUnsubs.forEach(unsub => unsub());
-        this._storeUnsubs = [];
-
-        this._managedIntervals.forEach(id => clearInterval(id));
-        this._managedIntervals = [];
-
-        this._managedListeners.forEach(({ eventType, targetNode, callback, options }) => {
-            targetNode.removeEventListener(eventType, callback, options);
-        });
-        this._managedListeners = [];
-    }
 
     onWorkspaceChanged(newWorkspaceId) {}
 }
-export function bindStoreInput(store, statePath, currentValue, options = {}) {
-    const { type = 'text', placeholder = '', style = '', id = '', selectOptions = [], min, max, onUpdate } = options;
-    const handleInput = (e) => {
-        let val = type === 'checkbox' ? e.target.checked : e.target.value;
-        if (type === 'number') val = parseFloat(val);
-        const parts = statePath.split('.');
-        if (parts.length === 1) {
-            store.setState({ [parts[0]]: val });
-        } else {
-            const state = store.getState();
-            store.setState({ [parts[0]]: { ...state[parts[0]], [parts[1]]: val } });
-        }
-        if (onUpdate) onUpdate(val, e);
-    };
 
-    if (type === 'textarea') {
-        return html`<textarea id=${id} style=${style} placeholder=${placeholder} .value=${currentValue || ''} @input=${handleInput}></textarea>`;
-    } else if (type === 'select') {
-        return html`<select id=${id} style=${style} .value=${currentValue || ''} @change=${handleInput}>
-            ${selectOptions.map(o => html`<option value=${o.value !== undefined ? o.value : o}>${o.label || o}</option>`)}
-        </select>`;
-    } else if (type === 'checkbox') {
-        return html`<input id=${id} type="checkbox" style=${style} .checked=${!!currentValue} @change=${handleInput}>`;
-    }
-    return html`<input id=${id} type=${type} style=${style} placeholder=${placeholder} min=${min||''} max=${max||''} .value=${currentValue || ''} @input=${handleInput}>`;
-}
-
-export function normalizeAccentText(str) {
-    if (!str) return '';
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-
-export function fuzzyFilterObjects(items, query, getSearchString = (item) => String(item)) {
-    if (!query.trim()) return items;
-
-    const norm = normalizeAccentText;
-    const queryWords = norm(query).trim().split(/\s+/).filter(t => t);
-
-    const scoredItems = [];
-
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const targetStr = norm(getSearchString(item));
-        let totalScore = 0;
-        let isMatch = true;
-
-        for (let w = 0; w < queryWords.length; w++) {
-            const qWord = queryWords[w];
-            let wordScore = 0;
-
-            if (targetStr.includes(qWord)) {
-                wordScore = qWord.length * 50;
-                if (targetStr.startsWith(qWord) || new RegExp(`[\\/\\s\\-_]${qWord}`).test(targetStr)) {
-                    wordScore += 50;
-                }
-            } else {
-                let qIdx = 0;
-                let tIdx = 0;
-                let prevTIdx = -1;
-
-                while (qIdx < qWord.length && tIdx < targetStr.length) {
-                    if (qWord[qIdx] === targetStr[tIdx]) {
-                        if (tIdx === 0 || /[\\/\\s\\-_]/.test(targetStr[tIdx - 1])) {
-                            wordScore += 10;
-                        } else {
-                            wordScore += 1;
-                        }
-                        if (prevTIdx !== -1) {
-                            const gap = tIdx - prevTIdx - 1;
-                            wordScore -= (gap * 1.5); 
-                        }
-                        prevTIdx = tIdx;
-                        qIdx++;
-                    }
-                    tIdx++;
-                }
-                if (qIdx !== qWord.length || wordScore <= 0) {
-                    isMatch = false; 
-                    break;
-                }
-            }
-            totalScore += wordScore;
-        }
-        if (isMatch) scoredItems.push({ item, score: totalScore });
-    }
-    return scoredItems.sort((a, b) => b.score - a.score).map(res => res.item);
-}
 // Safely initialize nested global namespaces individually
 window.inSetu = window.inSetu || {};
 window.inSetu.stores = window.inSetu.stores || {};
@@ -304,68 +134,108 @@ window.inSetu.events = window.inSetu.events || {
         return null;
     }
 };
-
-// Define the Job Polling Subroutine
-window.inSetu.utils.pollJob = function(jobId, options = {}) {
-    const { onProgress = ()=>{}, onComplete = ()=>{}, onError = ()=>{}, interval = 1000, maxRetries = 300 } = options;
-    let retries = 0;
-    const poll = async () => {
-        try {
-            const res = await window.inSetu.api.system(`jobs/${jobId}`);
-            if (!res.ok) {
-                if (res.status === 401) {
-                    // Server likely rebooted and rotated its boot token. Attempt a seamless re-handshake.
-                    const authRes = await fetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
-                    if (authRes.ok) {
-                        const authData = await authRes.json();
-                        sessionStorage.setItem('insetu_boot_token', authData.token);
-                        if (window.inSetu.stores.App) window.inSetu.stores.App.setState({ authToken: authData.token });
-                    }
-                } else if (res.status === 404) {
-                    try {
-                        const errData = await res.clone().json();
-                        if (errData.error === "Job not found") {
-                            onError(new Error("Job not found."));
-                            return;
-                        }
-                    } catch(e) {}
-                }
-                throw new Error(`HTTP ${res.status}`);
-            }
-            const data = await res.json();
-            if (data.status === 'processing' || data.status === 'pending') {
-                onProgress(data.message || "Processing...", data);
-                if (retries < maxRetries) {
-                    retries++;
-                    setTimeout(poll, interval);
-                } else onError(new Error("Job polling timed out."));
-            } else if (data.status === 'completed') {
-                onComplete(data);
-            } else if (data.status === 'failed') {
-                onError(new Error(data.message || "Job failed."));
-            }
-        } catch (e) {
-            // Silent retry for network interruptions and brief 404/502s during reboot
-            if (retries < maxRetries) {
-                retries++;
-                setTimeout(poll, interval);
-            } else {
-                onError(e);
-            }
-        }
-    };
-    setTimeout(poll, 500);
-};
-
-// Register SDK primitives
+// Forward the central registry
+window.inSetu.extensions.Registry = SutramRegistry;
+window.ExtensionRegistry = SutramRegistry;
 window.inSetu.extensions.InSetuElement = InSetuElement;
 window.inSetu.extensions.createExtensionStore = createExtensionStore;
-window.inSetu.utils.slugify = function(str) {
-    if (!str) return '';
-    return window.inSetu.utils.normalizeAccentText(str).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+// Apply opinionated inSetu OS extensions to the generic Sutram Registry
+const _baseGetLayoutSlots = typeof window.ExtensionRegistry.getLayoutSlots === 'function' 
+    ? window.ExtensionRegistry.getLayoutSlots.bind(window.ExtensionRegistry) 
+    : function() {
+        const slots = [];
+        this._manifests.forEach((manifest, extName) => {
+            if (manifest.layoutSlots && Array.isArray(manifest.layoutSlots)) {
+                slots.push(...manifest.layoutSlots.map(s => {
+                    const slotType = (s.slot || '').startsWith('slots:') ? s.slot : 'slots:' + s.slot;
+                    return { ...s, slot: slotType, extName };
+                }));
+            }
+        });
+        return slots;
+    }.bind(window.ExtensionRegistry);
+
+window.ExtensionRegistry.getLayoutSlots = function() {
+    try {
+        const slots = _baseGetLayoutSlots() || [];
+        return slots.filter(s => {
+            if (!s.extName) return true;
+            const isCore = ['bridge', 'gather', 'config', 'files', 'editor'].includes(s.extName);
+            if (isCore) return true;
+            if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(s.extName)) return true;
+            return false;
+        });
+    } catch (e) {
+        console.error("Error in getLayoutSlots:", e);
+        return [];
+    }
 };
+
+const _baseGetEntityActions = window.ExtensionRegistry.getEntityActions.bind(window.ExtensionRegistry);
+window.ExtensionRegistry.getEntityActions = function(compoundType, data) {
+    const actions = _baseGetEntityActions(compoundType, data);
+    return actions.filter(act => {
+        if (act.extName && !['bridge', 'gather', 'config', 'files'].includes(act.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(act.extName)) {
+            return false;
+        }
+        return true;
+    });
+};
+
+window.ExtensionRegistry.utils = {
+    debounce,
+    _verifyTimers: {},
+    debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
+        const key = `verify_${filepath}`;
+        if (this._verifyTimers[key]) window.clearTimeout(this._verifyTimers[key]); // utils.debounce whitelist
+        this._verifyTimers[key] = setTimeout(async () => {
+            try {
+                const res = await window.inSetu.api.workspace(`fs/exists?file=${encodeURIComponent(filepath)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    callback(data.exists, filepath);
+                }
+            } catch(e) {
+                console.warn("Silent verify failed", e);
+            }
+        }, delay);
+    }
+};
+
+const _originalRegister = window.ExtensionRegistry.registerExtension.bind(window.ExtensionRegistry);
+window.ExtensionRegistry.registerExtension = function(extName, config) {
+    if (config.entityActions) {
+        config.entityActions.forEach(act => {
+            if (act.emitEvent && !act.onClick && !act.asyncAction) {
+                act.onClick = (data, e) => {
+                    if (e) e.stopPropagation();
+                    const payload = act.emitEvent(data);
+                    if (window.inSetu?.events?.emit) {
+                        window.inSetu.events.emit(payload.name, payload.detail);
+                    }
+                };
+            }
+        });
+    }
+    _originalRegister(extName, config);
+
+    if (config.settingsActions) {
+        config.settingsActions.forEach(act => {
+            let sectionName = 'Extensions';
+            if (config.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'Workspace';
+            else if (config.name === 'Issue Tracker') sectionName = 'Tracker';
+            else if (config.name === 'Skills Tracker') sectionName = 'Practice';
+            this.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
+        });
+    }
+};
+
+// Attach util wrappers mapping to the Sutram imports
+window.inSetu.utils.slugify = slugify;
 window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
+
+// Preserve clipboard API bindings
 window.inSetu.utils.copyToClipboard = async function(text) {
     try {
         await navigator.clipboard.writeText(text);
@@ -375,6 +245,7 @@ window.inSetu.utils.copyToClipboard = async function(text) {
         throw new Error("Clipboard access denied");
     }
 };
+
 window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!") {
     try {
         await window.inSetu.utils.copyToClipboard(text);
@@ -404,6 +275,7 @@ window.inSetu.utils.parseFrontmatter = function(text) {
 
     return { meta, content, rawFrontmatter: match[0] };
 };
+
 window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null) {
     const extract = (data) => {
         if (Array.isArray(data)) return data;
@@ -426,7 +298,3 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
     });
     return Array.from(allFiles);
 };
-
-// Global backwards compatibility proxies for HTML click handlers and legacy extensions
-window.switchTab = (e, tabId) => window.inSetu.sys && window.inSetu.sys.switchTab ? window.inSetu.sys.switchTab(e, tabId) : null;
-window.switchSubTab = (subId, forceRefresh, isProgrammatic) => window.inSetu.sys && window.inSetu.sys.switchSubTab ? window.inSetu.sys.switchSubTab(subId, forceRefresh, isProgrammatic) : null;

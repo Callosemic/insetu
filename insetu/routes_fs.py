@@ -5,7 +5,6 @@ import threading
 from flask import Blueprint, request, jsonify, send_file
 from insetu.core.utils_core import resolve_logical_path
 from insetu.hooks import hooks
-import insetu.core.gather.engine_gather as engine_gather
 
 fs_bp = Blueprint('fs', __name__)
 
@@ -175,6 +174,47 @@ def api_fs_fetch(workspace_id):
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404
+@fs_bp.route('/api/<workspace_id>/manifest', methods=['GET'])
+def api_manifest(workspace_id):
+    from insetu.core.utils_core import get_gather_paths
+    paths = get_gather_paths(workspace_id)
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+    headers = {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+    }
+    if os.path.exists(manifest_path):
+        with open(manifest_path, 'r', encoding='utf-8') as f: 
+            return f.read(), 200, headers
+    return jsonify({}), 200, headers
+
+@fs_bp.route('/download/<path:filename>')
+def download_file(filename):
+    from insetu.utils import sniff_tenant_id
+    workspace_id = sniff_tenant_id()
+    from insetu.core.utils_core import get_gather_paths
+    import datetime
+    paths = get_gather_paths(workspace_id)
+
+    # Strip the arbitrary prefix to prevent double-nesting (e.g. prompts/prompts/file.md)
+    safe_basename = Path(filename).name
+    search_paths = [Path(d).joinpath(safe_basename).as_posix() for d in [paths["contexts_dir"], paths["prompts_dir"], paths["diffs_dir"], paths["gather_dir"]]]
+    file_path = next((p for p in search_paths if os.path.exists(p)), None)
+    # Fallback to resolving against the workspace root for media-vault files
+    if not file_path:
+        from insetu.core.utils_core import resolve_logical_path
+        resolved = resolve_logical_path(filename, workspace_id)
+        if os.path.exists(resolved): file_path = resolved
+    if not file_path: return jsonify({"error": "File not found"}), 404
+    base, ext = os.path.splitext(safe_basename)
+    dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+
+    # If explicitly requested as inline view, let the browser handle the mime type natively
+    if request.args.get('inline') == '1':
+        return send_file(file_path, as_attachment=False)
+
+    return send_file(file_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
+
 @fs_bp.route('/api/<workspace_id>/fs/exists', methods=['GET'])
 def api_fs_exists(workspace_id):
     """Silent validation route that returns 200 OK to keep the browser console clean."""

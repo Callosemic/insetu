@@ -110,7 +110,7 @@ def get_system_config(workspace_id):
                                             try:
                                                     return importlib.import_module(target), None
                                             except ModuleNotFoundError as e:
-                                                    if e.name == target.split('.')[-1] or e.name == target:
+                                                    if e.name == target.split('.')[-1] or e.name == target or (e.name and target.startswith(f"{e.name}.")):
                                                             return None, None
                                                     return None, f"Missing dependency: {e.name}"
                                             except Exception as e:

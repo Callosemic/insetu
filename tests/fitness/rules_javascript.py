@@ -2,9 +2,9 @@ import os
 import re
 from pathlib import Path
 from .core import FRONTEND_DIR, report_violation
-
 def check_javascript_files():
     print("🔍 Sweeping JavaScript Frontend (Regex Analysis)...")
+    shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
     dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
     hex_color_pattern = re.compile(r'#[0-9a-fA-F]{3,6}\b')
@@ -12,6 +12,7 @@ def check_javascript_files():
     raw_layout_ban_pattern = re.compile(r'class=[\'"].*\bfile-card\b.*[\'"]')
     legacy_modal_ban_pattern = re.compile(r'class=[\'"].*\b(modal-panel|modal-content|fullscreen-modal)\b.*[\'"]')
     legacy_modal_maxwidth_pattern = re.compile(r'<insetu-modal[^>]*\bmaxWidth=[\'"](?:100vw|95vw)[\'"]')
+    legacy_insetu_modal_pattern = re.compile(r'<(?:insetu-modal)\b|@modal-closed|@modal-closing')
     dom_annihilation_pattern = re.compile(r'(?:\.innerHTML|\[[\'"]innerHTML[\'"]\])\s*=\s*([\'"`][\'"`])')
     bracket_bypass_pattern = re.compile(r'\[[\'"](value|checked|classList)[\'"]\]')
     floating_global_pattern = re.compile(r'^\s*let\s+[a-zA-Z0-9_,\s]+')
@@ -39,6 +40,7 @@ def check_javascript_files():
     imperative_action_dispatch_pattern = re.compile(r'(?:onClick|asyncAction):\s*(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>\s*(?:window\.)?dispatchEvent\s*\(\s*new\s+CustomEvent')
     banned_localstorage_tab_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_(?:tab|subtab)")
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
+    dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -61,6 +63,8 @@ def check_javascript_files():
                             report_violation("CUSTOM_ELEMENT_DEFINE_MANDATE", filepath, 1, f"Class '{cls_name}' extends InSetuElement/LitElement but is missing a customElements.define registration.")
                 if "innerHTML =" in full_content and file != "ext_citations.js" and is_extension:
                     report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
+                if dom_content_loaded_registration_pattern.search(full_content):
+                    report_violation("DOMCONTENTLOADED_REGISTRATION_BAN", filepath, 1, "Extensions must invoke ExtensionRegistry.registerExtension at top-level module scope to guarantee deterministic registration during boot.")
 
                 if file not in ["app.js", "ui_dropdowns.js", "ui_file_tree.js"]:
                     if "addEventListener('click'" in full_content or 'addEventListener("click"' in full_content:
@@ -101,6 +105,8 @@ def check_javascript_files():
                         report_violation("LEGACY_MODAL_BAN", filepath, line_num, "Legacy modal layout class detected. Migrate to <yenvui-modal> or <insetu-modal> primitives.")
                     if legacy_modal_maxwidth_pattern.search(line):
                         report_violation("MODAL_FULLSCREEN_PROPERTY_MANDATE", filepath, line_num, "Deprecated maxWidth viewport attribute on <insetu-modal>. Use declarative ?fullscreen=${true} property instead.")
+                    if legacy_insetu_modal_pattern.search(line):
+                        report_violation("LEGACY_INSETU_MODAL_BAN", filepath, line_num, "Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.")
 
                     if is_extension and floating_global_pattern.match(line.strip()):
                         report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
@@ -194,6 +200,8 @@ def check_javascript_files():
 
                     if banned_localstorage_tab_pattern.search(line):
                         report_violation("BANNED_LOCALSTORAGE_TAB_ROUTING", filepath, line_num, "Direct localStorage tab state reads/writes are banned. Use AppStore routing and window.location.hash.")
-
                     if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                         report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
+
+                    if shared_styles_pattern.search(line) and 'vendor/sutram/shared_styles.js' not in line:
+                        report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Reference vendor/sutram/shared_styles.js instead.")

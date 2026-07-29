@@ -3,6 +3,25 @@
 <head>
     <title>{{ title }}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <script>
+        window.addEventListener('error', function(e) {
+            // Prevent the airbag from deploying for minor non-fatal errors (e.g. image loads)
+            if (e.filename && !e.filename.includes('.js')) return;
+
+            document.body.innerHTML = `
+                <div style="font-family: monospace; padding: 40px; background: #0f172a; color: #f8fafc; height: 100vh; text-align: center;">
+                    <h2 style="color: #ef4444;">⚠️ Fatal UI Crash Detected</h2>
+                    <p>A JavaScript error prevented the OS from booting.</p>
+                    <code style="display: block; background: #1e293b; padding: 15px; margin: 20px auto; max-width: 600px; text-align: left; color: #fca5a5;">${e.message}</code>
+                    <form method="POST" action="/api/system/panic">
+                        <button type="submit" style="background: #ef4444; color: white; padding: 12px 24px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px;">
+                            🆘 Force Kernel Panic (Boot Lifeboat)
+                        </button>
+                    </form>
+                </div>
+            `;
+        });
+    </script>
     <meta name="theme-color" content="#121212">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" href="/favicon.ico?v={{ title|urlencode }}">
@@ -15,22 +34,56 @@
     }
     </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        .retro-boot {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100dvh;
+            background-color: #000000; color: #4ade80;
+            font-family: 'Courier New', Courier, monospace;
+            z-index: 99999; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; text-transform: uppercase;
+        }
+        .retro-title { font-size: 2.5rem; margin-bottom: 30px; font-weight: bold; text-shadow: 2px 2px 0px #065f46; text-align: center; }
+        .retro-text { font-size: 1.1rem; margin: 8px 0; width: 300px; text-align: left; }
+        .retro-cursor { display: inline-block; width: 12px; height: 1.1rem; background-color: #4ade80; animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 5px; }
+        .retro-btn {
+            background: transparent; color: #3b82f6; border: 2px solid #3b82f6;
+            padding: 12px 20px; font-family: inherit; font-size: 1rem; font-weight: bold;
+            cursor: pointer; text-decoration: none; margin: 10px; text-transform: uppercase;
+            transition: all 0.1s;
+        }
+        .retro-btn:hover { background: #3b82f6; color: #000; }
+        .retro-btn.danger { color: #ef4444; border-color: #ef4444; }
+        .retro-btn.danger:hover { background: #ef4444; color: #000; }
+    </style>
 </head>
 <body>
-    <div id="js-panic-button" style="padding: 40px 20px; text-align: center; font-family: var(--font-mono); color: var(--text); z-index: 9999; position: relative;">
-        <h3 style="margin-top: 0; color: var(--text); opacity: 0.8;">⏳ Loading inSetu Developer OS...</h3>
-        <p style="font-size: 0.85rem; color: #888; margin-top: 10px;">
-            If this screen remains visible, the UI engine has stalled.<br><br>
-            <a href="#" onclick="event.preventDefault(); localStorage.clear(); sessionStorage.clear(); window.location.reload();" style="color: #3b82f6; text-decoration: underline; font-weight: bold; margin-right: 15px;">[Hard Refresh]</a>
-            <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='Rebooting Engine...'; setTimeout(()=>window.location.reload(), 3000);" style="color: #ef4444; text-decoration: underline; font-weight: bold;">[Boot Recovery OS]</a>
-        </p>
+    <div id="js-panic-button" class="retro-boot">
+        <div class="retro-title">inSetu<br>Developer OS</div>
+        <div class="retro-text">SYSTEM RAM ........ OK</div>
+        <div class="retro-text">MOUNTING VFS ...... OK</div>
+        <div class="retro-text" style="display: flex;">BOOTING KERNEL <span class="retro-cursor"></span></div>
+
+        <div style="margin-top: 60px; text-align: center; color: #64748b; font-size: 0.85rem;">
+            If the system halts, engage manual override:
+        </div>
+        <div style="margin-top: 15px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">
+            <a href="#" onclick="event.preventDefault(); localStorage.clear(); sessionStorage.clear(); window.location.reload();" class="retro-btn">[ Hard Reset ]</a>
+            <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='<div class=\'retro-text\' style=\'color:#ef4444; width: 100%; text-align: center;\'>INITIATING KERNEL PANIC...</div>'; setTimeout(()=>window.location.reload(), 3000);" class="retro-btn danger">[ Boot Lifeboat ]</a>
+        </div>
     </div>
     <script>
         window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
     </script>
 
-    <insetu-app-shell></insetu-app-shell>
+    <sutram-app-shell>
+        <div slot="header-actions" style="display: flex; gap: 10px; align-items: center;">
+            <insetu-selection-tray></insetu-selection-tray>
+            <insetu-system-settings></insetu-system-settings>
+        </div>
+    </sutram-app-shell>
     <insetu-file-modal id="file-modal"></insetu-file-modal>
+    <insetu-config-banner></insetu-config-banner>
     <insetu-status-bar baseTitle="{{ title }}"></insetu-status-bar>
 
     <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>

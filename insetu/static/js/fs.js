@@ -1,8 +1,6 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from './shared_styles.js';
-import { InSetuElement } from './sdk.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
+import { sharedStyles } from '../vendor/sutram/shared_styles.js';
+import { InSetuElement, createExtensionStore } from './sdk.js';
 import { resolveEditorMode } from './components/ui_editor.js';
 import { AppStore } from './store.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
@@ -46,40 +44,35 @@ document.addEventListener('dragstart', (e) => {
         }
     }
 });
-export const FsStore = createStore(
-    devtools(
-        subscribeWithSelector((set) => ({
-            searchQuery: '',
-            fileModal: {
-                open: false,
-                filename: '',
-                content: '',
-                originalContent: '',
-                fullText: '',
-                isTruncated: false,
-                isFS: false,
-                forceEdit: false,
-                isMemoryOnly: false,
-                isMarkdown: false,
-                isSupportedEditor: false,
-                ext: '',
-                codeMode: ''
-            },
-            modals: {
-                move: { open: false, currentFile: '', destPath: '', initialParts: [] },
-                newFile: { open: false, basePath: '', fileName: '', content: '' },
-                newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
-                linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
-                browser: { open: false, title: '', manifest: [], searchQuery: '' }
-            },
-            setSearchQuery: (q) => set({ searchQuery: q }),
-            setModal: (modalName, data) => set(state => ({
-                modals: { ...state.modals, [modalName]: { ...state.modals[modalName], ...data } }
-            }))
-        })),
-        { name: 'FsStore' }
-    )
-);
+export const FsStore = createExtensionStore('Fs', {
+    searchQuery: '',
+    fileModal: {
+        open: false,
+        filename: '',
+        content: '',
+        originalContent: '',
+        fullText: '',
+        isTruncated: false,
+        isFS: false,
+        forceEdit: false,
+        isMemoryOnly: false,
+        isMarkdown: false,
+        isSupportedEditor: false,
+        ext: '',
+        codeMode: ''
+    },
+    modals: {
+        move: { open: false, currentFile: '', destPath: '', initialParts: [] },
+        newFile: { open: false, basePath: '', fileName: '', content: '' },
+        newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
+        linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
+        browser: { open: false, title: '', manifest: [], searchQuery: '' }
+    },
+    setSearchQuery: (q) => FsStore.setState({ searchQuery: q }),
+    setModal: (modalName, data) => FsStore.setState(state => ({
+        modals: { ...state.modals, [modalName]: { ...state.modals[modalName], ...data } }
+    }))
+});
 window.inSetu = window.inSetu || { stores: {} };
 window.inSetu.stores.Fs = FsStore;
 

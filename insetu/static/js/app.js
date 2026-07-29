@@ -1,7 +1,5 @@
 import { BridgeStore } from './core/bridge.js';
 import { AppStore } from './store.js';
-import { createStore } from 'https://esm.sh/zustand/vanilla';
-import { devtools, subscribeWithSelector } from 'https://esm.sh/zustand/middleware';
 import './components/ui_dropdowns.js';
 import './components/ui_file_tree.js';
 import './components/ui_folder_browser.js';
@@ -10,7 +8,8 @@ import './components/ui_system_settings.js';
 import './components/ui_filter_pills.js';
 import './components/ui_primitives.js';
 import './components/ui_editor.js';
-import './components/ui_app_shell.js';
+import '../vendor/sutram/app_shell.js';
+import '../vendor/yenvui/js/tabs.js';
 import '../vendor/yenvui/js/toast.js';
 import '../vendor/yenvui/js/category-section.js';
 import '../vendor/yenvui/js/collapsible.js';
@@ -52,20 +51,12 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
+import { initShortcutRouter } from '../vendor/sutram/shortcuts.js';
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
-window.addEventListener('keydown', (e) => {
-    let keyStr = e.key.toLowerCase();
-    // Ignore lone modifier presses
-    if (['control', 'meta', 'shift', 'alt'].includes(keyStr)) return;
-
-    let prefix = '';
-    if (e.ctrlKey || e.metaKey) prefix += 'ctrl+';
-    if (e.shiftKey) prefix += 'shift+';
-    if (e.altKey) prefix += 'alt+';
-
-    const combo = prefix + (keyStr === ' ' ? 'space' : keyStr);
+initShortcutRouter(window.ExtensionRegistry, () => {
     const contexts = ['global'];
+
     // 1. Active Tab Hierarchy
     const { activeTab, activeSubTabs } = AppStore.getState();
     if (activeTab) {
@@ -85,16 +76,7 @@ window.addEventListener('keydown', (e) => {
     const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
     if (activeModal) contexts.unshift('modal:' + activeModal.id);
 
-    const { shortcuts } = window.ExtensionRegistry;
-    if (!shortcuts) return;
-
-    for (let ctx of contexts) {
-        if (shortcuts[ctx] && shortcuts[ctx][combo]) {
-            e.preventDefault();
-            shortcuts[ctx][combo](e);
-            return;
-        }
-    }
+    return contexts;
 });
 // Default OS Shortcut Registrations
 window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
@@ -315,6 +297,21 @@ setInterval(() => {
     });
 }, 100);
 import './api.js'; // Mount explicit API client and network interceptors
+import { createJobPoller } from '../vendor/sutram/poller.js';
+
+// Define the Job Polling Subroutine using the abstracted kernel
+window.inSetu.utils.pollJob = createJobPoller({
+    get: async (path) => window.inSetu.api.system(path),
+    handleUnauthorized: async () => {
+        // Server likely rebooted and rotated its boot token. Attempt a seamless re-handshake.
+        const authRes = await fetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        if (authRes.ok) {
+            const authData = await authRes.json();
+            sessionStorage.setItem('insetu_boot_token', authData.token);
+            if (window.inSetu.stores.App) window.inSetu.stores.App.setState({ authToken: authData.token });
+        }
+    }
+});
 
 // Restore UI State on Load
 async function executeSecurityHandshake() {
@@ -423,20 +420,50 @@ window.addEventListener('DOMContentLoaded', async () => {
             if (window.location.hash !== newHash && window.location.hash !== newHash.replace(/\/$/, '')) {
                 history.replaceState(null, '', newHash);
             }
+            // Sync declarative layout state to the Tier 0 App Shell
+            window.dispatchEvent(new CustomEvent('sutram-route-changed', {
+                detail: { tab, subTabs: subs }
+            }));
         }
     );
+    window.addEventListener('shell-tab-changed', (e) => {
+        const { tabId, isAlreadyActive } = e.detail;
+        const state = AppStore.getState();
+        AppStore.getState().setActiveRoute(tabId, null);
+
+        if (isAlreadyActive) {
+            const activeSub = state.activeSubTabs[tabId];
+            if (activeSub) window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId: activeSub, forceRefresh: true });
+        } else {
+            window.inSetu.events.emitHook('zone:tab-changed', tabId);
+        }
+    });
+
+    window.addEventListener('shell-subtab-changed', (e) => {
+        const { tabId, subId, isAlreadyActive } = e.detail;
+        AppStore.getState().setActiveRoute(tabId, subId);
+        window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId, forceRefresh: isAlreadyActive });
+    });
 
     // Wait for configuration and topology to settle before mounting layout
     await initializeWorkspaceTopology();
     // Compile the primary and settings layouts cleanly from the registry blueprints
     if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+        window.ExtensionRegistry.tabOrder = window.inSetu.stores.Gather?.getState()?.tabOrder || AppStore.getState().tabOrder || [];
         window.ExtensionRegistry.compileLayout();
     }
+    // Hydrate the declarative shell with the initial route state
+    const state = AppStore.getState();
+    window.dispatchEvent(new CustomEvent('sutram-route-changed', {
+        detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
+    }));
+
+    // Everything is fully booted, topologies mapped, and extensions mounted.
+    // NOW it's safe to drop the loading screen/panic button.
+    if (window.panicTimeout) clearTimeout(window.panicTimeout);
+    const _initPanicBtn = document.getElementById('js-panic-button');
+    if (_initPanicBtn) _initPanicBtn.style.display = 'none';
 });
-// Evade iOS PWA suspension timeout races by clearing the panic switch immediately upon JS evaluation
-if (window.panicTimeout) clearTimeout(window.panicTimeout);
-const _initPanicBtn = document.getElementById('js-panic-button');
-if (_initPanicBtn) _initPanicBtn.style.display = 'none';
 
 // PWA Isolation: Honor URL-bound workspace parameters before reading cache
 const urlParams = new URLSearchParams(window.location.search);
@@ -583,13 +610,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
         try {
-            const headers = window.inSetu.api._getHeaders(true);
-            headers.append('Content-Type', 'application/json');
-
-            const response = await fetch('/submit', {
+            const response = await window.inSetu.api.workspace('gather/submit', {
                 method: 'POST',
-                headers: headers,
-                body: JSON.stringify({ force_full: forceFull })
+                body: { force_full: forceFull }
             });
 
             const data = await response.json();
@@ -678,13 +701,17 @@ async function performSoftRefresh() {
     });
 
     window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
-
     try {
         // 1. Update routing topology for the new tenant
         const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
-            AppStore.setState({ configMissing: !!d.config_missing });
+            AppStore.setState({ 
+                allRepos: d.repos,
+                targetConfigs: d.targets || [],
+                configMissing: !!d.config_missing,
+                tabOrder: d.tab_order || []
+            });
             if (window.inSetu.stores.Gather) {
                 window.inSetu.stores.Gather.setState({
                     allRepos: d.repos,
@@ -742,15 +769,17 @@ async function performSoftRefresh() {
             }
 
             autoWireSettingsSchemas();
-
             // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
             if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+                window.ExtensionRegistry.tabOrder = window.inSetu.stores.Gather?.getState()?.tabOrder || AppStore.getState().tabOrder || [];
                 window.ExtensionRegistry.compileLayout();
             }
             // Re-render subtab navigation lists natively from scratch using the fresh registry state
-            const { activeTab } = AppStore.getState();
-            if (activeTab) {
-                window.inSetu.events.emitHook('zone:tab-changed', activeTab);
+            const state = AppStore.getState();
+            if (state.activeTab) {
+                window.dispatchEvent(new CustomEvent('sutram-route-changed', {
+                    detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
+                }));
             }
         }
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
@@ -806,7 +835,12 @@ async function initializeWorkspaceTopology() {
         const rRes = await window.inSetu.api.workspace('repos');
         if (rRes.ok) {
             const d = await rRes.json();
-            AppStore.setState({ configMissing: !!d.config_missing });
+            AppStore.setState({ 
+                allRepos: d.repos,
+                targetConfigs: d.targets || [],
+                configMissing: !!d.config_missing,
+                tabOrder: d.tab_order || []
+            });
             if (window.inSetu.stores.Gather) {
                 window.inSetu.stores.Gather.setState({
                     allRepos: d.repos,
