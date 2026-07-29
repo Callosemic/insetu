@@ -429,7 +429,7 @@ export class InSetuGenericSettingsModal extends InSetuElement {
                 if (res.ok) {
                     this.open = false;
                     btn.innerText = orig;
-                    if(window.executeSystemCompile) window.executeSystemCompile(null, true);
+                    if (window.inSetu?.sys?.executeSystemCompile) window.inSetu.sys.executeSystemCompile(null, true);
                 } else {
                     alert("Failed to save settings.");
                     btn.innerText = orig;

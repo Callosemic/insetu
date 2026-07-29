@@ -40,7 +40,8 @@ export class InSetuModal extends LitElement {
         this.open = false;
     }
     close(e) {
-        if (e && e.target !== e.currentTarget) return;
+        // Allow imperative calls and direct yenVUI signals, but block nested child bubbling
+        if (e && e.target && e.target !== e.currentTarget && e.target.tagName !== 'YENVUI-MODAL') return;
         const event = new CustomEvent('modal-closing', { bubbles: true, composed: true, cancelable: true });
         this.dispatchEvent(event);
         if (event.defaultPrevented) return;
