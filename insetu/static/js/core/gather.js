@@ -310,7 +310,7 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-categorized-list>
                 </div>
             </div>
-            <yenvui-modal ?open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @yenvui-modal-closed=${() => this.chunkModalOpen = false}>
+            <yenvui-modal .open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @yenvui-modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
                         const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
@@ -332,6 +332,8 @@ export class InSetuExtGather extends InSetuElement {
                 </div>
                 ${(this.activeChunkFile && window.inSetu.stores.App?.getState()?.manifest[this.activeChunkFile]?.files?.length > 0) ? html`
                     <button slot="footer" style="background: var(--intent-highlight); color: white;" @click=${() => {
+                        this.chunkModalOpen = false;
+                        this.requestUpdate();
                         if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(this.activeChunkFile);
                     }}>📁 Browse Context Files</button>
                 ` : ''}

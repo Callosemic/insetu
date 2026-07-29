@@ -6,10 +6,16 @@ def parse_blocks(text):
     state = "OUTSIDE"
     current_type = "exact"
     search_lines, replace_lines = [], []
-
     # Scaffolding: Strip conversational fluff before the first FILE block (INS-TODO-20260709_1032)
     if "<<<<<<< FILE:" in text:
         text = "<<<<<<< FILE:" + text.split("<<<<<<< FILE:", 1)[1]
+    # Heal strictly anchored spaced angle-bracket REPLACE tags and trailing decay ladders
+    text = re.sub(
+        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+REPLACE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
+        '>>>>>>> REPLACE',
+        text,
+        flags=re.MULTILINE
+    )
 
     # Sanitize invisible non-breaking spaces (NBSP) that break strict matching
     lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')

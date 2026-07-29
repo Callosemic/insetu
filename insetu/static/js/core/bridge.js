@@ -11,7 +11,9 @@ export const BridgeStore = createExtensionStore('Bridge', {
     viewMode: 'input',
     consoleOutput: 'Ready...',
     parseAndAppendCells: (text) => {
-        const val = text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        let val = text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        // Heal strictly anchored spaced angle-bracket REPLACE tags and trailing decay ladders
+        val = val.replace(/^[ \t\u00A0]*(?:>[ \t\u00A0]*)+REPLACE[ \t\u00A0]*(?:\n[ \t\u00A0]*(?:>[ \t\u00A0]*)+$)*/gm, '>>>>>>> REPLACE');
         const fileParts = val.split(/^<<<<<<< FILE:\s*(.+)$/m);
         const newCells = [];
         let cellIdx = 0;
@@ -442,8 +444,8 @@ export class InSetuExtBridge extends InSetuElement {
                     ` : html`
                         <div style="display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; background: var(--input-bg);">
                             ${this.cells.map(cell => html`
-                                <textarea style="display: ${this._activeCellId === cell.id ? 'block' : 'none'}; width: 100%; height: 100%; resize: none; border: none; padding: 20px; font-family: monospace; background: transparent; color: var(--text); box-sizing: border-box; outline: none; opacity: ${cell.active ? '1' : '0.5'}; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto;" 
-                                    .value=${cell.content} 
+                                <textarea class="cell-textarea" style="display: ${this._activeCellId === cell.id ? 'block' : 'none'}; width: 100%; height: 100%; resize: none; border: none; padding: 20px; font-family: monospace; background: transparent; color: var(--text); box-sizing: border-box; outline: none; opacity: ${cell.active ? '1' : '0.5'}; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto;" 
+                                    .value=${cell.content}  
                                     @input=${(e) => BridgeStore.getState().updateCellContent(cell.id, e.target.value)} 
                                     @paste=${(e) => {
                                         const text = e.clipboardData.getData('text');
