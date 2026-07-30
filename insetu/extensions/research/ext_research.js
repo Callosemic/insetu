@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -295,7 +295,7 @@ export class InSetuExtResearch extends InSetuElement {
             <div id="rs-detail-header" style="margin-bottom: 15px; padding: 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border);">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px;">
                     <div style="font-weight: bold; color: var(--intent-primary); font-size: 1.15rem; word-break: break-word;">🔍 ${job.query}</div>
-                    <insetu-async-btn style="flex-shrink: 0;" label="📋 Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></insetu-async-btn>
+                    <yenvui-async-btn style="flex-shrink: 0;" label="📋 Copy" intent="neutral" .onClick=${() => this.utils.copyRawText(job.query)}></yenvui-async-btn>
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
                     <span style="font-size: 0.95rem;"><b>Status:</b> <span style="color: ${statusColor}; font-weight: bold;">${job.status.toUpperCase()}</span> <span style="color: var(--text-muted);">${cardStatusExtra}</span></span>
@@ -320,14 +320,14 @@ export class InSetuExtResearch extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <insetu-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></insetu-async-btn>
+                    <yenvui-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></yenvui-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
                     <textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @input=${e => this._aiJsonInput = e.target.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
-                    <insetu-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></insetu-async-btn>
+                    <yenvui-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></yenvui-async-btn>
                 </div>
             ` : html`
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
@@ -435,7 +435,7 @@ export class InSetuExtResearch extends InSetuElement {
                         </div>
                     </div>
                 </div>
-                <insetu-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></insetu-async-btn>
+                <yenvui-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></yenvui-async-btn>
             </yenvui-modal>
         `;
     }

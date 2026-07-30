@@ -5,8 +5,8 @@ import uuid
 import datetime
 from pathlib import Path
 from flask import request, jsonify
-from insetu.sdk import InSetuExtension
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension
+from insetu.kernel.hooks import hooks
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -51,7 +51,7 @@ skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", descript
 __depends__ = []
 def _get_user_skills_dir(workspace_id=None):
     """Resolves and commands the localized workspace skills directory structure."""
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     base_dir = Path(cfg_path).parent.joinpath("data", "skills").as_posix()
     os.makedirs(base_dir, exist_ok=True)
@@ -59,7 +59,7 @@ def _get_user_skills_dir(workspace_id=None):
 def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
     try:
         from insetu.core.utils_core import parse_frontmatter
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         ctx = ExtensionContext('skills', workspace_id)
         content = ctx.vfs.read(abs_path) or ""
         yaml_data, _, _ = parse_frontmatter(content)
@@ -139,7 +139,7 @@ def log_skill_practice(ctx):
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
         from insetu.core.utils_core import update_frontmatter
-        from insetu.utils import slugify
+        from insetu.kernel.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -193,7 +193,7 @@ def update_skill_structure(ctx):
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
         from insetu.core.utils_core import update_frontmatter
-        from insetu.utils import slugify
+        from insetu.kernel.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -284,7 +284,7 @@ def create_new_skill(ctx):
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
-        from insetu.utils import slugify
+        from insetu.kernel.utils import slugify
         from insetu.core.utils_core import update_frontmatter
         filename = f"{slugify(name)}.md"
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()

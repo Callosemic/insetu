@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { InSetuElement, createExtensionStore } from '../core/sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
 
 const AppStore = window.inSetu.stores.App;
 
@@ -405,7 +405,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                             </insetu-markdown-editor>
                         </div>
                         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                            <insetu-async-btn label="📤 Send Reply" intent="primary" .onClick=${() => this.sendReply()}></insetu-async-btn>
+                            <yenvui-async-btn label="📤 Send Reply" intent="primary" .onClick=${() => this.sendReply()}></yenvui-async-btn>
                         </div>
                     </div>
                 </div>

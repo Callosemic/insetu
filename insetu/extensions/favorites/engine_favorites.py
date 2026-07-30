@@ -4,7 +4,7 @@ import json
 import uuid
 import datetime
 from flask import jsonify
-from insetu.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 
 FAVORITES_SCHEMA = {
     "favorites": {

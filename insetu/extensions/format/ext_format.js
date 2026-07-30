@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;

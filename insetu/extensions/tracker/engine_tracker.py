@@ -5,9 +5,9 @@ import re
 import json
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from insetu.utils import sniff_tenant_id
-from insetu.hooks import hooks
-from insetu.sdk import InSetuExtension
+from insetu.kernel.utils import sniff_tenant_id
+from insetu.kernel.hooks import hooks
+from insetu.core.sdk import InSetuExtension
 TRACKER_SCHEMA = {
     "tracker_tickets": {
         "id": "TEXT PRIMARY KEY",
@@ -50,7 +50,7 @@ def init_tracker_db():
         _sync_disk_to_db(workspace_id=ws_id)
 
         # Schedule background archiving to run silently every 1 hour
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         w_ctx = ExtensionContext('workers', ws_id)
         conn = w_ctx.db
         conn.execute("""
@@ -62,7 +62,7 @@ def init_tracker_db():
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
 
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
 
     for m in mutations:
@@ -83,7 +83,7 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
                 ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     try:
         content = ctx.vfs.read(abs_path)
@@ -160,7 +160,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     except Exception as e:
         print(f"Error parsing ticket {rel_path}: {e}")
 def _sync_disk_to_db(workspace_id=None):
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     ctx.db.execute("DELETE FROM tracker_tickets")
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
@@ -185,7 +185,7 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
     from insetu.core.utils_core import get_safe_repo_id
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
 
     ctx = ExtensionContext('tracker', workspace_id)
     tracker_cfg = ctx.settings.get_all()
@@ -399,7 +399,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     If the physical path contradicts the YAML, the YAML wins -> file is moved.
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     cfg = ctx.config
@@ -635,7 +635,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
 
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     tracker_cfg = ctx.settings.get_all()
 
@@ -761,7 +761,7 @@ def api_tracker_transition(ctx):
 @hooks.on('request_changelog_suggestions')
 def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
     include_archived = ctx.settings.get("include_archived_in_log", False)
 

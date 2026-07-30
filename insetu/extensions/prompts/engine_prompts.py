@@ -2,8 +2,8 @@ from pathlib import Path
 import os
 import re
 from flask import jsonify
-from insetu.sdk import InSetuExtension, ExtensionContext
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.kernel.hooks import hooks
 prompts_bp = InSetuExtension(
     'prompts', 
     __name__, 
@@ -49,10 +49,11 @@ def provide_available_prompts(workspace_id=None, **kwargs):
     manifest = ctx.manifest
     if "prompts_context.txt" in manifest:
         prompts = manifest["prompts_context.txt"].get("files", [])
-
     # Fallback to physical disk walk if the manifest hasn't compiled yet
     if not prompts:
-        for ws_rel_path in ctx.vfs.walk(ctx.paths["prompts_dir"]):
+        prompts_dir = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
+        os.makedirs(prompts_dir, exist_ok=True)
+        for ws_rel_path in ctx.vfs.walk(prompts_dir):
             prompts.append(ws_rel_path)
 
     # Enforce extension filtering so UI code isn't treated as a prompt.
@@ -67,11 +68,10 @@ def api_prompts_list(ctx):
         "prompts": prompts,
         "profile_dir": Path(ctx.paths["config_path"]).parent.as_posix()
     })
-
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):
     """Fetches a prompt and recursively resolves {{include: ...}} macros."""
-    from insetu.core.utils_core import resolve_macro_includes
+    from insetu.kernel.utils import resolve_macro_includes
 
     filename = ctx.req.args.get('file', '')
     if not filename:

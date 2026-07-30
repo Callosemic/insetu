@@ -2,8 +2,8 @@ from pathlib import Path
 import os
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension
+from insetu.kernel.hooks import hooks
 flow_bp = InSetuExtension(
     'flow', 
     __name__,
@@ -21,7 +21,7 @@ __depends__ = ['git', 'prompts']
 @hooks.on('compile_contexts')
 def compile_flow_batches(manifest, workspace_id=None, **kwargs):
     """Event Bus Hook: Auto-generates workflow batch payloads whenever the OS compiles."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('flow', workspace_id)
     cfg = ctx.config
     if "flow" not in cfg.get("extensions", []): return
@@ -53,7 +53,7 @@ def compile_flow_batches(manifest, workspace_id=None, **kwargs):
 
         compile_batch(batch, workspace_id, manifest_data=manifest)
 def compile_batch(batch, workspace_id=None, manifest_data=None):
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('flow', workspace_id)
 
     batch_id = batch.get("id")
@@ -212,9 +212,9 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
         archive_path = data.get("archive_path")
         original_response_path = data.get("original_response_path")
         if archive_path and original_response_path and "{date}" in original_response_path:
-            import os, shutil
+            import os
             from pathlib import Path
-            from insetu.sdk import ExtensionContext
+            from insetu.core.sdk import ExtensionContext
             ctx = ExtensionContext('flow', workspace_id)
 
             resolved_archive = ctx.resolve_path(archive_path)
@@ -225,14 +225,21 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
 
             resolved_path = ctx.resolve_path(filepath)
             if data.get("is_absolute_artifact"):
-                from insetu.utils import resolve_system_artifact_path
+                from insetu.kernel.utils import resolve_system_artifact_path
                 resolved_path = resolve_system_artifact_path(filepath, workspace_id)
 
             resolved_target_dir = Path(resolved_path).parent.as_posix()
             if os.path.exists(resolved_target_dir):
                 for f in os.listdir(resolved_target_dir):
                     if f.startswith(prefix) and os.path.isfile(Path(resolved_target_dir).joinpath(f).as_posix()):
-                        shutil.move(Path(resolved_target_dir).joinpath(f).as_posix(), Path(resolved_archive).joinpath(f).as_posix())
+                        src_path = Path(resolved_target_dir).joinpath(f).as_posix()
+                        dest_path = Path(resolved_archive).joinpath(f).as_posix()
+
+                        # Route the move operation through the async VFS queue
+                        content = ctx.vfs.read(src_path, is_absolute_artifact=True)
+                        if content is not None:
+                            ctx.vfs.save(dest_path, content, data={"is_absolute_artifact": True})
+                            ctx.vfs.save(src_path, "", data={"action": "delete", "ignore_ledger": True, "is_absolute_artifact": True})
 
 @flow_bp.route('batches/save', methods=['POST'])
 def api_flow_batches_save(ctx):

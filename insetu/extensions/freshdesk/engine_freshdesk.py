@@ -3,7 +3,7 @@ import json
 import urllib.request
 import urllib.error
 from flask import jsonify
-from insetu.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
     {"id": "api_key", "label": "Freshdesk API Key", "type": "password", "secure": True, "default": ""},

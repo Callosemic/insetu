@@ -6,10 +6,10 @@ import urllib.request
 import urllib.parse
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
-from insetu.workers import submit_job, register_callback
-from insetu.hooks import hooks
+from insetu.kernel.workers import submit_job, register_callback
+from insetu.kernel.hooks import hooks
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -185,13 +185,13 @@ class GooglePlaywrightProvider(SearchProvider):
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    from insetu.utils import get_workspace_physics
+                    from insetu.kernel.utils import get_workspace_physics
                     import time, os
                     cfg_path, _, _ = get_workspace_physics()
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    from insetu.sdk import ExtensionContext
+                    from insetu.core.sdk import ExtensionContext
                     dump_ctx = ExtensionContext('research', 'default')
                     dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
@@ -203,7 +203,7 @@ class GooglePlaywrightProvider(SearchProvider):
         return results
 class SerperDevProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0):
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         import urllib.error
         # We look up settings in 'default' context as API keys are generally instance-wide
         ctx = ExtensionContext('research', 'default')
@@ -270,7 +270,7 @@ def get_provider(provider_name):
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
 def gather_next_page(job_id, workspace_id=None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
-  from insetu.sdk import ExtensionContext
+  from insetu.core.sdk import ExtensionContext
   ctx = ExtensionContext('research', workspace_id)
   conn = ctx.db
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
@@ -296,7 +296,7 @@ def gather_next_page(job_id, workspace_id=None):
       if not exists:
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
         prior_cit = None
-        from insetu.utils import is_extension_enabled
+        from insetu.kernel.utils import is_extension_enabled
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
             cit_conn = get_connection("citations", workspace_id=workspace_id)
@@ -339,7 +339,7 @@ def gather_next_page(job_id, workspace_id=None):
       w_conn.commit()
 def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('research', workspace_id)
     conn = ctx.db
 
@@ -387,7 +387,7 @@ register_callback("research", "scrape_next_link", scrape_next_link)
 register_callback("research", "gather_next_page", gather_next_page)
 def _get_research_intervals():
     """Reads dynamic pacing configurations from the workspace config."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('research', 'default')
     cfg = ctx.config
     r_cfg = cfg.get("extension_config", {}).get("research", {})
@@ -482,7 +482,7 @@ def job_action(ctx, job_id):
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
 
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         w_ctx = ExtensionContext('workers', workspace_id)
         w_conn = w_ctx.db
         w_conn.execute("DELETE FROM jobs WHERE id IN (?, ?)", (f"research_{job_id}", f"research_gather_{job_id}"))
@@ -529,7 +529,7 @@ def list_inbox(ctx):
     return jsonify({"items": items})
 @research_bp.worker("export_context_task")
 def _background_export_context(ctx, research_job_id):
-    from insetu.workers import register_ephemeral_artifact
+    from insetu.kernel.workers import register_ephemeral_artifact
     from pathlib import Path
 
     ctx.jobs.update_progress("Compiling research context...")

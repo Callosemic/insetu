@@ -4,8 +4,8 @@ import json
 import urllib.request
 import urllib.parse
 from flask import request, jsonify
-from insetu.sdk import InSetuExtension
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension
+from insetu.kernel.hooks import hooks
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -32,7 +32,7 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     v_ctxs = cfg["virtual_contexts"]
     # Dynamically inject mappings for repo-specific citation buckets
     try:
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         ctx = ExtensionContext('citations', workspace_id)
         conn = ctx.db
         cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
@@ -71,7 +71,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         is_full_sweep = kwargs.get('is_full_sweep', True)
         if not is_full_sweep:
             return
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         ctx = ExtensionContext('citations', workspace_id)
         paths = ctx.paths
 
@@ -347,7 +347,7 @@ def inject_citation_middleware(text, workspace_id=None, **kwargs):
 
     csl_items = []
     try:
-        from insetu.sdk import ExtensionContext
+        from insetu.core.sdk import ExtensionContext
         ctx = ExtensionContext('citations', workspace_id)
         conn = ctx.db
         placeholders = ','.join(['?'] * len(true_ids))

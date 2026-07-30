@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -84,13 +84,14 @@ export class InSetuExtHooks extends InSetuElement {
             this.editingRule = state.editingRule;
             this.ruleForm = state.ruleForm;
         });
-        this.subscribe(window.inSetu.stores.Gather, state => {
+        this.subscribe('Gather', state => {
             this.allRepos = state.allRepos || [];
             this.targetConfigs = state.targetConfigs || [];
         });
-        const gState = window.inSetu.stores.Gather.getState();
-        this.allRepos = gState.allRepos || [];
-        this.targetConfigs = gState.targetConfigs || [];
+        const gatherStore = window.inSetu?.stores?.Gather;
+        const gState = gatherStore?.getState ? gatherStore.getState() : {};
+        this.allRepos = gState?.allRepos || [];
+        this.targetConfigs = gState?.targetConfigs || [];
 
         this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));

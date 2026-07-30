@@ -3,7 +3,7 @@ import urllib.parse
 import uuid
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
 

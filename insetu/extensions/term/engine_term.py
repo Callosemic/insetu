@@ -3,9 +3,9 @@ import subprocess
 import threading
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension, ExtensionContext
-from insetu.hooks import hooks
-from insetu.utils import get_all_workspace_ids
+from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.kernel.hooks import hooks
+from insetu.kernel.utils import get_all_workspace_ids
 
 try:
     from flask_sock import Sock
@@ -58,7 +58,7 @@ def term_stream(ws, workspace_id):
             pass
 
 def _run_term_stream(ws, workspace_id):
-    from insetu.utils import is_extension_enabled
+    from insetu.kernel.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
         ws.close()
         return

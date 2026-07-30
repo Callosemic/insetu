@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 
@@ -19,7 +19,7 @@ export const CitationStore = createExtensionStore('Citations', {
 
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../core/shared_styles.js';
 export class InSetuExtCitations extends InSetuElement {
     static properties = {
         importingIds: { type: Object },

@@ -4,8 +4,8 @@ import sys
 import json
 import uuid
 from flask import jsonify, send_file
-from insetu.sdk import InSetuExtension
-from insetu.workers import register_ephemeral_artifact
+from insetu.core.sdk import InSetuExtension
+from insetu.kernel.workers import register_ephemeral_artifact
 format_bp = InSetuExtension('format', __name__, title="Document Formatting", description="Document compilation (Pandoc) and JavaScript code formatting.")
 __depends__ = []
 @format_bp.worker("compile_task")
@@ -34,7 +34,7 @@ def api_format_compile_document(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, shutil, io
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
 
     ctx = ExtensionContext('format', workspace_id)
     resolved_path = ctx.resolve_path(filepath)

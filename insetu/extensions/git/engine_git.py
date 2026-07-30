@@ -4,9 +4,9 @@ import subprocess
 import uuid
 import json
 from flask import jsonify
-from insetu.sdk import InSetuExtension
-from insetu.utils import get_workspace_physics
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension
+from insetu.kernel.utils import get_workspace_physics
+from insetu.kernel.hooks import hooks
 
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
@@ -16,9 +16,8 @@ def get_headless_git_env():
     return env
 def get_git_settings_schema(workspace_id):
     """Dynamically generates distinct setting configuration slots for every tracked repository."""
-    from insetu.sdk import ExtensionContext
-    ctx = ExtensionContext('git', workspace_id)
-    cfg = ctx.config
+    from insetu.kernel.utils import load_config
+    cfg = load_config(workspace_id)
     schema = []
     for repo in cfg.get("target_repos", []):
         repo_dir = repo.get("repo_dir")
@@ -53,7 +52,7 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None):
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.gather.engine_gather import resolve_file_bucket
 
@@ -239,8 +238,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     if is_standalone:
         ctx.save_manifest(working_manifest)
     # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
-    from insetu.routes_fs import _VFS_WRITE_QUEUE
-    _VFS_WRITE_QUEUE.join()
+    ctx.sync_vfs_barrier()
 
     return diff_manifest, manifest_deltas
 @git_bp.worker("diffs_task")
@@ -262,7 +260,7 @@ def api_generate_diffs(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
@@ -324,7 +322,7 @@ def api_git_sweep_status(ctx):
 def _background_sweep_push(ctx, selections, message):
     import os
     import subprocess
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     output_log = ""
@@ -393,7 +391,7 @@ def api_git_changelogs(ctx):
 def _background_git_push(ctx, repo, message, diff_file):
     import os
     import subprocess
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
 
     ctx.jobs.update_progress(f"Preparing to push {repo}...")
 
@@ -504,7 +502,7 @@ def api_git_push(ctx):
 @hooks.on('request_available_diffs')
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_available_contexts
     import os
     ctx = ExtensionContext('git', workspace_id)

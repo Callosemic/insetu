@@ -5,8 +5,8 @@ import uuid
 import datetime
 from pathlib import Path
 from flask import jsonify
-from insetu.sdk import InSetuExtension, ExtensionContext
-from insetu.hooks import hooks
+from insetu.core.sdk import InSetuExtension, ExtensionContext
+from insetu.kernel.hooks import hooks
 from insetu.core.gather.engine_gather import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -77,7 +77,7 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
 
     if not files:
         return
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('hooks', workspace_id)
 
     # Fetch enabled rules for this workspace
@@ -131,7 +131,7 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
                 should_trigger = True
         if should_trigger:
             import time
-            from insetu.sdk import ExtensionContext
+            from insetu.core.sdk import ExtensionContext
             try:
                 w_ctx = ExtensionContext('workers', workspace_id)
                 w_conn = w_ctx.db
@@ -233,7 +233,7 @@ def delete_rule(ctx):
     return jsonify({"status": "success"})
 @hooks_bp.route('logs', methods=['GET'])
 def get_logs(ctx):
-    from insetu.sdk import ExtensionContext
+    from insetu.core.sdk import ExtensionContext
     import json
     # Use the central workers ledger, not the extension's local DB
     w_ctx = ExtensionContext('workers', ctx.workspace_id)

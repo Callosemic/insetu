@@ -1,7 +1,7 @@
 // ext_prompts.js - Prompt Library Extension
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -254,17 +254,18 @@ async function syncPromptsState() {
                 return match ? match[1] : p.split('/').pop();
             });
             PromptsStore.setState({ prompts: cleanPrompts });
-            window.inSetu.stores.Gather.setState(state => ({
-                gatherOptions: {
-                    ...(state.gatherOptions || {}),
-                    prompts: rawPrompts,
-                    profileDir: data.profile_dir || ".insetu/profiles/default"
-                }
-            }));
+            const gatherStore = window.inSetu?.stores?.Gather;
+            if (gatherStore && typeof gatherStore.setState === 'function') {
+                gatherStore.setState(state => ({
+                    gatherOptions: {
+                        ...(state?.gatherOptions || {}),
+                        prompts: rawPrompts,
+                        profileDir: data.profile_dir || ".insetu/profiles/default"
+                    }
+                }));
+            }
         }
     } catch (e) {
         console.warn("Headless prompt sync failed:", e);
     }
 }
-
-syncPromptsState();

@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
-import { sharedStyles } from '../shared_styles.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '../core/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
@@ -14,16 +14,19 @@ export const FlowStore = createExtensionStore('Flow', {
             const res = await window.inSetu.api.workspace('flow/batches');
             if (res.ok) {
                 const data = await res.json();
-                window.inSetu.stores.Gather.setState(state => ({
-                    gatherOptions: {
-                        ...state.gatherOptions,
-                        contexts: data.available_contexts || [],
-                        diffs: data.available_diffs || [],
-                        prompts: data.available_prompts || [],
-                        artifactsDir: data.artifacts_dir || ".insetu/profiles/default/data",
-                        profileDir: data.profile_dir || ".insetu/profiles/default"
-                    }
-                }));
+                const gatherStore = window.inSetu?.stores?.Gather;
+                if (gatherStore && typeof gatherStore.setState === 'function') {
+                    gatherStore.setState(state => ({
+                        gatherOptions: {
+                            ...(state?.gatherOptions || {}),
+                            contexts: data.available_contexts || [],
+                            diffs: data.available_diffs || [],
+                            prompts: data.available_prompts || [],
+                            artifactsDir: data.artifacts_dir || ".insetu/profiles/default/data",
+                            profileDir: data.profile_dir || ".insetu/profiles/default"
+                        }
+                    }));
+                }
                 FlowStore.setState({ batches: data.batches || [] });
             }
         } catch (e) {
@@ -50,8 +53,6 @@ export class InSetuExtFlow extends InSetuElement {
         _contextSearchQuery: { type: String },
         _viewingBatchPromptText: { type: String },
         _responseContent: { type: String },
-        chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String },
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
         _showFilters: { type: Boolean },
@@ -76,8 +77,6 @@ export class InSetuExtFlow extends InSetuElement {
         this._editForm = {};
         this._contextSearchQuery = '';
         this._viewingBatchPromptText = '';
-        this.chunkModalOpen = false;
-        this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
         this._applyVisibilityFilter = true;
@@ -99,13 +98,15 @@ export class InSetuExtFlow extends InSetuElement {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
-        this.subscribe(window.inSetu.stores.Gather, state => {
+        this.subscribe('Gather', state => {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
-        const aState = AppStore.getState();
-        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
+        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
+        const aState = appStore?.getState ? appStore.getState() : {};
+        this.pinnedRepos = aState?.pinnedRepos || new Set(['ALL']);
+        const gatherStore = window.inSetu?.stores?.Gather;
+        this.allRepos = gatherStore?.getState ? (gatherStore.getState()?.allRepos || []) : [];
 
         FlowStore.getState().fetchBatches();
     }
@@ -257,8 +258,14 @@ export class InSetuExtFlow extends InSetuElement {
         }
     }
     render() {
-            const { categoryOrder, manifest } = AppStore.getState();
-            const { gatherOptions } = window.inSetu.stores.Gather.getState();
+            const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
+            const appState = appStore?.getState ? appStore.getState() : {};
+            const categoryOrder = appState?.categoryOrder || [];
+            const manifest = appState?.manifest || {};
+
+            const gatherStore = window.inSetu?.stores?.Gather;
+            const gatherState = gatherStore?.getState ? gatherStore.getState() : {};
+            const gatherOptions = gatherState?.gatherOptions || {};
             const repoFilteredBatches = this.batches.map(b => {
                 const filename = `workflow_${b.id}_context.txt`;
                 const manifestObj = manifest[filename] || {};
@@ -313,7 +320,7 @@ export class InSetuExtFlow extends InSetuElement {
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
                         ${this.batches.length === 0 ? html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
-                        <insetu-categorized-list
+                        <sutram-categorized-list
                             .items=${filteredBatches.map(b => ({...b, _domain: b.domain || 'Workflows'}))}
                             categoryKey="_domain"
                             .categoryOrder=${categoryOrder}
@@ -343,7 +350,7 @@ export class InSetuExtFlow extends InSetuElement {
                                 </insetu-card>
                                 `;
                             }}>
-                        </insetu-categorized-list>
+                        </sutram-categorized-list>
                     </div>
             </div>
                     <yenvui-modal  
@@ -512,15 +519,14 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div style="display: flex; gap: 10px;">
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
-                                                                const chunks = window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, baseFile);
+                                                                const chunks = this.vfs && this.vfs.getChunks ? this.vfs.getChunks(baseFile) : window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, baseFile);
                                                                 const hasShare = !!navigator.share && !!navigator.canShare;
                                                                 if (chunks && chunks.length > 1) {
                                                                     return html`
                                                                         <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => {
-                                                                            e.stopPropagation();
-                                                                            this.activeChunkFile = baseFile;
-                                                                            this.chunkModalOpen = true;
-                                                                            this.requestUpdate();
+                                                                            if (e) e.stopPropagation();
+                                                                            if (this.vfs && this.vfs.openPartsModal) this.vfs.openPartsModal(baseFile);
+                                                                            else window.inSetu.events.emit('insetu:vfs:view-parts', { filepath: baseFile });
                                                                         }}>📦 View Parts</button>
                                                                         ${hasShare ? html`<yenvui-async-btn label="📤 Share All" intent="neutral" .onClick=${() => this.vfs.shareFiles(baseFile, chunks)}></yenvui-async-btn>` : ''}
                                                                     `;
@@ -555,27 +561,6 @@ export class InSetuExtFlow extends InSetuElement {
                                     ` : ''}
                             </div>
                     </yenvui-modal>
-                    <yenvui-modal .open=${this.chunkModalOpen} titleText="📦 Batch Parts" maxWidth="500px" @yenvui-modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
-                        <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                            ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
-                                const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
-                                    ? `${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb` 
-                                    : '';
-                                return html`
-                                    <yenvui-card 
-                                        titleText="Part ${idx + 1}"
-                                        detailText=${sizeKb}
-                                        icon="📄"
-                                        disableSelection=${true}>
-                                        <div style="display: flex; gap: 8px; margin-top: 10px; padding-bottom: 10px;">
-                                            <yenvui-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></yenvui-async-btn>
-                                            <yenvui-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></yenvui-async-btn>
-                                        </div>
-                                    </yenvui-card>
-                                `;
-                            })}
-                        </div>
-                </yenvui-modal>
     `;
 }
 }

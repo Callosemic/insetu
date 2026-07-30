@@ -1,4 +1,6 @@
-import { createExtensionStore } from '../sdk.js';
+import { html, css } from 'lit';
+import { sharedStyles } from '../core/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 export const GitStore = createExtensionStore('Git', {
@@ -24,7 +26,9 @@ export const GitStore = createExtensionStore('Git', {
 });
 window.inSetu.stores.Git = GitStore;
 export async function generateDiffs(force = false) {
-    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = GitStore.getState();
+    const gitStoreObj = typeof GitStore !== 'undefined' ? GitStore : window.inSetu?.stores?.Git;
+    if (!gitStoreObj || !gitStoreObj.getState) return;
+    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = gitStoreObj.getState();
     if (activeDiffJobId) return; // Prevent concurrent diff generation loops
 
     const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
@@ -45,15 +49,15 @@ export async function generateDiffs(force = false) {
             throw new Error(err.error || "Diff generation request failed.");
         }
         const data = await res.json();
-        GitStore.setState({ activeDiffJobId: data.job_id, diffJobError: null });
+        gitStoreObj.setState({ activeDiffJobId: data.job_id, diffJobError: null });
 
         window.inSetu.utils.pollJob(data.job_id, {
-            onProgress: (msg) => GitStore.setState({ diffJobMessage: msg }),
+            onProgress: (msg) => gitStoreObj.setState({ diffJobMessage: msg }),
             onComplete: (statusData) => {
                 const newFiles = statusData.artifact.files || [];
                 const targetReposRes = statusData.artifact.target_repos;
-                const prevCachedFiles = GitStore.getState().cachedDiffFiles || [];
-                const updatedDirtyRepos = new Set(GitStore.getState().dirtyDiffRepos);
+                const prevCachedFiles = gitStoreObj.getState().cachedDiffFiles || [];
+                const updatedDirtyRepos = new Set(gitStoreObj.getState().dirtyDiffRepos);
 
                 const updatedCachedFiles = (() => {
                         if (!targetReposRes) {
@@ -68,7 +72,7 @@ export async function generateDiffs(force = false) {
                                 return filtered.concat(newFiles);
                         }
                 })();
-                GitStore.setState({  
+                gitStoreObj.setState({  
                         activeDiffJobId: null, 
                         cachedDiffFiles: updatedCachedFiles,
                         dirtyDiffRepos: updatedDirtyRepos,
@@ -77,25 +81,23 @@ export async function generateDiffs(force = false) {
                     });
                 window.inSetu.events.emit('git-diffs-refreshed');
                 // Hydrate the global manifest explicitly so downstream extensions (like Flow) reflect the new batch chunks
-                window.inSetu.api.workspace('manifest?t=' + Date.now())
+                window.inSetu.api.workspace('gather/manifest?t=' + Date.now())
                     .then(mRes => mRes.ok ? mRes.json() : null)
                     .then(newManifest => {
-                        if (newManifest) AppStore.setState({ manifest: newManifest });
+                        if (newManifest && window.inSetu?.stores?.App) window.inSetu.stores.App.setState({ manifest: newManifest });
                     });
             },
             onError: (err) => {
-                GitStore.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
+                gitStoreObj.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
             }
         });
     } catch (error) {
-        GitStore.setState({ diffJobError: error.message });
+        gitStoreObj.setState({ diffJobError: error.message });
     }
 }
+
 window.addEventListener('insetu:git:generate-diffs', (e) => generateDiffs(e.detail?.force));
 
-import { html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
-import { InSetuElement } from '../sdk.js';
 export class InSetuExtGitDiffs extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
@@ -116,8 +118,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         currentPushRepo: { type: String },
         currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
-        chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String },
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
         _showFilters: { type: Boolean }
@@ -146,8 +146,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.currentPushRepo = '';
         this.currentPushDiffFile = '';
         this.activePushJobId = null;
-        this.chunkModalOpen = false;
-        this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
     }
@@ -182,7 +180,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.activePushJobId = state.activePushJobId;
             this.requestUpdate();
         });
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
+        this.subscribe('Gather', (state) => {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
             this.allRepos = state.allRepos || [];
@@ -193,12 +191,13 @@ export class InSetuExtGitDiffs extends InSetuElement {
         });
         const state = AppStore.getState();
         const gitState = GitStore.getState();
-        const gatherState = window.inSetu.stores.Gather.getState();
+        const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};
+
         let cached = gitState.cachedDiffFiles;
         if (!cached && state.manifest) {
             cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
                 filename: k,
-                repo: state.manifest[k].meta?.repo
+                repo: state.manifest[k]?.meta?.repo
             }));
         }
         this.cachedDiffFiles = cached || [];
@@ -210,14 +209,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
         this.allRepos = gatherState.allRepos || [];
         this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        // Secure boundary event listeners to allow external triggers (e.g. from file cards)
+
         this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
         this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
 
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
-}
+    }
 disconnectedCallback() {
         super.disconnectedCallback();
 }
@@ -505,15 +504,15 @@ disconnectedCallback() {
                                 .entityData=${{ filepath: `system://diffs/${f.filename}`, repoDir: f.repoDir, isFS: f.isFS }}
                                 @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
 ${(() => {
-    const chunks = window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, f.filename);
+    const chunks = this.vfs && this.vfs.getChunks ? this.vfs.getChunks(f.filename) : window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, f.filename);
     const hasChunks = chunks && chunks.length > 1;
     if (hasChunks) {
         return html`
             <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
                 @click=${(e) => {
-                    e.stopPropagation();
-                    this.activeChunkFile = f.filename;
-                    this.chunkModalOpen = true;
+                    if (e) e.stopPropagation();
+                    if (this.vfs && this.vfs.openPartsModal) this.vfs.openPartsModal(f.filename);
+                    else window.inSetu.events.emit('insetu:vfs:view-parts', { filepath: f.filename });
                 }}>
                 📦 View Parts
             </button>
@@ -582,27 +581,6 @@ ${(() => {
                 ` : ''}
             </div>
             </div>
-            <yenvui-modal ?open=${this.chunkModalOpen} titleText="📦 Diff Parts" maxWidth="500px" @yenvui-modal-closed=${() => this.chunkModalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
-                        const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
-                            ? `${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb` 
-                            : '';
-                        return html`
-                            <yenvui-card 
-                                titleText="Part ${idx + 1}"
-                                detailText=${sizeKb}
-                                icon="📄"
-                                disableSelection=${true}>
-                                <div style="display: flex; gap: 8px; margin-top: 10px; padding-bottom: 10px;">
-                                    <insetu-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></insetu-async-btn>
-                                    <insetu-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></insetu-async-btn>
-                                </div>
-                            </yenvui-card>
-                        `;
-                    })}
-                </div>
-            </yenvui-modal>
             <yenvui-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @yenvui-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
@@ -668,11 +646,11 @@ export class InSetuExtGitCtrl extends InSetuElement {
             this.reposStatus = reposStatus || {};
             this.requestUpdate();
         });
-        this.subscribe(window.inSetu.stores.Gather, state => {
+        this.subscribe('Gather', state => {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
-        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
+        this.allRepos = window.inSetu?.stores?.Gather?.getState?.()?.allRepos || [];
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
         this._loadSettings();
@@ -1048,11 +1026,11 @@ window.ExtensionRegistry.registerExtension('git', {
             intent: 'danger',
             order: 5,
             match: (data) => {
-                const status = window.inSetu.stores.Git.getState().reposStatus[data.repoDir];
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
                 return status && status.conflicts && status.conflicts.length > 0;
             },
             onClick: (data, e) => {
-                const status = window.inSetu.stores.Git.getState().reposStatus[data.repoDir];
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
                 if (status && status.conflicts && status.conflicts.length > 0) {
                     const firstConflict = status.conflicts[0];
                     if (window.inSetu.vfs && window.inSetu.vfs.viewSourceFile) {

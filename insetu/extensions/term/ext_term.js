@@ -1,6 +1,6 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 
@@ -26,21 +26,53 @@ export class InSetuExtTerm extends InSetuElement {
         window.addEventListener('resize', this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
-
         // Decouple from static uiHooks DOM sniffing
         this.registerGlobalListener('insetu:term:resize', window, () => {
-            if (this._handleResize) setTimeout(() => this._handleResize(), 50);
+            setTimeout(() => {
+                if (!this._term) {
+                    this._initTerminal();
+                } else if (this._handleResize) {
+                    this._handleResize();
+                }
+            }, 50);
         });
         this.registerGlobalListener('insetu:term:restart', window, () => {
             this.onWorkspaceChanged(this.workspaceId);
         });
     }
+    firstUpdated() {
+        const container = this.shadowRoot.getElementById('terminal-container');
+        if (container) {
+            this._visibilityObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    // Yield to browser layout engine to prevent 0x0 geometry crashes
+                    setTimeout(() => {
+                        if (!this._term) {
+                            this._initTerminal();
+                        } else {
+                            this._handleResize();
+                        }
+                    }, 50);
+                }
+            });
+            this._visibilityObserver.observe(this);
+
+            this._resizeObserver = new ResizeObserver(() => {
+                if (this._resizeTimer) clearTimeout(this._resizeTimer);
+                this._resizeTimer = setTimeout(() => this._handleResize(), 50);
+            });
+            this._resizeObserver.observe(this);
+        }
+    }
     disconnectedCallback() {
         super.disconnectedCallback();
         clearTimeout(this._initTimer);
         clearTimeout(this._wsTimer);
+        clearTimeout(this._resizeTimer);
         window.removeEventListener('resize', this._handleResize);
         if (this._themeObserver) this._themeObserver.disconnect();
+        if (this._resizeObserver) this._resizeObserver.disconnect();
+        if (this._visibilityObserver) this._visibilityObserver.disconnect();
         if (this._ws) {
             this._ws.onclose = null;
             if (this._ws.readyState === WebSocket.CONNECTING) {
@@ -82,12 +114,15 @@ export class InSetuExtTerm extends InSetuElement {
         }, 300);
     }
     _handleResize = () => {
-        // Only calculate geometry if the component is actively visible on the screen
-        if (this._fitAddon && this._term && this.offsetParent !== null && this.isConnected) {
+        if (this._fitAddon && this._term && this.isConnected && this.clientWidth > 0) {
             try {
-                this._fitAddon.fit();
-                if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-                    this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+                // Guardrail: Ensure Xterm's internal renderer has successfully booted 
+                // before attempting to calculate fit geometry
+                if (this._term._core && this._term._core._renderService) {
+                    this._fitAddon.fit();
+                    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                        this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+                    }
                 }
             } catch (e) {}
         }
@@ -97,7 +132,8 @@ export class InSetuExtTerm extends InSetuElement {
         if (this._term) return; // Prevent double-initialization on load
 
         const container = this.shadowRoot.getElementById('terminal-container');
-        if (!container) return;
+        // Must have physical pixel dimensions painted to the screen
+        if (!container || container.clientWidth === 0) return; 
 
         this._term = new Terminal({
             cursorBlink: true,
@@ -109,6 +145,10 @@ export class InSetuExtTerm extends InSetuElement {
         this._fitAddon = new FitAddon();
         this._term.loadAddon(this._fitAddon);
         this._term.open(container);
+
+        // Provide immediate visual feedback so the screen is never blank
+        this._term.writeln('\x1b[36mInitializing terminal session...\x1b[0m');
+
         // Wait slightly for DOM to settle before fitting
         this._wsTimer = setTimeout(() => {
             if (!this.isConnected) return;
@@ -143,13 +183,18 @@ export class InSetuExtTerm extends InSetuElement {
                 }, 100);
             }
         };
-
         this._ws.onmessage = (event) => {
             if (!this._term) return;
             if (typeof event.data === 'string') {
                 this._term.write(event.data);
             } else {
                 this._term.write(new Uint8Array(event.data));
+            }
+        };
+        this._ws.onerror = (error) => {
+            if (this._term) {
+                this._term.write('\r\n\x1b[31m[WebSocket Connection Error]\x1b[0m\r\n');
+                this._term.write('\x1b[33mIf using Tailscale/HTTPS with the built-in Flask server, WebSockets may fail due to Werkzeug SSL handling. Try using an HTTP port instead, or deploy with Gunicorn.\x1b[0m\r\n');
             }
         };
         this._ws.onclose = (event) => {

@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement, bindStoreInput } from '../sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -61,9 +61,8 @@ if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
 }
 
 window.addEventListener('insetu:tracker:load-board', () => KanbanStore.getState().fetchTasks());
-
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../shared_styles.js';
+import { sharedStyles } from '../core/shared_styles.js';
 export class InSetuExtTracker extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
@@ -143,24 +142,35 @@ constructor() {
         super.connectedCallback();
         const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
-        this.subscribe(AppStore, (state) => {
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        });
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.allRepos = state.allRepos || [];
-        });
-        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
-        this.pinnedRepos = AppStore.getState().pinnedRepos || new Set(['ALL']);
-        this.subscribe(KanbanStore, (state) => {
-            this.tasks = state.tasks || [];
-            this.pinnedTags = state.pinnedTags;
-            this.pinnedBuckets = state.pinnedBuckets;
-            this.requestUpdate();
-        });
-        const kState = KanbanStore.getState();
-        this.tasks = kState.tasks || [];
-        this.pinnedTags = kState.pinnedTags;
-        this.pinnedBuckets = kState.pinnedBuckets;
+
+        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
+        if (appStore) {
+            this.subscribe(appStore, (state) => {
+                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
+            });
+            this.pinnedRepos = appStore.getState ? (appStore.getState()?.pinnedRepos || new Set(['ALL'])) : new Set(['ALL']);
+        }
+
+        const gatherStore = window.inSetu?.stores?.Gather;
+        if (gatherStore) {
+            this.subscribe(gatherStore, (state) => {
+                this.allRepos = state?.allRepos || [];
+            });
+            this.allRepos = gatherStore.getState ? (gatherStore.getState()?.allRepos || []) : [];
+        }
+
+        if (typeof KanbanStore !== 'undefined' && KanbanStore) {
+            this.subscribe(KanbanStore, (state) => {
+                this.tasks = state?.tasks || [];
+                this.pinnedTags = state?.pinnedTags || new Set(['ALL']);
+                this.pinnedBuckets = state?.pinnedBuckets || new Set(['ALL']);
+                this.requestUpdate();
+            });
+            const kState = KanbanStore.getState ? KanbanStore.getState() : {};
+            this.tasks = kState?.tasks || [];
+            this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
+            this.pinnedBuckets = kState?.pinnedBuckets || new Set(['ALL']);
+        }
 
         this.registerGlobalListener('insetu:tracker:generate-changelog', window, (e) => {
             if (this.activeTab === 'log') {
@@ -168,7 +178,19 @@ constructor() {
             }
         });
 
-        KanbanStore.getState().fetchTasks();
+        if (KanbanStore?.getState?.()?.fetchTasks) {
+            KanbanStore.getState().fetchTasks();
+        }
+    }
+
+    _getBucketsForRepo(repoDir) {
+        const getFn = window.inSetu?.utils?.getFlattenedBuckets || this.sys?.getFlattenedBuckets;
+        if (!getFn) return [];
+        const gatherState = window.inSetu?.stores?.Gather?.getState ? window.inSetu.stores.Gather.getState() : {};
+        const targetConfigs = gatherState.targetConfigs || [];
+        const repoConfig = targetConfigs.find(r => r && r.repo_dir === repoDir);
+        if (!repoConfig) return [];
+        return getFn([repoConfig]);
     }
 
     onWorkspaceChanged(newWorkspaceId) {
@@ -343,7 +365,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                         ${!this.pinnedRepos.has('ALL') ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
                                 ${Array.from(this.pinnedRepos).map(repo => {
-                                    const buckets = this.sys.getFlattenedBuckets(repo);
+                                    const buckets = this._getBucketsForRepo(repo);
                                     if (buckets.length === 0) return '';
 
                                     const repoBucketsActive = buckets.some(b => this.pinnedBuckets.has(repo + '::' + b.id));
@@ -546,24 +568,34 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AppStore, (state) => {
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        });
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.allRepos = state.allRepos || [];
-            this.requestUpdate();
-        });
-        this.subscribe(KanbanStore, (state) => {
-            this.pinnedTags = state.pinnedTags;
-            this._modals = state.modals;
-            this.requestUpdate();
-        });
-        const aState = AppStore.getState();
-        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
-        const kState = KanbanStore.getState();
-        this.pinnedTags = kState.pinnedTags;
-        this._modals = kState.modals;
+
+        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
+        if (appStore) {
+            this.subscribe(appStore, (state) => {
+                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
+            });
+            this.pinnedRepos = appStore.getState ? (appStore.getState()?.pinnedRepos || new Set(['ALL'])) : new Set(['ALL']);
+        }
+
+        const gatherStore = window.inSetu?.stores?.Gather;
+        if (gatherStore) {
+            this.subscribe(gatherStore, (state) => {
+                this.allRepos = state?.allRepos || [];
+                this.requestUpdate();
+            });
+            this.allRepos = gatherStore.getState ? (gatherStore.getState()?.allRepos || []) : [];
+        }
+
+        if (typeof KanbanStore !== 'undefined' && KanbanStore) {
+            this.subscribe(KanbanStore, (state) => {
+                this.pinnedTags = state?.pinnedTags || new Set(['ALL']);
+                this._modals = state?.modals || { new: false, edit: false };
+                this.requestUpdate();
+            });
+            const kState = KanbanStore.getState ? KanbanStore.getState() : {};
+            this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
+            this._modals = kState?.modals || { new: false, edit: false };
+        }
 
         this.registerGlobalListener('insetu:tracker:open-new-task', window, (e) => {
             this._openNewTaskModal(e.detail.activeTab);
@@ -571,6 +603,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this.registerGlobalListener('insetu:tracker:open-edit-task', window, (e) => {
             this._openEditTaskModal(e.detail.filepath);
         });
+    }
+
+    _getBucketsForRepo(repoDir) {
+        const getFn = window.inSetu?.utils?.getFlattenedBuckets || this.sys?.getFlattenedBuckets;
+        if (!getFn) return [];
+        const gatherState = window.inSetu?.stores?.Gather?.getState ? window.inSetu.stores.Gather.getState() : {};
+        const targetConfigs = gatherState.targetConfigs || [];
+        const repoConfig = targetConfigs.find(r => r && r.repo_dir === repoDir);
+        if (!repoConfig) return [];
+        return getFn([repoConfig]);
     }
 
     _openNewTaskModal(activeTab) {
@@ -772,13 +814,13 @@ export class InSetuExtTrackerModals extends InSetuElement {
         }
     }
     render() {
-        const { newTaskForm } = KanbanStore.getState();
-        const selectedRepoNew = newTaskForm.repo || this.allRepos[0];
-        const bucketsNew = selectedRepoNew ? this.sys.getFlattenedBuckets(selectedRepoNew) : [];
+        const { newTaskForm } = (KanbanStore?.getState ? KanbanStore.getState() : { newTaskForm: {} }) || { newTaskForm: {} };
+        const selectedRepoNew = newTaskForm?.repo || (this.allRepos && this.allRepos[0]) || '';
+        const bucketsNew = selectedRepoNew ? this._getBucketsForRepo(selectedRepoNew) : [];
 
-        const { editTaskForm } = KanbanStore.getState();
-        const activeRepoEdit = editTaskForm.repo || '';
-        const bucketsEdit = activeRepoEdit ? this.sys.getFlattenedBuckets(activeRepoEdit) : [];
+        const { editTaskForm } = (KanbanStore?.getState ? KanbanStore.getState() : { editTaskForm: {} }) || { editTaskForm: {} };
+        const activeRepoEdit = editTaskForm?.repo || '';
+        const bucketsEdit = activeRepoEdit ? this._getBucketsForRepo(activeRepoEdit) : [];
 
         return html`
             <!-- New Task Modal -->
@@ -1073,6 +1115,5 @@ window.ExtensionRegistry.registerExtension('tracker', {
 });
 
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
-// Executes independently of the UI component to ensure other extensions (like Git Changelogs)  
-// always have access to the tracker backlog via the UDF KanbanStore.
-KanbanStore.getState().fetchTasks();
+// Data fetching is managed defensively via lifecycle hooks (zone:tab-changed, zone:soft-refresh, connectedCallback)
+// to prevent boot-time evaluation race conditions.
