@@ -108,7 +108,7 @@ Native `open('file.md', 'w')` inside an extension is strictly banned, as it evad
 To prevent namespace pollution in a zero-bundler environment, extensions manage their own CSS and visual footprints.
 * **Style Injection:** Extensions inject their styling natively via JavaScript (dynamically appending `<style>` tags). 
     * *Transitional Note:* Once the Phase 2 Unified Frontend Stack (LitElement) migration is fully implemented, this manual injection method will be deprecated. Extensions will be required to strictly encapsulate all CSS within native Web Components (Shadow DOM).
-* **Static Asset Routing:** The core `app.py` routing matrix will automatically serve any static assets located in a localized extension directory if requested, bypassing the core OS `/static` folder.
+* **Static Asset Routing & Vendor Manifests:** The core `app.py` routing matrix automatically serves static assets located in extension subdirectories via `/static/extensions/<ext_name>/<path:filename>`. Third-party dependencies must be declared in `<ext_root>/vendor.json` with version and compound SemVer range criteria for JIT importmap assembly (ADR 0032).
 
 ## 7. Configuration & Settings (The Two-Tier Matrix)
 Extensions must never write rogue configuration files or `.env` files to the disk. They must strictly utilize the OS-provided configuration layers to maintain data containment:
