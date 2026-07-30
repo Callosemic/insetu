@@ -4,9 +4,10 @@ import json
 import datetime
 import subprocess
 from flask import jsonify
-from insetu.utils import get_workspace_physics
-from insetu.core.utils_core import get_valid_workspace_files, generate_ascii_tree, evaluate_circuit_breaker
-from insetu.sdk import InSetuExtension
+from insetu.kernel.utils import get_workspace_physics, generate_ascii_tree
+from insetu.core.utils_core import get_valid_workspace_files, evaluate_circuit_breaker
+from insetu.kernel.extension import InSetuExtension
+from insetu.kernel.hooks import hooks
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
 GATHER_SETTINGS_SCHEMA = [
@@ -20,7 +21,7 @@ GATHER_SETTINGS_SCHEMA = [
 ]
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
 __depends__ = []
-from insetu.hooks import hooks
+from insetu.kernel.hooks import hooks
 
 def resolve_file_bucket(filepath, sub_buckets):
     """DRY Helper to map a filepath to its configured sub-bucket."""
@@ -48,8 +49,8 @@ def resolve_file_bucket(filepath, sub_buckets):
     return catch_all, None
 def compile_context_payload(workspace_id, output_dir, base_filename, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
-    from insetu.vfs import VFSTransaction
-    from insetu.sdk import ExtensionContext
+    from insetu.kernel.vfs import VFSTransaction
+    from insetu.kernel.extension import ExtensionContext
 
     if max_kb is None:
         ctx = ExtensionContext('gather', workspace_id)
@@ -112,7 +113,7 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     return manifest_entry
 def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir, workspace_id=None, max_kb=None):
     if not filepaths: return []
-    from insetu.vfs import VFSTransaction
+    from insetu.kernel.vfs import VFSTransaction
     vfs = VFSTransaction(workspace_id)
 
     header_str = "="*60 + f"\nINSETU TOPOLOGY ({title})\n" + "="*60 + "\n" + generate_ascii_tree(filepaths) + "\n\n"
@@ -137,7 +138,7 @@ def write_bucket(output_path, filepaths, title, domain_str, repo_path, repo_dir,
     )
     return manifest_entry
 def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buckets=None):
-    from insetu.sdk import ExtensionContext
+    from insetu.kernel.extension import ExtensionContext
     from insetu.core.utils_core import get_valid_workspace_files, get_safe_repo_id
 
     ctx = ExtensionContext('gather', workspace_id)
@@ -271,10 +272,10 @@ def _compile_repo_buckets(config, paths, workspace_id, manifest_ref, touched_buc
                         except Exception: pass
 
     return dirty
-from insetu.hooks import hooks
+from insetu.kernel.hooks import hooks
 
 def _process_vfs_ledger(workspace_id="default"):
-    from insetu.db import get_connection
+    from insetu.kernel.db import get_connection
     import time
     db_conn = get_connection("workers", workspace_id=workspace_id)
 
@@ -297,7 +298,7 @@ def _process_vfs_ledger(workspace_id="default"):
     # Decouple Cartographer: Run asynchronously so it doesn't block the background Context Gatherer
     touched_repos = list(set(e["filepath"].split('/')[0] for e in events if '/' in e["filepath"]))
     import uuid, json
-    from insetu.workers import submit_immediate_job
+    from insetu.kernel.workers import submit_immediate_job
 
     if touched_repos:
         cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
@@ -310,14 +311,13 @@ def _process_vfs_ledger(workspace_id="default"):
     })
     # Dispatch to the UI-visible Job Queue for processing
     submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
-from insetu.workers import register_callback
+from insetu.kernel.workers import register_callback
 register_callback("gather", "process_vfs_ledger", _process_vfs_ledger)
-
 @hooks.on('system_boot')
 def init_gather_workers():
-    from insetu.utils import get_all_workspace_ids
+    from insetu.kernel.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
-        from insetu.sdk import ExtensionContext
+        from insetu.kernel.extension import ExtensionContext
         w_ctx = ExtensionContext('workers', ws_id)
         conn = w_ctx.db
         conn.execute("""
@@ -325,14 +325,22 @@ def init_gather_workers():
             VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
         """)
         conn.commit()
+@hooks.on('gather_settings_updated')
+def on_gather_settings_updated(workspace_id=None, **kwargs):
+    from insetu.kernel.workers import submit_immediate_job
+    import uuid, json
+    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
+    return {"job_id": job_id}
+
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
     if not files and not filepath: return
     if filepath: files = [filepath]
 
     with get_compiler_lock(workspace_id or "default"):
-        from insetu.sdk import ExtensionContext
-        from insetu.utils import load_json_file, save_json_file
+        from insetu.kernel.extension import ExtensionContext
+        from insetu.kernel.utils import load_json_file, save_json_file
         from insetu.core.utils_core import get_safe_repo_id
         ctx = ExtensionContext('gather', workspace_id)
         paths = ctx.paths
@@ -392,18 +400,17 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                 dirty = True
         if dirty:
             # Note: Ledger wipe is handled in Phase 3 once Gather fully owns the event loop.
-            from insetu.routes_fs import _VFS_WRITE_QUEUE
+            from insetu.kernel.vfs import _VFS_WRITE_QUEUE
             _VFS_WRITE_QUEUE.join()
 
             hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
             ctx.save_manifest(manifest)
-
 def generate_context_file(workspace_id=None, target_repos=None):
-    from insetu.sdk import ExtensionContext
+    from insetu.kernel.extension import ExtensionContext
     ctx = ExtensionContext('gather', workspace_id)
     paths = ctx.paths
     # Pre-flight purge: destroy all stale contexts to prevent ghost files (excluding active ephemerals)
-    from insetu.db import get_connection
+    from insetu.kernel.db import get_connection
     w_conn = get_connection("workers", workspace_id=workspace_id)
     w_conn.execute("""
         CREATE TABLE IF NOT EXISTS ephemeral_artifacts (
@@ -416,7 +423,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
     """)
     w_conn.commit()
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
-    from insetu.vfs import VFSTransaction
+    from insetu.kernel.vfs import VFSTransaction
     vfs = VFSTransaction(workspace_id)
     live_cfg = ctx.config
     manifest = {} if target_repos is None else ctx.manifest
@@ -425,8 +432,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
         if target_repos and config.get("repo_dir") not in target_repos: continue
         _compile_repo_buckets(config, paths, workspace_id, manifest)
     # --- EXTENSION HOOKS ---
-    from insetu.hooks import hooks
-    from insetu.routes_fs import execute_vfs_save, _VFS_WRITE_QUEUE
+    from insetu.kernel.hooks import hooks
+    from insetu.kernel.vfs import execute_vfs_save, _VFS_WRITE_QUEUE
     _VFS_WRITE_QUEUE.join()
 
     sweep_payload = True if target_repos is None else target_repos
@@ -439,10 +446,9 @@ def generate_context_file(workspace_id=None, target_repos=None):
         for ws_rel_path in vfs.walk(paths["contexts_dir"]):
             f_path = ctx.resolve_path(ws_rel_path)
             f_basename = Path(f_path).name
-
             if f_path not in active_ephemerals and f_basename not in valid_basenames and f_basename != "manifest.json":
                 try:
-                    from insetu.routes_fs import execute_vfs_delete
+                    from insetu.kernel.vfs import execute_vfs_delete
                     execute_vfs_delete(workspace_id, ws_rel_path)
                 except Exception:
                     pass
@@ -484,7 +490,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
 def _pack_selection_worker(ctx, items, job_id=None):
     ctx.jobs.update_progress("Compiling selected files into context payload...")
     from insetu.core.utils_core import generate_ascii_tree
-    from insetu.vfs import VFSTransaction
+    from insetu.kernel.vfs import VFSTransaction
     import time
     import os
     from pathlib import Path
@@ -546,10 +552,10 @@ def _pack_selection_worker(ctx, items, job_id=None):
     manifest_data = ctx.manifest
     manifest_data[base_filename] = manifest_entry
     ctx.save_manifest(manifest_data)
-    from insetu.routes_fs import _VFS_WRITE_QUEUE
+    from insetu.kernel.vfs import _VFS_WRITE_QUEUE
     _VFS_WRITE_QUEUE.join()
 
-    from insetu.workers import register_ephemeral_artifact
+    from insetu.kernel.workers import register_ephemeral_artifact
     chunks = manifest_entry.get("chunks", [base_filename])
     for chunk in chunks:
         out_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
@@ -590,7 +596,7 @@ def api_clear_quickpacks(ctx):
     ctx.save_manifest(manifest_data)
 
     # Clean up the garbage collector ledger synchronously
-    from insetu.db import get_connection
+    from insetu.kernel.db import get_connection
     conn = get_connection("workers", workspace_id=ctx.workspace_id)
     conn.execute("DELETE FROM ephemeral_artifacts WHERE module_owner = 'quick_pack'")
     conn.commit()
@@ -643,7 +649,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
                 live_cfg = ctx.config
                 # Proactive Ledger Flush: If manual UI refresh, grab any pending VFS mutations instantly
                 if ledger_events is None:
-                    from insetu.db import get_connection
+                    from insetu.kernel.db import get_connection
                     w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
                     try:
                         events = w_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
@@ -662,7 +668,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
                         touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
                         if touched_repos:
                             import uuid, json
-                            from insetu.workers import submit_immediate_job
+                            from insetu.kernel.workers import submit_immediate_job
                             cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
                             submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=ctx.workspace_id)
                 
@@ -702,7 +708,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
         if needs_full_compile or forced_repos:
             # Fire Cartographer asynchronously
             import uuid, json
-            from insetu.workers import submit_immediate_job
+            from insetu.kernel.workers import submit_immediate_job
             cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
             submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": None if needs_full_compile else forced_repos}), workspace_id=ctx.workspace_id)
 
@@ -725,23 +731,125 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
         raise e
     finally:
         ws_lock.release()
+@gather_bp.route('repos', methods=['GET'])
+def api_repos(ctx):
+    from insetu.core.utils_core import get_sister_repos
+    import os
+    from pathlib import Path
+    from flask import jsonify
+    cfg = ctx.config
+    targets = cfg.get("target_repos", []) or []
+    _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
+
+    for c in targets:
+        if not c: continue
+        r_dir = c.get("repo_dir", "")
+        for b in (c.get("sub_buckets") or []):
+            if b and b.get("dynamic_split_prefix"):
+                if "meta_map" not in b:
+                    b["meta_map"] = {}
+                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
+                if os.path.exists(dyn_dir):
+                    for module in os.listdir(dyn_dir):
+                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
+                            if module not in b["meta_map"]:
+                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
+    return jsonify({
+        "repos": get_sister_repos(ctx.workspace_id),
+        "term_port": cfg.get("term_port", 8181),
+        "targets": targets,
+        "virtual_contexts": cfg.get("virtual_contexts", []),
+        "category_order": cfg.get("category_order", []),
+        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
+        "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
+        "config_missing": not os.path.exists(ctx.paths["config_path"])
+    })
+
+@gather_bp.route('manifest', methods=['GET'])
+def api_manifest(ctx):
+    import os
+    from pathlib import Path
+    from flask import jsonify
+    headers = {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+    }
+    try:
+        from insetu.core.utils_core import get_gather_paths
+        paths = get_gather_paths(ctx.workspace_id)
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        if os.path.exists(manifest_path):
+            with open(manifest_path, 'r', encoding='utf-8') as f: 
+                return f.read(), 200, headers
+    except Exception:
+        pass
+    return jsonify({}), 200, headers
+
+@gather_bp.route('repos/template', methods=['GET'])
+def api_repo_template(ctx):
+    from insetu.core.utils_core import get_default_repo_template
+    from flask import jsonify
+    return jsonify(get_default_repo_template(""))
+
 @gather_bp.route('submit', methods=['POST'])
 def api_gather_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
-
-    from insetu.db import get_connection
-    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
-    existing_job = w_conn.execute(
-        "SELECT id FROM immediate_jobs WHERE ext_name='gather' AND callback_name='compile_contexts' AND status IN ('pending', 'processing')"
-    ).fetchone()
-
     from flask import jsonify
+    from insetu.kernel.db import get_connection
+    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+    existing_job = w_conn.execute("SELECT id FROM immediate_jobs WHERE ext_name='gather' AND callback_name='compile_contexts' AND status IN ('pending', 'processing')").fetchone()
+
     if existing_job:
         return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing compilation."}), 202
 
     job_id = ctx.jobs.submit("compile_contexts", force_full=force_full)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
+@hooks.on('request_paths')
+def hook_request_paths(workspace_id=None, **kwargs):
+    try:
+        from insetu.core.utils_core import get_gather_paths
+        return get_gather_paths(workspace_id)
+    except Exception: return {}
 
+@hooks.on('request_manifest')
+def hook_request_manifest(workspace_id=None, **kwargs):
+    try:
+        from insetu.kernel.utils import load_json_file
+        from insetu.core.utils_core import get_gather_paths
+        import os
+        from pathlib import Path
+        paths = get_gather_paths(workspace_id)
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        if os.path.exists(manifest_path): return load_json_file(manifest_path, {})
+    except Exception: pass
+    return {}
 
+@hooks.on('request_manifest_chunks')
+def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
+    try:
+        from insetu.kernel.utils import load_json_file
+        from insetu.core.utils_core import get_gather_paths, extract_manifest_files
+        import os
+        from pathlib import Path
+        paths = get_gather_paths(workspace_id)
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        manifest = load_json_file(manifest_path, {}) if os.path.exists(manifest_path) else {}
+        return extract_manifest_files(manifest, target_key)
+    except Exception: return []
+
+@hooks.on('save_manifest')
+def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
+    try:
+        from insetu.kernel.utils import save_json_file, load_json_file
+        from insetu.core.utils_core import get_gather_paths
+        import time
+        from pathlib import Path
+        paths = get_gather_paths(workspace_id)
+        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        save_json_file(manifest_path, manifest_data, workspace_id)
+        cache_path = Path(paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
+        cache_data = {"manifest": manifest_data, "last_full_compile_time": time.time() if is_full_compile else load_json_file(cache_path, {}).get("last_full_compile_time", 0)}
+        save_json_file(cache_path, cache_data, workspace_id)
+    except Exception: pass

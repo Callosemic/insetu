@@ -1,9 +1,9 @@
 import uuid
 from flask import jsonify
-from insetu.utils import generate_idempotency_hash
-from insetu.db import get_connection
-from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
-from insetu.sdk import InSetuExtension
+from insetu.kernel.utils import generate_idempotency_hash
+from insetu.kernel.db import get_connection
+from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from insetu.kernel.extension import InSetuExtension
 
 # Import the extracted math & validation logic
 from .bridge_vfs import execute_bridge_sync
@@ -45,9 +45,8 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
         update_immediate_job_status(job_id, 'processing', "Analyzing patch matrices and running AST validation...", workspace_id=workspace_id)
         # Execute the pure operational logic
         sync_output = execute_bridge_sync(workspace_id, kwargs)
-
         # VFS BARRIER: Block the completion signal until physical disk writes settle
-        from insetu.routes_fs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
+        from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
         import time
 
         # Replace blocking .join() with an abortable polling lock

@@ -8,16 +8,13 @@ import subprocess
 import base64
 from pathlib import Path
 from contextlib import redirect_stdout
-
-from insetu.utils import get_workspace_physics
+from insetu.kernel.utils import get_workspace_physics, parse_blocks
 from insetu.core.utils_core import get_sister_repos, get_omniscient_workspace_files
-from insetu.vfs import VFSTransaction
-from .bridge_parser import parse_blocks
+from insetu.kernel.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory
-
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     """Core transaction loop extracted to reduce cyclomatic complexity and deep nesting."""
-    from insetu.sdk import ExtensionContext
+    from insetu.kernel.extension import ExtensionContext
     ctx = ExtensionContext('bridge', workspace_id)
     raw_text = data.get("text", "")
     active_files = data.get("active_files", [])

@@ -1,6 +1,7 @@
 import re
 import difflib
 import base64
+from insetu.kernel.utils import _get_base_step_and_diffs
 
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., ``` or =======
@@ -44,41 +45,6 @@ def is_effectively_identical(lines_a, lines_b):
 
     return True
 
-def _get_base_step_and_diffs(lines):
-    """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
-    indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
-    if len(indents) > 1:
-        diffs = [indents[k+1] - indents[k] for k in range(len(indents)-1)]
-        valid_diffs = [d for d in diffs if d > 1]
-
-        if valid_diffs:
-            best_step = 4
-            min_error = float('inf')
-
-            # Test against standard software indent sizes (ordered by preference)
-            for S in [4, 2, 3, 8]:
-                error = 0
-                has_base_jump = False
-
-                for d in valid_diffs:
-                    # Determine implied nesting level (e.g., 12 spaces at S=4 is level 3)
-                    k = max(1, int(round(d / S)))
-                    if k == 1:
-                        has_base_jump = True
-
-                    # Accumulate deviation from perfect grid
-                    error += abs(d - (k * S))
-
-                # A valid step size MUST have at least one single-level jump (k=1)
-                if not has_base_jump:
-                    error += 1000 
-
-                if error < min_error:
-                    min_error = error
-                    best_step = S
-
-            return best_step, diffs
-    return 4, []
 
 def apply_block_in_memory(content, block, silent=False):
     content = content.replace('\r\n', '\n').replace('\xa0', ' ')

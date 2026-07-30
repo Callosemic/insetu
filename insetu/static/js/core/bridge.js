@@ -1,7 +1,7 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
-import { AppStore } from '../store.js';
+import { AppStore } from './store.js';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
@@ -210,8 +210,13 @@ export class InSetuExtBridge extends InSetuElement {
             });
 
             if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || await res.text());
+                let errText = `HTTP ${res.status} Error`;
+                try { 
+                    if (!res.bodyUsed) errText = await res.text(); 
+                } catch(e) {}
+                let err = {};
+                try { err = JSON.parse(errText); } catch(e) {}
+                throw new Error(err.error || errText);
             }
             const data = await res.json();
             BridgeStore.setState({ activeBridgeJobId: data.job_id, consoleOutput: "Transaction accepted. Processing matrix off-thread..." });

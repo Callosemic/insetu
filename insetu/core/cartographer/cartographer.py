@@ -1,10 +1,10 @@
 import os
 import subprocess
 from pathlib import Path
-from insetu.utils import get_workspace_physics, load_config
-from insetu.core.utils_core import get_valid_workspace_files, build_tree_dict
-from insetu.hooks import hooks
-from insetu.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from insetu.kernel.utils import get_workspace_physics, load_config, build_tree_dict
+from insetu.core.utils_core import get_valid_workspace_files
+from insetu.kernel.hooks import hooks
+from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
 
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
@@ -142,8 +142,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
             rel_index_path = index_path.relative_to(ws_root_path).as_posix()
         except ValueError:
             rel_index_path = index_path.as_posix()
-
-        from insetu.routes_fs import execute_vfs_save
+        from insetu.kernel.vfs import execute_vfs_save
 
         # ADR 0018: Ignore Ledger to prevent Cartographer from triggering infinite recompilation loops
         execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})

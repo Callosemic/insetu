@@ -1,30 +1,63 @@
 import { html, css } from 'lit';
-import { AppStore } from '../store.js';
-import { fetchAndDownloadState, fetchAndCopy, buildFileTree, getGlobalManifest, viewAndCopy, FsStore } from '../fs.js';
-import { createExtensionStore, InSetuElement } from '../sdk.js';
+import { AppStore } from './store.js';
+import { fetchAndDownloadState, fetchAndCopy, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
+import { createExtensionStore, InSetuElement } from './sdk.js';
 import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
-window.inSetu.vfs = window.inSetu.vfs || {};
-window.inSetu.ui = window.inSetu.ui || {};
+
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
     loadingMessage: "Compiling ecosystem contexts... please wait.",
     searchQuery: '',
-    allRepos: [],
-    targetConfigs: [],
+    allRepos: AppStore.getState().allRepos || [],
+    targetConfigs: AppStore.getState().targetConfigs || [],
     virtualContexts: [],
     categoryOrder: [],
-    tabOrder: [],
     hiddenOutputs: [],
+    quickPacks: [],
+    activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
     setSearchQuery: (q) => GatherStore.setState({ searchQuery: q })
 });
 
-window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+// Reactively synchronize topology from AppStore to GatherStore
+AppStore.subscribe(state => state.targetConfigs, (targets) => {
+    if (targets && targets.length > 0) {
+        GatherStore.setState({ targetConfigs: targets });
+    }
+});
+AppStore.subscribe(state => state.allRepos, (repos) => {
+    if (repos && repos.length > 0) {
+        GatherStore.setState({ allRepos: repos });
+    }
+});
+
+window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.stores.Gather = GatherStore;
 
-export function getFlattenedBuckets(repoDir, includeSystem = false) {
+export function getFlattenedBuckets(repoDirOrConfigs = [], includeSystem = false) {
+    if (Array.isArray(repoDirOrConfigs)) {
+        const flattened = [];
+        repoDirOrConfigs.forEach(repo => {
+            if (!repo || typeof repo !== 'object') return;
+            const subBuckets = repo.sub_buckets || [];
+            if (Array.isArray(subBuckets)) {
+                subBuckets.forEach(b => {
+                    if (b && typeof b === 'object' && (!b.is_system || includeSystem)) {
+                        flattened.push({
+                            ...b,
+                            repo_dir: repo.repo_dir || '',
+                            repo_title: repo.title || repo.repo_dir || ''
+                        });
+                    }
+                });
+            }
+        });
+        return flattened;
+    }
+
+    const repoDir = repoDirOrConfigs;
     const { targetConfigs } = AppStore.getState();
-    const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
+    const repoCfg = (targetConfigs || []).find(c => c.repo_dir === repoDir);
     if (!repoCfg || !repoCfg.sub_buckets) return [];
 
     const buckets = [];
@@ -42,8 +75,12 @@ export function getFlattenedBuckets(repoDir, includeSystem = false) {
     return buckets;
 }
 
-window.inSetu.sys = window.inSetu.sys || {};
-window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
+if (typeof window !== 'undefined') {
+    window.inSetu.utils = window.inSetu.utils || {};
+    window.inSetu.sys = window.inSetu.sys || {};
+    window.inSetu.utils.getFlattenedBuckets = getFlattenedBuckets;
+    window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
+}
 
 const packSelectionPayload = async (items) => {
     const payloadItems = items.map(i => {
@@ -66,7 +103,7 @@ const packSelectionPayload = async (items) => {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
                 try {
-                    const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                    const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
                     if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
                 } catch(e) {}
                 resolve(statusData.artifact);
@@ -84,14 +121,13 @@ export class InSetuExtGatherActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
+
 export class InSetuExtGather extends InSetuElement {
     static properties = {
         loading: { type: Boolean },
         loadingMessage: { type: String },
         manifestFiles: { type: Array },
         searchQuery: { type: String },
-        chunkModalOpen: { type: Boolean },
-        activeChunkFile: { type: String },
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
         _showFilters: { type: Boolean }
@@ -110,14 +146,11 @@ export class InSetuExtGather extends InSetuElement {
         this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         this.manifestFiles = [];
         this.searchQuery = '';
-        this.chunkModalOpen = false;
-        this.activeChunkFile = null;
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
     }
-
     onWorkspaceChanged(newWorkspaceId) {
-        this.loadContext();
+        this.loadContext(false);
     }
     connectedCallback() {
         super.connectedCallback();
@@ -137,7 +170,7 @@ export class InSetuExtGather extends InSetuElement {
         });
 
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
-            if (tick) this.loadContext();
+            if (tick) this.loadContext(false);
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest || {});
@@ -147,24 +180,16 @@ export class InSetuExtGather extends InSetuElement {
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
-
-        this.registerGlobalListener('insetu:gather:view-parts', window, (e) => {
-            this.activeChunkFile = e.detail.filepath;
-            this.chunkModalOpen = true;
-            this.requestUpdate();
-        });
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    async loadContext() {
+    async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
-            // Pass `true` as the second argument to forcefully bypass the differential 
-            // ledger and execute a full Cartography and Manifest rebuild.
             const result = await window.inSetu.sys.executeSystemCompile((msg) => {
                 GatherStore.setState({ loadingMessage: msg });
-            }, true);
+            }, forceFull);
             if (result && result.status === 'error') {
                 alert("❌ " + result.message);
             }
@@ -263,7 +288,7 @@ export class InSetuExtGather extends InSetuElement {
             <div class="gather-body">
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
                 <div style="display: ${this.loading ? 'none' : 'block'};">
-                    <insetu-categorized-list
+                    <sutram-categorized-list
                     .items=${filteredFiles}
                     categoryKey="finalCat"
                     .categoryOrder=${categoryOrder}
@@ -277,11 +302,10 @@ export class InSetuExtGather extends InSetuElement {
                                             if (res.ok) {
                                                 const data = await res.json();
                                                 if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                                                const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
                                                 if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
                                             }
                                         } catch(e) {
-                                            // yenVUI prefers toast containers over window.alert
                                             console.error("Failed to clear quickpacks: " + e.message);
                                         }
                                     }}></yenvui-async-btn>
@@ -300,142 +324,161 @@ export class InSetuExtGather extends InSetuElement {
                             intentColor="var(--intent-highlight)"
                             entityType="file:context"
                             .entityData=${{ filepath: `system://contexts/${f.filename}`, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton, suppressCopy: true, suppressBrowse: true }}
-                            @card-clicked=${() => { if(!f.isSkeleton && window.inSetu.vfs.viewAndCopy) window.inSetu.vfs.viewAndCopy(f.filename); }}>
+                            @card-clicked=${() => {
+                                if (f.isSkeleton) return;
+                                const manifest = AppStore.getState().manifest || {};
+                                const chunks = window.inSetu?.utils?.extractManifestFiles 
+                                    ? window.inSetu.utils.extractManifestFiles(manifest, f.filename) 
+                                    : [];
+                                if (Array.isArray(chunks) && chunks.length > 1) {
+                                    window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: f.filename } }));
+                                } else if (window.inSetu?.vfs?.viewAndCopy) {
+                                    window.inSetu.vfs.viewAndCopy(f.filename);
+                                } else if (typeof viewAndCopy === 'function') {
+                                    viewAndCopy(f.filename);
+                                }
+                            }}>
 
                             ${f.isSkeleton ? html`
                                 <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
                             ` : ''}
                         </insetu-card>
                     `}>
-                </insetu-categorized-list>
+                </sutram-categorized-list>
                 </div>
             </div>
-            <yenvui-modal .open=${this.chunkModalOpen} titleText="📦 Context Parts" maxWidth="500px" @yenvui-modal-closed=${() => { this.chunkModalOpen = false; this.requestUpdate(); }}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${(this.activeChunkFile ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, this.activeChunkFile) : []).map((chunk, idx) => {
-                        const sizeKb = (AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes && AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx]) 
-                            ? `${Math.round(AppStore.getState().manifest[this.activeChunkFile]?.meta?.chunk_sizes[idx] / 1024)}kb` 
-                            : '';
-                        return html`
-                            <yenvui-card 
-                                titleText="Part ${idx + 1}"
-                                detailText=${sizeKb}
-                                icon="📄"
-                                disableSelection=${true}>
-                                <div style="display: flex; gap: 8px; margin-top: 10px; padding-bottom: 10px;">
-                                    <yenvui-async-btn label="📋 Copy" intent="neutral" .onClick=${() => this._copyTarget(chunk)}></yenvui-async-btn>
-                                    <yenvui-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(chunk)}></yenvui-async-btn>
-                                </div>
-                            </yenvui-card>
-                        `;
-                    })}
-                </div>
-                ${(this.activeChunkFile && window.inSetu.stores.App?.getState()?.manifest[this.activeChunkFile]?.files?.length > 0) ? html`
-                    <button slot="footer" style="background: var(--intent-highlight); color: white;" @click=${() => {
-                        this.chunkModalOpen = false;
-                        this.requestUpdate();
-                        if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(this.activeChunkFile);
-                    }}>📁 Browse Context Files</button>
-                ` : ''}
-            </yenvui-modal>
         `;
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
+
 window.ExtensionRegistry.registerExtension('gather', {
     name: "Context Gatherer",
-        version: "2.0.0",
-        entityActions: [
-            {
-                targetEntity: 'context',
-                id: 'context-view-parts',
-                label: 'View Parts',
-                icon: '📦',
-                intent: 'primary',
-                order: 100,
-                match: (data) => {
-                    if (data.isSkeleton) return false;
-                    const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                    const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App.getState().manifest, basename);
-                    return chunks && chunks.length > 1;
-                },
-                emitEvent: (data) => {
-                    const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                    return { name: 'insetu:gather:view-parts', detail: { filepath: basename } };
-                }
-            }
-        ],
-        layoutSlots: [
-            {
-                slot: "slots:sub-navigation",
-                targetParent: "context",
-                id: "gather",
-                label: "Gather",
-                order: 1,
-                component: "insetu-ext-gather"
+    version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'file:context',
+            id: 'context-view-parts',
+            label: 'View Parts',
+            icon: '📦',
+            intent: 'primary',
+            order: 100,
+            match: (data) => {
+                if (!data || data.isSkeleton) return false;
+                const pathStr = data.filepath || data.filename || '';
+                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
+                const manifest = window.inSetu?.stores?.App?.getState()?.manifest || {};
+                const chunks = window.inSetu?.utils?.extractManifestFiles 
+                    ? window.inSetu.utils.extractManifestFiles(manifest, basename) 
+                    : [];
+                return Array.isArray(chunks) && chunks.length > 1;
             },
-            {
-                slot: "slots:sub-navigation-actions",
-                targetParent: "context",
-                targetSub: "gather",
-                component: "insetu-ext-gather-actions",
-                order: 1
+            emitEvent: (data) => {
+                const pathStr = data.filepath || data.filename || '';
+                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
+                return { name: 'insetu:vfs:view-parts', detail: { filepath: basename } };
             }
-        ],
-        batchActions: [
-            {
-                id: 'batch-download',
-                label: 'Download',
-                icon: '⬇️',
-                intent: 'primary',
-                order: 20,
-                match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
-                asyncAction: async (items) => {
-                    try {
-                        const artifact = await packSelectionPayload(items);
-                        window.inSetu.stores.Selection.getState().clearSelection();
-                        if (artifact.chunks && artifact.chunks.length > 1) {
-                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
-                            if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
-                            window.dispatchEvent(new CustomEvent('insetu:gather:view-parts', { detail: { filepath: artifact.base_filename } }));
-                        } else {
-                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
-                            if (window.inSetu.vfs.fetchAndDownloadState) {
-                                await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
-                            }
-                        }
-                    } catch (err) {
-                        alert("Packing failed: " + err.message);
-                    }
-                }
+        },
+        {
+            targetEntity: 'context',
+            id: 'context-view-parts-legacy',
+            label: 'View Parts',
+            icon: '📦',
+            intent: 'primary',
+            order: 100,
+            match: (data) => {
+                if (!data || data.isSkeleton) return false;
+                const pathStr = data.filepath || data.filename || '';
+                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
+                const manifest = window.inSetu?.stores?.App?.getState()?.manifest || {};
+                const chunks = window.inSetu?.utils?.extractManifestFiles 
+                    ? window.inSetu.utils.extractManifestFiles(manifest, basename) 
+                    : [];
+                return Array.isArray(chunks) && chunks.length > 1;
             },
-            {
-                id: 'batch-share',
-                label: 'Share',
-                icon: '📤',
-                intent: 'neutral',
-                order: 30,
-                match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
-                asyncAction: async (items) => {
-                    try {
-                        const artifact = await packSelectionPayload(items);
-                        window.inSetu.stores.Selection.getState().clearSelection();
-                        if (window.inSetu.vfs.shareFiles) {
-                            await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
+            emitEvent: (data) => {
+                const pathStr = data.filepath || data.filename || '';
+                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
+                return { name: 'insetu:vfs:view-parts', detail: { filepath: basename } };
+            }
+        }
+    ],
+    layoutSlots: [
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "context",
+            id: "gather",
+            label: "Gather",
+            order: 1,
+            component: "insetu-ext-gather"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "context",
+            targetSub: "gather",
+            component: "insetu-ext-gather-actions",
+            order: 1
+        }
+    ],
+    batchActions: [
+        {
+            id: 'batch-download',
+            label: 'Download',
+            icon: '⬇️',
+            intent: 'primary',
+            order: 20,
+            match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+            asyncAction: async (items) => {
+                try {
+                    const artifact = await packSelectionPayload(items);
+                    window.inSetu.stores.Selection.getState().clearSelection();
+                    if (artifact.chunks && artifact.chunks.length > 1) {
+                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
+                        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
+                        window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: artifact.base_filename } }));
+                    } else {
+                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
+                        if (window.inSetu.vfs.fetchAndDownloadState) {
+                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
                         }
-                    } catch (err) {
-                        alert("Packing failed: " + err.message);
                     }
+                } catch (err) {
+                    alert("Packing failed: " + err.message);
                 }
             }
-        ],
-        uiHooks: {
-            'zone:subtab-changed': (data) => {
-                if (data.parentId === 'context' && data.subId === 'gather') {
-                    if (data.forceRefresh) {
-                        window.inSetu.stores.App.setState({ gatherForceRefreshTick: Date.now() });
+        },
+        {
+            id: 'batch-share',
+            label: 'Share',
+            icon: '📤',
+            intent: 'neutral',
+            order: 30,
+            match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+            asyncAction: async (items) => {
+                try {
+                    const artifact = await packSelectionPayload(items);
+                    window.inSetu.stores.Selection.getState().clearSelection();
+                    if (window.inSetu.vfs.shareFiles) {
+                        await window.inSetu.vfs.shareFiles(artifact.base_filename, artifact.chunks);
                     }
+                } catch (err) {
+                    alert("Packing failed: " + err.message);
                 }
             }
         }
+    ],
+    uiHooks: {
+        'zone:subtab-changed': (data) => {
+            if ((data.parentId === 'context' && data.subId === 'gather') || data.subId === 'gather') {
+                if (data.forceRefresh) {
+                    AppStore.setState({ gatherForceRefreshTick: Date.now() });
+                }
+            }
+        },
+        'zone:tab-changed': (tabId) => {
+            if (tabId === 'context' || tabId === 'gather') {
+                AppStore.setState({ gatherForceRefreshTick: Date.now() });
+            }
+        }
+    }
 });

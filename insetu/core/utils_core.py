@@ -2,7 +2,19 @@ from pathlib import Path
 import os
 import json
 import subprocess
-from insetu.utils import load_config, get_workspace_physics, slugify, load_json_file
+from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file
+from insetu.kernel.hooks import hooks
+@hooks.on('vfs_resolve_path')
+def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
+    """Provides logical repo::path boundary resolution to the Kernel VFS."""
+    if filepath:
+        if filepath.startswith("system://"):
+            from insetu.core.routes_fs import resolve_vfs_file
+            resolved, _ = resolve_vfs_file(workspace_id, filepath)
+            if resolved:
+                return resolved
+        return resolve_logical_path(filepath, workspace_id)
+    return None
 
 def get_gather_paths(workspace_id=None):
     cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
@@ -15,12 +27,10 @@ def get_gather_paths(workspace_id=None):
         "workflows_path": wf_path,
         "artifacts_base": artifacts_base,
         "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix(),
-        "prompts_dir": Path(workspace_dir).joinpath("prompts").as_posix(),
         "diffs_dir": Path(artifacts_base).joinpath("diffs").as_posix(),
         "gather_dir": Path(artifacts_base).joinpath("workflows").as_posix()
     }
     os.makedirs(paths["contexts_dir"], exist_ok=True)
-    os.makedirs(paths["prompts_dir"], exist_ok=True)
     os.makedirs(paths["diffs_dir"], exist_ok=True)
     os.makedirs(paths["gather_dir"], exist_ok=True)
     return paths
@@ -150,28 +160,6 @@ def evaluate_circuit_breaker(touched_count, total_count, threshold=0.5):
         return False
     return (touched_count / total_count) > threshold
 
-def build_tree_dict(file_paths):
-    tree = {}
-    for path in file_paths:
-        parts = path.split('/')
-        current = tree
-        for part in parts:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-    return tree
-
-def generate_ascii_tree(file_paths):
-    tree = build_tree_dict(file_paths)
-    def print_tree(node, prefix=""):
-        lines = []
-        entries = sorted(list(node.keys()))
-        for i, key in enumerate(entries):
-            is_last = (i == len(entries) - 1)
-            lines.append(f"{prefix}{'└── ' if is_last else '├── '}{key}")
-            lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
-        return lines
-    return ".\n" + "\n".join(print_tree(tree))
 def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, include_types=None):
     def _extract(data):
         if isinstance(data, dict):
@@ -185,9 +173,11 @@ def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, i
             if include_types: return []
             return data
         return []
-
     if target_key:
-        return _extract(manifest_data.get(target_key, {}))
+        entry = manifest_data.get(target_key)
+        if entry is None and ("/" in target_key or "\\" in target_key):
+            entry = manifest_data.get(Path(target_key).name)
+        return _extract(entry or {})
 
     all_files = set()
     for k, v in manifest_data.items():
@@ -268,44 +258,62 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
                 candidates.append((f, cand_rel))
     return candidates
 
+def get_flattened_buckets(workspace_id=None, target_configs=None):
+    """Backend SSOT helper for resolving flattened sub-buckets with defensive null-safety."""
+    if target_configs is None:
+        cfg = load_config(workspace_id)
+        target_configs = cfg.get("target_repos", []) or []
+
+    if not isinstance(target_configs, list):
+        return []
+
+    flattened = []
+    for repo in target_configs:
+        if not repo or not isinstance(repo, dict):
+            continue
+        sub_buckets = repo.get("sub_buckets") or []
+        if isinstance(sub_buckets, list):
+            for b in sub_buckets:
+                if b and isinstance(b, dict) and not b.get("is_system"):
+                    b_copy = dict(b)
+                    b_copy["repo_dir"] = repo.get("repo_dir", "")
+                    b_copy["repo_title"] = repo.get("title") or repo.get("repo_dir", "")
+                    flattened.append(b_copy)
+    return flattened
+
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
-
 def resolve_logical_path(path, workspace_id=None):
     from pathlib import Path
     import re
+
+    if not path:
+        return ""
+
+    cfg = load_config(workspace_id)
     _, workspace_root, _ = get_workspace_physics(workspace_id)
     ws_root_path = Path(workspace_root).resolve()
 
-    norm_path = path
+    norm_path = str(path).strip().replace('\\', '/')
+
+    # Handle absolute paths
     if Path(norm_path).is_absolute():
         resolved_abs = Path(norm_path).resolve()
-        cfg = load_config(workspace_id)
-        for repo in cfg.get("target_repos", []):
-            p_path = repo.get("physical_path")
-            if p_path:
-                allowed_base = Path(p_path).expanduser().resolve()
-                if str(resolved_abs).startswith(str(allowed_base)):
-                    return resolved_abs.as_posix()
-
-        if str(resolved_abs).startswith(str(ws_root_path)):
+        if resolved_abs.exists():
             return resolved_abs.as_posix()
         try:
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
 
-    norm_path = re.sub(r'\.\.(?=/|$)', '', str(norm_path))
+    norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
 
-    cfg = load_config(workspace_id)
-
+    # Handle explicit repo boundary ::
     if '::' in norm_path:
         boundary_parts = norm_path.split('::', 1)
-        target_repo = boundary_parts[0]
-        downstream = boundary_parts[1].lstrip('/')
-
+        target_repo, downstream = boundary_parts[0], boundary_parts[1].lstrip('/')
         for repo in cfg.get("target_repos", []):
             if target_repo == repo.get("repo_dir"):
                 physical_path = repo.get("physical_path")
@@ -313,92 +321,39 @@ def resolve_logical_path(path, workspace_id=None):
                 return expanded_base.joinpath(downstream).resolve().as_posix()
         norm_path = norm_path.replace('::', '/')
 
+    # Pass 1: Direct match relative to workspace root
+    direct_cand = ws_root_path.joinpath(norm_path).resolve()
+    if direct_cand.exists():
+        return direct_cand.as_posix()
+
+    # Pass 2: Try prefixing with each target repo ({repo}/path)
+    target_repos = cfg.get("target_repos", [])
+    for repo in target_repos:
+        repo_dir = repo.get("repo_dir")
+        p_path = repo.get("physical_path")
+        repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
+
+        repo_cand = repo_base.joinpath(norm_path).resolve()
+        if repo_cand.exists():
+            return repo_cand.as_posix()
+
+    # Pass 3: Handle redundant/duplicated repo prefixes by stripping leading repo_dir segments
     parts = [p for p in norm_path.split('/') if p]
-    if not parts:
-        return Path(path).as_posix()
+    for repo in target_repos:
+        repo_dir = repo.get("repo_dir")
+        p_path = repo.get("physical_path")
+        repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
 
-    for repo in cfg.get("target_repos", []):
-        if parts[0] == repo.get("repo_dir"):
-            physical_path = repo.get("physical_path")
-            if physical_path:
-                expanded_base = Path(physical_path).expanduser().resolve()
-            else:
-                expanded_base = (ws_root_path / repo.get("repo_dir")).resolve()
-            if len(parts) == 1:
-                if expanded_base.exists():
-                    return expanded_base.as_posix()
+        curr_parts = list(parts)
+        while curr_parts and curr_parts[0] == repo_dir:
+            curr_parts.pop(0)
+            if curr_parts:
+                stripped_cand = repo_base.joinpath(*curr_parts).resolve()
+                if stripped_cand.exists():
+                    return stripped_cand.as_posix()
 
-            candidate_paths = []
-            if len(parts) > 1:
-                candidate_paths.append(expanded_base.joinpath(*parts[1:]).resolve())
-            candidate_paths.append(expanded_base.joinpath(*parts).resolve())
+    return direct_cand.as_posix()
 
-            repo_dir_name = repo.get("repo_dir")
-            dup_idx = 1
-            while dup_idx < len(parts) and parts[dup_idx] == repo_dir_name:
-                dup_idx += 1
-                if dup_idx < len(parts):
-                    candidate_paths.append(expanded_base.joinpath(*parts[dup_idx:]).resolve())
-
-            for cand in candidate_paths:
-                if cand.exists():
-                    return cand.as_posix()
-
-            path_stripped = candidate_paths[0] if candidate_paths else expanded_base
-            path_kept = expanded_base.joinpath(*parts).resolve()
-
-            def get_unmatched_distance(target_path):
-                d_path = target_path.parent
-                distance = 0
-                while d_path and str(d_path).startswith(str(expanded_base)) and len(str(d_path)) >= len(str(expanded_base)):
-                    if d_path.is_dir():
-                        return distance
-                    distance += 1
-                    d_path = d_path.parent
-                return distance
-
-            dist_kept = get_unmatched_distance(path_kept)
-            dist_stripped = get_unmatched_distance(path_stripped)
-
-            if dist_kept < dist_stripped:
-                return path_kept.as_posix()
-            return path_stripped.as_posix()
-
-    return ws_root_path.joinpath(norm_path).resolve().as_posix()
-
-def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
-    import re
-    if depth > 5:
-        return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
-    def replacer(match):
-        include_path = match.group(1).strip()
-        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
-
-        if include_path.startswith('./') or include_path.startswith('../'):
-            parts = current_filepath.split('/')[:-1]
-            for p in include_path.split('/'):
-                if p == '.': continue
-                elif p == '..': 
-                    if parts: parts.pop()
-                else: parts.append(p)
-            target_path = '/'.join(parts)
-        else:
-            target_path = include_path.lstrip('/')
-
-        inc_content = read_callback(target_path)
-        if inc_content is not None:
-            if params_str:
-                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|([^;}]*))', params_str)
-                for pm in param_matches:
-                    key = pm.group(1)
-                    val = pm.group(2) if pm.group(2) is not None else pm.group(3).strip()
-                    macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
-                    inc_content = re.sub(macro_pattern, val, inc_content)
-            return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
-        else:
-            return f"[!] MACRO TARGET NOT FOUND: {include_path}"
-
-    return re.sub(pattern, replacer, text)
 
 def search_workspace_files(workspace_id, query):
     terms = [t for t in query.split() if t]
@@ -460,16 +415,15 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
         "apply_ignore": True,
         "sub_buckets": []
     }
-
 def sanitize_workspace_config(cfg):
     cfg.pop("_settings_schemas", None)
     valid_repos = []
-    for repo in cfg.get("target_repos", []):
-        if not repo.get("repo_dir"):
+    for repo in (cfg.get("target_repos") or []):
+        if not repo or not repo.get("repo_dir"):
             continue
         valid_buckets = []
-        for b in repo.get("sub_buckets", []):
-            if b.get("is_system"):
+        for b in (repo.get("sub_buckets") or []):
+            if not b or b.get("is_system"):
                 continue
             if not b.get("dynamic_split_prefix"):
                 if not b.get("id"):
