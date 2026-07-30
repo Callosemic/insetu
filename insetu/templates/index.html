@@ -25,9 +25,16 @@
     <meta name="theme-color" content="#121212">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" href="/favicon.ico?v={{ title|urlencode }}">
-    <script type="importmap">
-    {{ importmap|tojson|safe }}
+    <script>
+        window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
+        window.SUTRAM_MANIFEST_URLS = [
+            '/static/vendor.json'
+            {% for ext in extensions %}
+            , '/static/extensions/{{ ext }}/vendor.json'
+            {% endfor %}
+        ];
     </script>
+    <script src="{{ url_for('static', filename='vendor/sutram/sutram-boot.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
@@ -67,20 +74,23 @@
             <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='<div class=\'retro-text\' style=\'color:#ef4444; width: 100%; text-align: center;\'>INITIATING KERNEL PANIC...</div>'; setTimeout(()=>window.location.reload(), 3000);" class="retro-btn danger">[ Boot Lifeboat ]</a>
         </div>
     </div>
-    <script>
-        window.ACTIVE_EXTENSIONS = {{ extensions|tojson|safe }};
-    </script>
-
     <sutram-app-shell>
         <div slot="header-actions" style="display: flex; gap: 10px; align-items: center;">
-            <insetu-selection-tray></insetu-selection-tray>
+            <sutram-selection-tray></sutram-selection-tray>
             <insetu-system-settings></insetu-system-settings>
         </div>
     </sutram-app-shell>
     <insetu-file-modal id="file-modal"></insetu-file-modal>
     <insetu-config-banner></insetu-config-banner>
-    <insetu-status-bar baseTitle="{{ title }}"></insetu-status-bar>
+    <sutram-status-bar baseTitle="{{ title }}"></sutram-status-bar>
 
-    <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+        window.addEventListener('sutram:boot-ready', () => {
+            const script = document.createElement('script');
+            script.type = 'module';
+            script.src = "{{ url_for('static', filename='js/app.js') }}";
+            document.body.appendChild(script);
+        });
+    </script>
 </body>
 </html>

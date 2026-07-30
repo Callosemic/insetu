@@ -124,7 +124,7 @@ def load_json_file(filepath, default_fallback=None):
     return _JSON_CACHE[filepath]
 def save_json_file(filepath, data, workspace_id=None):
     global _JSON_CACHE, _JSON_MTIME
-    from insetu.vfs import VFSTransaction
+    from insetu.kernel.vfs import VFSTransaction
     import json
 
     wid = workspace_id or sniff_tenant_id()
@@ -146,8 +146,8 @@ def load_config(workspace_id=None):
     if cfg_path not in _MUTATED_CONFIG_CACHE or current_mtime > _MUTATED_CONFIG_MTIME.get(cfg_path, 0):
         import copy
         cfg = copy.deepcopy(load_json_file(cfg_path, {}))
-        
-        from insetu.hooks import hooks
+
+        from insetu.kernel.hooks import hooks
         hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
         _MUTATED_CONFIG_CACHE[cfg_path] = cfg
         _MUTATED_CONFIG_MTIME[cfg_path] = current_mtime
@@ -203,19 +203,163 @@ def resolve_sandbox_path(filepath, workspace_id=None):
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
-
     norm_path = re.sub(r'\.\.(?=/|$)', '', str(norm_path))
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
 
-    return ws_root_path.joinpath(norm_path).resolve().as_posix()
+    resolved = ws_root_path.joinpath(norm_path).resolve()
+    if not resolved.exists():
+        parts = norm_path.split('/')
+        if len(parts) > 1 and parts[0] == parts[1]:
+            dedup_path = ws_root_path.joinpath(*parts[1:]).resolve()
+            if dedup_path.exists():
+                return dedup_path.as_posix()
+
+    return resolved.as_posix()
 
 def resolve_system_artifact_path(filepath, workspace_id):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     active_insetu_base = Path(cfg_path).parent.resolve()
     default_insetu_base = Path(_cwd).joinpath(".insetu").resolve()
     resolved_abs = Path(filepath).resolve()
-
     if str(resolved_abs).startswith(str(active_insetu_base)) or str(resolved_abs).startswith(str(default_insetu_base)):
         return resolved_abs.as_posix()
     else:
         return resolve_sandbox_path(filepath, workspace_id)
+
+def build_tree_dict(file_paths):
+    tree = {}
+    for path in file_paths:
+        parts = path.split('/')
+        current = tree
+        for part in parts:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+    return tree
+
+def generate_ascii_tree(file_paths):
+    tree = build_tree_dict(file_paths)
+    def print_tree(node, prefix=""):
+        lines = []
+        entries = sorted(list(node.keys()))
+        for i, key in enumerate(entries):
+            is_last = (i == len(entries) - 1)
+            lines.append(f"{prefix}{'└── ' if is_last else '├── '}{key}")
+            lines.extend(print_tree(node[key], prefix + ("    " if is_last else "│   ")))
+        return lines
+    return ".\n" + "\n".join(print_tree(tree))
+
+def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
+    import re
+    if depth > 5:
+        return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
+    def replacer(match):
+        include_path = match.group(1).strip()
+        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
+
+        if include_path.startswith('./') or include_path.startswith('../'):
+            parts = current_filepath.split('/')[:-1]
+            for p in include_path.split('/'):
+                if p == '.': continue
+                elif p == '..': 
+                    if parts: parts.pop()
+                else: parts.append(p)
+            target_path = '/'.join(parts)
+        else:
+            target_path = include_path.lstrip('/')
+
+        inc_content = read_callback(target_path)
+        if inc_content is not None:
+            if params_str:
+                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|([^;}]*))', params_str)
+                for pm in param_matches:
+                    key = pm.group(1)
+                    val = pm.group(2) if pm.group(2) is not None else pm.group(3).strip()
+                    macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
+                    inc_content = re.sub(macro_pattern, val, inc_content)
+            return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
+        else:
+            return f"[!] MACRO TARGET NOT FOUND: {include_path}"
+
+    return re.sub(pattern, replacer, text)
+
+def _get_base_step_and_diffs(lines):
+    """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
+    indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
+    if len(indents) > 1:
+        diffs = [indents[k+1] - indents[k] for k in range(len(indents)-1)]
+        valid_diffs = [d for d in diffs if d > 1]
+
+        if valid_diffs:
+            best_step = 4
+            min_error = float('inf')
+
+            for S in [4, 2, 3, 8]:
+                error = 0
+                has_base_jump = False
+
+                for d in valid_diffs:
+                    k = max(1, int(round(d / S)))
+                    if k == 1:
+                        has_base_jump = True
+                    error += abs(d - (k * S))
+
+                if not has_base_jump:
+                    error += 1000 
+
+                if error < min_error:
+                    min_error = error
+                    best_step = S
+
+            return best_step, diffs
+    return 4, []
+
+def parse_blocks(text):
+    import re
+    files = {}
+    current_file = None
+    state = "OUTSIDE"
+    current_type = "exact"
+    search_lines, replace_lines = [], []
+
+    if "<<<<<<< FILE:" in text:
+        text = "<<<<<<< FILE:" + text.split("<<<<<<< FILE:", 1)[1]
+
+    text = re.sub(
+        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+REPLACE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
+        '>>>>>>> REPLACE',
+        text,
+        flags=re.MULTILINE
+    )
+
+    lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+    for line in lines:
+        if line.startswith("<<<<<<< FILE:"):
+            current_file = line.replace("<<<<<<< FILE:", "").strip()
+            if current_file not in files: files[current_file] = []
+            state = "OUTSIDE"
+        elif line.startswith("<<<<<<< SEARCH"):
+            state = "SEARCH"
+            search_lines = []
+            current_type = "regex" if "REGEX" in line else "exact"
+        elif line.startswith("======="):
+            if state == "SEARCH":
+                state = "REPLACE"
+                replace_lines = []
+            elif state == "OUTSIDE" and current_file:
+                print(f"  [~] Warning: Missing '<<<<<<< SEARCH' tag detected for {current_file}. Auto-healing as a genesis patch.")
+                state = "REPLACE"
+                search_lines = []
+                replace_lines = []
+        elif line.startswith(">>>>>>> REPLACE"):
+            if state == "REPLACE" and current_file:
+                files[current_file].append({
+                    "type": current_type,
+                    "search": "\n".join(search_lines),
+                    "replace": "\n".join(replace_lines)
+                })
+            state = "OUTSIDE"
+        else:
+            if state == "SEARCH": search_lines.append(line)
+            elif state == "REPLACE": replace_lines.append(line)
+    return files

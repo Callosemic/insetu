@@ -3,7 +3,7 @@ import json
 import socket
 import secrets
 from flask import Blueprint, request, jsonify
-from insetu.utils import load_config, save_json_file, get_workspace_physics
+from insetu.kernel.utils import load_config, save_json_file, get_workspace_physics
 auth_bp = Blueprint('auth', __name__)
 
 # Generate a cryptographically sound scrolling runtime session token
@@ -75,7 +75,7 @@ def bootstrap():
         allowed_emails = cfg.get("allowed_dev_emails", [])
         # Trust On First Use (TOFU)
         if not allowed_emails:
-            from insetu.utils import load_json_file
+            from insetu.kernel.utils import load_json_file
             cfg_path, _, _ = get_workspace_physics()
             raw_cfg = load_json_file(cfg_path, {})
             raw_cfg["allowed_dev_emails"] = [user_email]

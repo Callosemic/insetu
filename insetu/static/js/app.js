@@ -1,13 +1,4 @@
-import { BridgeStore } from './core/bridge.js';
-import { AppStore } from './store.js';
-import './components/ui_dropdowns.js';
-import './components/ui_file_tree.js';
-import './components/ui_folder_browser.js';
-import './components/ui_modal.js';
-import './components/ui_system_settings.js';
-import './components/ui_filter_pills.js';
-import './components/ui_primitives.js';
-import './components/ui_editor.js';
+import { AppStore } from './core/store.js';
 import '../vendor/sutram/app_shell.js';
 import '../vendor/yenvui/js/tabs.js';
 import '../vendor/yenvui/js/toast.js';
@@ -15,8 +6,8 @@ import '../vendor/yenvui/js/category-section.js';
 import '../vendor/yenvui/js/collapsible.js';
 import '../vendor/yenvui/js/toolbar.js';
 import '../vendor/yenvui/js/editor.js';
-import './core/gather.js';
-import './config.js';
+import '../vendor/yenvui/js/status-bar.js';
+
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('/sw.js').then(reg => {
@@ -36,12 +27,12 @@ if ('serviceWorker' in navigator) {
 window.addEventListener('beforeunload', (e) => {
     let isDirty = false;
 
-    const bridgeState = BridgeStore.getState();
+    const bridgeState = window.inSetu?.stores?.Bridge?.getState();
     if (bridgeState && bridgeState.payloadText && bridgeState.payloadText.trim() !== '') {
         isDirty = true;
     }
 
-    const fm = window.inSetu.stores.Fs?.getState()?.fileModal;
+    const fm = window.inSetu?.stores?.Fs?.getState()?.fileModal;
     if (fm && fm.open && fm.isFS && fm.content !== fm.originalContent) {
         isDirty = true;
     }
@@ -52,6 +43,7 @@ window.addEventListener('beforeunload', (e) => {
     }
 });
 import { initShortcutRouter } from '../vendor/sutram/shortcuts.js';
+import '../vendor/sutram/primitives.js';
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
@@ -107,110 +99,6 @@ document.addEventListener('input', (e) => {
 window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
 window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
 window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
-
-import { LitElement, html, css } from 'lit';
-import { InSetuElement } from './sdk.js';
-
-export class InSetuSelectionTray extends InSetuElement {
-    static properties = { 
-        selectedItems: { type: Object },
-        modalOpen: { type: Boolean }
-    };
-
-    static styles = css`
-        .cart-btn {
-            background: var(--intent-highlight);
-            color: white;
-            border: none;
-            border-radius: 50%;
-            width: 28px;
-            height: 28px;
-            font-size: 0.85rem;
-            font-weight: bold;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 12px;
-            transition: transform 0.2s;
-            padding: 0;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        }
-        .cart-btn:hover {
-            transform: scale(1.1);
-        }
-    `;
-
-    constructor() {
-        super();
-        this.selectedItems = new Map();
-        this.modalOpen = false;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(window.inSetu.stores.Selection, state => {
-            this.selectedItems = state.selectedItems;
-            if (this.selectedItems.size === 0) this.modalOpen = false;
-            this.requestUpdate();
-        });
-        this.selectedItems = window.inSetu.stores.Selection.getState().selectedItems;
-    }
-
-    render() {
-        const count = this.selectedItems.size;
-        const itemsArray = Array.from(this.selectedItems.values());
-
-        let batchActions = [];
-        if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
-            window.ExtensionRegistry._manifests.forEach(config => {
-                if (config.batchActions) {
-                    config.batchActions.forEach(act => {
-                        if (act.match(itemsArray)) batchActions.push(act);
-                    });
-                }
-            });
-        }
-        batchActions.sort((a, b) => (a.order || 99) - (b.order || 99));
-        return html`
-            ${count > 0 ? html`
-                <button class="cart-btn" title="View Selected Items" @click=${() => this.modalOpen = true}>${count}</button>
-            ` : ''}
-
-            <insetu-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="Selected Items (${count})" @modal-closed=${() => this.modalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${itemsArray.map(item => html`
-                        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 4px;">
-                            <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${item.data?.filepath || item.data?.folderpath || item.data?.id || 'Unknown Item'}</span>
-                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 4px 8px; font-size: 1rem; cursor: pointer; margin: 0;" @click=${() => {
-                                const id = item.data?.filepath || item.data?.folderpath || item.data?.id;
-                                if (id) window.inSetu.stores.Selection.getState().toggleSelection(id, item.entityType, item.data);
-                            }}>✕</button>
-                        </div>
-                    `)}
-                </div>
-                <insetu-async-btn 
-                    slot="footer" 
-                    label="🗑️ Clear" 
-                    intent="danger" 
-                    .onClick=${() => window.inSetu.stores.Selection.getState().clearSelection()}>
-                </insetu-async-btn>
-                ${batchActions.map(act => html`
-                    <insetu-async-btn   
-                        slot="footer"
-                        label="${act.icon} ${act.label}" 
-                        intent="${act.intent || 'primary'}" 
-                        .onClick=${async (e) => {
-                            await act.asyncAction(itemsArray, e);
-                        }}>
-                    </insetu-async-btn>
-                `)}
-            </insetu-modal>
-        `;
-    }
-}
-customElements.define('insetu-selection-tray', InSetuSelectionTray);
-
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
@@ -221,7 +109,7 @@ export function autoWireSettingsSchemas() {
             ...Object.keys(window.inSetu.serverSchemas || {})
         ]);
         allExts.forEach((extName) => {
-            const isCore = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
+            const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
             if (!isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
                 return;
             }
@@ -237,9 +125,17 @@ export function autoWireSettingsSchemas() {
                         id: `${extName}_generic_settings`,
                         label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Settings`,
                         icon: '📋',
-                        onClick: () => {
+                        onClick: async () => {
                             const genericModal = document.getElementById('insetu-generic-settings-root');
-                            if (genericModal) genericModal.openModal(extName);
+                            if (genericModal) {
+                                const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas[extName] || manifest.settingsSchema || [];
+                                let formData = {};
+                                try {
+                                    const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
+                                    if (res.ok) formData = await res.json();
+                                } catch(e) {}
+                                genericModal.openModal(extName, schema, formData);
+                            }
                         }
                     };
                     manifest.settingsActions.push(action);
@@ -248,8 +144,7 @@ export function autoWireSettingsSchemas() {
                 if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
                     const actionToRegister = manifest.settingsActions.find(a => a.id === `${extName}_generic_settings`);
                     if (actionToRegister) {
-                        const isCoreConfig = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
-                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick, isCoreConfig ? 'System' : 'Extensions');
+                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick, isCore ? 'System' : 'Extensions');
                     }
                 }
             }
@@ -258,45 +153,50 @@ export function autoWireSettingsSchemas() {
 }
 
 async function bootExtensions() {
-    if (window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.length > 0) {
-        for (const ext of window.ACTIVE_EXTENSIONS) {
-            if (ext === 'config') continue; // Core OS module, already hard-imported
-            try {
-                // Dynamically load the module native to the browser
-                await import(`/static/js/extensions/ext_${ext}.js`);
-                console.log(`🔌 Loaded UI Extension: ${ext}`);
-            } catch (e) {
-                console.error(`⚠️ Failed to load UI extension: ${ext}`, e);
-            }
-        }
+    const activeExts = window.ACTIVE_EXTENSIONS || [];
+
+    // Batch 0: Core UI Primitives & Foundational Components
+    const coreComponents = [
+        '/static/js/core/components/ui_dropdowns.js',
+        '/static/js/core/components/ui_file_tree.js',
+        '/static/js/core/components/ui_folder_browser.js',
+        '/static/js/core/components/ui_modal.js',
+        '/static/js/core/components/ui_system_settings.js',
+        '/static/js/core/components/ui_filter_pills.js',
+        '/static/js/core/components/ui_primitives.js',
+        '/static/js/core/components/ui_editor.js'
+    ];
+
+    // Batch 1: Core OS Chassis Modules
+    const coreModules = ['bridge', 'gather', 'config'];
+    const coreUrls = coreModules.map(m => `/static/js/core/${m}.js`);
+
+    // Batch 2: Feature Extensions
+    const extensionUrls = activeExts
+        .filter(ext => !(window.inSetu?.isCore ? window.inSetu.isCore(ext) : coreModules.includes(ext)))
+        .map(ext => `/static/js/extensions/ext_${ext}.js`);
+
+    if (window.ExtensionRegistry && typeof window.ExtensionRegistry.loadBatches === 'function') {
+        await window.ExtensionRegistry.loadBatches([
+            coreComponents,
+            coreUrls,
+            extensionUrls
+        ]);
     }
+
     // Automatically map schemas to the System Settings menu
     autoWireSettingsSchemas();
 }
+
 // --- THE CENTRALIZED FRONTEND METRONOME ---
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-// Evaluate ticks every 100ms to allow sub-second, high-resolution polling for critical extensions
-setInterval(() => {
-    const now = Date.now();
-    window.ExtensionRegistry._ticks.forEach((tasks, extName) => {
-        // Guardrail: Short-circuit background updates instantly if the extension is disabled or tearing down
-        const isCore = ['bridge', 'gather', 'config', 'files', 'core_refresh'].includes(extName);
-        if (!isCore && (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes(extName))) {
-            return;
-        }
-        tasks.forEach(task => {
-            if (now - task.lastRun >= task.interval) {
-                task.lastRun = now;
-                try { 
-                    task.cb(); 
-                } catch (e) { 
-                    console.error(`Tick error in extension [${extName}]:`, e); 
-                }
-            }
-        });
-    });
-}, 100);
-import './api.js'; // Mount explicit API client and network interceptors
+
+// Delegate execution to the Tier 1 agnostic metronome
+window.ExtensionRegistry.startMetronome(
+    () => window.ACTIVE_EXTENSIONS || [],
+    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh']
+);
+import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/poller.js';
 
 // Define the Job Polling Subroutine using the abstracted kernel
@@ -350,15 +250,21 @@ async function executeSecurityHandshake() {
     return false;
 }
 
-window.addEventListener('DOMContentLoaded', async () => {
+async function executeBootSequence() {
+    console.log("[BOOT] Starting sequence...");
+    if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = true;
+
     const authenticated = await executeSecurityHandshake();
+    console.log("[BOOT] Security Handshake completed:", authenticated);
     if (!authenticated) {
         document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
+        console.log("[BOOT] Fetching system configuration...");
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+        console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
         if (cRes.ok) {
             const data = await cRes.json();
             const config = data.config || {};
@@ -366,7 +272,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
             // Synchronize branding tokens while we have the config
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.querySelector('insetu-status-bar');
+            const statusBar = document.querySelector('sutram-status-bar');
             if (statusBar) {
                 statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
             }
@@ -374,9 +280,45 @@ window.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
-    await bootExtensions();
+    console.log("[BOOT] Loading Workspaces...");
     // Load the available multi-tenant workspaces into the UI securely
     await loadWorkspaces();
+    console.log("[BOOT] Workspaces loaded.");
+    console.log("[BOOT] Initializing Workspace Topology...");
+    await initializeWorkspaceTopology();
+    console.log("[BOOT] Topology initialized.");
+    console.log("[BOOT] Booting Extensions...");
+    await bootExtensions();
+    // Declarative Tab Ordering: AppStore syncs tabOrder directly to Sutram
+    AppStore.subscribe(
+        state => state.tabOrder,
+        (tabOrder) => {
+            if (window.ExtensionRegistry?.setTabOrder && Array.isArray(tabOrder)) {
+                window.ExtensionRegistry.setTabOrder(tabOrder);
+            }
+        }
+    );
+    // Initial Sync for Cold Boot
+    const initialTabOrder = AppStore.getState().tabOrder;
+    if (window.ExtensionRegistry?.setTabOrder && Array.isArray(initialTabOrder) && initialTabOrder.length > 0) {
+        window.ExtensionRegistry.setTabOrder(initialTabOrder);
+    }
+
+    // Sync pinned repos to the agnostic Sutram Status Bar
+        const statusBar = document.querySelector('sutram-status-bar');
+        if (statusBar) {
+            AppStore.subscribe(state => state.pinnedRepos, (repos) => {
+                if (repos && repos.size > 0 && !repos.has('ALL')) {
+                    statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
+                } else {
+                    statusBar.statusString = '';
+                }
+            });
+            const repos = AppStore.getState().pinnedRepos;
+            if (repos && repos.size > 0 && !repos.has('ALL')) {
+                statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
+            }
+        }
 
     // Initialize Zero-Bundler SPA Router (Native Hash Routing)
     const handleHashChange = () => {
@@ -444,26 +386,60 @@ window.addEventListener('DOMContentLoaded', async () => {
         AppStore.getState().setActiveRoute(tabId, subId);
         window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId, forceRefresh: isAlreadyActive });
     });
+    try {
+        // Hydrate the declarative shell with the initial route state
+        const state = AppStore.getState();
+        window.dispatchEvent(new CustomEvent('sutram-route-changed', {
+            detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
+        }));
 
-    // Wait for configuration and topology to settle before mounting layout
-    await initializeWorkspaceTopology();
-    // Compile the primary and settings layouts cleanly from the registry blueprints
-    if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
-        window.ExtensionRegistry.tabOrder = window.inSetu.stores.Gather?.getState()?.tabOrder || AppStore.getState().tabOrder || [];
-        window.ExtensionRegistry.compileLayout();
+        if (state.activeTab) {
+            window.inSetu.events.emitHook('zone:tab-changed', state.activeTab);
+            const activeSub = state.activeSubTabs[state.activeTab];
+            if (activeSub) {
+                window.inSetu.events.emitHook('zone:subtab-changed', { parentId: state.activeTab, subId: activeSub, forceRefresh: true });
+            }
+        }
+    } catch (bootErr) {
+        console.error("⚠️ [BOOT] Non-fatal error during layout/topology hydration:", bootErr);
+    } finally {
+        // Everything is fully booted, topologies mapped, and extensions mounted.
+        // NOW it's safe to drop the loading screen/panic button and mark boot as complete.
+        window.BOOT_COMPLETE = true;
+        if (window.panicTimeout) clearTimeout(window.panicTimeout);
+        const _initPanicBtn = document.getElementById('js-panic-button');
+        if (_initPanicBtn) _initPanicBtn.style.display = 'none';
     }
-    // Hydrate the declarative shell with the initial route state
-    const state = AppStore.getState();
-    window.dispatchEvent(new CustomEvent('sutram-route-changed', {
-        detail: { tab: state.activeTab, subTabs: state.activeSubTabs }
-    }));
+}
 
-    // Everything is fully booted, topologies mapped, and extensions mounted.
-    // NOW it's safe to drop the loading screen/panic button.
-    if (window.panicTimeout) clearTimeout(window.panicTimeout);
-    const _initPanicBtn = document.getElementById('js-panic-button');
-    if (_initPanicBtn) _initPanicBtn.style.display = 'none';
+// --- FAIL-SAFE EXTENSION ERROR GATEWAY ---
+// Intercepts unhandled extension runtime errors to prevent them from taking down the OS shell.
+window.addEventListener('error', (e) => {
+    const isExtensionError = e.filename && (e.filename.includes('ext_') || e.filename.includes('extensions/'));
+    if (window.BOOT_COMPLETE || isExtensionError) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.error("⚠️ [Isolated Extension Error]:", e.error || e.message);
+        const toastStore = window.inSetu?.stores?.Toast;
+        if (toastStore && typeof toastStore.getState === 'function') {
+            toastStore.getState().addToast(
+                `Extension Error (${e.filename ? e.filename.split('/').pop() : 'UI'}): ${e.message}`,
+                'danger'
+            );
+        }
+        // Forcefully suppress panic overlay if error originated from an extension
+        const panicBtn = document.getElementById('js-panic-button');
+        if (panicBtn && (window.BOOT_COMPLETE || isExtensionError)) {
+            panicBtn.style.display = 'none';
+        }
+    }
 });
+
+if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', executeBootSequence);
+} else {
+    executeBootSequence();
+}
 
 // PWA Isolation: Honor URL-bound workspace parameters before reading cache
 const urlParams = new URLSearchParams(window.location.search);
@@ -498,8 +474,13 @@ async function executeWorkspaceSwap(key, title) {
     window.ACTIVE_EXTENSIONS = [];
 
     Object.values(window.inSetu.stores).forEach(store => {
-        if (store.getState().clearPayload) store.getState().clearPayload();
-        if (store.getState().resetState) store.getState().resetState();
+        if (store && typeof store.getState === 'function') {
+            const state = store.getState();
+            if (state) {
+                if (typeof state.clearPayload === 'function') state.clearPayload();
+                if (typeof state.resetState === 'function') state.resetState();
+            }
+        }
     });
     const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
     AppStore.setState({ activeWorkspace: key, pinnedRepos: newPinned });
@@ -544,8 +525,9 @@ export function setGlobalStatus(msg, timeout = 3000, isError = false) {
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
 window.alert = function(msg, intent = 'danger') {
-    if (window.inSetu && window.inSetu.stores && window.inSetu.stores.Toast) {
-        window.inSetu.stores.Toast.getState().addToast(msg, intent);
+    const toastStore = window.inSetu?.stores?.Toast;
+    if (toastStore && typeof toastStore.getState === 'function') {
+        toastStore.getState().addToast(msg, intent);
     } else {
         console.warn("Alert:", msg); // Graceful fallback
     }
@@ -601,9 +583,13 @@ let compilePromiseWs = null;
 export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
-    // Guardrail: Short-circuit the compilation pipeline instantly if the workspace has no repositories tracked
-    const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
-    if (!gatherState.targetConfigs || gatherState.targetConfigs.length === 0) {
+
+    // Check both GatherStore and AppStore for targetConfigs to handle early boot timing
+    const gatherTargets = window.inSetu.stores.Gather?.getState()?.targetConfigs;
+    const appTargets = AppStore.getState().targetConfigs;
+    const targetConfigs = (gatherTargets && gatherTargets.length > 0) ? gatherTargets : appTargets;
+
+    if (!targetConfigs || targetConfigs.length === 0) {
         return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
     }
 
@@ -612,7 +598,8 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
         try {
             const response = await window.inSetu.api.workspace('gather/submit', {
                 method: 'POST',
-                body: { force_full: forceFull }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force_full: forceFull })
             });
 
             const data = await response.json();
@@ -649,8 +636,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
                         }
 
                         retries++;
-                        if (retries > 600) { // 10 minute absolute timeout
-                            result = { status: 'error', message: 'Compilation timed out.', files: [] };
+                        // Tighten the deadlock timeout to 15 seconds (60 retries @ 250ms) to prevent infinite load screens
+                        if (retries > 60) {
+                            result = { status: 'error', message: 'Compilation timed out. The background worker may have stalled.', files: [] };
                             break;
                         }
                     } else if (pollData.status === 'completed') {
@@ -666,7 +654,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             }
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+                const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
             }
 
@@ -696,29 +684,37 @@ async function performSoftRefresh() {
 
     // Dynamically iterate over all mounted global stores to trigger resets
     Object.values(window.inSetu.stores).forEach(store => {
-        if (store.getState().clearPayload) store.getState().clearPayload();
-        if (store.getState().resetState) store.getState().resetState();
+        if (store && typeof store.getState === 'function') {
+            const state = store.getState();
+            if (state) {
+                if (typeof state.clearPayload === 'function') state.clearPayload();
+                if (typeof state.resetState === 'function') state.resetState();
+            }
+        }
     });
 
     window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await window.inSetu.api.workspace('repos?t=' + Date.now());
+        const rRes = await window.inSetu.api.workspace('gather/repos?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
+            const tabOrder = d.tab_order || [];
             AppStore.setState({ 
                 allRepos: d.repos,
                 targetConfigs: d.targets || [],
                 configMissing: !!d.config_missing,
-                tabOrder: d.tab_order || []
+                tabOrder: tabOrder
             });
+            if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
+                window.ExtensionRegistry.setTabOrder(tabOrder);
+            }
             if (window.inSetu.stores.Gather) {
                 window.inSetu.stores.Gather.setState({
                     allRepos: d.repos,
                     targetConfigs: d.targets || [],
                     virtualContexts: d.virtual_contexts || [],
                     categoryOrder: d.category_order || [],
-                    tabOrder: d.tab_order || [],
                     hiddenOutputs: d.hidden_outputs || []
                 });
             }
@@ -733,14 +729,15 @@ async function performSoftRefresh() {
             await bootExtensions(); // ES6 naturally caches imports, preventing duplicate execution
             // Dynamically synchronize workspace branding tokens to prevent ghost state layouts
             AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.querySelector('insetu-status-bar');
+            const statusBar = document.querySelector('sutram-status-bar');
             if (statusBar) {
                 statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
             }
             // Flush old memory states only for deactivated extensions to protect core layout definitions
             if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
                 window.ExtensionRegistry._manifests.forEach((ext, extName) => {
-                    if (!window.ACTIVE_EXTENSIONS.includes(extName) && !['bridge', 'gather', 'config', 'files'].includes(extName)) {
+                    const isCoreModule = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files'].includes(extName);
+                    if (!window.ACTIVE_EXTENSIONS.includes(extName) && !isCoreModule) {
                         if (window.ExtensionRegistry.executeUnload) {
                             window.ExtensionRegistry.executeUnload(extName);
                         }
@@ -751,7 +748,7 @@ async function performSoftRefresh() {
             if (window.ExtensionRegistry) {
                 window.ExtensionRegistry._settingsActions = [];
                 window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
-                    const isCore = ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
+                    const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
                     if (isCore || window.ACTIVE_EXTENSIONS.includes(extName)) {
                         if (manifest.settingsActions) {
                             manifest.settingsActions.forEach(act => {
@@ -771,7 +768,6 @@ async function performSoftRefresh() {
             autoWireSettingsSchemas();
             // Recompile the primary and sub-tab layouts cleanly from the registry blueprints
             if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
-                window.ExtensionRegistry.tabOrder = window.inSetu.stores.Gather?.getState()?.tabOrder || AppStore.getState().tabOrder || [];
                 window.ExtensionRegistry.compileLayout();
             }
             // Re-render subtab navigation lists natively from scratch using the fresh registry state
@@ -786,7 +782,7 @@ async function performSoftRefresh() {
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: {} });
 
-        let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
@@ -832,31 +828,33 @@ async function fullRefresh() {
 async function initializeWorkspaceTopology() {
     // 1. Fetch Repository Configurations
     try {
-        const rRes = await window.inSetu.api.workspace('repos');
+        const rRes = await window.inSetu.api.workspace('gather/repos');
         if (rRes.ok) {
             const d = await rRes.json();
+            const tabOrder = d.tab_order || [];
             AppStore.setState({ 
                 allRepos: d.repos,
                 targetConfigs: d.targets || [],
                 configMissing: !!d.config_missing,
-                tabOrder: d.tab_order || []
+                tabOrder: tabOrder
             });
+            if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
+                window.ExtensionRegistry.setTabOrder(tabOrder);
+            }
             if (window.inSetu.stores.Gather) {
                 window.inSetu.stores.Gather.setState({
                     allRepos: d.repos,
                     targetConfigs: d.targets || [],
                     virtualContexts: d.virtual_contexts || [],
                     categoryOrder: d.category_order || [],
-                    tabOrder: d.tab_order || [],
                     hiddenOutputs: d.hidden_outputs || []
                 });
             }
         }
 } catch(e) { console.error("Topology fetch failed:", e); }
-
     // 2. Auto-Hydrate Manifest
     try {
-        let mRes = await window.inSetu.api.workspace('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
         if (Object.keys(manifestData).length === 0) {
             await executeSystemCompile();
@@ -864,10 +862,6 @@ async function initializeWorkspaceTopology() {
         }
         if (mRes.ok || manifestData) {
             AppStore.setState({ manifest: manifestData });
-            const { activeTab } = AppStore.getState();
-            if (activeTab) {
-                window.inSetu.events.emitHook('zone:tab-changed', activeTab);
-            }
         }
     } catch (e) {
         console.error("Auto-hydration failed:", e);

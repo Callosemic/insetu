@@ -1,4 +1,4 @@
-const CACHE_NAME = 'insetu-tooling-v1';
+const CACHE_NAME = 'insetu-tooling-v2';
 const ASSETS = [
     '/',
     '/static/css/style.css',

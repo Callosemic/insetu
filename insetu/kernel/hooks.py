@@ -47,7 +47,6 @@ class HookRegistry:
                 self._hooks[event_name].sort(key=lambda item: item[0])
             return func
         return decorator
-
     def _is_authorized(self, cb, event_name, workspace_id):
         """Boundary filter: checks if the callback's module is enabled in the active tenant scope."""
         # Prevent blocking OS boot/shutdown or the config generation loop itself
@@ -62,12 +61,7 @@ class HookRegistry:
         # Cross-reference extension engines with the tenant's configuration
         if mod_name.startswith('engine_'):
             ext_name = mod_name.replace('engine_', '')
-
-            # Whitelist core OS engines that are not optional extensions
-            if ext_name in ['bridge', 'gather']:
-                return True
-            # Utilize the central utility to evaluate extension clearance statelessly
-            from insetu.utils import is_extension_enabled
+            from insetu.kernel.utils import is_extension_enabled
             return is_extension_enabled(ext_name, workspace_id)
 
         return True

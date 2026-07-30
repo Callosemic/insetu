@@ -4,8 +4,8 @@ import time
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from insetu.db import get_connection
-from insetu.hooks import hooks
+from insetu.kernel.db import get_connection
+from insetu.kernel.hooks import hooks
 
 _executor = None
 _metronome_thread = None
@@ -14,10 +14,9 @@ _callbacks = {}
 def register_callback(ext_name, callback_name, func):
     """Extensions register their background functions here to be triggered by the Metronome."""
     _callbacks[f"{ext_name}:{callback_name}"] = func
-
 def _prepare_job_payload(args_json, workspace_id):
     if not workspace_id:
-        from insetu.utils import sniff_tenant_id
+        from insetu.kernel.utils import sniff_tenant_id
         workspace_id = sniff_tenant_id()
     workspace_id = workspace_id or "default"
     _init_worker_schema(workspace_id)
@@ -194,7 +193,7 @@ def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_j
             pass
 def _metronome_loop():
     """The unified Event Loop dispatcher supporting dynamic multi-tenancy."""
-    from insetu.utils import _cwd, load_json_file
+    from insetu.kernel.utils import _cwd, load_json_file
     while not _shutdown_event.is_set():
         try:
             index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
@@ -298,7 +297,7 @@ class NonGitDirectoryWatcher:
         filename = Path(event.src_path).name
         if filename.startswith('.') or filename.endswith('~'): return
 
-        from insetu.utils import get_workspace_physics
+        from insetu.kernel.utils import get_workspace_physics
         try:
             _, ws_root, _ = get_workspace_physics(self.workspace_id)
             ws_rel_path = os.path.relpath(event.src_path, ws_root).replace('\\', '/')
@@ -307,7 +306,7 @@ class NonGitDirectoryWatcher:
             if event.event_type == 'created': mutation_type = 'added'
             elif event.event_type == 'deleted': mutation_type = 'deleted'
 
-            from insetu.db import get_connection
+            from insetu.kernel.db import get_connection
             import time
             db_conn = get_connection("workers", workspace_id=self.workspace_id)
             db_conn.execute(
@@ -322,8 +321,9 @@ SYSTEM_BOOT_TIME = time.time()
 @hooks.on('system_boot')
 def start_workers():
         global _executor, _metronome_thread, _observer
+        _executor = ThreadPoolExecutor(max_workers=3)
 
-        from insetu.utils import _cwd, load_json_file
+        from insetu.kernel.utils import _cwd, load_json_file
         import os
         index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
         workspace_ids = ["default"]
@@ -342,24 +342,25 @@ def start_workers():
                 conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
                 conn.commit()
                 # Boot-Time Heuristic: Offline Mutation Guard
-                from insetu.sdk import ExtensionContext
-                from insetu.utils import load_json_file
+                from insetu.kernel.extension import ExtensionContext
+                from insetu.kernel.utils import load_json_file
                 import uuid, json
                 ctx = ExtensionContext('gather', ws_id)
-                cache_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
-                cache_data = load_json_file(cache_path, {})
-                last_compile = cache_data.get("last_full_compile_time", 0)
+                contexts_dir = ctx.paths.get("contexts_dir")
+                if contexts_dir:
+                    cache_path = Path(contexts_dir).joinpath("manifest_cache.json").as_posix()
+                    cache_data = load_json_file(cache_path, {})
+                    last_compile = cache_data.get("last_full_compile_time", 0)
 
-                if SYSTEM_BOOT_TIME > last_compile:
-                    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-                    args_json = json.dumps({"force_full": True})
-                    conn.execute("""
-                        INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
-                        VALUES (?, ?, ?, 'processing', 'Healing offline mutations...', '{}', ?, ?, ?)
-                    """, (job_id, "gather", "compile_contexts", time.time(), time.time(), args_json))
-                    conn.commit()
+                    if SYSTEM_BOOT_TIME > last_compile:
+                        job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+                        args_json = json.dumps({"force_full": True})
+                        conn.execute("""
+                            INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
+                            VALUES (?, ?, ?, 'processing', 'Healing offline mutations...', '{}', ?, ?, ?)
+                        """, (job_id, "gather", "compile_contexts", time.time(), time.time(), args_json))
+                        conn.commit()
 
-        _executor = ThreadPoolExecutor(max_workers=3)
         # Flush the immediate_jobs queue natively for the boot heuristics
         for ws_id in workspace_ids:
             conn = get_connection("workers", workspace_id=ws_id)
@@ -377,7 +378,7 @@ def start_workers():
             _observer = Observer()
             has_watches = False
             for ws_id in workspace_ids:
-                from insetu.utils import load_config, get_workspace_physics
+                from insetu.kernel.utils import load_config, get_workspace_physics
                 cfg = load_config(ws_id)
                 _, ws_root, _ = get_workspace_physics(ws_id)
 

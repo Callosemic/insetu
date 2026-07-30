@@ -122,7 +122,7 @@ def main():
             print(f"[!] Details:\n{err_details}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
             os.environ["INSETU_PANIC_DETAILS"] = err_details
-            from insetu.fallback_bridge import run_recovery_app
+            from insetu.kernel.fallback_bridge import run_recovery_app
             run_recovery_app()
     elif command == "service":
         if len(sys.argv) < 3:

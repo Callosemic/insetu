@@ -324,32 +324,98 @@ def api_emergency_dump():
     import os
     from datetime import datetime
     try:
-        # Hardcoded to the current file's directory (insetu/insetu)
-        script_dir = Path(__file__).resolve().parent.as_posix()
-        
-        # Drop it in the localized CWD so the dumb-terminal download route doesn't trip on absolute path slashes
+        # Point to the repository root
+        repo_root = Path(__file__).resolve().parent.parent.parent.as_posix()
         out_file = "emergency_core_context.txt"
         
+        target_dirs = [
+            "docs",
+            "insetu/kernel",
+            "insetu/core",
+            "insetu/static/js/core",
+            "insetu/static/vendor/sutram",
+            "insetu/templates"
+        ]
+        target_files = [
+            "insetu/app.py",
+            "insetu/cli.py",
+            "insetu/static/js/app.js",
+            "CODE_INDEX.md"
+        ]
+        
+        # 1. Collect all matching target files
+        matched_entries = []
+        for root, _, files in os.walk(repo_root):
+            if "__pycache__" in root or "node_modules" in root or ".git" in root: 
+                continue
+                
+            rel_dir = os.path.relpath(root, repo_root).replace('\\', '/')
+            
+            # Match target directories (strictly limiting 'docs' to direct children)
+            is_target_dir = False
+            for d in target_dirs:
+                if d == "docs":
+                    if rel_dir == "docs":
+                        is_target_dir = True
+                        break
+                elif rel_dir.startswith(d):
+                    is_target_dir = True
+                    break
+            
+            for f in files:
+                if not f.endswith(('.py', '.js', '.html', '.md', '.json', '.txt')):
+                    continue
+                    
+                rel_path = f"{rel_dir}/{f}" if rel_dir != "." else f
+                
+                if is_target_dir or rel_path in target_files:
+                    filepath = Path(root).joinpath(f).as_posix()
+                    matched_entries.append((rel_path, filepath))
+
+        matched_entries.sort(key=lambda x: x[0])
+
+        # 2. Build ASCII tree hierarchy
+        tree_dict = {}
+        for rel_path, _ in matched_entries:
+            parts = rel_path.split('/')
+            curr = tree_dict
+            for part in parts:
+                curr = curr.setdefault(part, {})
+
+        tree_lines = ["."]
+        def render_tree(node, prefix=""):
+            items = list(node.keys())
+            for i, key in enumerate(items):
+                is_last = (i == len(items) - 1)
+                connector = "└── " if is_last else "├── "
+                child_prefix = "    " if is_last else "│   "
+                tree_lines.append(f"{prefix}{connector}{key}")
+                render_tree(node[key], prefix + child_prefix)
+
+        render_tree(tree_dict)
+        tree_str = "\n".join(tree_lines)
+
+        # Print tree to console
+        print("\n--- EMERGENCY CORE CONTEXT INCLUSION TREE ---")
+        print(tree_str)
+        print("---------------------------------------------\n")
+
+        # 3. Write tree structure and file contents to context dump
         with open(out_file, "w", encoding="utf-8") as out:
             out.write("============================================================\n")
             out.write(f"INSETU EMERGENCY CORE CONTEXT ({datetime.now()})\n")
             out.write("============================================================\n\n")
+            out.write("INCLUDED FILE STRUCTURE:\n")
+            out.write(tree_str + "\n\n")
+            out.write("============================================================\n")
             
-            for root, _, files in os.walk(script_dir):
-                # Skip massive vendor/cache directories
-                if "__pycache__" in root or "node_modules" in root or ".git" in root: 
-                    continue
-                    
-                for f in files:
-                    if f.endswith(('.py', '.js', '.html', '.css')):
-                        filepath = Path(root).joinpath(f).as_posix()
-                        rel_path = os.path.relpath(filepath, script_dir)
-                        try:
-                            with open(filepath, 'r', encoding='utf-8') as inf:
-                                content = inf.read()
-                            out.write(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
-                        except Exception:
-                            pass
+            for rel_path, filepath in matched_entries:
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as inf:
+                        content = inf.read()
+                    out.write(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
+                except Exception:
+                    pass
                             
         return jsonify({"status": "success", "file": out_file})
     except Exception as e:

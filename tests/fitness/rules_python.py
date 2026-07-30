@@ -12,15 +12,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.filename = filename
         self.has_save_json = False
         self.has_cache_clear = False
-
     def visit_Subscript(self, node):
-        if 'sdk' not in self.filepath.parts and self.filename != 'engine_hooks.py':
-            if isinstance(node.value, ast.Name) and node.value.id == 'item':
-                if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
-                    report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
-        self.generic_visit(node)
-    def visit_Subscript(self, node):
-        if 'sdk' not in self.filepath.parts and self.filename != 'engine_hooks.py':
+        if self.filename not in ('extension.py', 'engine_hooks.py'):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -44,8 +37,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'hooks' and node.func.attr == 'emit':
                 report_violation("BACKEND_EXTENSION_EVENT_EMIT_MANDATE", self.filepath, node.lineno, "Global hooks.emit() call detected in extension module. Use ctx.emit() instead.")
-
-        if 'sdk' not in self.filepath.parts and self.filename != 'engine_hooks.py':
+        if self.filename not in ('extension.py', 'engine_hooks.py'):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -133,17 +125,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         if self.filename not in VFS_WRITE_WHITELIST:
                             report_violation("EVENT_LEDGER_SENTINEL", self.filepath, node.lineno, "Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).")
         self.generic_visit(node)
-
     def visit_Import(self, node):
         self._check_sqlite_import(node)
-        is_core = 'core' in self.filepath.parts
+        for alias in node.names:
+            if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
+                report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'insetu.kernel.{alias.name.split('.')[-1]}' instead.")
         is_ext = 'extensions' in self.filepath.parts
-        is_tier1 = not is_core and not is_ext and self.filename not in ('cli.py',)
-        if is_tier1 and any(alias.name.startswith('insetu.core') for alias in node.names):
-            report_violation("KERNEL_TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 1 Kernel modules cannot import from Tier 2 core OS engines.")
+        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
 
-        if is_core and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
-            report_violation("CORE_TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Core Tier 2 modules cannot import from Tier 3 extensions.")
+        if is_tier2 and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
+            report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
 
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext and any(alias.name == 'flask' for alias in node.names):
@@ -174,18 +165,21 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     if isinstance(child, ast.Yield):
                         report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
         self.generic_visit(node)
-
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
+        if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
+            report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'insetu.kernel.{node.module.split('.')[-1]}' instead.")
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
+        is_ext = 'extensions' in self.filepath.parts
+        is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
 
-        is_core = 'core' in self.filepath.parts
-        if is_core and node.module and (node.module.startswith('insetu.extensions') or node.module.startswith('extensions')):
-            report_violation("CORE_TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Core Tier 2 modules cannot import from Tier 3 extensions.")
-
+        if is_tier2 and node.module and (node.module.startswith('insetu.extensions') or node.module.startswith('extensions')):
+            report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
+            if node.module in ('insetu.sdk', 'insetu.utils', 'insetu.hooks', 'insetu.workers'):
+                report_violation("DEPRECATED_TIER_IMPORT", self.filepath, node.lineno, f"Extension imports from un-tiered '{node.module}'. Import from 'insetu.core.sdk' or 'insetu.kernel.*' instead.")
             if node.module == 'flask' and any(alias.name == 'Blueprint' for alias in node.names):
                 report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
             if node.module == 'socket':
@@ -226,7 +220,6 @@ def check_python_files():
 
                         if visitor.has_save_json and not visitor.has_cache_clear and file in ["routes_system.py", "extension.py", "app.py"]:
                             report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_file for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
-
                         if file == "app.py":
                             has_token_gate = any(
                                 isinstance(n, ast.FunctionDef) and n.name == "enforce_token_gate"
@@ -234,6 +227,18 @@ def check_python_files():
                             )
                             if not has_token_gate:
                                 report_violation("REST_SECURITY_GATE_MANDATE", filepath, 1, "Core app.py is missing the mandatory enforce_token_gate() before_request hook.")
+
+                        if file == "utils_core.py" and "core" in filepath.parts:
+                            has_vfs_hook = any(
+                                isinstance(n, ast.FunctionDef) and any(
+                                    isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'on'
+                                    and len(dec.args) > 0 and getattr(dec.args[0], 'value', '') == 'vfs_resolve_path'
+                                    for dec in n.decorator_list
+                                )
+                                for n in ast.walk(tree)
+                            )
+                            if not has_vfs_hook:
+                                report_violation("VFS_HOOK_MANDATE", filepath, 1, "Tier 2 core/utils_core.py is missing the mandatory @hooks.on('vfs_resolve_path') hook.")
 
                         is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
                         if is_ext:

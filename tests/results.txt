@@ -3,58 +3,7 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
-❌ [VIOLATION: VFS_CONSTRAINT] /home/jrnguyen/projects/axoneme/insetu/insetu/extensions/flow/engine_flow.py:235
-   ↳ Synchronous shutil.move/rmtree detected. Route through the async VFS queue.
-
 🔍 Sweeping JavaScript Frontend (Regex Analysis)...
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:282
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:287
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:518
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/config.js:523
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1368
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1388
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1398
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1429
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/fs.js:1478
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/app.js:180
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_modal.js:89
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:121
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:291
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:307
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:450
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
-❌ [VIOLATION: LEGACY_INSETU_MODAL_BAN] /home/jrnguyen/projects/axoneme/insetu/insetu/static/js/components/ui_system_settings.js:454
-   ↳ Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.
-
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-❌ FAILED: Found 17 architectural violations.
+✅ SUCCESS: Codebase complies with all engineering standards.

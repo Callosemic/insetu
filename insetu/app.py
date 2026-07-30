@@ -2,8 +2,10 @@ from pathlib import Path
 import os
 
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
-if os.environ.get("INSETU_SIMULATE_PANIC") == "1":
-    del os.environ["INSETU_SIMULATE_PANIC"] # Clear flag to prevent a permanent boot loop
+import os
+if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
+    if "INSETU_SIMULATE_PANIC" in os.environ: del os.environ["INSETU_SIMULATE_PANIC"]
+    if os.path.exists(".panic_lock"): os.remove(".panic_lock")
     raise SyntaxError("Simulated Kernel Panic (Triggered via UI Fire Drill)")
 
 import io
@@ -12,8 +14,7 @@ import datetime
 from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
-from insetu.core.utils_core import get_sister_repos
-import insetu.workers # Initializes the metronome listeners
+import insetu.kernel.workers # Initializes the metronome listeners
 app = Flask(__name__)
 
 class ForceHTTPSProxyFix(object):
@@ -24,21 +25,26 @@ class ForceHTTPSProxyFix(object):
         if environ.get('HTTP_X_FORWARDED_PROTO') == 'https' or environ.get('HTTP_HOST', '').endswith('.ts.net'):
             environ['wsgi.url_scheme'] = 'https'
         return self.app(environ, start_response)
-
 app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
-from insetu.routes_fs import fs_bp
-from insetu.routes_system import system_bp
-from insetu.auth import auth_bp, BOOT_TOKEN
-
-app.register_blueprint(fs_bp)
-app.register_blueprint(system_bp)
+from insetu.kernel.auth import auth_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
+
+# Explicitly register system core routes first to prevent dynamic loader misfires
+try:
+    from insetu.core.routes_system import system_bp
+    if 'system' not in app.blueprints:
+        app.register_blueprint(system_bp)
+    from insetu.core.routes_fs import fs_bp
+    if 'fs' not in app.blueprints:
+        app.register_blueprint(fs_bp)
+except Exception as e:
+    print(f"⚠️ Failed to mount core system routes explicitly: {e}")
 @app.before_request
 def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
     # Always allow core landing, public assets, and the auth route to bypass checks
     # Expose the panic endpoint so the recovery OS button works even if JS crashes before the token handshake
-    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic'] or request.path.startswith('/static/'):
+    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/recovery'] or request.path.startswith('/static/'):
         return None
 
     # Check header first, fallback to query parameter for WebSockets
@@ -47,7 +53,7 @@ def enforce_token_gate():
         return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from insetu.utils import load_config, _cwd
+    from insetu.kernel.utils import load_config, _cwd
     import importlib
     import json
     import os
@@ -72,8 +78,15 @@ def load_workspace_extensions():
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
 
-    # Treat Tier 2 OS engines as implicit system extensions
-    raw_extensions.update(["bridge", "gather", "cartographer"])
+    # Inject Tier 2 Core Modules into the DAG automatically
+    core_dir = Path(__file__).parent.joinpath("core")
+    if core_dir.exists() and core_dir.is_dir():
+        for item in os.listdir(core_dir):
+            if os.path.isdir(core_dir.joinpath(item)) and not item.startswith("__") and item != "sdk":
+                raw_extensions.add(item)
+
+    # Resolve Backend Python Dependencies via vendor.json
+    resolve_python_vendors(list(raw_extensions))
 
     # DAG Node Resolution
     modules = {}
@@ -137,29 +150,31 @@ def load_workspace_extensions():
     # Mount Blueprints in safe DAG order
     for ext in sorted_exts:
         try:
-            ext_module = getattr(modules[ext], f"{ext}_bp")
-            # SDK Check: Unwrap the Blueprint if it utilizes the InSetuExtension SDK class
-            blueprint = ext_module.bp if hasattr(ext_module, 'bp') else ext_module
+            mod = modules[ext]
+            bp_attr = f"{ext}_bp"
 
-            app.register_blueprint(blueprint)
+            if hasattr(mod, bp_attr):
+                ext_module = getattr(mod, bp_attr)
+                # SDK Check: Unwrap the Blueprint if it utilizes the InSetuExtension SDK class
+                blueprint = ext_module.bp if hasattr(ext_module, 'bp') else ext_module
 
-            # Wire up native WebSockets natively via flask-sock if the extension provides it
-            if hasattr(ext_module, 'sock'):
-                ext_module.sock.init_app(app)
+                if blueprint.name not in app.blueprints:
+                    app.register_blueprint(blueprint)
 
-            print(f"🔌 Extension Mounted Successfully: [engine_{ext}]")
-        except AttributeError as e:
-            print(f"⚠️  Blueprint Mount Failed [{ext}]: {str(e)}")
+            # Wire up native WebSockets natively via flask-sock if the module provides it
+            if hasattr(mod, 'sock'):
+                mod.sock.init_app(app)
 
+            print(f"🔌 Module Mounted Successfully: [{ext}]")
+        except Exception as e:
+            print(f"⚠️  Unexpected Mount Failure [{ext}]: {type(e).__name__} - {str(e)}")
     # Purge the config cache. Because the bootloader called load_config() 
     # to discover extensions, the mutate_workspace_config hook fired into a void.
     # Clearing the cache ensures the fully-mounted Extension DAG gets a chance to inject.
-    from insetu.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
 
-# Ignite active workspace feature components JIT at application startup
-load_workspace_extensions()
 import operator
 import re
 
@@ -189,88 +204,71 @@ def eval_single_clause(v_tuple, clause):
     op_str, target_str = match.groups()
     op_func = OPERATORS[op_str]
     return op_func(v_tuple, parse_semver(target_str))
-
 def satisfies_range(version_str, range_str):
     """Evaluates compound range expressions (e.g., '>=5.0.0 && <6.0.0')."""
     v_tuple = parse_semver(version_str)
     clauses = [c.strip() for c in re.split(r'&&|\s+', range_str) if c.strip()]
     return all(eval_single_clause(v_tuple, clause) for clause in clauses)
-def build_dynamic_importmap():
-    """Statelessly scans core static/vendor.json and active extension vendor.json manifests with compound SemVer resolution."""
-    import json
-    from insetu.utils import load_config
 
-    imports = {}
-    scopes = {}
+def resolve_python_vendors(active_exts):
+    """Statelessly scans core and extension vendor.json manifests to resolve and inject Python dependencies."""
+    import sys
+    import json
+
     candidates = {}
+    resolved_paths = {}
 
     # 1. Read Core Baseline Manifest
     core_vendor_file = Path(app.static_folder).joinpath("vendor.json")
     if core_vendor_file.exists() and core_vendor_file.is_file():
         try:
             with open(core_vendor_file, "r", encoding="utf-8") as f:
-                core_decls = json.load(f).get("imports", {})
+                core_decls = json.load(f).get("python", {})
             for specifier, meta in core_decls.items():
-                rel_path = meta.get("path", "").lstrip("/")
-                imports[specifier] = f"/static/{rel_path}"
+                resolved_paths[specifier] = Path(app.root_path).joinpath("static", meta.get("path", "")).resolve().as_posix()
         except Exception as e:
             print(f"⚠️ Failed to parse core static/vendor.json: {e}")
 
-    # 2. Sweep Active Extensions for vendor.json Declarations
-    cfg = load_config()
-    active_exts = cfg.get("extensions", [])
+    # 2. Sweep Active Extensions
     ext_base = Path(app.root_path).joinpath("extensions")
-
     for ext in active_exts:
         vendor_file = ext_base.joinpath(ext, "vendor.json")
         if vendor_file.exists() and vendor_file.is_file():
             try:
                 with open(vendor_file, "r", encoding="utf-8") as f:
-                    declarations = json.load(f).get("imports", {})
-
+                    declarations = json.load(f).get("python", {})
                 for specifier, meta in declarations.items():
-                    rel_path = meta.get("path", "").lstrip("/")
-                    v_str = meta.get("version", "0.0.0")
-                    r_str = meta.get("range", f"={v_str}")
-                    asset_url = f"/static/extensions/{ext}/{rel_path}"
-
                     if specifier not in candidates:
                         candidates[specifier] = []
                     candidates[specifier].append({
                         "ext": ext,
-                        "url": asset_url,
-                        "version": v_str,
-                        "range": r_str
+                        "path": Path(ext_base).joinpath(ext, meta.get("path", "")).resolve().as_posix(),
+                        "version": meta.get("version", "0.0.0"),
+                        "range": meta.get("range", ">=0.0.0")
                     })
             except Exception as e:
                 print(f"⚠️ Failed to parse vendor.json for extension [{ext}]: {e}")
 
-    # 3. Resolve Extension Candidates per Specifier
+    # 3. Resolve Extension Candidates
     for specifier, items in candidates.items():
-        if specifier in imports:
-            print(f"ℹ️ Importmap Protection: [{specifier}] claimed by Core OS. Skipping extension declarations.")
+        if specifier in resolved_paths:
+            print(f"ℹ️ Python Vendor Protection: [{specifier}] claimed by Core OS. Skipping extension declarations.")
             continue
 
         items.sort(key=lambda x: parse_semver(x["version"]), reverse=True)
-
         highest_item = items[0]
         all_satisfied = all(satisfies_range(highest_item["version"], item["range"]) for item in items)
 
-        if all_satisfied:
-            imports[specifier] = highest_item["url"]
-        else:
-            imports[specifier] = highest_item["url"]
-            for item in items:
-                if not satisfies_range(highest_item["version"], item["range"]):
-                    scope_key = f"/static/extensions/{item['ext']}/"
-                    if scope_key not in scopes:
-                        scopes[scope_key] = {}
-                    scopes[scope_key][specifier] = item["url"]
+        if not all_satisfied:
+            print(f"⚠️ SemVer conflict for Python vendor [{specifier}]. Utilizing highest version {highest_item['version']}.")
 
-    payload = {"imports": imports}
-    if scopes:
-        payload["scopes"] = scopes
-    return payload
+        resolved_paths[specifier] = highest_item["path"]
+
+    # 4. Inject into sys.path
+    for specifier, abs_path in resolved_paths.items():
+        if os.path.exists(abs_path) and abs_path not in sys.path:
+            sys.path.insert(0, abs_path)
+            print(f"🐍 Python Vendor Injected: [{specifier}] -> {abs_path}")
 
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
@@ -285,6 +283,11 @@ def serve_extension_static(ext_name, filename):
 
     if target_path.exists() and target_path.is_file():
         return send_file(target_path.as_posix())
+
+    # Graceful fallback: The frontend bootloader polls all extensions for vendor.json.
+    # If an extension doesn't vend external dependencies, return an empty map to prevent 404 console noise.
+    if filename == 'vendor.json':
+        return jsonify({"imports": {}})
 
     return "Extension static asset not found", 404
 
@@ -313,7 +316,7 @@ def sw():
 def manifest():
     import json
     import os
-    from insetu.utils import load_config
+    from insetu.kernel.utils import load_config
 
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath('manifest.json').as_posix()
@@ -331,7 +334,7 @@ def manifest():
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
     cfg_path, _, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
     ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
@@ -351,7 +354,7 @@ def intercept_local_static_assets():
     """
     import os
     from flask import send_file
-    from insetu.utils import get_workspace_physics
+    from insetu.kernel.utils import get_workspace_physics
 
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
@@ -364,7 +367,7 @@ def intercept_local_static_assets():
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
 def favicon():
-    from insetu.utils import load_config, get_workspace_physics
+    from insetu.kernel.utils import load_config, get_workspace_physics
     import os
     cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
@@ -378,38 +381,25 @@ def favicon():
         mimetype = 'image/png' if local_icon_path.lower().endswith('.png') else 'image/vnd.microsoft.icon'
         return send_file(local_icon_path, mimetype=mimetype)
     return send_file(Path(app.static_folder).joinpath('favicon.ico').as_posix(), mimetype='image/vnd.microsoft.icon')
-@app.route('/api/<workspace_id>/repos', methods=['GET'])
-def api_repos(workspace_id):
-    from insetu.core.utils_core import get_sister_repos
-    from insetu.utils import load_config, get_workspace_physics
+@app.route('/api/system/panic', methods=['POST'])
+def api_system_panic():
+    """Hard reboot of the OS process, setting the simulated panic flag."""
     import os
-    cfg = load_config(workspace_id)
-    targets = cfg.get("target_repos", [])
-    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    import threading
+    import time
+    from flask import jsonify
+    
+    def crash_and_restart():
+        from insetu.kernel.hooks import hooks
+        try: hooks.emit('system_shutdown')
+        except Exception: pass
+        time.sleep(0.5)
+        # Drop breadcrumb for external process supervisors (like Gunicorn) to read on boot
+        with open(".panic_lock", "w") as f: f.write("1")
+        os._exit(1)
 
-    # Dynamically inject discovered directories into meta_map for the frontend
-    for c in targets:
-        r_dir = c.get("repo_dir", "")
-        for b in c.get("sub_buckets", []):
-            if b.get("dynamic_split_prefix"):
-                if "meta_map" not in b:
-                    b["meta_map"] = {}
-                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                if os.path.exists(dyn_dir):
-                    for module in os.listdir(dyn_dir):
-                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                            if module not in b["meta_map"]:
-                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-    return jsonify({
-        "repos": get_sister_repos(workspace_id),
-        "term_port": cfg.get("term_port", 8181),
-        "targets": targets,
-        "virtual_contexts": cfg.get("virtual_contexts", []),
-        "category_order": cfg.get("category_order", []),
-        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
-        "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
-        "config_missing": not os.path.exists(cfg_path)
-    })
+    threading.Thread(target=crash_and_restart, daemon=True).start()
+    return jsonify({"status": "success", "message": "Initiating kernel panic..."})
 
 @app.route('/recovery')
 def recovery_ui():
@@ -431,30 +421,34 @@ def recovery_ui():
     return html
 @app.route('/')
 def index():
-    from insetu.utils import load_config
+    from insetu.kernel.utils import load_config
     cfg = load_config()
     instance_title = cfg.get("instance_title", "inSetu Developer OS")
     instance_emoji = cfg.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
-    importmap = build_dynamic_importmap()
-    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions, importmap=importmap)
+    return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
+
+# Ignite active workspace feature components JIT at application startup
+load_workspace_extensions()
+
+import os
+from insetu.kernel.hooks import hooks
+
+# Fire the system boot hook to ignite the worker pools and VFS queues globally
+try:
+    hooks.emit('system_boot')
+except Exception as e:
+    print(f"Warning: system_boot failed: {e}")
 
 def run_app():
-    from insetu.utils import load_config
-    from insetu.hooks import hooks
+    from insetu.kernel.utils import load_config
     import os
 
     cfg = load_config()
-    # Lock the port on initial boot so it survives os.execv workspace swaps
     if "INSETU_PORT" not in os.environ:
         os.environ["INSETU_PORT"] = str(cfg.get("port", 5005))
 
     port = int(os.environ["INSETU_PORT"])
-
-    # Guardrail: If Flask debug reloader is active, only emit system_boot inside the active worker child.
-    # This prevents background terminals/daemons from binding to the master file-monitor process.
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-        hooks.emit('system_boot')
 
     print(f"🚀 Starting inSetu Developer OS (Port {port})...")
     print(f"👉 Open http://127.0.0.1:{port} in your browser")
