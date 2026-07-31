@@ -209,26 +209,27 @@ export class InSetuMarkdownEditor extends InSetuElement {
         }));
         this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     }
-
     insertAtCursor(text) {
-        const editor = this.shadowRoot.querySelector('yenvui-editor');
+        const editor = this.shadowRoot.querySelector('sutram-editor');
         if (editor && editor.insertAtCursor) {
             editor.insertAtCursor(text);
         }
     }
     render() {
         return html`
-            <yenvui-editor 
+            <sutram-editor 
                 .value=${this.value}
                 .language=${this.language}
                 .readOnly=${this.readOnly}
                 .customExtensions=${this._customExtensions}
-                @yenvui-editor-changed=${this._handleEditorChange}>
-            </yenvui-editor>
+                @editor-changed=${this._handleEditorChange}>
+            </sutram-editor>
         `;
     }
 }
-customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
+if (!customElements.get('insetu-markdown-editor')) {
+    customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
+}
 // Register local schema and action for the generic settings modal
 if (window.ExtensionRegistry) {
     window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};

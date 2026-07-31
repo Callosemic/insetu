@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../../vendor/sutram/shared_styles.js';
+import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
 import { InSetuElement } from '../sdk.js';
 
 export class InSetuJobTracker extends InSetuElement {
@@ -92,6 +92,13 @@ export class InSetConfigBanner extends InSetuElement {
     }
 }
 customElements.define('insetu-config-banner', InSetConfigBanner);
+// --- LEGACY INSETU COMPATIBILITY ALIASES ---
+// Maps legacy <insetu-*> tags directly to Sutram primitives to prevent 
+// template crashes in un-migrated views without polluting Sutram.
+import { SutramCard, SutramModal, SutramAsyncBtn } from '../../../vendor/sutram/js/primitives.js';
+if (!customElements.get('insetu-card')) customElements.define('insetu-card', class extends SutramCard {});
+if (!customElements.get('insetu-modal')) customElements.define('insetu-modal', class extends SutramModal {});
+if (!customElements.get('insetu-async-btn')) customElements.define('insetu-async-btn', class extends SutramAsyncBtn {});
 
 if (!document.getElementById('insetu-toast-root')) {
     const toastRoot = document.createElement('sutram-toast-container');

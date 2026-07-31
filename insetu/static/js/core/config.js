@@ -2,7 +2,7 @@
 import { html, css } from 'lit';
 import { AppStore } from './store.js';
 import { InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 export class InSetuExtConfig extends InSetuElement {
     static properties = {

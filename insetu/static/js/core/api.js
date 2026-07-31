@@ -18,6 +18,21 @@ window.inSetu.api = {
         }
         return headers;
     },
+    _attemptReAuthAndRetry: async function(fullUrl, options, isWorkspaceScoped) {
+        const authRes = await originalFetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        if (authRes.ok) {
+            const authData = await authRes.json();
+            sessionStorage.setItem('insetu_boot_token', authData.token);
+            if (window.inSetu.stores?.App) window.inSetu.stores.App.setState({ authToken: authData.token });
+
+            const newHeaders = this._getHeaders(isWorkspaceScoped);
+            if (options.headers) {
+                new Headers(options.headers).forEach((value, key) => newHeaders.set(key, value));
+            }
+            return await originalFetch(fullUrl, { ...options, headers: newHeaders });
+        }
+        return null;
+    },
     workspace: async function(path, options = {}) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
@@ -29,7 +44,13 @@ window.inSetu.api = {
         }
 
         // Future Architectural Seam: Offline Typewriter IndexedDB queue will intercept POST requests here
-        const res = await originalFetch(fullUrl, { ...options, headers });
+        let res = await originalFetch(fullUrl, { ...options, headers });
+
+        if (res.status === 401) {
+            const retryRes = await this._attemptReAuthAndRetry(fullUrl, options, true);
+            if (retryRes) res = retryRes;
+        }
+
         if (options.method && options.method.toUpperCase() !== 'GET') {
             try {
                 const clone = res.clone();
@@ -67,6 +88,13 @@ window.inSetu.api = {
             new Headers(options.headers).forEach((value, key) => headers.set(key, value));
         }
 
-        return originalFetch(fullUrl, { ...options, headers });
+        let res = await originalFetch(fullUrl, { ...options, headers });
+
+        if (res.status === 401) {
+            const retryRes = await this._attemptReAuthAndRetry(fullUrl, options, true);
+            if (retryRes) res = retryRes;
+        }
+
+        return res;
     }
 };

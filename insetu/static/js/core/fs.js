@@ -1,9 +1,9 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { InSetuElement, createExtensionStore } from './sdk.js';
 import { resolveEditorMode } from './components/ui_editor.js';
 import { AppStore } from './store.js';
-import { buildFileTree } from '../../vendor/sutram/utils.js';
+import { buildFileTree } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -217,11 +217,14 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     a.remove();
 }
 export async function viewAndCopy(filename) {
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filename);
+    const cleanName = filename ? filename.replace(/^system:\/\/contexts\//, '') : filename;
+    const chunks = getChunks(cleanName);
+    const targetFile = (chunks && chunks.length > 0) ? chunks[0] : cleanName;
+    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
 
     FsStore.setState({ fileModal: {
         open: true,
-        filename: filename,
+        filename: targetFile,
         content: 'Loading...',
         originalContent: 'Loading...',
         fullText: 'Loading...',
@@ -237,7 +240,7 @@ export async function viewAndCopy(filename) {
 
     closeBrowseModal();
     try {
-        const res = await fetch(`/download/${filename}`, { headers: window.inSetu.api._getHeaders(true) });
+        const res = await fetch(`/download/${encodeURIComponent(targetFile)}`, { headers: window.inSetu.api._getHeaders(true) });
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
@@ -657,12 +660,11 @@ export class InSetuVFSExplorerActions extends InSetuElement {
         window.inSetu.events.emitHook('zone:fs-dropdown-menu', { currentPath, isPrompts: false, menuItems: items });
         return items;
     }
-
     render() {
         return html`
-            <yenvui-dropdown align="right" .items=${this._menuItems}>
+            <sutram-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </yenvui-dropdown>
+            </sutram-dropdown>
         `;
     }
 }
@@ -681,9 +683,7 @@ window.ExtensionRegistry.registerExtension('files', {
             match: (data) => {
                 if (data.suppressCopy) return false;
                 if (data.isSkeleton) return false;
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
-                return !chunks || chunks.length <= 1;
+                return true;
             },
             asyncAction: async (data, e) => {
                 let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
@@ -733,29 +733,41 @@ window.ExtensionRegistry.registerExtension('files', {
         {
             targetEntity: 'file',
             id: 'file-download',
-            label: 'Download',
-            icon: '⬇️',
+            label: (data) => {
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                return (chunks && chunks.length > 1) ? 'View Parts' : 'Download';
+            },
+            icon: (data) => {
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                return (chunks && chunks.length > 1) ? '📦' : '⬇️';
+            },
             intent: 'primary',
             order: 100,
             match: (data) => {
                 if (data.suppressDownload) return false;
                 if (data.isSkeleton) return false;
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
-                // If it has multiple chunks, the 'context' subclass takes over download responsibilities
-                return !chunks || chunks.length <= 1;
+                return true;
             },
             asyncAction: async (data, e) => {
-                let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
 
-                // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
-                if (!fetchUrl) {
-                    const activeWs = window.inSetu.utils.getActiveWorkspace();
-                    fetchUrl = data.isFS 
-                        ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
-                        : `/download/${encodeURIComponent(data.filepath)}`;
+                if (chunks && chunks.length > 1) {
+                    window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: basename } }));
+                } else {
+                    let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
+
+                    // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
+                    if (!fetchUrl) {
+                        const activeWs = window.inSetu.utils.getActiveWorkspace();
+                        fetchUrl = data.isFS 
+                            ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
+                            : `/download/${encodeURIComponent(data.filepath)}`;
+                    }
+                    await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
-                await fetchAndDownloadState(data.filepath, fetchUrl);
             }
         }
     ],
@@ -960,9 +972,10 @@ export function openWorkspaceBrowser(options = {}) {
         title = 'Browse Workspace',
         files = null,
         callback = null,
-        autoDrilldown = false
+        autoDrilldown = false,
+        isParts = false
     } = options;
-    AppStore.setState({ browserConfig: { mode, callback } });
+    AppStore.setState({ browserConfig: { mode, callback, isParts, title } });
 
     let targetManifest = files || getGlobalManifest();
 
@@ -980,7 +993,7 @@ export function openWorkspaceBrowser(options = {}) {
         }
     }
     AppStore.setState({ currentBrowsePath: cbPath });
-    FsStore.getState().setModal('browser', { open: true, title, manifest: targetManifest, searchQuery: '' });
+    FsStore.getState().setModal('browser', { open: true, title, manifest: targetManifest, searchQuery: '', isParts });
 }
 function _handleBrowserCardClick(detail) {
     const { browserConfig } = AppStore.getState();
@@ -988,7 +1001,11 @@ function _handleBrowserCardClick(detail) {
         if (browserConfig.callback) browserConfig.callback(detail.filename);
         closeBrowseModal();
     } else if (browserConfig && browserConfig.mode === 'view') {
-        if (detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(detail.filename, true);
+        if (detail.isSource && window.inSetu.vfs.viewSourceFile) {
+            window.inSetu.vfs.viewSourceFile(detail.filename, true);
+        } else if (window.inSetu.vfs.viewAndCopy) {
+            window.inSetu.vfs.viewAndCopy(detail.filename);
+        }
     }
 };
 
@@ -1092,29 +1109,28 @@ export class InSetuFileModal extends InSetuElement {
                         <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
                         <button @click=${() => closeFileModal()} class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
                     </div>
-
                     ${m.isFS ? html`
                         <div style="display: flex; gap: 10px; margin: 0; padding: 10px 20px 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); border-radius: 0; align-items: center; flex-shrink: 0;">
-                            <yenvui-dropdown align="left" .items=${[
+                            <sutram-dropdown align="left" .items=${[
                                 { label: 'Rename', icon: '✏️', onClick: renameModalFile },
                                 { label: 'Move', icon: '🚚', onClick: openMoveModal },
                                 { label: 'Archive', icon: '📦', onClick: archiveModalFile },
                                 { label: 'Delete', icon: '🗑️', onClick: deleteModalFile }
                             ]}>
                                 <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📁 File ▾</button>
-                            </yenvui-dropdown>
+                            </sutram-dropdown>
 
-                            <yenvui-dropdown align="left" .items=${[
+                            <sutram-dropdown align="left" .items=${[
                                 { label: 'Insert Link', icon: '🔗', onClick: openLinkModal },
                                 ...(m.isMarkdown || m.ext === 'txt' ? [{ label: 'Clean AI Tags', icon: '🧹', onClick: cleanModalFile }] : [])
                             ]}>
                                 <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
-                            </yenvui-dropdown>
+                            </sutram-dropdown>
 
                             ${extMenuItems.length > 0 ? html`
-                                <yenvui-dropdown align="left" .items=${extMenuItems}>
+                                <sutram-dropdown align="left" .items=${extMenuItems}>
                                     <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">🧩 Extensions ▾</button>
-                                </yenvui-dropdown>
+                                </sutram-dropdown>
                             ` : ''}
                         </div>
                     ` : ''}
@@ -1143,36 +1159,15 @@ export class InSetuFileModal extends InSetuElement {
                         `}
                     </div>
                     <div class="modal-footer" style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
-                        ${(window.inSetu.stores.App?.getState()?.manifest[m.filename]?.files?.length > 0) ? html`
-                            <sutram-async-btn label="📁 Browse" intent="highlight" .onClick=${() => {
-                                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(m.filename);
-                            }}></sutram-async-btn>
-                        ` : ''}
-                        ${(() => {
-                            const chunks = getChunks(m.filename);
-                            if (chunks && chunks.length > 1) {
-                                return html`
-                                    <sutram-async-btn label="📦 View Parts" intent="highlight" .onClick=${() => openPartsModal(m.filename)}></sutram-async-btn>
-                                `;
-                            }
-                            return html`
-                                <sutram-async-btn 
-                                    class="ui-draggable-export" 
-                                    draggable="true" 
-                                    @dragstart=${(e) => {
-                                        let fetchUrl = m.isFS ? `fs/fetch?file=${encodeURIComponent(m.filename)}` : `/download/${m.filename}`;
-                                        const override = window.inSetu.events.emitHook('zone:file-fetch-url', m.filename);
-                                        if (override) fetchUrl = override;
-                                        bindDownloadDrag(e, m.filename, fetchUrl);
-                                    }}
-                                    label="⬇️ Download" 
-                                    intent="primary" 
-                                    .onClick=${downloadFromModal}>
-                                </sutram-async-btn>
-                            `;
-                        })()}
-
-                        <sutram-async-btn label="📋 Copy" intent="success" .onClick=${copyFromModal}></sutram-async-btn>
+                        <sutram-entity-actions 
+                            entityType="file" 
+                            .entityData=${{ 
+                                filepath: m.filename, 
+                                isFS: m.isFS,
+                                isSkeleton: false,
+                                chunks: getChunks(m.filename)
+                            }}>
+                        </sutram-entity-actions>
 
                         ${this.isDirty ? html`
                             <sutram-async-btn label="💾 Save" intent="warning" .onClick=${() => saveModalFile(false)}></sutram-async-btn>
@@ -1215,17 +1210,17 @@ window.inSetu.utils.extractManifestFiles = extractManifestFiles;
 // Window Bindings
 window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
-
 export function openPartsModal(filepath) {
     if (!filepath) return;
     const basename = filepath.split('/').pop();
     const chunks = getChunks(basename);
     if (chunks && chunks.length > 0) {
         openWorkspaceBrowser({
-            mode: 'view',
+            mode: 'parts',
             title: `Parts: ${basename}`,
             files: chunks,
-            autoDrilldown: false
+            autoDrilldown: false,
+            isParts: true
         });
     }
 }
@@ -1401,12 +1396,11 @@ export class InSetuVFSModals extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
     render() {
         const m = this.modals;
         if (!m) return '';
         return html`
-            <yenvui-modal ?open=${m.move?.open} ?fullscreen=${true} titleText="Move File to..." @yenvui-modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
+            <sutram-modal ?open=${m.move?.open} ?fullscreen=${true} titleText="Move File to..." @sutram-modal-closed=${() => FsStore.getState().setModal('move', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; min-height: 0;">
                     <input type="text" .value=${m.move?.destPath || ''} @input=${e => {
                         const newDest = e.target.value;
@@ -1425,8 +1419,8 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${executeMove}>🚚 Move File</button>
-            </yenvui-modal>
-            <yenvui-modal ?open=${m.newFile?.open} ?fullscreen=${true} titleText="Create New Workspace File" @yenvui-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+            </sutram-modal>
+            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
                     <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1435,8 +1429,8 @@ export class InSetuVFSModals extends InSetuElement {
                     <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-width: 0; min-height: 200px; resize: vertical;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>
-            </yenvui-modal>
-            <yenvui-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @yenvui-modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
+            </sutram-modal>
+            <sutram-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @sutram-modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFolder?.basePath}</span></label>
                     <input type="text" placeholder="Directory name..." .value=${m.newFolder?.folderName || ''} @input=${e => FsStore.getState().setModal('newFolder', { folderName: e.target.value })} style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
@@ -1466,8 +1460,8 @@ export class InSetuVFSModals extends InSetuElement {
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFolder}>
                     ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
                 </button>
-            </yenvui-modal>
-            <yenvui-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" @yenvui-modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
+            </sutram-modal>
+            <sutram-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" @sutram-modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="height: 40px; flex-shrink: 0; margin-bottom: 15px; border-bottom: 1px solid var(--border);">
                         <div class="sub-tabs">
@@ -1515,30 +1509,93 @@ export class InSetuVFSModals extends InSetuElement {
                         })}
                     </div>
                 </div>
-            </yenvui-modal>
-<yenvui-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} @yenvui-modal-closed=${closeBrowseModal}>
+            </sutram-modal>
+<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
-        <insetu-file-tree 
-            basePath=""
-            .files=${m.browser?.manifest || []}
-            .currentPath=${this.currentBrowsePath || []}
-            .hidePath=${false}
-            .enableSearch=${this.browserConfig?.mode !== 'folder'}
-            searchPlaceholder="Fuzzy find files..."
-            .hideFiles=${this.browserConfig?.mode === 'folder'}
-            @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
-            @card-clicked=${e => _handleBrowserCardClick(e.detail)}>
-        </insetu-file-tree>
+        ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
+            <div style="display: flex; flex-direction: column; gap: 10px; padding: 15px; overflow-y: auto; flex: 1;">
+                ${(m.browser?.manifest || []).map(f => {
+                    const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                    const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                    return html`
+                        <insetu-card
+                            .titleText=${cleanName}
+                            .detailText=${f}
+                            icon="📦"
+                            intentColor="var(--intent-highlight)"
+                            ?disableSelection=${true}
+                            style="margin-bottom: 8px;">
+                            <div style="display: flex; justify-content: flex-end; padding-top: 8px;">
+                                <sutram-async-btn
+                                    label="⬇️ Download"
+                                    intent="primary"
+                                    .onClick=${async () => {
+                                        await fetchAndDownloadState(cleanName, fetchUrl);
+                                    }}>
+                                </sutram-async-btn>
+                            </div>
+                        </insetu-card>
+                    `;
+                })}
+            </div>
+        ` : html`
+            <insetu-file-tree 
+                basePath=""
+                .files=${m.browser?.manifest || []}
+                .currentPath=${this.currentBrowsePath || []}
+                .hidePath=${false}
+                .enableSearch=${this.browserConfig?.mode !== 'folder'}
+                searchPlaceholder="Fuzzy find files..."
+                .hideFiles=${this.browserConfig?.mode === 'folder'}
+                @path-changed=${e => AppStore.setState({ currentBrowsePath: e.detail.path })}
+                @card-clicked=${e => _handleBrowserCardClick(e.detail)}>
+            </insetu-file-tree>
+        `}
     </div>
-    ${this.browserConfig?.mode === 'folder' ? html`
+    ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
+        <sutram-async-btn
+            slot="footer"
+            label="⬇️ Download All"
+            intent="primary"
+            .onClick=${async () => {
+                const manifestFiles = m.browser?.manifest || [];
+                for (const f of manifestFiles) {
+                    const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                    const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                    await fetchAndDownloadState(cleanName, fetchUrl);
+                }
+            }}>
+        </sutram-async-btn>
+        ${!!navigator.share && !!navigator.canShare ? html`
+            <sutram-async-btn
+                slot="footer"
+                label="📤 Share All"
+                intent="neutral"
+                .onClick=${async () => {
+                    const manifestFiles = m.browser?.manifest || [];
+                    if (manifestFiles.length > 0) {
+                        const firstFile = manifestFiles[0];
+                        const cleanFirst = firstFile.includes('/') ? firstFile.split('/').pop() : firstFile;
+                        await shareFiles(cleanFirst, manifestFiles, false);
+                    }
+                }}>
+            </sutram-async-btn>
+        ` : ''}
+    ` : (this.browserConfig?.mode === 'folder' ? html`
         <button slot="footer" style="background: var(--intent-success); color: white;" @click=${confirmFolderSelection}>✅ Select This Folder</button>
-    ` : ''}
-</yenvui-modal>
+    ` : '')}
+</sutram-modal>
         `;
     }
 }
 customElements.define('insetu-vfs-modals', InSetuVFSModals);
-
-document.addEventListener('DOMContentLoaded', () => {
-    document.body.appendChild(document.createElement('insetu-vfs-modals'));
-});
+function mountVFSModals() {
+    if (!document.querySelector('insetu-vfs-modals')) {
+        document.body.appendChild(document.createElement('insetu-vfs-modals'));
+    }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountVFSModals);
+} else {
+    mountVFSModals();
+}

@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { AppStore } from './store.js';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---

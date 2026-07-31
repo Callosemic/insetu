@@ -2,7 +2,7 @@ import { html, css } from 'lit';
 import { AppStore } from './store.js';
 import { fetchAndDownloadState, fetchAndCopy, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
 import { createExtensionStore, InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
@@ -81,11 +81,11 @@ if (typeof window !== 'undefined') {
     window.inSetu.utils.getFlattenedBuckets = getFlattenedBuckets;
     window.inSetu.sys.getFlattenedBuckets = getFlattenedBuckets;
 }
-
 const packSelectionPayload = async (items) => {
     const payloadItems = items.map(i => {
-        if (i.data?.folderpath) return { folderpath: i.data.folderpath };
-        if (i.data?.filepath) return { filepath: i.data.filepath };
+        const d = i.data || i;
+        if (d?.folderpath) return { folderpath: d.folderpath };
+        if (d?.filepath) return { filepath: d.filepath };
         return null;
     }).filter(i => i !== null);
 
@@ -200,16 +200,6 @@ export class InSetuExtGather extends InSetuElement {
             GatherStore.setState({ loading: false });
         }
     }
-    async _downloadTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await fetchAndDownloadState(targetFile, explicitUrl);
-    }
-
-    async _copyTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await fetchAndCopy(targetFile, explicitUrl);
-    }
-
     render() {
         const categories = {};
         const manifest = AppStore.getState().manifest;
@@ -260,6 +250,7 @@ export class InSetuExtGather extends InSetuElement {
             }
         }
         const repoFilteredFiles = enrichedFiles.filter(f => {
+            if (f.finalCat === 'Quickpacks') return true;
             if (this.pinnedRepos.has('ALL')) return true;
             if (f.repoDir && this.pinnedRepos.has(f.repoDir)) return true;
             return Array.from(this.pinnedRepos).some(repo => f.filename.startsWith(repo + '_') || f.filename.includes('_' + repo + '_') || (f.finalTitle && f.finalTitle.toLowerCase().includes(repo.toLowerCase())));
@@ -296,19 +287,19 @@ export class InSetuExtGather extends InSetuElement {
                         if (cat === 'Quickpacks') {
                             return html`
                                 <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-                                    <yenvui-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
+                                    <sutram-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
                                         try {
                                             const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
                                             if (res.ok) {
                                                 const data = await res.json();
                                                 if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
                                                 const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
-                                                if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                                                if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
                                             }
                                         } catch(e) {
                                             console.error("Failed to clear quickpacks: " + e.message);
                                         }
-                                    }}></yenvui-async-btn>
+                                    }}></sutram-async-btn>
                                 </div>
                             `;
                         }
@@ -323,7 +314,14 @@ export class InSetuExtGather extends InSetuElement {
                             icon="📦"
                             intentColor="var(--intent-highlight)"
                             entityType="file:context"
-                            .entityData=${{ filepath: `system://contexts/${f.filename}`, repoDir: f.repoDir, isFS: false, isSkeleton: f.isSkeleton, suppressCopy: true, suppressBrowse: true }}
+                            .entityData=${{ 
+                                filepath: `system://contexts/${f.filename}`, 
+                                repoDir: f.repoDir, 
+                                isFS: false, 
+                                isSkeleton: f.isSkeleton, 
+                                suppress: ['copy', 'browse'],
+                                chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
+                            }}
                             @card-clicked=${() => {
                                 if (f.isSkeleton) return;
                                 const manifest = AppStore.getState().manifest || {};
@@ -351,58 +349,9 @@ export class InSetuExtGather extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-gather', InSetuExtGather);
-
 window.ExtensionRegistry.registerExtension('gather', {
     name: "Context Gatherer",
     version: "2.0.0",
-    entityActions: [
-        {
-            targetEntity: 'file:context',
-            id: 'context-view-parts',
-            label: 'View Parts',
-            icon: '📦',
-            intent: 'primary',
-            order: 100,
-            match: (data) => {
-                if (!data || data.isSkeleton) return false;
-                const pathStr = data.filepath || data.filename || '';
-                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
-                const manifest = window.inSetu?.stores?.App?.getState()?.manifest || {};
-                const chunks = window.inSetu?.utils?.extractManifestFiles 
-                    ? window.inSetu.utils.extractManifestFiles(manifest, basename) 
-                    : [];
-                return Array.isArray(chunks) && chunks.length > 1;
-            },
-            emitEvent: (data) => {
-                const pathStr = data.filepath || data.filename || '';
-                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
-                return { name: 'insetu:vfs:view-parts', detail: { filepath: basename } };
-            }
-        },
-        {
-            targetEntity: 'context',
-            id: 'context-view-parts-legacy',
-            label: 'View Parts',
-            icon: '📦',
-            intent: 'primary',
-            order: 100,
-            match: (data) => {
-                if (!data || data.isSkeleton) return false;
-                const pathStr = data.filepath || data.filename || '';
-                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
-                const manifest = window.inSetu?.stores?.App?.getState()?.manifest || {};
-                const chunks = window.inSetu?.utils?.extractManifestFiles 
-                    ? window.inSetu.utils.extractManifestFiles(manifest, basename) 
-                    : [];
-                return Array.isArray(chunks) && chunks.length > 1;
-            },
-            emitEvent: (data) => {
-                const pathStr = data.filepath || data.filename || '';
-                const basename = pathStr.includes('/') ? pathStr.split('/').pop() : pathStr;
-                return { name: 'insetu:vfs:view-parts', detail: { filepath: basename } };
-            }
-        }
-    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
@@ -427,7 +376,10 @@ window.ExtensionRegistry.registerExtension('gather', {
             icon: '⬇️',
             intent: 'primary',
             order: 20,
-            match: (items) => items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+            match: (items) => items.length > 0 && items.every(i => {
+                const d = i.data || i;
+                return d?.filepath || d?.folderpath;
+            }),
             asyncAction: async (items) => {
                 try {
                     const artifact = await packSelectionPayload(items);
@@ -453,7 +405,10 @@ window.ExtensionRegistry.registerExtension('gather', {
             icon: '📤',
             intent: 'neutral',
             order: 30,
-            match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => i.data?.filepath || i.data?.folderpath),
+            match: (items) => !!navigator.share && !!navigator.canShare && items.length > 0 && items.every(i => {
+                const d = i.data || i;
+                return d?.filepath || d?.folderpath;
+            }),
             asyncAction: async (items) => {
                 try {
                     const artifact = await packSelectionPayload(items);
@@ -473,11 +428,6 @@ window.ExtensionRegistry.registerExtension('gather', {
                 if (data.forceRefresh) {
                     AppStore.setState({ gatherForceRefreshTick: Date.now() });
                 }
-            }
-        },
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'context' || tabId === 'gather') {
-                AppStore.setState({ gatherForceRefreshTick: Date.now() });
             }
         }
     }

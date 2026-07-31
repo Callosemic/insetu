@@ -1,7 +1,7 @@
 // insetu/insetu/static/js/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
-import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../../vendor/sutram/sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce } from '../../vendor/sutram/utils.js';
+import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../../vendor/sutram/js/sdk.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce } from '../../vendor/sutram/js/utils.js';
 
 export { bindStoreInput };
 export function createExtensionStore(name, initialState, persistKeys = []) {

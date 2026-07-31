@@ -1,145 +1,9 @@
 import { LitElement, html, css } from 'lit';
-import { buildFileTree } from '../../../vendor/sutram/utils.js';
-import { sharedStyles } from '../../../vendor/sutram/shared_styles.js';
-import '../../../vendor/yenvui/js/card.js';
-import '../../../vendor/yenvui/js/card-group.js';
-import '../../../vendor/yenvui/js/async-btn.js';
+import { buildFileTree } from '../../../vendor/sutram/js/utils.js';
+import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
+import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
 
-export class InSetuCard extends LitElement {
-    static properties = {
-        filename: { type: String },
-        titleText: { type: String },
-        descriptionText: { type: String },
-        detailText: { type: String },
-        icon: { type: String },
-        intentColor: { type: String },
-        entityType: { type: String },
-        entityData: { type: Object },
-        selected: { type: Boolean },
-        disableSelection: { type: Boolean }
-    };
-    static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.filename = '';
-        this.titleText = '';
-        this.descriptionText = '';
-        this.detailText = '';
-        this.icon = '📄';
-        this.intentColor = '';
-        this.entityType = '';
-        this.entityData = {};
-        this.selected = false;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        const selStore = window.inSetu.stores.Selection;
-        if (selStore) {
-            this._unsubSel = selStore.subscribe(state => state.selectedItems, items => {
-                const id = this.entityData?.filepath || this.entityData?.id || this.filename;
-                const isSelected = items.has(id);
-                if (this.selected !== isSelected) {
-                    this.selected = isSelected;
-                }
-            });
-            const items = selStore.getState().selectedItems;
-            this.selected = items.has(this.entityData?.filepath || this.entityData?.id || this.filename);
-        }
-    }
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        if (this._unsubSel) this._unsubSel();
-    }
-
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        // If Lit reuses this DOM node for a different file due to array filtering, 
-        // immediately true-up the visual selection state against the store.
-        if (changedProperties.has('entityData') || changedProperties.has('filename')) {
-            const selStore = window.inSetu.stores.Selection;
-            if (selStore) {
-                const id = this.entityData?.filepath || this.entityData?.id || this.filename;
-                this.selected = selStore.getState().selectedItems.has(id);
-            }
-        }
-    }
-
-    render() {
-        const dynActions = this._renderDynamicActions();
-        const hasDynActions = Array.isArray(dynActions) ? dynActions.length > 0 : !!dynActions;
-        const hasActionsSlot = Array.from(this.children).some(c => c.getAttribute('slot') === 'actions');
-
-        return html`
-            <yenvui-card
-                .titleText=${this.titleText}
-                .descriptionText=${this.descriptionText}
-                .detailText=${this.detailText}
-                .icon=${this.icon}
-                .intentColor=${this.intentColor}
-                ?selected=${this.selected}
-                ?disableSelection=${this.disableSelection}
-                @yenvui-card-select-toggled=${(e) => {
-                    e.stopPropagation();
-                    const id = this.entityData?.filepath || this.entityData?.id || this.filename;
-                    if (window.inSetu.stores.Selection) {
-                        window.inSetu.stores.Selection.getState().toggleSelection(id, this.entityType, this.entityData);
-                    }
-                }}
-                @click=${this._handleMainClick}
-                style="cursor: pointer;">
-
-                <slot name="header-tags"></slot>
-                <slot></slot>
-                ${(hasDynActions || hasActionsSlot) ? html`
-                    <div slot="actions" style="display: contents;" @click=${e => e.stopPropagation()}>
-                        ${dynActions}
-                        <slot name="actions"></slot>
-                    </div>
-                ` : ''}
-            </yenvui-card>
-        `;
-    }
-
-    _renderDynamicActions() {
-        if (!this.entityType || !window.ExtensionRegistry || !window.ExtensionRegistry.getEntityActions) return '';
-        const actions = window.ExtensionRegistry.getEntityActions(this.entityType, this.entityData || {});
-
-        return actions.map(act => {
-            if (act.component) {
-                return html`<div style="display: contents; order: ${act.order || 99};">${act.component(this.entityData)}</div>`;
-            }
-
-            const label = typeof act.label === 'function' ? act.label(this.entityData) : act.label;
-            const icon = typeof act.icon === 'function' ? act.icon(this.entityData) : (act.icon || '');
-            const intent = typeof act.intent === 'function' ? act.intent(this.entityData) : (act.intent || 'primary');
-            let clickHandler;
-            if (act.asyncAction) {
-                clickHandler = (e) => act.asyncAction(this.entityData, e);
-            } else {
-                clickHandler = async (e) => {
-                    e.stopPropagation();
-                    if (act.emitEvent) {
-                        const payload = act.emitEvent(this.entityData);
-                        if (window.inSetu?.events?.emit) window.inSetu.events.emit(payload.name, payload.detail);
-                    } else if (act.onClick) {
-                        act.onClick(this.entityData, e);
-                    }
-                };
-            }
-            return html`<sutram-async-btn style="margin: 0; order: ${act.order || 99};" label="${icon} ${label}" intent="${intent}" .onClick=${clickHandler}></sutram-async-btn>`;
-        });
-    }
-    _handleMainClick(e) {
-        this._overlayActive = false;
-        this.dispatchEvent(new CustomEvent('card-clicked', {
-            detail: { filename: this.filename, isSource: true }, 
-            bubbles: true,
-            composed: true
-        }));
-    }
-}
+export class InSetuCard extends SutramCard {}
 export class InSetuFileTree extends LitElement {
     static properties = {
         files: { type: Array },
@@ -246,7 +110,7 @@ constructor() {
                 </div>
             ` : '')}
             <div class="tree-container">
-                <yenvui-card-group>
+                <sutram-card-group>
                 ${isSearching ? flatResults.map(filepath => {
                     const key = filepath.split('/').pop();
                     const fullFilepath = `${this.basePath}${filepath}`;
@@ -297,10 +161,9 @@ constructor() {
                         </insetu-card>
                     `;
                 })}
-                </yenvui-card-group>
+                </sutram-card-group>
             </div>
         `;
     }
 }
-customElements.define('insetu-card', InSetuCard);
 customElements.define('insetu-file-tree', InSetuFileTree);

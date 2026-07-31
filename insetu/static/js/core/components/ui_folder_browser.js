@@ -1,1 +1,0 @@
-// Component migrated to sutram/js/primitives.js as <sutram-folder-browser>
