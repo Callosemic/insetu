@@ -102,7 +102,7 @@ export class InSetuExtIngestModals extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @yenvui-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
+            <sutram-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
                 <div slot="body">
                     <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
                     <input type="text" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;"
@@ -127,7 +127,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                     ?disabled=${!!this.ingestStatus && this.ingestStatus !== '✅ Success'} @click=${this._executeImportUrl}>
                     📥 Fetch & Convert
                 </button>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }

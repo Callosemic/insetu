@@ -340,7 +340,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
 
         const hasFilters = !this.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
         return html`
-            <yenvui-toolbar
+            <sutram-toolbar
                 searchPlaceholder="🔍 Fuzzy search tickets..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
@@ -398,9 +398,9 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                                 }
                                                 KanbanStore.setState({ pinnedBuckets: newSet });
                                             }}>
-                                                <yenvui-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></yenvui-pill>
+                                                <sutram-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></sutram-pill>
                                                 ${visibleBuckets.map(b => html`
-                                                    <yenvui-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></yenvui-pill>
+                                                    <sutram-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></sutram-pill>
                                                 `)}
                                             </div>
                                         </div>
@@ -413,7 +413,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                 <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._tagsExpanded = !this._tagsExpanded}>
                                     🏷️ Tags ${this._tagsExpanded ? '▼' : '▶'}
                                 </span>
-                                <yenvui-filter-group
+                                <sutram-filter-group
                                     label=""
                                     .allowAll=${true}
                                     .items=${(this._tagsExpanded ? tagsArray : Array.from(this.pinnedTags).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
@@ -421,11 +421,11 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                     @yenvui-filter-changed=${(e) => {
                                         KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
                                     }}>
-                                </yenvui-filter-group>
+                                </sutram-filter-group>
                             </div>
                         ` : ''}
                 </div>
-            </yenvui-toolbar>
+            </sutram-toolbar>
 
             <div class="tracker-body">
                 ${this.activeTab === 'todos' ? this._renderColumns('todos', textFilteredTasks) : ''}
@@ -507,12 +507,11 @@ export class InSetuExtTrackerActions extends InSetuElement {
         }
         return items;
     }
-
     render() {
         return html`
-            <yenvui-dropdown align="right" .items=${this._menuItems}>
+            <sutram-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </yenvui-dropdown>
+            </sutram-dropdown>
         `;
     }
 }
@@ -824,11 +823,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
         return html`
             <!-- New Task Modal -->
-            <yenvui-modal 
+            <sutram-modal 
                 ?open=${this._modals?.new} 
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
-                @yenvui-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
+                @sutram-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
 
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
@@ -847,14 +846,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     try { await this._saveNewTask(); } catch(err) {}
                     this._isSaving = false;
                 }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
-            </yenvui-modal>
+            </sutram-modal>
             <!-- Edit Task Modal -->
-            <yenvui-modal 
+            <sutram-modal 
                 ?open=${this._modals?.edit} 
                 titleText="Edit Ticket"
                 ?fullscreen=${true}
-                @yenvui-modal-closing=${this._handleModalClosing}
-                @yenvui-modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
+                @sutram-modal-closing=${this._handleModalClosing}
+                @sutram-modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
 
                 <div slot="body" style="margin: -20px; height: calc(100% + 40px); display: flex; flex-direction: column; overflow: hidden; background: var(--bg);">
                     <div style="padding: 6px 20px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--bg);">
@@ -931,7 +930,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         this._isSaving = false;
                     }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
                 ` : ''}
-            </yenvui-modal>
+            </sutram-modal>
 `;
     }
 }

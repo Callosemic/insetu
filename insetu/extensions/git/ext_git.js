@@ -149,15 +149,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
     }
-    async _downloadTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await this.vfs.fetchAndDownloadState(targetFile, explicitUrl);
-    }
-
-    async _copyTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await this.vfs.fetchAndCopy(targetFile, explicitUrl);
-    }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(AppStore, (state) => {
@@ -469,7 +460,7 @@ disconnectedCallback() {
             return a.localeCompare(b);
         });
         return html`
-            <yenvui-toolbar
+            <sutram-toolbar
                 searchPlaceholder="🔍 Fuzzy search pending diffs..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
@@ -482,14 +473,13 @@ disconnectedCallback() {
                     .activeRepos=${Array.from(this.pinnedRepos)}
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
-            </yenvui-toolbar>
-
+            </sutram-toolbar>
             <div class="git-body">
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
-                    <yenvui-category-section titleText=${catName}>
+                    <sutram-category-section titleText=${catName}>
                         ${categories[catName].map(f => {
                             const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
                             return html`
@@ -501,32 +491,20 @@ disconnectedCallback() {
                                 icon="📦"
                                 intentColor="var(--intent-highlight)"
                                 entityType="file:diff"
-                                .entityData=${{ filepath: `system://diffs/${f.filename}`, repoDir: f.repoDir, isFS: f.isFS }}
+                                .entityData=${{ 
+                                    filepath: `system://diffs/${f.filename}`, 
+                                    repoDir: f.repoDir, 
+                                    isFS: f.isFS,
+                                    chunks: AppStore.getState().manifest[f.filename]?.chunks || [f.filename]
+                                }}
                                 @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
-${(() => {
-    const chunks = this.vfs && this.vfs.getChunks ? this.vfs.getChunks(f.filename) : window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, f.filename);
-    const hasChunks = chunks && chunks.length > 1;
-    if (hasChunks) {
-        return html`
-            <button slot="actions" class="btn-sm" style="background: var(--intent-primary); margin: 0; color: white; border: none; cursor: pointer;"
-                @click=${(e) => {
-                    if (e) e.stopPropagation();
-                    if (this.vfs && this.vfs.openPartsModal) this.vfs.openPartsModal(f.filename);
-                    else window.inSetu.events.emit('insetu:vfs:view-parts', { filepath: f.filename });
-                }}>
-                📦 View Parts
-            </button>
-        `;
-    }
-    return '';
-})()}
                             </insetu-card>
                         `;})}
-                    </yenvui-category-section>
+                    </sutram-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
                 ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
-                    <yenvui-category-section titleText="🧹 Sweepable State">
+                    <sutram-category-section titleText="🧹 Sweepable State">
                         <button slot="header-actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${this._executeSweepAll}>🚀 Sweep All</button>
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                         ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
@@ -570,7 +548,7 @@ ${(() => {
                             </div>
                         ` : ''}
                     `;})}
-                    </yenvui-category-section>
+                    </sutram-category-section>
                 ` : ''}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
                     <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin-top: 20px;">
@@ -581,7 +559,7 @@ ${(() => {
                 ` : ''}
             </div>
             </div>
-            <yenvui-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @yenvui-modal-closed=${() => this.pushModalOpen = false}>
+            <sutram-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @sutram-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
                     <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold; flex-shrink: 0;" @change=${(e) => this.gitPushMessage = e.target.value}>
@@ -592,7 +570,7 @@ ${(() => {
                     <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
                 </div>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._executePush}>🚀 Execute Push</button>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }
@@ -907,7 +885,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     `;
                 })}
             </div>
-            <yenvui-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @yenvui-modal-closed=${() => this.branchModalOpen = false}>
+            <sutram-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => this.branchModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
                         <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Switch to Existing Branch:</label>
@@ -930,8 +908,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         </div>
                     </div>
                 </div>
-            </yenvui-modal>
-            <yenvui-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @yenvui-modal-closed=${() => this.previewModalOpen = false}>
+            </sutram-modal>
+            <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Incoming Changes: ${this.previewRepo}" @sutram-modal-closed=${() => this.previewModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <pre style="margin: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 40vh; white-space: pre-wrap; font-size: 0.85rem;">${this.previewMessage}</pre>
 
@@ -956,8 +934,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
-            </yenvui-modal>
-            <yenvui-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @yenvui-modal-closed=${() => this.remoteModalOpen = false}>
+            </sutram-modal>
+            <sutram-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => this.remoteModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${this.remoteConflict ? html`
                         <div style="background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; padding: 15px;">
@@ -991,7 +969,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                 ` : html`
                     <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote()}>☁️ Connect & Push</button>
                 `}
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }

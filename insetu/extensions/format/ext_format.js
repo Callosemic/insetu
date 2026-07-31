@@ -64,7 +64,7 @@ export class InSetuExtFormatModals extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-modal ?open=${this.formatModalOpen} ?fullscreen=${true} titleText="Publish Document" @yenvui-modal-closed=${() => FormatStore.setState({ formatModalOpen: false })}>
+            <sutram-modal ?open=${this.formatModalOpen} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => FormatStore.setState({ formatModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
                     <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;"
@@ -88,7 +88,7 @@ export class InSetuExtFormatModals extends InSetuElement {
                         🚀 Compile & Download
                     </button>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }

@@ -16,42 +16,73 @@ flow_bp = InSetuExtension(
         "out_file": "workflows_context.txt"
     }]
 )
-__depends__ = ['git', 'prompts']
-
-@hooks.on('compile_contexts')
-def compile_flow_batches(manifest, workspace_id=None, **kwargs):
-    """Event Bus Hook: Auto-generates workflow batch payloads whenever the OS compiles."""
+__depends__ = ['prompts']
+@hooks.on('vfs_mutated')
+def on_vfs_mutated_flow(mutations=None, workspace_id=None, **kwargs):
+    """Native event listener to intercept filesystem changes completely agnostic of Gather."""
+    if not mutations: return
     from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('flow', workspace_id)
-    cfg = ctx.config
-    if "flow" not in cfg.get("extensions", []): return
-    is_full_sweep = kwargs.get('is_full_sweep', True)
-    touched_buckets = kwargs.get('touched_buckets')
+    if "flow" not in ctx.config.get("extensions", []): return
+
+    # Only trigger compile if files were added, modified, or deleted and aren't ledger-ignored
+    relevant_mutations = [m["filepath"] for m in mutations if not m.get("ignore_ledger")]
+    if not relevant_mutations: return
+
+    # Submit Flow's own dedicated immediate worker to compile the batches statelessly
+    import uuid
+    job_id = f"flo_{uuid.uuid4().hex[:8]}"
+    ctx.jobs.submit("compile_flow_batches", mutations=relevant_mutations)
+@hooks.on('compile_contexts')
+def on_compile_contexts_flow(manifest, workspace_id=None, **kwargs):
+    """Ensures workflow batches are injected into the global manifest during a system sweep."""
+    from insetu.core.sdk import ExtensionContext
+    ctx = ExtensionContext('flow', workspace_id)
     context_batches = ctx.store.get("workflows.json", "context_batches", [])
+    if not context_batches: return
 
+    # During a full sweep, Gather wipes the manifest. We must recompile all workflows 
+    # synchronously so they are injected into the manifest before Gather saves it to disk.
     for batch in context_batches:
-        is_partial = (is_full_sweep is False) or isinstance(is_full_sweep, list)
-        if is_partial and touched_buckets is not None:
-            current_repo_forced = False
-            if isinstance(is_full_sweep, list):
-                includes = batch.get("includes", [])
-                if any(any(inc.startswith(r + '/') for r in is_full_sweep) for inc in includes):
-                    current_repo_forced = True
-            if not current_repo_forced:
-                includes = batch.get("includes", [])
-                needs_compile = False
-                for inc in includes:
-                    basename = Path(inc).name
-                    if basename in touched_buckets:
-                        needs_compile = True
-                        break
-                    if not basename.endswith('_context.txt') and not basename.endswith('_diffs.txt'):
-                        needs_compile = True
-                        break
-                if not needs_compile:
-                    continue
+        try:
+            compile_batch(batch, workspace_id, manifest_data=manifest)
+        except Exception as e:
+            print(f"Warning: Flow failed to compile batch {batch.get('id')} during sweep: {e}")
 
-        compile_batch(batch, workspace_id, manifest_data=manifest)
+@flow_bp.worker("compile_flow_batches")
+def _background_compile_flow(ctx, mutations=None, job_id=None):
+    """Independent background worker for Flow that surgically recompiles only affected batches."""
+    if not mutations: return
+    context_batches = ctx.store.get("workflows.json", "context_batches", [])
+    if not context_batches: return
+
+    mutated_basenames = {Path(m).name for m in mutations}
+
+    compiled_count = 0
+    for batch in context_batches:
+        includes = batch.get("includes", [])
+        needs_compile = False
+
+        for inc in includes:
+            inc_basename = Path(inc).name
+            # Check if the mutated file matches the exact include, or if it matches the generated context chunk
+            if inc in mutations or inc_basename in mutated_basenames:
+                needs_compile = True
+                break
+            # Always safely recompile if an underlying raw repo file was touched that maps to this batch
+            if not inc_basename.endswith('_context.txt') and not inc_basename.endswith('_diffs.txt'):
+                if any(m.startswith(inc + '/') for m in mutations):
+                    needs_compile = True
+                    break
+
+        if needs_compile:
+            ctx.jobs.update_progress(f"Recompiling workflow batch: {batch.get('title', batch.get('id'))}...")
+            compile_batch(batch, ctx.workspace_id)
+            compiled_count += 1
+
+    if compiled_count > 0:
+        ctx.jobs.update_progress(f"Successfully recompiled {compiled_count} workflow(s).")
+        ctx.sync_vfs_barrier()
 def compile_batch(batch, workspace_id=None, manifest_data=None):
     from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('flow', workspace_id)
@@ -69,16 +100,18 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
     header_str = f"========== BATCH: {batch.get('title', batch_id)} ==========\n\n"
     text_blocks = []
     resolved_files = []
-
     # Expand directories into explicit file paths before we enter the compilation matrix
     expanded_includes = []
     for inc in includes:
-        inc_path = ctx.resolve_path(inc)
-        if os.path.isdir(inc_path) and not inc.endswith('.txt'):
-            for f in ctx.vfs.walk(inc):
-                expanded_includes.append(f)
-        else:
+        if inc.startswith("system://"):
             expanded_includes.append(inc)
+        else:
+            inc_path = ctx.resolve_path(inc)
+            if os.path.isdir(inc_path) and not inc.endswith('.txt'):
+                for f in ctx.vfs.walk(inc):
+                    expanded_includes.append(f)
+            else:
+                expanded_includes.append(inc)
 
     # Enforce VFS lock sync to survive race conditions during concurrent sweeps
     ctx.sync_vfs_barrier()
@@ -93,24 +126,32 @@ def compile_batch(batch, workspace_id=None, manifest_data=None):
             if not chunks:
                 chunks = [inc]
 
-            is_diff_target = "diffs/" in inc or basename.endswith("_diffs.txt")
-            is_prompt_target = "prompts/" in inc
-            is_context_target = "contexts/" in inc or basename.endswith("_context.txt")
+            is_system_uri = inc.startswith("system://")
+            is_diff_target = is_system_uri and "diffs/" in inc
+            is_prompt_target = is_system_uri and "prompts/" in inc
+            is_context_target = is_system_uri and "contexts/" in inc
+
+            # Legacy fallback for older batches before the system:// protocol migration
+            if not is_system_uri:
+                is_diff_target = "diffs/" in inc or basename.endswith("_diffs.txt")
+                is_prompt_target = "prompts/" in inc
+                is_context_target = "contexts/" in inc or basename.endswith("_context.txt")
 
             for chunk_identifier in chunks:
                 safe_chunk_base = Path(chunk_identifier).name
                 display_name = f"{Path(inc).parent.as_posix()}/{safe_chunk_base}" if (chunk_identifier != inc and "/" in inc) else chunk_identifier
 
-                if is_prompt_target or "prompts/" in chunk_identifier:
+                if is_prompt_target or (chunk_identifier.startswith("system://prompts/") or "prompts/" in chunk_identifier):
                     inc_path = Path(ctx.paths["prompts_dir"]).joinpath(safe_chunk_base).as_posix()
-                elif is_diff_target or "diffs/" in chunk_identifier or safe_chunk_base.endswith("_diffs.txt") or "_diffs_part" in safe_chunk_base:
+                elif is_diff_target or (chunk_identifier.startswith("system://diffs/") or "diffs/" in chunk_identifier or safe_chunk_base.endswith("_diffs.txt") or "_diffs_part" in safe_chunk_base):
                     inc_path = Path(ctx.paths["diffs_dir"]).joinpath(safe_chunk_base).as_posix()
-                elif is_context_target or "contexts/" in chunk_identifier or safe_chunk_base.endswith("_context.txt") or "_context_part" in safe_chunk_base:
+                elif is_context_target or (chunk_identifier.startswith("system://contexts/") or "contexts/" in chunk_identifier or safe_chunk_base.endswith("_context.txt") or "_context_part" in safe_chunk_base):
                     inc_path = Path(ctx.paths["contexts_dir"]).joinpath(safe_chunk_base).as_posix()
                 else:
-                    inc_path = ctx.resolve_path(inc)
+                    clean_inc = inc.replace("system://", "") if inc.startswith("system://") else inc
+                    inc_path = ctx.resolve_path(clean_inc)
                     if not os.path.exists(inc_path):
-                        inc_path = Path(ctx.paths["artifacts_base"]).joinpath(inc).as_posix()
+                        inc_path = Path(ctx.paths["artifacts_base"]).joinpath(clean_inc).as_posix()
 
                 try:
                     content = ctx.vfs.read(inc_path, is_absolute_artifact=True)
@@ -197,11 +238,15 @@ def api_flow_batches(ctx):
             if res: available_prompts.extend(res)
     except Exception:
         pass
+    # Strip out chunk/part files so the UI only displays base topology roots
+    import re
+    def _is_base(name):
+        return not bool(re.search(r'_part\d+\.txt$', name))
 
     return jsonify({
         "batches": batches,
-        "available_contexts": sorted(list(expected_contexts)),
-        "available_diffs": sorted(list(set(available_diffs))),
+        "available_contexts": sorted([c for c in expected_contexts if _is_base(c)]),
+        "available_diffs": sorted([d for d in set(available_diffs) if _is_base(d)]),
         "available_prompts": sorted(available_prompts),
         "artifacts_dir": paths["artifacts_base"],
         "profile_dir": Path(paths["config_path"]).parent.as_posix()
@@ -256,14 +301,13 @@ def api_flow_batches_save(ctx):
         batches.append(data)
 
     ctx.store.set("workflows.json", "context_batches", batches)
-
     target_batch = existing if existing else data
     try:
         compile_batch(target_batch, ctx.workspace_id)
     except Exception as e:
         print(f"Warning: Failed to auto-compile batch {batch_id}: {str(e)}")
 
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "manifest": ctx.manifest})
 @flow_bp.route('batches/delete', methods=['POST'])
 def api_flow_batches_delete(ctx):
     data = ctx.req.json
@@ -288,4 +332,4 @@ def api_flow_batches_delete(ctx):
     except Exception:
         pass
 
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "manifest": ctx.manifest})

@@ -320,32 +320,35 @@ export class InSetuExtResearch extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <yenvui-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></yenvui-async-btn>
+                    <sutram-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></sutram-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
                     <textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @input=${e => this._aiJsonInput = e.target.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
-                    <yenvui-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></yenvui-async-btn>
+                    <sutram-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
                 </div>
             ` : html`
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);">
                         <div style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 10px; flex: 1;">
                             ${activeInbox.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">No pending items for this job.</span>` : activeInbox.map(item => {
-                                const scrapedBadge = item.scraped_at ? html`<span title="Extraction Complete" style="font-size: 0.8rem;">✅</span>` : html`<span title="Waiting for extraction..." style="font-size: 0.8rem; opacity: 0.5;">⏳</span>`;
+                                const statusBadge = item.scraped_at ? '✅' : '⏳';
+                                const isSelected = this.selectedItemId === item.id;
                                 return html`
-                                    <div class="file-card" style="cursor: pointer; padding: 10px; ${this.selectedItemId === item.id ? 'border: 2px solid var(--intent-highlight);' : ''}" @click=${() => ResearchStore.setState({ selectedItemId: item.id })}>
-                                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 5px;">
-                                            <div style="font-weight: bold; color: var(--text); font-size: 0.9rem; word-wrap: break-word;">${item.title || 'Untitled'}</div>
-                                            <div style="flex-shrink: 0;">${scrapedBadge}</div>
-                                        </div>
-                                        <div style="font-size: 0.75rem; color: var(--intent-primary); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${item.url}</div>
-                                        <div style="color: var(--text-muted); font-family: monospace; font-size: 0.7rem; margin-top: 4px; user-select: all;">ID: ${item.id}</div>
+                                    <insetu-card
+                                        .filename=${item.id}
+                                        .titleText=${`${statusBadge} ${item.title || 'Untitled'}`}
+                                        .descriptionText=${item.url}
+                                        .detailText=${`ID: ${item.id}`}
+                                        icon="📄"
+                                        ?selected=${isSelected}
+                                        intentColor="var(--intent-primary)"
+                                        @card-clicked=${() => ResearchStore.setState({ selectedItemId: item.id })}>
                                         ${item.status === 'duplicate' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-warning); font-weight: bold;">⚠️ Already Scraped</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-warning); color: var(--intent-warning); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
                                         ${item.status === 'in_library' ? html`<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;"><span style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold;">📚 In Library</span><button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-highlight); color: var(--intent-highlight); padding: 2px 8px; margin: 0; font-size: 0.7rem;" @click=${(e) => { e.stopPropagation(); this.handleDisposition(item.id, 'force_scrape'); }}>Force Scrape Anyway</button></div>` : ''}
-                                    </div>
+                                    </insetu-card>
                                 `;
                             })}
                         </div>
@@ -376,7 +379,7 @@ export class InSetuExtResearch extends InSetuElement {
                     </div>
                 `}
             </div>
-            <yenvui-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @yenvui-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
+            <sutram-modal ?open=${!!activeItem} titleText="Research Item Preview" ?fullscreen=${true} @sutram-modal-closed=${() => ResearchStore.setState({ selectedItemId: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%; padding: 0;">
                     ${activeItem ? html`
                         <div style="padding: 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--input-bg);">
@@ -398,8 +401,8 @@ export class InSetuExtResearch extends InSetuElement {
                         <div tabindex="0" style="flex: 1; overflow-y: auto; padding: 20px; font-size: 0.95rem; outline: none;" .innerHTML=${activeItem.raw_markdown ? marked.parse(activeItem.raw_markdown) : '<span style="color: var(--intent-warning); font-style: italic;">Awaiting extraction...</span>'}></div>
                     ` : ''}
                 </div>
-            </yenvui-modal>
-            <yenvui-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @yenvui-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
+            </sutram-modal>
+            <sutram-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; box-sizing: border-box;' })}
                     <div style="display: flex; gap: 10px;">
@@ -435,8 +438,8 @@ export class InSetuExtResearch extends InSetuElement {
                         </div>
                     </div>
                 </div>
-                <yenvui-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></yenvui-async-btn>
-            </yenvui-modal>
+                <sutram-async-btn slot="footer" label="🚀 Start Scraping" loadingLabel="⏳ Starting..." intent="highlight" .onClick=${this.startJob.bind(this)}></sutram-async-btn>
+            </sutram-modal>
         `;
     }
 }

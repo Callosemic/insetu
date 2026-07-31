@@ -350,7 +350,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @yenvui-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
+            <sutram-modal ?open=${this.isModalOpen} titleText="Ticket #${this.selectedTicket?.id || ''}" ?fullscreen=${true} @sutram-modal-closed=${() => FreshdeskStore.setState({ isModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; height: 100%;">
                     <!-- Metadata Header -->
                     <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
@@ -405,11 +405,11 @@ export class InSetuExtFreshdesk extends InSetuElement {
                             </insetu-markdown-editor>
                         </div>
                         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                            <yenvui-async-btn label="📤 Send Reply" intent="primary" .onClick=${() => this.sendReply()}></yenvui-async-btn>
+                            <sutram-async-btn label="📤 Send Reply" intent="primary" .onClick=${() => this.sendReply()}></sutram-async-btn>
                         </div>
                     </div>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
             <div style="display: flex; gap: 15px; margin-top: 15px; align-items: center; background: var(--input-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 8px;">
                     <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted);">Assignee:</label>

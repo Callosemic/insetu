@@ -46,12 +46,18 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
         is_full_sweep = kwargs.get('is_full_sweep', True)
         if isinstance(is_full_sweep, list):
             target_repos = is_full_sweep
+            touched_buckets = kwargs.get('touched_buckets')
         else:
             target_repos = None if is_full_sweep else kwargs.get('target_repos')
-        generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest)
+            touched_buckets = None if is_full_sweep else kwargs.get('touched_buckets')
+
+        generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
+
+        # Guaranteed Checkpoint: Emit event when Git has finished evaluating/generating diffs
+        hooks.emit('git_evaluation_complete', manifest=manifest, workspace_id=workspace_id, is_full_sweep=is_full_sweep, target_repos=target_repos, touched_buckets=touched_buckets)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
-def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None):
+def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.gather.engine_gather import resolve_file_bucket
@@ -59,29 +65,18 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     ctx = ExtensionContext('git', workspace_id)
     paths = ctx.paths
     _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
-
     live_cfg = ctx.config
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
-    if diffs_dir_path.exists():
-        for f_path in diffs_dir_path.iterdir():
-            if f_path.is_file() and ('_diffs.txt' in f_path.name or '_diffs_part' in f_path.name):
-                f = f_path.name
-                if not target_repos or any(f == f"{st}_diffs.txt" or f.startswith(f"{st}_") for st in safe_targets):
-                    try:
-                        ctx.vfs.save(f_path.as_posix(), "", data={"action": "delete"})
-                    except Exception as e:
-                        print(f"Warning: Failed to clear old diff file {f_path}: {e}")
-    # Prune stale diff entries from the manifest to prevent ghost references
     is_standalone = manifest_ref is None
-
     working_manifest = manifest_ref if not is_standalone else ctx.manifest
-    stale_keys = [k for k in working_manifest.keys() if k.endswith('_diffs.txt') and (not target_repos or any(k == f"{st}_diffs.txt" or k.startswith(f"{st}_") for st in safe_targets))]
-    for k in stale_keys:
-        del working_manifest[k]
     diff_manifest = []
     manifest_deltas = {}
+    active_generated_diffs = set()
     ws_root_path = Path(ws_root).resolve()
+
+    touched_diff_buckets = set(b.replace('_context.txt', '_diffs.txt') for b in touched_buckets) if touched_buckets is not None else None
+
     for config in live_cfg.get("target_repos", []):
         if target_repos and config.get("repo_dir") not in target_repos: continue
         if config.get("exclude_from_diffs"): continue
@@ -151,6 +146,9 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 if filtered_files:
                     bucketed_files[out_filename] = filtered_files
             for out_filename, files_in_bucket in bucketed_files.items():
+                if touched_diff_buckets is not None and out_filename not in touched_diff_buckets:
+                    continue
+
                 header_lines = []
                 header_lines.append(f"============================================================")
                 header_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
@@ -212,6 +210,19 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 if text_blocks:
                     from insetu.core.gather.engine_gather import compile_context_payload
 
+                    new_content_full = header_str + "".join(text_blocks)
+                    existing_content = None
+                    try:
+                        out_path_abs = diffs_dir_path.joinpath(out_filename).as_posix()
+                        existing_content = ctx.vfs.read(out_path_abs, is_absolute_artifact=True)
+                    except Exception:
+                        pass
+
+                    if existing_content == new_content_full and out_filename in working_manifest:
+                        diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
+                        active_generated_diffs.add(out_filename)
+                        continue
+
                     # Diff specific manifest integration
                     meta = {
                         "type": "diff",
@@ -233,8 +244,26 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     working_manifest[out_filename] = manifest_entry
                     diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
                     manifest_deltas[out_filename] = manifest_entry
+                    active_generated_diffs.add(out_filename)
         except Exception as e:
             print(f"Skipping diff generation for {config['repo_dir']}: {e}")
+    # Prune stale diff entries that are no longer active
+    stale_keys = [
+        k for k in working_manifest.keys() 
+        if k.endswith('_diffs.txt') and k not in active_generated_diffs 
+        and (not target_repos or any(k == f"{st}_diffs.txt" or k.startswith(f"{st}_") for st in safe_targets))
+        and (touched_diff_buckets is None or k in touched_diff_buckets)
+    ]
+    for k in stale_keys:
+        chunks = working_manifest[k].get("chunks", [k])
+        for chunk in chunks:
+            try:
+                ctx.vfs.save(diffs_dir_path.joinpath(chunk).as_posix(), "", data={"action": "delete", "is_absolute_artifact": True})
+            except Exception:
+                pass
+        del working_manifest[k]
+        manifest_deltas[k] = None
+
     if is_standalone:
         ctx.save_manifest(working_manifest)
     # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
@@ -250,6 +279,7 @@ def _background_generate_diffs(ctx, target_repos=None):
     if files:
         diff_filenames = [f['filename'] for f in files]
         ctx.emit('compile_contexts', manifest=ctx.manifest, is_full_sweep=False, touched_buckets=diff_filenames)
+        ctx.emit('git_evaluation_complete', manifest=ctx.manifest, is_full_sweep=False, touched_buckets=diff_filenames)
 
     return {"message": "Diff generation complete.", "artifact": {"files": files, "target_repos": target_repos, "manifest_deltas": manifest_deltas}}
 

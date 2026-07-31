@@ -162,9 +162,9 @@ export class InSetuExtPromptsActions extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-dropdown align="right" .items=${this._menuItems}>
+            <sutram-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </yenvui-dropdown>
+            </sutram-dropdown>
         `;
     }
 }
@@ -233,7 +233,9 @@ window.ExtensionRegistry.registerExtension('prompts', {
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;
             const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
-            if (touchedPrompt) syncPromptsState();
+            // The VFS operates on an async background queue. Delay the read request 
+            // slightly so the backend has time to physically flush the deletion to disk.
+            if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
             return false;
         },
         'zone:soft-refresh': () => {
@@ -242,10 +244,9 @@ window.ExtensionRegistry.registerExtension('prompts', {
         }
     }
 });
-
 async function syncPromptsState() {
     try {
-        const res = await window.inSetu.api.workspace('prompts/list');
+        const res = await window.inSetu.api.workspace('prompts/list?t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
             const rawPrompts = data.prompts || [];

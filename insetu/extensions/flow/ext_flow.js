@@ -93,7 +93,16 @@ export class InSetuExtFlow extends InSetuElement {
             this.searchQuery = state.searchQuery;
         });
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
-        this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
+        // Opportunistic UI Routing: Wait for Git's checkpoint if Git is installed, otherwise react to raw manifest updates
+        const isGitActive = window.ExtensionRegistry?.hasExtension?.('git') && 
+                            (!window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes('git'));
+
+        if (isGitActive) {
+            this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
+        } else {
+            this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
+        }
+
         this.subscribe(AppStore, state => {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
@@ -142,16 +151,6 @@ export class InSetuExtFlow extends InSetuElement {
         this._editModalOpen = true;
         this.requestUpdate();
     }
-    async _downloadTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await this.vfs.fetchAndDownloadState(targetFile, explicitUrl);
-    }
-
-    async _copyTarget(targetFile) {
-        const explicitUrl = `/download/${targetFile}`;
-        await this.vfs.fetchAndCopy(targetFile, explicitUrl);
-    }
-    // Logic abstracted to window.shareFiles
     openBatchModal(batch) {
         this._viewingBatch = batch;
         this._viewingBatchPromptText = 'Loading prompt...';
@@ -180,6 +179,11 @@ export class InSetuExtFlow extends InSetuElement {
                 this._editingBatch = null;
                 this._editModalOpen = false;
                 this.requestUpdate();
+
+                const responseData = await res.json();
+                if (responseData.manifest) {
+                    AppStore.setState({ manifest: responseData.manifest });
+                }
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -216,6 +220,11 @@ export class InSetuExtFlow extends InSetuElement {
                 this._editingBatch = null;
                 this._editModalOpen = false;
                 this.requestUpdate();
+
+                const responseData = await res.json();
+                if (responseData.manifest) {
+                    AppStore.setState({ manifest: responseData.manifest });
+                }
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -295,7 +304,7 @@ export class InSetuExtFlow extends InSetuElement {
             const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
-                <yenvui-toolbar
+                <sutram-toolbar
                     searchPlaceholder="🔍 Fuzzy search workflows..."
                     .searchQuery=${this.searchQuery}
                     @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
@@ -314,7 +323,7 @@ export class InSetuExtFlow extends InSetuElement {
                             <label for="vis-toggle" style="font-size: 0.9rem; color: var(--text); cursor: pointer;">Apply Visibility Requirements</label>
                         </div>
                     </div>
-                </yenvui-toolbar>
+                </sutram-toolbar>
 
             <div class="flow-body">
         ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
@@ -345,7 +354,12 @@ export class InSetuExtFlow extends InSetuElement {
                                         icon=""
                                         intentColor="var(--intent-primary)"
                                         entityType="file:workflow_batch"
-                                        .entityData=${{ ...b, filepath: `workflow_${b.id}_context.txt` }}
+                                        .entityData=${{ 
+                                            ...b, 
+                                            filepath: `workflow_${b.id}_context.txt`, 
+                                            suppress: ['browse'], 
+                                            chunks: manifestObj.chunks || [`workflow_${b.id}_context.txt`] 
+                                        }}
                                         @card-clicked=${() => this.openBatchModal(b)}>
                                 </insetu-card>
                                 `;
@@ -353,11 +367,11 @@ export class InSetuExtFlow extends InSetuElement {
                         </sutram-categorized-list>
                     </div>
             </div>
-                    <yenvui-modal  
+                    <sutram-modal  
                             .open=${this._editModalOpen} 
                             ?fullscreen=${true}
                             titleText=${this._editForm?.id ? `Edit Batch: ${this._editForm.title}` : 'Create New Batch'}
-                            @yenvui-modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
+                            @sutram-modal-closed=${() => { this._editModalOpen = false; this._editingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                             <div style="flex: 1; min-width: 150px;">
@@ -378,15 +392,31 @@ export class InSetuExtFlow extends InSetuElement {
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${this._editForm?.includes?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No files selected.</div>` : 
-                                                        this._editForm?.includes?.map((inc, idx) => html`
+                                                        this._editForm?.includes?.map((inc, idx) => {
+                                                            const isSystem = inc.startsWith('system://');
+                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
+                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+
+                                                            let icon = "📄";
+                                                            if (inc.includes('diffs/')) icon = "🔄";
+                                                            else if (inc.includes('contexts/')) icon = "📦";
+                                                            else if (inc.endsWith('/')) icon = "📁";
+                                                            else if (!isSystem && !inc.includes('.')) icon = "📁"; // rough heuristic for path directories without trailing slash
+
+                                                            return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
-                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
+                                                                    <span style="font-size: 1.1rem; opacity: 0.8;">${icon}</span>
+                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
+                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
+                                                                </div>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.includes.splice(idx, 1);
                                                                     this.requestUpdate();
                                                                 }}>×</button>
                                                             </div>
-                                                        `)}
+                                                        `})}
                                             </div>
                                             <div style="display: flex; gap: 10px;">
                                                 <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📦 Select Contexts</button>
@@ -422,34 +452,64 @@ export class InSetuExtFlow extends InSetuElement {
                                     </div>
                                     <div>
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
-
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these exist:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
-                                                        this._editForm?.showIfExists?.map((inc, idx) => html`
+                                                        this._editForm?.showIfExists?.map((inc, idx) => {
+                                                            const isSystem = inc.startsWith('system://');
+                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
+                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+
+                                                            let icon = "📄";
+                                                            if (inc.includes('diffs/')) icon = "🔄";
+                                                            else if (inc.includes('contexts/')) icon = "📦";
+                                                            else if (inc.endsWith('/')) icon = "📁";
+                                                            else if (!isSystem && !inc.includes('.')) icon = "📁";
+
+                                                            return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
-                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
+                                                                    <span style="font-size: 1.1rem; opacity: 0.8;">${icon}</span>
+                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
+                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
+                                                                </div>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.showIfExists.splice(idx, 1);
                                                                     this.requestUpdate();
                                                                 }}>×</button>
                                                             </div>
-                                                        `)}
+                                                        `})}
                                             </div>
                                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</button>
-
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these are missing:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
-                                                        this._editForm?.showIfMissing?.map((inc, idx) => html`
+                                                        this._editForm?.showIfMissing?.map((inc, idx) => {
+                                                            const isSystem = inc.startsWith('system://');
+                                                            const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
+                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+
+                                                            let icon = "📄";
+                                                            if (inc.includes('diffs/')) icon = "🔄";
+                                                            else if (inc.includes('contexts/')) icon = "📦";
+                                                            else if (inc.endsWith('/')) icon = "📁";
+                                                            else if (!isSystem && !inc.includes('.')) icon = "📁";
+
+                                                            return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <span style="font-family: monospace; font-size: 0.85rem; color: var(--text); word-break: break-all;">${inc}</span>
-                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px;" @click=${() => {
+                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
+                                                                    <span style="font-size: 1.1rem; opacity: 0.8;">${icon}</span>
+                                                                    <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
+                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
+                                                                </div>
+                                                                <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.showIfMissing.splice(idx, 1);
                                                                     this.requestUpdate();
                                                                 }}>×</button>
                                                             </div>
-                                                        `)}
+                                                        `})}
                                             </div>
                                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'missing'; this._tempContexts = [...(this._editForm.showIfMissing || [])]; this._showSelectContexts = true; }}>➕ Add Missing Contexts</button>
                                     </div>
@@ -484,18 +544,54 @@ export class InSetuExtFlow extends InSetuElement {
                             </div>
                             ${this._editingBatch?.id ? html`<button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this.deleteEditBatch}>🗑️ Delete Batch</button>` : ''}
                             <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveEditBatch}>💾 Save Batch</button>
-                    </yenvui-modal>
-                    <yenvui-modal .open=${this._showSelectContexts} titleText="Select Contexts" @yenvui-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
+                    </sutram-modal>
+                    <sutram-modal .open=${this._showSelectContexts} titleText="Select Contexts" @sutram-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0;">
                                     <input type="text" placeholder="🔍 Fuzzy search contexts..." style="padding: 8px; margin-bottom: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this._contextSearchQuery} @input=${(e) => { this._contextSearchQuery = e.target.value; }}>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
-                                            ${(this._contextSearchQuery ? window.inSetu.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => html`
-                                                    <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border);">
-                                                            <input type="checkbox" .checked=${this._tempContexts.includes(file)} style="cursor: pointer; transform: scale(1.2);"
-                                                                    @change=${() => { const set = new Set(this._tempContexts); set.has(file) ? set.delete(file) : set.add(file); this._tempContexts = Array.from(set); this.requestUpdate(); }}>
-                                                            <label style="cursor: pointer; word-break: break-all; flex: 1; font-family: monospace; font-size: 0.9rem; color: var(--text);">${file}</label>
+                                            ${(this._contextSearchQuery ? window.inSetu.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => {
+                                                const systemUri = `system://${file}`;
+                                                const isChecked = this._tempContexts.includes(systemUri) || this._tempContexts.includes(file); // Handle legacy untyped files
+
+                                                const isDiff = file.includes('diffs/');
+                                                const manifestObj = manifest[file.split('/').pop()] || {};
+                                                const meta = manifestObj.meta || {};
+                                                let sizeStr = "";
+                                                if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+                                                    const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
+                                                    sizeStr = sizes.join(' + ') + " KB";
+                                                } else if (meta.size_bytes !== undefined) {
+                                                    const kb = Math.round(meta.size_bytes / 1024);
+                                                    sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
+                                                }
+
+                                                return html`
+                                                    <div style="display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); background: var(--bg);">
+                                                            <input type="checkbox" .checked=${isChecked} style="cursor: pointer; transform: scale(1.2);"
+                                                                    @change=${() => { 
+                                                                        const set = new Set(this._tempContexts); 
+                                                                        if (set.has(file)) set.delete(file); // Clean up legacy string if modifying
+                                                                        set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri); 
+                                                                        this._tempContexts = Array.from(set); 
+                                                                        this.requestUpdate(); 
+                                                                    }}>
+                                                            <div style="display: flex; flex-direction: column; flex: 1; cursor: pointer;" @click=${() => {
+                                                                const set = new Set(this._tempContexts);
+                                                                if (set.has(file)) set.delete(file);
+                                                                set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri);
+                                                                this._tempContexts = Array.from(set);
+                                                                this.requestUpdate();
+                                                            }}>
+                                                                <div style="display: flex; justify-content: space-between;">
+                                                                    <span style="font-family: monospace; font-size: 0.9rem; color: var(--intent-primary); font-weight: bold;">${systemUri}</span>
+                                                                    <span style="font-size: 0.75rem; color: var(--text-muted);">${sizeStr}</span>
+                                                                </div>
+                                                                <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 2px;">
+                                                                    ${isDiff ? '🔄 Git Working Tree Diffs' : `📦 Context Payload (${meta.repos ? meta.repos.join(', ') : 'Generated'})`}
+                                                                </span>
+                                                            </div>
                                                     </div>
-                                            `)}
+                                            `})}
                                     </div>
                             </div>
                             <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => { 
@@ -505,8 +601,8 @@ export class InSetuExtFlow extends InSetuElement {
                                 this._showSelectContexts = false; 
                                 this._contextSearchQuery = '';
                             }}>✅ Confirm Selection</button>
-                    </yenvui-modal>
-                    <yenvui-modal .open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @yenvui-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
+                    </sutram-modal>
+                    <sutram-modal .open=${this._viewModalOpen} ?fullscreen=${true} titleText=${this._viewingBatch ? `Batch Workflow: ${this._viewingBatch.title}` : ''} @sutram-modal-closed=${() => { this._viewModalOpen = false; this._viewingBatch = null; this.requestUpdate(); }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                                     ${this._viewingBatch ? html`
                                             <div>
@@ -519,33 +615,26 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div style="display: flex; gap: 10px;">
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
-                                                                const chunks = this.vfs && this.vfs.getChunks ? this.vfs.getChunks(baseFile) : window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest, baseFile);
-                                                                const hasShare = !!navigator.share && !!navigator.canShare;
-                                                                if (chunks && chunks.length > 1) {
-                                                                    return html`
-                                                                        <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => {
-                                                                            if (e) e.stopPropagation();
-                                                                            if (this.vfs && this.vfs.openPartsModal) this.vfs.openPartsModal(baseFile);
-                                                                            else window.inSetu.events.emit('insetu:vfs:view-parts', { filepath: baseFile });
-                                                                        }}>📦 View Parts</button>
-                                                                        ${hasShare ? html`<yenvui-async-btn label="📤 Share All" intent="neutral" .onClick=${() => this.vfs.shareFiles(baseFile, chunks)}></yenvui-async-btn>` : ''}
-                                                                    `;
-                                                                } else {
-                                                                    return html`
-                                                                        <yenvui-async-btn label="📋 Copy Context" intent="success" .onClick=${() => this._copyTarget(baseFile)}></yenvui-async-btn>
-                                                                        <yenvui-async-btn label="⬇️ Download" intent="primary" .onClick=${() => this._downloadTarget(baseFile)}></yenvui-async-btn>
-                                                                        ${hasShare ? html`<yenvui-async-btn label="📤 Share" intent="neutral" .onClick=${() => this.vfs.shareFiles(baseFile)}></yenvui-async-btn>` : ''}
-                                                                    `;
-                                                                }
+                                                                const manifestObj = AppStore.getState().manifest[baseFile] || {};
+                                                                return html`
+                                                                    <sutram-entity-actions 
+                                                                        entityType="file" 
+                                                                        .entityData=${{ 
+                                                                            filepath: baseFile, 
+                                                                            chunks: manifestObj.chunks || [baseFile],
+                                                                            showOnly: ['copy', 'download', 'parts', 'share']
+                                                                        }}>
+                                                                    </sutram-entity-actions>
+                                                                `;
                                                             })()}
                                                     </div>
                                             </div>
                                             ${this._viewingBatch.include_prompt ? html`
                                                     <div>
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                                                            <textarea style="height: 150px; margin-bottom: 10px;" readonly>${this._viewingBatchPromptText}</textarea>
+                                                            <textarea style="width: 100%; box-sizing: border-box; padding: 10px; height: 150px; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem;" readonly>${this._viewingBatchPromptText}</textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                                                    <yenvui-async-btn label="📋 Copy Prompt" intent="success" .onClick=${() => this.utils.copyRawText(this._viewingBatchPromptText)}></yenvui-async-btn>
+                                                                    <sutram-async-btn label="📋 Copy Prompt" intent="success" .onClick=${() => this.utils.copyRawText(this._viewingBatchPromptText)}></sutram-async-btn>
                                                             </div>
                                                     </div>
                                             ` : 
@@ -554,13 +643,13 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div>
                                                             <h4 style="margin: 0 0 5px 0; color: var(--text); font-size: 1.05rem;">3. LLM Response Integration</h4>
                                                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste response to save to: <code style="word-break: break-all; color: var(--intent-success);">${this._viewingBatch.response_path}</code></p>
-                                                            <textarea id="batch-response-text" style="flex: 1; min-height: 250px; margin-bottom: 10px;" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} @input=${(e) => { this._responseContent = e.target.value; this.requestUpdate(); }}></textarea>
+                                                            <textarea id="batch-response-text" style="width: 100%; box-sizing: border-box; padding: 10px; min-height: 250px; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem;" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} @input=${(e) => { this._responseContent = e.target.value; this.requestUpdate(); }}></textarea>
                                                             <button class="btn-sm" style="background: var(--intent-success); width: 100%; padding: 15px; font-size: 1.1rem; font-weight: bold;" @click=${this.saveBatchResponse}>💾 Save Response</button>
                                                     </div>
                                             ` : ''}
                                     ` : ''}
                             </div>
-                    </yenvui-modal>
+                    </sutram-modal>
     `;
 }
 }
@@ -577,9 +666,9 @@ export class InSetuExtFlowActions extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-dropdown align="right" .items=${this._menuItems}>
+            <sutram-dropdown align="right" .items=${this._menuItems}>
                 <button slot="trigger" class="system-action-btn">☰</button>
-            </yenvui-dropdown>
+            </sutram-dropdown>
         `;
     }
 }

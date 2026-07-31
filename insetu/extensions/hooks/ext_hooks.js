@@ -254,11 +254,11 @@ export class InSetuExtHooks extends InSetuElement {
                     </div>
                 </div>
             </div>
-            <yenvui-modal  
+            <sutram-modal  
                 ?open=${this.ruleModalOpen} 
                 ?fullscreen=${true}
                 titleText=${this.editingRule ? 'Edit Automation Rule' : 'New Automation Rule'}
-                @yenvui-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
+                @sutram-modal-closed=${() => HooksStore.setState({ ruleModalOpen: false })}>
 
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
@@ -343,8 +343,8 @@ export class InSetuExtHooks extends InSetuElement {
                         <label style="font-size: 0.9rem; color: var(--text); font-weight: bold; cursor: pointer;">Enable Rule Immediately</label>
                     </div>
                 </div>
-                <yenvui-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></yenvui-async-btn>
-            </yenvui-modal>
+                <sutram-async-btn slot="footer" label="💾 Save Rule" intent="primary" .onClick=${this.saveRule.bind(this)}></sutram-async-btn>
+            </sutram-modal>
         `;
     }
 }
