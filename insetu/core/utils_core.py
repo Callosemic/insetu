@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import json
 import subprocess
-from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file
+from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree
 from insetu.kernel.hooks import hooks
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
@@ -226,9 +226,14 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
     manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     manifest_data = load_json_file(manifest_path, {})
 
-    for f in extract_manifest_files(manifest_data, exclude_types=exclude_types, include_types=include_types):
-        if f.endswith('.txt'):
-            expected_contexts.add(f"contexts/{f}")
+    for k, v in manifest_data.items():
+        if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
+            item_type = v.get("meta", {}).get("type", "unknown")
+            if exclude_types and item_type in exclude_types:
+                continue
+            if include_types and item_type not in include_types:
+                continue
+            expected_contexts.add(f"contexts/{k}")
 
     return expected_contexts
 

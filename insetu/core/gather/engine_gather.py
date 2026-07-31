@@ -285,8 +285,8 @@ def _process_vfs_ledger(workspace_id="default"):
         return
     last_mut = row['last_mut']
     now = time.time()
-    # Macro Slew Limiter: 5.0-second silence window to balance batching with UI responsiveness
-    if now - last_mut < 5.0:
+    # Macro Slew Limiter: 15.0-second silence window to balance batching with UI responsiveness
+    if now - last_mut < 15.0:
         return
 
     events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
@@ -489,7 +489,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items, job_id=None):
     ctx.jobs.update_progress("Compiling selected files into context payload...")
-    from insetu.core.utils_core import generate_ascii_tree
+    from insetu.kernel.utils import generate_ascii_tree
     from insetu.kernel.vfs import VFSTransaction
     import time
     import os

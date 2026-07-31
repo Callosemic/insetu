@@ -51,7 +51,7 @@ def get_system_config(workspace_id):
     core_engines = {"bridge", "gather"}
     available_ids = set()
     available = []
-    extensions_dir = Path(script_dir).joinpath("extensions").as_posix()
+    extensions_dir = Path(script_dir).parent.joinpath("extensions").as_posix()
     if os.path.exists(extensions_dir):
             for item in os.listdir(extensions_dir):
                     item_path = Path(extensions_dir).joinpath(item).as_posix()
