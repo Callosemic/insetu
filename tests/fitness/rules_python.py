@@ -227,6 +227,14 @@ def check_python_files():
                             )
                             if not has_token_gate:
                                 report_violation("REST_SECURITY_GATE_MANDATE", filepath, 1, "Core app.py is missing the mandatory enforce_token_gate() before_request hook.")
+                        if file == "utils.py" and "kernel" in filepath.parts:
+                            has_core_modules = any(
+                                isinstance(n, ast.Assign) and 
+                                any(isinstance(t, ast.Name) and t.id == 'CORE_MODULES' for t in n.targets) 
+                                for n in tree.body
+                            )
+                            if not has_core_modules:
+                                report_violation("CORE_MODULES_SSOT_MANDATE", filepath, 1, "Tier 1 kernel/utils.py is missing the CORE_MODULES SSOT definition.")
 
                         if file == "utils_core.py" and "core" in filepath.parts:
                             has_vfs_hook = any(

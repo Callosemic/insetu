@@ -61,9 +61,6 @@ def get_connection(db_name, workspace_id=None):
         from insetu.kernel.utils import sniff_tenant_id
         workspace_id = sniff_tenant_id()
 
-    cfg_path, _, _ = get_workspace_physics(workspace_id)
-    artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
-    db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
     # Key the connection by tenant
     cache_key = (workspace_id, db_name)
 
@@ -72,6 +69,10 @@ def get_connection(db_name, workspace_id=None):
         conn = _local.connections.pop(cache_key)
         _local.connections[cache_key] = conn
         return conn
+
+    cfg_path, _, _ = get_workspace_physics(workspace_id)
+    artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
+    db_path = Path(artifacts_base).joinpath(f"{db_name}.db").as_posix()
 
     # Phase 3: LRU Eviction Policy (Max 5 Workspaces to prevent WAL lock exhaustion)
     if len(_local.connections) >= 5:

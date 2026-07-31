@@ -1,12 +1,5 @@
 import { AppStore } from './core/store.js';
-import '../vendor/sutram/app_shell.js';
-import '../vendor/yenvui/js/tabs.js';
-import '../vendor/yenvui/js/toast.js';
-import '../vendor/yenvui/js/category-section.js';
-import '../vendor/yenvui/js/collapsible.js';
-import '../vendor/yenvui/js/toolbar.js';
-import '../vendor/yenvui/js/editor.js';
-import '../vendor/yenvui/js/status-bar.js';
+import '../vendor/sutram/js/app_shell.js';
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -42,8 +35,8 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
-import { initShortcutRouter } from '../vendor/sutram/shortcuts.js';
-import '../vendor/sutram/primitives.js';
+import { initShortcutRouter } from '../vendor/sutram/js/shortcuts.js';
+import '../vendor/sutram/js/primitives.js';
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
@@ -154,17 +147,12 @@ export function autoWireSettingsSchemas() {
 
 async function bootExtensions() {
     const activeExts = window.ACTIVE_EXTENSIONS || [];
-
     // Batch 0: Core UI Primitives & Foundational Components
     const coreComponents = [
-        '/static/js/core/components/ui_dropdowns.js',
         '/static/js/core/components/ui_file_tree.js',
-        '/static/js/core/components/ui_folder_browser.js',
-        '/static/js/core/components/ui_modal.js',
         '/static/js/core/components/ui_system_settings.js',
         '/static/js/core/components/ui_filter_pills.js',
-        '/static/js/core/components/ui_primitives.js',
-        '/static/js/core/components/ui_editor.js'
+        '/static/js/core/components/ui_primitives.js'
     ];
 
     // Batch 1: Core OS Chassis Modules
@@ -197,20 +185,10 @@ window.ExtensionRegistry.startMetronome(
     [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh']
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
-import { createJobPoller } from '../vendor/sutram/poller.js';
-
+import { createJobPoller } from '../vendor/sutram/js/poller.js';
 // Define the Job Polling Subroutine using the abstracted kernel
 window.inSetu.utils.pollJob = createJobPoller({
-    get: async (path) => window.inSetu.api.system(path),
-    handleUnauthorized: async () => {
-        // Server likely rebooted and rotated its boot token. Attempt a seamless re-handshake.
-        const authRes = await fetch('/auth/bootstrap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
-        if (authRes.ok) {
-            const authData = await authRes.json();
-            sessionStorage.setItem('insetu_boot_token', authData.token);
-            if (window.inSetu.stores.App) window.inSetu.stores.App.setState({ authToken: authData.token });
-        }
-    }
+    get: async (path) => window.inSetu.api.system(path)
 });
 
 // Restore UI State on Load
@@ -289,6 +267,20 @@ async function executeBootSequence() {
     console.log("[BOOT] Topology initialized.");
     console.log("[BOOT] Booting Extensions...");
     await bootExtensions();
+
+    // Native System Sync Indicator Hook
+    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
+        window.ExtensionRegistry.registerUIHook('zone:vfs-mutated', (payload) => {
+            if (payload && payload.mutations) {
+                // If any file was touched that actually matters to the ledger, flip to Pending
+                const requiresSync = payload.mutations.some(m => !m.ignore_ledger);
+                if (requiresSync && window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
+                    window.inSetu.ui.setSyncStatus('pending');
+                }
+            }
+            return false;
+        });
+    }
     // Declarative Tab Ordering: AppStore syncs tabOrder directly to Sutram
     AppStore.subscribe(
         state => state.tabOrder,
@@ -522,6 +514,9 @@ function updateRefreshText() {
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
     window.dispatchEvent(new CustomEvent('insetu-status-update', { detail: { msg, timeout, isError } }));
 }
+export function setSyncStatus(state) {
+    window.dispatchEvent(new CustomEvent('sutram-sync-status', { detail: { state } }));
+}
 // --- NON-BLOCKING TOAST NOTIFICATIONS ---
 // Hijack native alerts to prevent thread blocking while preserving stack traces
 window.alert = function(msg, intent = 'danger') {
@@ -592,9 +587,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     if (!targetConfigs || targetConfigs.length === 0) {
         return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
     }
-
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
+        if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
         try {
             const response = await window.inSetu.api.workspace('gather/submit', {
                 method: 'POST',
@@ -656,11 +651,15 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             if (result && result.status !== 'error') {
                 const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+                if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
+            } else {
+                if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
             }
 
             window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
             return result;
         } catch (error) {
+            if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending');
             throw error;
         } finally {
             compilePromise = null;
@@ -884,4 +883,5 @@ window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;
 window.inSetu.sys.loadWorkspaces = loadWorkspaces;
 window.inSetu.sys.executeWorkspaceSwap = executeWorkspaceSwap;
 window.inSetu.ui.setGlobalStatus = setGlobalStatus;
+window.inSetu.ui.setSyncStatus = setSyncStatus;
 

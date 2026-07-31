@@ -86,65 +86,7 @@ box-sizing: border-box; border-radius: 0; box-shadow: none; flex-direction: colu
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
 textarea { height: 250px; margin-top: 10px; }
 pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; letter-spacing: 0.3px; }
-/* CodeMirror 6 Base Overrides */
-.cm-editor { height: 100%; flex: 1; display: flex; flex-direction: column; }
-.cm-scroller { overflow: auto; flex: 1; font-family: var(--font-mono); }
 
-/* CodeMirror Search Dialog Theming */
-.CodeMirror-dialog {
-    background: var(--input-bg) !important;
-    color: var(--text) !important;
-    border-bottom: 1px solid var(--border) !important;
-    padding: 8px 10px !important;
-}
-.CodeMirror-dialog input {
-    background: var(--bg) !important;
-    color: var(--text) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 4px;
-    padding: 4px 8px !important;
-    font-family: var(--font-mono);
-    outline: none;
-}
-.CodeMirror-dialog input:focus {
-    border-color: var(--btn) !important;
-}
-.CodeMirror-search-match { background: #f59e0b; color: #000; }
-.CodeMirror-search-hint { color: #888; font-style: italic; }
-/* EasyMDE "No Nonsense" Overrides */
-.EasyMDEContainer .CodeMirror {
-    background: var(--input-bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    font-family: var(--font-mono) !important;
-    font-size: 13px;
-    line-height: 1.5;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.EasyMDEContainer .CodeMirror-scroll {
-    flex: 1;
-    min-height: 100%;
-}
-
-/* Flatten massive header scaling inside the raw editor */
-.EasyMDEContainer .CodeMirror .cm-header-1 { font-size: 1.25em; line-height: 1.3; }
-.EasyMDEContainer .CodeMirror .cm-header-2 { font-size: 1.15em; line-height: 1.3; }
-.EasyMDEContainer .CodeMirror .cm-header-3 { font-size: 1.05em; line-height: 1.3; }
-.EasyMDEContainer .CodeMirror .cm-header-4,
-.EasyMDEContainer .CodeMirror .cm-header-5,
-.EasyMDEContainer .CodeMirror .cm-header-6 { font-size: 1em; line-height: 1.3; }
-
-.EasyMDEContainer {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-.editor-preview { background: var(--input-bg); color: var(--text); }
 pre { background: var(--input-bg); padding: 15px; border-radius: 4px; border-left: 4px solid var(--btn); white-space: pre-wrap; font-size: 14px; max-height: 200px; overflow-y: auto;}
 button { background: var(--btn); color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; margin-top: 20px; }
 button:hover { background: var(--btn-hover); }
@@ -226,12 +168,7 @@ h1, h2, h3, h4, h5, h6 {
     color: #000000 !important;
     font-weight: bold;
 }
-[data-theme="e-ink"] .repo-pill.active {
-    background: #000000 !important;
-    color: #ffffff !important;
-    border: 2px solid #000000 !important;
-    box-shadow: 3px 3px 0 #9ca3af !important; /* Gray shadow for contrast */
-}
+
 [data-theme="e-ink"] .top-bar {
     border-bottom: 2px solid #d946ef !important; /* Fuchsia header separator */
 }

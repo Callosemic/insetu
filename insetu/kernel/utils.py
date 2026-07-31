@@ -32,12 +32,11 @@ def get_workspace_physics(workspace_id=None):
     if env_config:
         resolved_cfg = os.path.abspath(os.path.expanduser(env_config))
         return resolved_cfg, _cwd, Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
-
     target_ws = workspace_id
     if not target_ws:
         if os.path.exists(index_path):
             try:
-                with open(index_path, 'r', encoding='utf-8') as f: w_data = json.load(f)
+                w_data = load_json_file(index_path, {})
                 target_ws = w_data.get("active_workspace", "default")
             except Exception:
                 target_ws = "default"
@@ -48,8 +47,7 @@ def get_workspace_physics(workspace_id=None):
     cfg_path = None
     if os.path.exists(index_path):
         try:
-            with open(index_path, 'r', encoding='utf-8') as f:
-                w_data = json.load(f)
+            w_data = load_json_file(index_path, {})
             registered = w_data.get("workspaces", {})
             if target_ws in registered:
                 cfg_path = registered[target_ws].get("config_path")
@@ -67,11 +65,10 @@ def get_workspace_physics(workspace_id=None):
 
     if not os.path.exists(resolved_cfg) and target_ws == "default":
         resolved_cfg = default_config
-
     workflows_path = Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
     if os.path.exists(resolved_cfg):
         try:
-            with open(resolved_cfg, 'r', encoding='utf-8') as f: c_data = json.load(f)
+            c_data = load_json_file(resolved_cfg, {})
             if "workspace_root" in c_data:
                 return resolved_cfg, Path(c_data["workspace_root"]).expanduser().resolve().as_posix(), workflows_path
         except Exception:
@@ -83,8 +80,14 @@ def get_workspace_physics(workspace_id=None):
         return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
 
     return resolved_cfg, _cwd, workflows_path
+CORE_MODULES = {'bridge', 'gather', 'cartographer', 'config', 'fs', 'system', 'workers', 'auth'}
+
+def is_core_module(ext_name):
+    return ext_name in CORE_MODULES
 
 def is_extension_enabled(ext_name, workspace_id=None):
+    if is_core_module(ext_name):
+        return True
     cfg = load_config(workspace_id)
     return ext_name in cfg.get("extensions", [])
 

@@ -42,6 +42,8 @@ def check_javascript_files():
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
     banned_cdn_import_pattern = re.compile(r'from\s+[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
+    banned_yenvui_tag_pattern = re.compile(r'<(?:yenvui-[a-z0-9-]+)\b|@yenvui-[a-z0-9-]+')
+    sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -159,9 +161,11 @@ def check_javascript_files():
                         report_violation("SDK_STORE_MANDATE", filepath, line_num, "Standard Zustand createStore detected. Use createExtensionStore() from the OS SDK instead.")
                     if is_extension and zustand_direct_import_pattern.search(line):
                         report_violation("BANNED_ZUSTAND_IMPORT", filepath, line_num, "Direct import from external Zustand distributions found. Extensions must use createExtensionStore() from the local SDK to preserve multi-tenant tracking.")
-
                     if banned_cdn_import_pattern.search(line):
                         report_violation("BANNED_CDN_IMPORT", filepath, line_num, "Hardcoded CDN import detected. Extensions must utilize vendor.json and local vendor subdirectories.")
+
+                    if banned_yenvui_tag_pattern.search(line):
+                        report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated <yenvui-*> tag or @yenvui-* event detected. Migrate to vendorized <sutram-*> primitives.")
 
                     if is_extension and lit_element_class_pattern.search(line):
                         report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")
@@ -206,6 +210,7 @@ def check_javascript_files():
                         report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of window.executeSystemCompile detected. Use SDK domain accessor window.inSetu.sys.executeSystemCompile instead (ADR 0024).")
                     if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                         report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
-
-                    if shared_styles_pattern.search(line) and 'vendor/sutram/shared_styles.js' not in line:
-                        report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Reference vendor/sutram/shared_styles.js instead.")
+                    if shared_styles_pattern.search(line) and 'vendor/sutram/js/shared_styles.js' not in line:
+                        report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Reference vendor/sutram/js/shared_styles.js instead.")
+                    if sutram_subdir_pattern.search(line):
+                        report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")

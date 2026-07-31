@@ -148,8 +148,16 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
         from insetu.kernel.utils import resolve_sandbox_path
         overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
         resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
-
     is_new = not os.path.exists(resolved_path)
+
+    # Idempotency Gatekeeper: Kill phantom writes by dropping identical payloads
+    if not is_new and not data.get("delete_source"):
+        try:
+            with open(resolved_path, 'r', encoding='utf-8') as f:
+                if f.read() == content:
+                    return  # Silently drop the transaction before touching disk or the event ledger
+        except Exception:
+            pass
 
     target_dir = Path(resolved_path).parent.as_posix()
     if target_dir:
@@ -192,7 +200,6 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 db_conn.commit()
 
     hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "save", "ignore_ledger": ignore_ledger}])
-
 class VFSTransaction:
     """Provides atomic-style batching and async queue dispatch for file mutations."""
     def __init__(self, workspace_id):
@@ -200,8 +207,12 @@ class VFSTransaction:
         self._buffer = []
         self._in_transaction = False
     def save(self, filepath, content, data=None):
+        data = data or {}
+        # Pre-flight Idempotency Gatekeeper: drop unchanged payloads to prevent phantom VFS events
+        if not data.get("delete_source") and self.read(filepath, is_absolute_artifact=data.get("is_absolute_artifact")) == content:
+            return
         if self._in_transaction:
-            self._buffer.append((filepath, content, data or {}))
+            self._buffer.append((filepath, content, data))
         else:
             execute_vfs_save(self.workspace_id, filepath, content, data)
     def read(self, filepath, is_absolute_artifact=False):

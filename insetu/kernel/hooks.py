@@ -49,16 +49,20 @@ class HookRegistry:
         return decorator
     def _is_authorized(self, cb, event_name, workspace_id):
         """Boundary filter: checks if the callback's module is enabled in the active tenant scope."""
-        # Prevent blocking OS boot/shutdown or the config generation loop itself
+        # System lifecycle events always bypass tenant authorization
         if event_name in ['system_boot', 'system_shutdown', 'mutate_workspace_config']:
             return True
 
         mod = cb.__module__
         if not mod: return True
 
+        # Core system modules (Tier 1 & Tier 2) are always authorized
+        if mod.startswith('insetu.core.') or mod.startswith('insetu.kernel.'):
+            return True
+
         mod_name = mod.split('.')[-1]
 
-        # Cross-reference extension engines with the tenant's configuration
+        # Cross-reference extension engines against the central SSOT
         if mod_name.startswith('engine_'):
             ext_name = mod_name.replace('engine_', '')
             from insetu.kernel.utils import is_extension_enabled
