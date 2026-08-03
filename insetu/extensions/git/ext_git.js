@@ -277,7 +277,7 @@ disconnectedCallback() {
             const selections = {};
             let totalFiles = 0;
             Object.keys(this.sweepFiles).forEach(repo => {
-                if (this.pinnedRepos.has('ALL') || this.pinnedRepos.has(repo)) {
+                if (this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(repo)) {
                     const selected = this.selectedSweepFiles[repo] || [];
                     if (selected.length > 0) { selections[repo] = selected; totalFiles += selected.length; }
                 }
@@ -287,7 +287,7 @@ disconnectedCallback() {
             if (!msg) throw new Error("Commit message required.");
             return { selections, message: msg };
         }, {
-            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(msg || "Sweeping workspaces..."); },
+            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg || "Sweeping workspaces..."}`, null); },
             onComplete: async (statusData) => {
                 const { dirtyDiffRepos } = GitStore.getState();
                 const newDirty = new Set(dirtyDiffRepos);
