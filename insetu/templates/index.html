@@ -44,9 +44,14 @@
             font-family: 'Courier New', Courier, monospace;
             z-index: 99999; display: flex; flex-direction: column;
             justify-content: center; align-items: center; text-transform: uppercase;
+            padding: 20px; box-sizing: border-box; overflow: hidden;
         }
-        .retro-title { font-size: 2.5rem; margin-bottom: 30px; font-weight: bold; text-shadow: 2px 2px 0px #065f46; text-align: center; }
-        .retro-text { font-size: 1.1rem; margin: 8px 0; width: 300px; text-align: left; }
+        .retro-title { font-size: 2.2rem; margin-bottom: 20px; font-weight: bold; text-shadow: 2px 2px 0px #065f46; text-align: center; }
+        .retro-text { 
+            font-size: 0.95rem; margin: 4px 0; width: 320px; max-width: 85vw; 
+            text-align: left; white-space: nowrap; overflow: hidden; 
+            text-overflow: ellipsis; height: 1.5em; line-height: 1.5em; 
+        }
         .retro-cursor { display: inline-block; width: 12px; height: 1.1rem; background-color: #4ade80; animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 5px; }
         .retro-btn {
             background: transparent; color: #3b82f6; border: 2px solid #3b82f6;
@@ -64,12 +69,16 @@
         <div class="retro-title">inSetu<br>Developer OS</div>
         <div class="retro-text">SYSTEM RAM ........ OK</div>
         <div class="retro-text">MOUNTING VFS ...... OK</div>
-        <div class="retro-text" style="display: flex;">BOOTING KERNEL <span class="retro-cursor"></span></div>
+        <div id="retro-status-msg" class="retro-text" style="display: flex; align-items: center; justify-content: flex-start;">BOOTING KERNEL (0%) <span class="retro-cursor"></span></div>
 
-        <div style="margin-top: 60px; text-align: center; color: #64748b; font-size: 0.85rem;">
+        <div style="width: 320px; max-width: 85vw; border: 2px solid #4ade80; padding: 4px; margin-top: 16px; background: #000; box-shadow: 0 0 15px rgba(74, 222, 128, 0.35), inset 0 0 8px rgba(74, 222, 128, 0.2); box-sizing: border-box;">
+            <div id="retro-bar-fill" style="width: 0%; height: 16px; background: #4ade80; transition: width 0.15s ease-out; box-shadow: 0 0 10px #4ade80;"></div>
+        </div>
+
+        <div style="margin-top: 24px; text-align: center; color: #64748b; font-size: 0.8rem;">
             If the system halts, engage manual override:
         </div>
-        <div style="margin-top: 15px; display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;">
+        <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
             <a href="#" onclick="event.preventDefault(); localStorage.clear(); sessionStorage.clear(); window.location.reload();" class="retro-btn">[ Hard Reset ]</a>
             <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='<div class=\'retro-text\' style=\'color:#ef4444; width: 100%; text-align: center;\'>INITIATING KERNEL PANIC...</div>'; setTimeout(()=>window.location.reload(), 3000);" class="retro-btn danger">[ Boot Lifeboat ]</a>
         </div>

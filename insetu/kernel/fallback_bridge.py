@@ -162,10 +162,15 @@ HTML_TEMPLATE = """
 
         async function rebootOS() {
             if (!confirm("Attempt to reboot into the primary Developer OS?")) return;
-            document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Page will reload automatically</span></h2>";
+            document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
             try {
                 await fetch('/api/system/reboot', { method: 'POST' });
-                setTimeout(() => window.location.reload(), 3000);
+                setInterval(async () => {
+                    try {
+                        const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
+                        if (ping.ok) window.location.reload();
+                    } catch(err) {}
+                }, 1000);
             } catch (e) {
                 alert("Reboot failed: " + e.message);
             }

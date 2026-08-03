@@ -41,7 +41,6 @@ class SettingsManager:
             if field.get('id') == key:
                 return field.get('secure', False)
         return False
-
     def get(self, key, default=None):
         from insetu.kernel.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
@@ -52,7 +51,15 @@ class SettingsManager:
             data = load_json_file(filepath, {})
             ext_secrets = data.get(self.ext_name, {})
             if key in ext_secrets:
-                return ext_secrets[key]
+                val = ext_secrets[key]
+                if isinstance(val, str) and val.startswith("v1:"):
+                    from insetu.kernel.auth import decrypt_secret
+                    return decrypt_secret(val)
+                elif val:
+                    # Auto-migrate legacy plaintext to encrypted
+                    self.set(key, val)
+                    return val
+                return val
         else:
             filepath = Path(control_dir).joinpath(self.filename).as_posix()
             data = load_json_file(filepath, {})
@@ -64,13 +71,15 @@ class SettingsManager:
                 return field['default']
 
         return default
-
     def set(self, key, value):
         from insetu.kernel.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
         control_dir = get_tenant_control_dir(self.workspace_id)
 
         if self._is_secure(key):
+            if value:
+                from insetu.kernel.auth import encrypt_secret
+                value = encrypt_secret(value)
             filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
             data = load_json_file(filepath, {})
             if self.ext_name not in data:
@@ -84,7 +93,6 @@ class SettingsManager:
         save_json_file(filepath, data, self.workspace_id)
         _MUTATED_CONFIG_CACHE.clear()
         _MUTATED_CONFIG_MTIME.clear()
-
     def get_all(self):
         from insetu.kernel.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
@@ -102,7 +110,11 @@ class SettingsManager:
             if not fid: continue
 
             if field.get('secure'):
-                result[fid] = secrets_data.get(fid, field.get('default'))
+                val = secrets_data.get(fid, field.get('default'))
+                if isinstance(val, str) and val.startswith("v1:"):
+                    from insetu.kernel.auth import decrypt_secret
+                    val = decrypt_secret(val)
+                result[fid] = val
             else:
                 result[fid] = data.get(fid, field.get('default'))
 
@@ -122,13 +134,15 @@ class SettingsManager:
 
         dirty_normal = False
         dirty_secrets = False
-
         for field in self.schema:
             k = field.get('id')
             if not k or k not in payload_dict: continue
 
             v = payload_dict[k]
             if field.get('secure'):
+                if v:
+                    from insetu.kernel.auth import encrypt_secret
+                    v = encrypt_secret(v)
                 ext_secrets[k] = v
                 dirty_secrets = True
             else:
@@ -261,6 +275,14 @@ class ExtensionContext:
         overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=self.workspace_id)
         resolved = next((r for r in overrides if r), None)
         return resolved or resolve_sandbox_path(filepath, self.workspace_id)
+
+    def get_repo_path(self, repo_dir):
+        """SSOT for resolving a repository's physical override or logical path."""
+        import os
+        for c in self.config.get("target_repos", []):
+            if c.get("repo_dir") == repo_dir and c.get("physical_path"):
+                return os.path.abspath(os.path.expanduser(c.get("physical_path")))
+        return self.resolve_path(repo_dir)
 
     @property
     def manifest(self):

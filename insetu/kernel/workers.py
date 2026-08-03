@@ -316,8 +316,6 @@ class NonGitDirectoryWatcher:
             db_conn.commit()
         except Exception:
             pass
-import time
-SYSTEM_BOOT_TIME = time.time()
 @hooks.on('system_boot')
 def start_workers():
         global _executor, _metronome_thread, _observer
@@ -337,29 +335,10 @@ def start_workers():
                         pass
         for ws_id in workspace_ids:
                 _init_worker_schema(ws_id)
-                # Clean up ghost jobs strictly once during the OS boot sequence
+                # Clean up ghost jobs strictly once during the OS boot sequence (sparing boot heuristics)
                 conn = get_connection("workers", workspace_id=ws_id)
-                conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
+                conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing') AND callback_name != 'compile_contexts'")
                 conn.commit()
-                # Boot-Time Heuristic: Offline Mutation Guard
-                from insetu.kernel.extension import ExtensionContext
-                from insetu.kernel.utils import load_json_file
-                import uuid, json
-                ctx = ExtensionContext('gather', ws_id)
-                contexts_dir = ctx.paths.get("contexts_dir")
-                if contexts_dir:
-                    cache_path = Path(contexts_dir).joinpath("manifest_cache.json").as_posix()
-                    cache_data = load_json_file(cache_path, {})
-                    last_compile = cache_data.get("last_full_compile_time", 0)
-
-                    if SYSTEM_BOOT_TIME > last_compile:
-                        job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-                        args_json = json.dumps({"force_full": True})
-                        conn.execute("""
-                            INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
-                            VALUES (?, ?, ?, 'processing', 'Healing offline mutations...', '{}', ?, ?, ?)
-                        """, (job_id, "gather", "compile_contexts", time.time(), time.time(), args_json))
-                        conn.commit()
 
         # Flush the immediate_jobs queue natively for the boot heuristics
         for ws_id in workspace_ids:

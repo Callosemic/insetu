@@ -26,8 +26,9 @@ class ForceHTTPSProxyFix(object):
             environ['wsgi.url_scheme'] = 'https'
         return self.app(environ, start_response)
 app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
-from insetu.kernel.auth import auth_bp, BOOT_TOKEN
+from insetu.kernel.auth import auth_bp, security_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
+app.register_blueprint(security_bp.bp)
 
 # Explicitly register system core routes first to prevent dynamic loader misfires
 try:

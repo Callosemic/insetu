@@ -125,13 +125,15 @@ def execute_vfs_archive(workspace_id, filepath):
 def execute_vfs_delete(workspace_id, filepath):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "delete"}))
     return {"status": "accepted", "message": f"File deletion queued."}, 202
-
 def execute_vfs_save(workspace_id, filepath, content, data=None):
     if data is None:
         data = {}
     if filepath.lower().endswith('.json'):
         import json
-        json.loads(content)
+        try:
+            json.loads(content)
+        except Exception as e:
+            raise ValueError(f"Invalid JSON syntax: {str(e)}")
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, content, data))
     return {"status": "accepted", "message": f"File {filepath} queued for atomic background commit."}
 

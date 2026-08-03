@@ -5,13 +5,35 @@ from .core import (
     BACKEND_DIR, VFS_WRITE_WHITELIST, SQLITE_WHITELIST, 
     SUBPROCESS_WHITELIST, report_violation
 )
-
 class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename):
         self.filepath = filepath
         self.filename = filename
         self.has_save_json = False
         self.has_cache_clear = False
+
+    def visit_Dict(self, node):
+        dict_keys = {}
+        for k, v in zip(node.keys, node.values):
+            if k and isinstance(k, ast.Constant) and isinstance(k.value, str):
+                dict_keys[k.value] = v
+
+        if 'id' in dict_keys and isinstance(dict_keys['id'], ast.Constant) and isinstance(dict_keys['id'].value, str):
+            setting_id = dict_keys['id'].value.lower()
+            sensitive_keywords = ['api_key', 'secret', 'password', 'token']
+            if any(kw in setting_id for kw in sensitive_keywords):
+                secure_val = dict_keys.get('secure')
+                is_secure = isinstance(secure_val, ast.Constant) and secure_val.value is True
+
+                if not is_secure:
+                    report_violation(
+                        "SENSITIVE_SETTING_SECURE_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        f"Setting field '{setting_id}' contains sensitive keywords but is missing 'secure': True."
+                    )
+        self.generic_visit(node)
+
     def visit_Subscript(self, node):
         if self.filename not in ('extension.py', 'engine_hooks.py'):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
@@ -154,6 +176,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
+
+        if 'system_boot' in hook_events:
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    func_name = child.func.id if isinstance(child.func, ast.Name) else (child.func.attr if isinstance(child.func, ast.Attribute) else "")
+                    if func_name in ('generate_context_file', 'walk'):
+                        report_violation("BOOT_HOOK_NONBLOCKING_MANDATE", self.filepath, child.lineno, f"Synchronous execution '{func_name}' detected in system_boot hook. Offload heavy operations to background workers via submit_immediate_job.")
 
         if is_ext:
             is_worker = any(

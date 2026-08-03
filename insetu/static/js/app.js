@@ -37,6 +37,7 @@ window.addEventListener('beforeunload', (e) => {
 });
 import { initShortcutRouter } from '../vendor/sutram/js/shortcuts.js';
 import '../vendor/sutram/js/primitives.js';
+import '../vendor/sutram/js/inputs.js';
 
 // --- CENTRALIZED SHORTCUT ROUTER ---
 initShortcutRouter(window.ExtensionRegistry, () => {
@@ -190,8 +191,29 @@ import { createJobPoller } from '../vendor/sutram/js/poller.js';
 window.inSetu.utils.pollJob = createJobPoller({
     get: async (path) => window.inSetu.api.system(path)
 });
-
 // Restore UI State on Load
+let bootCurrentStep = 0;
+let bootTotalSteps = 8;
+function updateBootProgress(statusMsg) {
+    bootCurrentStep++;
+    const percent = Math.min(100, Math.round((bootCurrentStep / bootTotalSteps) * 100));
+
+    const fillBar = document.getElementById('retro-bar-fill');
+    const statusEl = document.getElementById('retro-status-msg');
+
+    if (statusEl && statusMsg) {
+        statusEl.innerHTML = `${statusMsg} (${percent}%) <span class="retro-cursor"></span>`;
+    }
+    if (fillBar) {
+        fillBar.style.width = `${percent}%`;
+    }
+}
+
+window.addEventListener('sutram:extension-registered', (e) => {
+    const extName = e.detail?.extName || 'extension';
+    updateBootProgress(`Loaded Extension: ${extName}`);
+});
+
 async function executeSecurityHandshake() {
     // Attempt a seamless, zero-config Tailscale or Localhost handshake first
     let res = await fetch('/auth/bootstrap', {
@@ -227,10 +249,10 @@ async function executeSecurityHandshake() {
     }
     return false;
 }
-
 async function executeBootSequence() {
     console.log("[BOOT] Starting sequence...");
     if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = true;
+    updateBootProgress("Security Handshake...");
 
     const authenticated = await executeSecurityHandshake();
     console.log("[BOOT] Security Handshake completed:", authenticated);
@@ -241,6 +263,7 @@ async function executeBootSequence() {
     // Fetch tenant-specific configuration to override the server's stateless HTML injection
     try {
         console.log("[BOOT] Fetching system configuration...");
+        updateBootProgress("Fetching system config...");
         const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
         console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
         if (cRes.ok) {
@@ -254,15 +277,19 @@ async function executeBootSequence() {
             if (statusBar) {
                 statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
             }
+
+            // Recalculate total boot steps dynamically based on discovered extension count
+            bootTotalSteps = 5 + window.ACTIVE_EXTENSIONS.length;
         }
     } catch (e) {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
     console.log("[BOOT] Loading Workspaces...");
-    // Load the available multi-tenant workspaces into the UI securely
+    updateBootProgress("Loading Workspaces...");
     await loadWorkspaces();
     console.log("[BOOT] Workspaces loaded.");
     console.log("[BOOT] Initializing Workspace Topology...");
+    updateBootProgress("Initializing Topology...");
     await initializeWorkspaceTopology();
     console.log("[BOOT] Topology initialized.");
     console.log("[BOOT] Booting Extensions...");
@@ -295,18 +322,17 @@ async function executeBootSequence() {
     if (window.ExtensionRegistry?.setTabOrder && Array.isArray(initialTabOrder) && initialTabOrder.length > 0) {
         window.ExtensionRegistry.setTabOrder(initialTabOrder);
     }
-
     // Sync pinned repos to the agnostic Sutram Status Bar
         const statusBar = document.querySelector('sutram-status-bar');
         if (statusBar) {
-            AppStore.subscribe(state => state.pinnedRepos, (repos) => {
+            window.inSetu.stores.Gather.subscribe(state => state.pinnedRepos, (repos) => {
                 if (repos && repos.size > 0 && !repos.has('ALL')) {
                     statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
                 } else {
                     statusBar.statusString = '';
                 }
             });
-            const repos = AppStore.getState().pinnedRepos;
+            const repos = window.inSetu.stores.Gather.getState().pinnedRepos;
             if (repos && repos.size > 0 && !repos.has('ALL')) {
                 statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
             }
@@ -396,11 +422,15 @@ async function executeBootSequence() {
         console.error("⚠️ [BOOT] Non-fatal error during layout/topology hydration:", bootErr);
     } finally {
         // Everything is fully booted, topologies mapped, and extensions mounted.
-        // NOW it's safe to drop the loading screen/panic button and mark boot as complete.
+        updateBootProgress("System Ready!");
         window.BOOT_COMPLETE = true;
         if (window.panicTimeout) clearTimeout(window.panicTimeout);
         const _initPanicBtn = document.getElementById('js-panic-button');
-        if (_initPanicBtn) _initPanicBtn.style.display = 'none';
+        if (_initPanicBtn) {
+            _initPanicBtn.style.opacity = '0';
+            _initPanicBtn.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => { _initPanicBtn.style.display = 'none'; }, 300);
+        }
     }
 }
 
@@ -668,12 +698,22 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     return compilePromise;
 };
 async function simulatePanic() {
-    if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload in 3 seconds. Continue?")) return;
+    if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
     const btn = document.getElementById('simulate-panic-btn');
     if (btn) btn.innerText = "⏳ Crashing...";
+
+    // Declarative UI State Transition
+    AppStore.setState({ isRebooting: true, rebootType: 'panic' });
+
     try {
         await window.inSetu.api.system('panic', { method: 'POST' });
-        setTimeout(() => window.location.reload(), 3000);
+        setInterval(async () => {
+            try {
+                // The lifeboat OS does not serve a manifest, so we ping the root HTML
+                const res = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
+                if (res.ok) window.location.reload();
+            } catch(err) {}
+        }, 1000);
     } catch (e) {
         alert("Error triggering panic.");
     }

@@ -42,8 +42,9 @@ def check_javascript_files():
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
     banned_cdn_import_pattern = re.compile(r'from\s+[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
-    banned_yenvui_tag_pattern = re.compile(r'<(?:yenvui-[a-z0-9-]+)\b|@yenvui-[a-z0-9-]+')
+    banned_yenvui_tag_pattern = re.compile(r'\byenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
+    raw_dialog_pattern = re.compile(r'<dialog\b')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -163,9 +164,8 @@ def check_javascript_files():
                         report_violation("BANNED_ZUSTAND_IMPORT", filepath, line_num, "Direct import from external Zustand distributions found. Extensions must use createExtensionStore() from the local SDK to preserve multi-tenant tracking.")
                     if banned_cdn_import_pattern.search(line):
                         report_violation("BANNED_CDN_IMPORT", filepath, line_num, "Hardcoded CDN import detected. Extensions must utilize vendor.json and local vendor subdirectories.")
-
                     if banned_yenvui_tag_pattern.search(line):
-                        report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated <yenvui-*> tag or @yenvui-* event detected. Migrate to vendorized <sutram-*> primitives.")
+                        report_violation("BANNED_YENVUI_TAG_BAN", filepath, line_num, "Deprecated 'yenvui-' token detected. Migrate entirely to vendorized 'sutram-' primitives.")
 
                     if is_extension and lit_element_class_pattern.search(line):
                         report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends native LitElement. Use InSetuElement instead to enable managed lifecycles.")
@@ -214,3 +214,5 @@ def check_javascript_files():
                         report_violation("VENDOR_SHARED_STYLES_MANDATE", filepath, line_num, "Legacy or un-vendorized sharedStyles import detected. Reference vendor/sutram/js/shared_styles.js instead.")
                     if sutram_subdir_pattern.search(line):
                         report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")
+                    if raw_dialog_pattern.search(line) and '@cancel' not in line:
+                        report_violation("RAW_DIALOG_OVERLAY_BAN", filepath, line_num, "Unwrapped <dialog> element detected without an explicit @cancel handler. Wrap in <sutram-modal> or supply an @cancel listener to prevent unhandled backdrop escape loops.")
