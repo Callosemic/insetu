@@ -65,8 +65,7 @@ export class InSetuExtNotesModals extends InSetuElement {
     static get extensionName() { return 'notes'; }
     static properties = {
         newNoteModalOpen: { type: Boolean },
-        noteForm: { type: Object },
-        allRepos: { type: Array }
+        noteForm: { type: Object }
     };
     static styles = [sharedStyles];
 
@@ -74,7 +73,6 @@ export class InSetuExtNotesModals extends InSetuElement {
         super();
         this.newNoteModalOpen = false;
         this.noteForm = {};
-        this.allRepos = [];
     }
 
     connectedCallback() {
@@ -82,9 +80,6 @@ export class InSetuExtNotesModals extends InSetuElement {
         this.subscribe(NotesStore, state => {
             this.newNoteModalOpen = state.newNoteModalOpen;
             this.noteForm = state.noteForm;
-        });
-        this.subscribe(window.inSetu.stores.Gather, state => {
-            this.allRepos = state.allRepos || [];
         });
     }
 
@@ -99,7 +94,7 @@ export class InSetuExtNotesModals extends InSetuElement {
                     <sutram-input label="Note Title" .value=${this.noteForm.title} placeholder="e.g., API Architectural Decision" @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, title: e.detail.value }}))}></sutram-input>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <div style="flex: 1; min-width: 150px;">
-                            <sutram-select label="Repository Mapping" .value=${this.noteForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...this.allRepos.map(r => ({value: r, label: r}))]} @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, repo: e.detail.value }}))}></sutram-select>
+                            <sutram-select label="Repository Mapping" .value=${this.noteForm.repo} .options=${[{value: 'global', label: 'Global OS Level'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]} @sutram-input-changed=${(e) => NotesStore.setState(state => ({ noteForm: { ...state.noteForm, repo: e.detail.value }}))}></sutram-select>
                         </div>
                         ${this.noteForm.repo !== 'global' ? (() => {
                             const buckets = this.sys.getFlattenedBuckets ? this.sys.getFlattenedBuckets(this.noteForm.repo) : [];
@@ -271,7 +266,7 @@ export class InSetuExtNotes extends InSetuElement {
             this.searchQuery = state.searchQuery;
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         });
-        this.subscribe(window.inSetu.stores.Gather, state => {
+        this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });

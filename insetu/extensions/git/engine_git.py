@@ -38,9 +38,38 @@ def get_git_settings_schema(workspace_id):
             "description": f"Reconciliation strategy for branch divergence inside the '{repo_dir}' workspace target."
         })
     return schema
-
 git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=get_git_settings_schema)
-__depends__ = []
+__depends__ = ['gather']
+@hooks.on('request_paths')
+def hook_git_request_paths(workspace_id=None, **kwargs):
+    try:
+        from pathlib import Path
+        import os
+        from insetu.kernel.utils import get_workspace_physics
+        cfg_path, _, _ = get_workspace_physics(workspace_id)
+        artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
+        paths = {
+            "diffs_dir": Path(artifacts_base).joinpath("diffs").as_posix()
+        }
+        os.makedirs(paths["diffs_dir"], exist_ok=True)
+        return paths
+    except Exception: 
+        return {}
+
+@hooks.on('vfs_resolve_file')
+def resolve_git_artifacts(filename=None, workspace_id=None, **kwargs):
+    """Resolves system://diffs URIs and fallback searches for git diffs."""
+    if not filename: return None
+    from insetu.core.sdk import ExtensionContext
+    from pathlib import Path
+    import os
+    ctx = ExtensionContext('git', workspace_id)
+
+    safe_basename = Path(filename).name
+    cand = Path(ctx.paths["diffs_dir"]).joinpath(safe_basename).as_posix()
+    if os.path.exists(cand):
+        return cand, True
+    return None
 @hooks.on('compile_contexts')
 def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
     try:
@@ -61,8 +90,8 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.sdk import ExtensionContext
-    from insetu.core.utils_core import get_safe_repo_id
-    from insetu.core.gather.engine_gather import resolve_file_bucket
+    from insetu.core.utils_core import get_safe_repo_id, resolve_file_bucket
+    import concurrent.futures
 
     ctx = ExtensionContext('git', workspace_id)
     paths = ctx.paths
@@ -79,10 +108,15 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
     touched_diff_buckets = set(b.replace('_context.txt', '_diffs.txt') for b in touched_buckets) if touched_buckets is not None else None
 
-    for config in live_cfg.get("target_repos", []):
-        if target_repos and config.get("repo_dir") not in target_repos: continue
-        if config.get("exclude_from_diffs"): continue
-        if config.get("archive_type", "repo") == "media-vault": continue
+    def process_repo(config):
+        local_diff_manifest = []
+        local_manifest_deltas = {}
+        local_active_diffs = set()
+
+        if target_repos and config.get("repo_dir") not in target_repos: return None
+        if config.get("exclude_from_diffs"): return None
+        if config.get("archive_type", "repo") == "media-vault": return None
+
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
         physical_path = config.get("physical_path")
 
@@ -90,16 +124,18 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             repo_path = Path(physical_path).expanduser().resolve()
         else:
             repo_path = (ws_root_path / config["repo_dir"]).resolve()
-        if not repo_path.exists(): continue
-        try:
-            result = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=str(repo_path))
-            lines = result.stdout.splitlines()
-            if not lines: continue
+        if not repo_path.exists(): return None
 
-            # Resolve Git root to normalize `--porcelain` paths against logical workspace directories
-            git_root_res = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=str(repo_path))
+        try:
+            # OPTIMIZATION 1: --no-optional-locks avoids heavy background index refreshes
+            result = subprocess.run(['git', '--no-optional-locks', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=str(repo_path))
+            lines = result.stdout.splitlines()
+            if not lines: return None
+
+            git_root_res = subprocess.run(['git', '--no-optional-locks', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=str(repo_path))
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
             changed_files = []
+
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
@@ -111,18 +147,19 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 try:
                     rel_to_repo = abs_filepath.relative_to(repo_path.resolve()).as_posix()
                 except ValueError:
-                    continue # File is outside our logical repo_dir bounding box, skip it
+                    continue
                 if abs_filepath.is_file() or 'D' in status:
                     changed_files.append((rel_to_repo, status, filepath))
 
-            if not changed_files: continue
+            if not changed_files: return None
+
             sub_buckets = config.get("sub_buckets", [])
             bucketed_files = {}
             ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
             ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
+
             if sub_buckets:
                 for rel_to_repo, status, orig_filepath in changed_files:
-                    # Global ignore guards should apply BEFORE sub-bucket routing
                     if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
                     if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
 
@@ -147,6 +184,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     filtered_files.append((rel_to_repo, status, orig_filepath))
                 if filtered_files:
                     bucketed_files[out_filename] = filtered_files
+
             for out_filename, files_in_bucket in bucketed_files.items():
                 if touched_diff_buckets is not None and out_filename not in touched_diff_buckets:
                     continue
@@ -160,13 +198,11 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 header_lines.append("\n\n")
                 header_str = "\n".join(header_lines)
 
-                # OPTIMIZATION: Bulk fetch diffs to eliminate N+1 subprocess bottleneck
                 files_to_diff = [orig_f for _, s, orig_f in files_in_bucket if s != "??"]
                 bulk_diffs = {}
                 if files_to_diff:
                     try:
-                        # Diffs must be fetched relative to the git root to match porcelain output
-                        diff_res = subprocess.run(['git', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=str(git_root))
+                        diff_res = subprocess.run(['git', '--no-optional-locks', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=str(git_root))
                         for chunk in diff_res.stdout.split('diff --git '):
                             if not chunk.strip(): continue
                             first_line = chunk.split('\n')[0]
@@ -209,6 +245,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         block_lines.append("\n\n")
 
                     text_blocks.append("\n".join(block_lines))
+
                 if text_blocks:
                     from insetu.core.gather.engine_gather import compile_context_payload
 
@@ -221,11 +258,10 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         pass
 
                     if existing_content == new_content_full and out_filename in working_manifest:
-                        diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
-                        active_generated_diffs.add(out_filename)
+                        local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
+                        local_active_diffs.add(out_filename)
                         continue
 
-                    # Diff specific manifest integration
                     meta = {
                         "type": "diff",
                         "title": out_filename.replace('_diffs.txt', '').replace('_', ' ').title(),
@@ -242,13 +278,25 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         [f"{config['repo_dir']}/{f}" for f, s, _ in files_in_bucket if 'D' not in s], 
                         meta
                     )
-                    # Update central manifest explicitly so Gather/UI tools can find the diff chunks!
-                    working_manifest[out_filename] = manifest_entry
-                    diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
-                    manifest_deltas[out_filename] = manifest_entry
-                    active_generated_diffs.add(out_filename)
+                    local_manifest_deltas[out_filename] = manifest_entry
+                    local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
+                    local_active_diffs.add(out_filename)
         except Exception as e:
-            print(f"Skipping diff generation for {config['repo_dir']}: {e}")
+            print(f"Skipping diff generation for {config.get('repo_dir', 'Unknown')}: {e}")
+
+        return (local_diff_manifest, local_manifest_deltas, local_active_diffs)
+
+    # OPTIMIZATION 2: ThreadPoolExecutor processes independent repositories in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(process_repo, config) for config in live_cfg.get("target_repos", [])]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                lm_diff, lm_delta, l_active = res
+                diff_manifest.extend(lm_diff)
+                manifest_deltas.update(lm_delta)
+                working_manifest.update(lm_delta)
+                active_generated_diffs.update(l_active)
     # Prune stale diff entries that are no longer active
     stale_keys = [
         k for k in working_manifest.keys() 
@@ -280,7 +328,6 @@ def _background_generate_diffs(ctx, target_repos=None):
     # Notify the ecosystem (e.g., Flow) that diffs have updated so dependent batches can recompile
     if files:
         diff_filenames = [f['filename'] for f in files]
-        ctx.emit('compile_contexts', manifest=ctx.manifest, is_full_sweep=False, touched_buckets=diff_filenames)
         ctx.emit('git_evaluation_complete', manifest=ctx.manifest, is_full_sweep=False, touched_buckets=diff_filenames)
 
     return {"message": "Diff generation complete.", "artifact": {"files": files, "target_repos": target_repos, "manifest_deltas": manifest_deltas}}

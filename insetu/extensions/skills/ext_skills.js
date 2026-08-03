@@ -193,15 +193,10 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: metrics
         };
         try {
-            const res = await this.api.post('create', payload);
-            if (res.ok) {
-                SkillsStore.setState({ newSkillModalOpen: false });
-            } else {
-                const faultText = await res.json().catch(() => ({}));
-                alert(`Failed to compile item structure: ${faultText.error || res.statusText}`);
-            }
+            await this.api.postJson('create', payload);
+            SkillsStore.setState({ newSkillModalOpen: false });
         } catch (err) {
-            alert(`Network synchronization failure: ${err.message}`);
+            alert(`Failed to compile item structure: ${err.message}`);
         }
     }
 
@@ -255,21 +250,15 @@ export class InSetuExtSkills extends InSetuElement {
             </div>
         `;
     }
-
     async _deleteSkillItem() {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            const res = await this.api.post('delete', { filepath: this.selectedItem.filepath });
-            if (res.ok) {
-                SkillsStore.setState({ selectedItem: null });
-                alert("Track permanently wiped from file system.");
-            } else {
-                const faultText = await res.json().catch(() => ({}));
-                alert(`Failed to execute deletion sequence: ${faultText.error || res.statusText}`);
-            }
+            await this.api.postJson('delete', { filepath: this.selectedItem.filepath });
+            SkillsStore.setState({ selectedItem: null });
+            alert("Track permanently wiped from file system.");
         } catch (err) {
-            alert(`Network synchronization failure: ${err.message}`);
+            alert(`Failed to execute deletion sequence: ${err.message}`);
         }
     }
 
@@ -285,16 +274,11 @@ export class InSetuExtSkills extends InSetuElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            const res = await this.api.post('update', payload);
-            if (res.ok) {
-                SkillsStore.setState({ selectedItem: null });
-                alert("Structural configuration updated successfully!");
-            } else {
-                const faultText = await res.json().catch(() => ({}));
-                alert(`Failed to save adjustments: ${faultText.error || res.statusText}`);
-            }
+            await this.api.postJson('update', payload);
+            SkillsStore.setState({ selectedItem: null });
+            alert("Structural configuration updated successfully!");
         } catch (err) {
-            alert(`Network failure: ${err.message}`);
+            alert(`Failed to save adjustments: ${err.message}`);
         }
     }
 
@@ -310,14 +294,12 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: this.formMetrics
         };
         try {
-            const res = await this.api.post('log', payload);
-            if (res.ok) {
-                SkillsStore.setState({ selectedItem: null });
-                alert("Practice entry committed atomically into text ledger!");
-            }
-        } catch (e) {
-            console.error("Practice logging failed:", e);
-            alert("Network error sync loop failed. Check the console for details.");
+            await this.api.postJson('log', payload);
+            SkillsStore.setState({ selectedItem: null });
+            alert("Practice entry committed atomically into text ledger!");
+        } catch (err) {
+            console.error("Practice logging failed:", err);
+            alert(`Network error sync loop failed: ${err.message}`);
         }
     }
     _renderMetricInput(key, def) {

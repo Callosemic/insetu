@@ -84,14 +84,13 @@ export class InSetuExtHooks extends InSetuElement {
             this.editingRule = state.editingRule;
             this.ruleForm = state.ruleForm;
         });
-        this.subscribe('Gather', state => {
+        this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.targetConfigs = state.targetConfigs || [];
         });
-        const gatherStore = window.inSetu?.stores?.Gather;
-        const gState = gatherStore?.getState ? gatherStore.getState() : {};
-        this.allRepos = gState?.allRepos || [];
-        this.targetConfigs = gState?.targetConfigs || [];
+        const aState = AppStore.getState();
+        this.allRepos = aState?.allRepos || [];
+        this.targetConfigs = aState?.targetConfigs || [];
 
         this.registerGlobalListener('insetu:hooks:toggle', window, (e) => this.toggleRule(e.detail.data));
         this.registerGlobalListener('insetu:hooks:execute', window, (e) => this.executeRule(e.detail.id));
@@ -122,7 +121,6 @@ export class InSetuExtHooks extends InSetuElement {
             });
         }
     }
-
     async saveRule() {
         const { name, command } = this.ruleForm;
         if (!name || !command) return alert("Rule name and command are required.");
@@ -131,62 +129,50 @@ export class InSetuExtHooks extends InSetuElement {
             const payload = { ...this.ruleForm };
             if (this.editingRule) payload.id = this.editingRule.id;
 
-            const res = await this.api.post('save', payload);
-            if (res.ok) {
-                HooksStore.setState({ ruleModalOpen: false });
-                HooksStore.getState().fetchRules();
-            } else {
-                const err = await res.json();
-                alert(`Error: ${err.error}`);
-            }
+            await this.api.postJson('save', payload);
+            HooksStore.setState({ ruleModalOpen: false });
+            HooksStore.getState().fetchRules();
         } catch (e) {
-            alert(`Network error saving rule: ${e.message}`);
+            alert(`Error saving rule: ${e.message}`);
         }
     }
 
     async toggleRule(rule) {
-        const nextState = !rule.enabled;
         try {
-            await this.api.post('toggle', { id: rule.id, enabled: nextState });
+            await this.api.postJson('toggle', { id: rule.id, enabled: !rule.enabled });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error toggling rule: ${e.message}`);
         }
     }
+
     async deleteRule(ruleId) {
         if (!confirm("Are you sure you want to delete this automation rule?")) return;
         try {
-            await this.api.post('delete', { id: ruleId });
+            await this.api.postJson('delete', { id: ruleId });
             HooksStore.getState().fetchRules();
         } catch (e) {
             alert(`Error deleting rule: ${e.message}`);
         }
     }
+    _getExecuteRuleAction(ruleId) {
+        return this.api.bindJobAction('execute', { id: ruleId }, {
+            onProgress: () => {
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("⏳ Executing rule...", null);
+            },
+            onComplete: () => {
+                HooksStore.getState().fetchLogs();
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Rule executed successfully", 2000);
+            },
+            onError: (err) => {
+                alert(`Execution failed: ${err.message}`);
+                HooksStore.getState().fetchLogs();
+            }
+        });
+    }
 
     async executeRule(ruleId) {
-        try {
-            const res = await this.api.post('execute', { id: ruleId });
-            if (res.ok) {
-                const data = await res.json();
-                this.api.pollJob(data.job_id, {
-                    onProgress: () => {},
-                    onComplete: () => {
-                        HooksStore.getState().fetchLogs();
-                        if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Rule executed successfully", 2000);
-                    },
-                    onError: (err) => {
-                        alert(`Execution failed: ${err.message}`);
-                        HooksStore.getState().fetchLogs();
-                    }
-                });
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("⏳ Executing rule...", null);
-            } else {
-                const err = await res.json();
-                alert(`Error: ${err.error}`);
-            }
-        } catch (e) {
-            alert(`Network error executing rule: ${e.message}`);
-        }
+        try { await this._getExecuteRuleAction(ruleId)(); } catch(e) {}
     }
 
     render() {

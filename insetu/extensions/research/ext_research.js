@@ -138,28 +138,34 @@ export class InSetuExtResearch extends InSetuElement {
         if (!query) throw new Error("Query required.");
 
         const maxResults = formMax === 'custom' ? (parseInt(maxCustom, 10) || 50) : parseInt(formMax, 10);
-        const res = await this.api.post('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
 
-        if (res.ok) {
+        try {
+            await this.api.postJson('start', { query, provider, parser: parser, target_dir: targetDir, max_results: maxResults, date_range: dateRange });
             ResearchStore.setState(s => ({ searchForm: { ...s.searchForm, query: '' }, newJobModalOpen: false }));
             await this.fetchState();
-        } else {
-            const data = await res.json();
-            throw new Error(data.error || "Failed to start job.");
+        } catch (err) {
+            throw new Error(err.message || "Failed to start job.");
         }
     }
+
     async handleJobAction(jobId, action) {
         if (action === 'delete' && !confirm("Are you sure you want to permanently delete this research job and all its scraped items? This cannot be undone.")) return;
-        await this.api.post(`${jobId}/action`, { action });
-        if (action === 'delete') {
-            ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
+
+        try {
+            await this.api.postJson(`${jobId}/action`, { action });
+            if (action === 'delete') {
+                ResearchStore.setState({ selectedJobId: null, selectedItemId: null, aiTriageMode: false });
+            }
+            await this.fetchState();
+        } catch (err) {
+            alert(`Action failed: ${err.message}`);
         }
-        await this.fetchState();
     }
 
     async handleDisposition(inboxId, status) {
         const item = this.inbox.find(i => i.id === inboxId);
         if (!item) return;
+
         if (status === 'accepted') {
             const targetDir = (this.targetDir || 'research/').replace(/\/+$/, '') + '/';
             const slug = (() => {
@@ -171,39 +177,39 @@ export class InSetuExtResearch extends InSetuElement {
             const success = await this.sys.executeWorkspaceMutation('fs/save', { filepath, content: item.raw_markdown }, { silent: true });
             if (!success) return alert("Failed to write Markdown to disk.");
         }
-        await this.api.post(`inbox/${inboxId}/disposition`, { status });
 
-        if (this.selectedItemId === inboxId) {
-            ResearchStore.setState({ selectedItemId: null });
-        }
+        try {
+            await this.api.postJson(`inbox/${inboxId}/disposition`, { status });
+            if (this.selectedItemId === inboxId) {
+                ResearchStore.setState({ selectedItemId: null });
+            }
 
-        const currentInbox = this.inbox;
-        if (status === 'force_scrape') {
-            const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
-            ResearchStore.setState({ inbox: updatedInbox });
-        } else {
-            const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
-            ResearchStore.setState({ inbox: updatedInbox });
+            const currentInbox = this.inbox;
+            if (status === 'force_scrape') {
+                const updatedInbox = currentInbox.map(i => i.id === inboxId ? { ...i, status: 'pending', scraped_at: null, raw_markdown: null } : i);
+                ResearchStore.setState({ inbox: updatedInbox });
+            } else {
+                const updatedInbox = currentInbox.filter(i => i.id !== inboxId);
+                ResearchStore.setState({ inbox: updatedInbox });
+            }
+        } catch (err) {
+            alert(`Disposition failed: ${err.message}`);
         }
     }
+    _getGenerateContextAction(jobId) {
+        return this.api.bindJobAction(`${jobId}/export_context`, {}, {
+            onComplete: async (statusData) => {
+                const files = statusData.artifact.files || [];
+                for (const f of files) {
+                    await this.vfs.fetchAndDownloadState(f.filename, f.download_url);
+                }
+            },
+            onError: (err) => alert("Failed to generate context files: " + err.message)
+        });
+    }
+
     async generateContext(jobId, e) {
-        try {
-            const res = await this.api.post(`${jobId}/export_context`, {});
-            if (!res.ok) throw new Error("Failed to start export context job");
-            const data = await res.json();
-            this.api.pollJob(data.job_id, {
-                onProgress: () => {},
-                onComplete: async (statusData) => {
-                    const files = statusData.artifact.files || [];
-                    for (const f of files) {
-                        await this.vfs.fetchAndDownloadState(f.filename, f.download_url);
-                    }
-                },
-                onError: (err) => alert("Failed to generate context files: " + err.message)
-            });
-        } catch(err) {
-            alert("Failed to generate context files: " + err.message);
-        }
+        try { await this._getGenerateContextAction(jobId)(e); } catch(err) {}
     }
     async executeAITriage(e) {
         const input = (this._aiJsonInput || '').trim();
@@ -250,9 +256,8 @@ export class InSetuExtResearch extends InSetuElement {
             if (job.status === 'failed') return 'var(--intent-danger)';
             return 'var(--text-muted)';
         })();
-
-        const safeDate = job.created_at ? new Date(job.created_at).toLocaleString() : 'Unknown Date';
-        const cardStatusExtra = job.status === 'gathering' 
+        const safeDate = this.utils.formatDate(job.created_at);
+        const cardStatusExtra = job.status === 'gathering'  
             ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
             : `(${job.processed_links}/${job.total_links} scraped)`;
 
@@ -284,8 +289,8 @@ export class InSetuExtResearch extends InSetuElement {
             if (job.status === 'failed') return 'var(--intent-danger)';
             return 'var(--text-muted)';
         })();
-        const safeDate = job.created_at ? new Date(job.created_at).toLocaleString() : 'Unknown Date';
-        const cardStatusExtra = job.status === 'gathering' 
+        const safeDate = this.utils.formatDate(job.created_at);
+        const cardStatusExtra = job.status === 'gathering'  
             ? `(Page ${Math.floor((meta.start_index || 0) / 10) + 1} - ${job.total_links} found)`
             : `(${job.processed_links}/${job.total_links} scraped)`;
 
@@ -320,7 +325,7 @@ export class InSetuExtResearch extends InSetuElement {
                     <h3 style="margin-top: 0; color: var(--intent-highlight); margin-bottom: 15px;">Batch Triage Pipeline</h3>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 1: Download Context</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Downloads all fully-scraped pending URLs in this job as chunked text files.</p>
-                    <sutram-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${(e) => this.generateContext(job.id, e)}></sutram-async-btn>
+                    <sutram-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
                     <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>

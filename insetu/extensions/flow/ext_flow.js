@@ -105,15 +105,14 @@ export class InSetuExtFlow extends InSetuElement {
         } else {
             this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
         }
-        this.subscribe(window.inSetu.stores.Gather, state => {
+        this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
-        const gatherStore = window.inSetu?.stores?.Gather;
-        const gs = gatherStore?.getState ? gatherStore.getState() : {};
-        this.pinnedRepos = gs.pinnedRepos || new Set(['ALL']);
-        this.allRepos = gs.allRepos || [];
+        const as = AppStore.getState ? AppStore.getState() : {};
+        this.pinnedRepos = as.pinnedRepos || new Set(['ALL']);
+        this.allRepos = as.allRepos || [];
 
         FlowStore.getState().fetchBatches();
     }

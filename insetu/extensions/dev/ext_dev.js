@@ -145,7 +145,7 @@ export class InSetuExtDevDash extends InSetuElement {
                                             <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); word-break: break-all;">${err.filepath}</span>
                                             ${err.attempt_count > 1 ? html`<span style="background: var(--intent-warning); color: #000; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; font-weight: bold;">${err.attempt_count}x Attempts</span>` : ''}
                                         </div>
-                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${new Date(err.timestamp * 1000).toLocaleString()}</span>
+                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
                                     </div>
                                     <div style="font-size: 0.85rem; font-weight: bold; color: var(--intent-warning); margin-bottom: 4px;">[${err.error_type}]</div>
                                     <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px;">${err.details}</div>

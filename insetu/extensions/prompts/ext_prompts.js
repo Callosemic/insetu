@@ -70,8 +70,7 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     static openPromptEmbedModal() {
         if (window.inSetu.ui && window.inSetu.ui.openWorkspaceBrowser) {
-            const gatherOptions = window.inSetu.stores.Gather.getState().gatherOptions || {};
-            const rawPrompts = gatherOptions.prompts || [];
+            const rawPrompts = PromptsStore.getState().prompts || [];
             if (rawPrompts.length === 0) {
                 alert("No prompts available to embed. Compile contexts first.");
                 return;
@@ -229,6 +228,14 @@ window.ExtensionRegistry.registerExtension('prompts', {
                 return `/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(filepath);
             }
             return null;
+        },
+        'zone:global-manifest-files': () => {
+            const rawPrompts = PromptsStore.getState().prompts || [];
+            if (rawPrompts.length === 0) return ['.insetu/prompts/.gitkeep'];
+            return rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`);
+        },
+        'zone:global-manifest-whitelist': () => {
+            return ['.insetu/prompts/'];
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

@@ -22,47 +22,22 @@ citations_bp = InSetuExtension('citations', __name__, title="Reference Library",
     "out_file": "citations_context.txt"
 }])
 __depends__ = []
-
 @hooks.on('mutate_workspace_config')
 def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
-    """Dynamically injects virtual UI metadata for citation payloads."""
+    """Dynamically injects virtual UI metadata for citation payloads statelessly."""
     if "citations" not in cfg.get("extensions", []): return
     if "virtual_contexts" not in cfg:
         cfg["virtual_contexts"] = []
-    v_ctxs = cfg["virtual_contexts"]
-    # Dynamically inject mappings for repo-specific citation buckets
+
     try:
         from insetu.core.sdk import ExtensionContext
         ctx = ExtensionContext('citations', workspace_id)
-        conn = ctx.db
-        cursor = conn.execute("SELECT attachments FROM citations WHERE attachments != '[]'")
-        citation_scopes = set()
-        for row in cursor.fetchall():
-            atts = json.loads(row[0])
-            for att in atts:
-                repo = att.get('repo')
-                bucket = att.get('bucket', 'None')
-                if repo: 
-                    citation_scopes.add((repo, None))
-                    if bucket and bucket != "None":
-                        citation_scopes.add((repo, bucket))
+        # Read from the fast JSON memory cache instead of hitting SQLite synchronously
+        cached_scopes = ctx.store.get("citations_ui.json", "virtual_contexts", [])
 
-        for repo, bucket in citation_scopes:
-            if bucket:
-                virtual_dir = f"virtual_citations_{repo}_{bucket}"
-                ui_title = f"{repo}/{bucket}"
-                out_file = f"{repo}_{bucket}_citations_context.txt"
-            else:
-                virtual_dir = f"virtual_citations_{repo}"
-                ui_title = repo
-                out_file = f"{repo}_citations_context.txt"
-            if not any(v.get("out_file") == out_file for v in v_ctxs):
-                v_ctxs.append({
-                    "title": ui_title,
-                    "description": f"Academic citations scoped to {ui_title}.",
-                    "domain": "Reference Library",
-                    "out_file": out_file
-                })
+        for scope in cached_scopes:
+            if not any(v.get("out_file") == scope.get("out_file") for v in cfg["virtual_contexts"]):
+                cfg["virtual_contexts"].append(scope)
     except Exception:
         pass
 @hooks.on('compile_contexts')
@@ -121,8 +96,20 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                             if item not in bucketed_items[rb_key]: bucketed_items[rb_key].append(item)
 
             write_citation_bucket("citations_context.txt", global_items, "GLOBAL REFERENCE LIBRARY")
+            v_ctxs = []
             for k, items in bucketed_items.items():
-                write_citation_bucket(f"{k}_citations_context.txt", items, f"REFERENCE LIBRARY ({k.upper()})")
+                out_file = f"{k}_citations_context.txt"
+                ui_title = k.replace('_', '/')
+                write_citation_bucket(out_file, items, f"REFERENCE LIBRARY ({k.upper()})")
+                v_ctxs.append({
+                    "title": ui_title,
+                    "description": f"Academic citations scoped to {ui_title}.",
+                    "domain": "Reference Library",
+                    "out_file": out_file
+                })
+
+            # Save the generated scopes to the fast JSON cache for the UI to consume statelessly
+            ctx.store.set("citations_ui.json", "virtual_contexts", v_ctxs)
 
     except Exception as e:
         print(f"Extension Hook Error (citations compile): {e}")

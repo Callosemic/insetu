@@ -27,7 +27,7 @@ hooks_bp = InSetuExtension(
     description="IFTTT-style event automation for local commands and workflows.", 
     schema=HOOKS_SCHEMA
 )
-__depends__ = []
+__depends__ = ['gather']
 
 
 @hooks_bp.worker("execute_rule_task")
@@ -90,11 +90,9 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
 
     if not active_rules:
         return
+    from insetu.core.utils_core import resolve_file_bucket
+    target_repos = ctx.config.get("target_repos", [])
 
-    # Topology is defined in the Gather extension, not the Hooks extension
-    gather_ctx = ExtensionContext('gather', workspace_id)
-    target_repos = gather_ctx.config.get("target_repos", [])
-    
     # Analyze mutated files
     touched_repos = set()
     touched_buckets = set() # Format: 'repo::bucket_id'

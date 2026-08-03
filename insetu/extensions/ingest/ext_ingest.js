@@ -46,59 +46,45 @@ export class InSetuExtIngestModals extends InSetuElement {
             this.activeIngestJobId = state.activeIngestJobId;
         });
     }
+    _getImportAction() {
+        return this.api.bindJobAction('url', () => {
+            const url = this.ingestUrl.trim();
+            if (!url) throw new Error("Please enter a valid URL.");
+            IngestStore.setState({ ingestStatus: 'Fetching and converting...', ingestError: null });
+            return { url, method: this.ingestMethod };
+        }, {
+            onProgress: (msg) => IngestStore.setState({ ingestStatus: msg }),
+            onComplete: (statusData) => {
+                const fsState = window.inSetu.stores.Fs.getState();
+                const currentContent = fsState.modals.newFile?.content || '';
+                const shouldOverwrite = currentContent.trim() !== '' ? confirm("Overwrite existing content with imported markdown?") : false;
+                const newContent = (shouldOverwrite || currentContent.trim() === '') ? statusData.artifact.markdown : currentContent + '\n\n' + statusData.artifact.markdown;
+                fsState.setModal('newFile', { content: newContent });
+                window.inSetu.events.emitHook('zone:post-import-url', statusData.artifact);
 
-    async _executeImportUrl() {
-        const url = this.ingestUrl.trim();
-        if (!url) return alert("Please enter a valid URL.");
+                const currentFileName = fsState.modals.newFile?.fileName || '';
+                if (currentFileName.trim() === '') {
+                    const slug = (() => {
+                        const titleBase = (statusData.artifact.title && statusData.artifact.title !== 'Imported Content') ? window.inSetu.utils.slugify(statusData.artifact.title) : '';
+                        const urlBase = (() => {
+                            if (titleBase) return titleBase;
+                            try {
+                                const urlObj = new URL(statusData.artifact.resolved_url || url);
+                                return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+                            } catch(e) { return ''; }
+                        })();
+                        return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
+                    })();
+                    fsState.setModal('newFile', { fileName: slug + '.md' });
+                }
 
-        IngestStore.setState({ activeIngestJobId: 'starting', ingestStatus: 'Fetching and converting...', ingestError: null });
-        try {
-            const res = await this.api.post('url', { url, method: this.ingestMethod });
-            if (res.ok) {
-                const data = await res.json();
-                IngestStore.setState({ activeIngestJobId: data.job_id });
-
-                this.api.pollJob(data.job_id, {
-                    onProgress: (msg) => IngestStore.setState({ ingestStatus: msg }),
-                    onComplete: (statusData) => {
-                        const fsState = window.inSetu.stores.Fs.getState();
-                        const currentContent = fsState.modals.newFile?.content || '';
-                        const shouldOverwrite = currentContent.trim() !== '' ? confirm("Overwrite existing content with imported markdown?") : false;
-                        const newContent = (shouldOverwrite || currentContent.trim() === '') ? statusData.artifact.markdown : currentContent + '\n\n' + statusData.artifact.markdown;
-                        fsState.setModal('newFile', { content: newContent });
-                        window.inSetu.events.emitHook('zone:post-import-url', statusData.artifact);
-
-                        const currentFileName = fsState.modals.newFile?.fileName || '';
-                        if (currentFileName.trim() === '') {
-                            const slug = (() => {
-                                const titleBase = (statusData.artifact.title && statusData.artifact.title !== 'Imported Content') ? window.inSetu.utils.slugify(statusData.artifact.title) : '';
-                                const urlBase = (() => {
-                                    if (titleBase) return titleBase;
-                                    try {
-                                        const urlObj = new URL(statusData.artifact.resolved_url || url);
-                                        return (urlObj.pathname.split('/').pop() || urlObj.hostname).replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-                                    } catch(e) { return ''; }
-                                })();
-                                return (urlBase || 'imported-article').replace(/^-+|-+$/g, '').substring(0, 60);
-                            })();
-                            fsState.setModal('newFile', { fileName: slug + '.md' });
-                        }
-
-                        IngestStore.setState({ activeIngestJobId: null, ingestStatus: '✅ Success' });
-                        setTimeout(() => IngestStore.setState({ ingestModalOpen: false, ingestStatus: null, ingestUrl: '' }), 1000);
-                    },
-                    onError: (err) => {
-                        IngestStore.setState({ activeIngestJobId: null, ingestStatus: null, ingestError: err.message });
-                    }
-                });
-
-            } else {
-                const err = await res.json();
-                throw new Error(err.error || "Ingestion request failed.");
+                IngestStore.setState({ ingestStatus: '✅ Success' });
+                setTimeout(() => IngestStore.setState({ ingestModalOpen: false, ingestStatus: null, ingestUrl: '' }), 1000);
+            },
+            onError: (err) => {
+                IngestStore.setState({ ingestStatus: null, ingestError: err.message });
             }
-        } catch (e) {
-            IngestStore.setState({ activeIngestJobId: null, ingestError: e.message });
-        }
+        });
     }
     render() {
         return html`
@@ -123,10 +109,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                     ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
                     ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;"
-                    ?disabled=${!!this.ingestStatus && this.ingestStatus !== '✅ Success'} @click=${this._executeImportUrl}>
-                    📥 Fetch & Convert
-                </button>
+                <sutram-async-btn slot="footer" label="📥 Fetch & Convert" intent="primary" .onClick=${this._getImportAction()}></sutram-async-btn>
             </sutram-modal>
         `;
     }

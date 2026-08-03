@@ -140,100 +140,68 @@ export class InSetuExtFreshdesk extends InSetuElement {
             console.error("Failed to save ignored tickets schema", err);
         }
     }
-    async resolveTicket(ticketId) {
-        FreshdeskStore.setState({ loadingMsg: "Resolving ticket...", activeJobId: 'starting' });
-        try {
-            const res = await this.api.post(`tickets/${ticketId}/resolve`, {});
-            if (res.ok) {
-                const data = await res.json();
-                FreshdeskStore.setState({ activeJobId: data.job_id });
-                this.api.pollJob(data.job_id, {
-                    onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
-                    onComplete: (statusData) => {
-                        const updatedTicket = statusData.artifact.ticket;
-                        const state = FreshdeskStore.getState();
-
-                        // Merge the new state while preserving our local agent name mappings
-                        const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket, responder_name: t.responder_name } : t);
-                        const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket, responder_name: state.selectedTicket.responder_name } : state.selectedTicket;
-                        FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
-                        if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Resolved!", 2000);
-                    },
-                    onError: (err) => {
-                        FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-                        if (window.alert) window.alert(`Resolve Error: ${err.message}`);
-                    }
-                });
-            } else {
+    _getResolveTicketAction(ticketId) {
+        return this.api.bindJobAction(`tickets/${ticketId}/resolve`, {}, {
+            onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
+            onComplete: (statusData) => {
+                const updatedTicket = statusData.artifact.ticket;
+                const state = FreshdeskStore.getState();
+                const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket, responder_name: t.responder_name } : t);
+                const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket, responder_name: state.selectedTicket.responder_name } : state.selectedTicket;
+                FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Resolved!", 2000);
+            },
+            onError: (err) => {
                 FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-            }
-        } catch(e) {
-            console.error(e);
-            FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-        }
-    }
-
-    async takeTicket(ticketId) {
-        FreshdeskStore.setState({ loadingMsg: "Assigning ticket to you...", activeJobId: 'starting' });
-        try {
-            const res = await this.api.post(`tickets/${ticketId}/take`, {});
-            if (res.ok) {
-                const data = await res.json();
-                FreshdeskStore.setState({ activeJobId: data.job_id });
-                this.api.pollJob(data.job_id, {
-                    onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
-                    onComplete: (statusData) => {
-                        const updatedTicket = statusData.artifact.ticket;
-                        const state = FreshdeskStore.getState();
-                        // Reactively update the ticket in the background and the modal
-                        const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket } : t);
-                        const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket } : state.selectedTicket;
-                        FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
-                        if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Assigned!", 2000);
-                    },
-                    onError: (err) => {
-                        FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-                        if (window.alert) window.alert(`Assignment Error: ${err.message}`);
-                    }
-                });
-            } else {
-                FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-            }
-        } catch(e) {
-            console.error(e);
-            FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
-        }
-    }
-    sendReply() {
-        const ticketId = this.selectedTicket?.id;
-        const content = FreshdeskStore.getState().replyContent;
-        if (!ticketId || !content.trim()) return Promise.resolve();
-
-        return new Promise(async (resolve, reject) => {
-            try {
-                const res = await this.api.post(`tickets/${ticketId}/reply`, { body: content });
-                if (res.ok) {
-                    const data = await res.json();
-                    this.api.pollJob(data.job_id, {
-                        onComplete: async () => {
-                            FreshdeskStore.setState({ replyContent: '' });
-                            this.fetchConversations(ticketId);
-                            if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Reply Sent & Saved Locally!", 2000);
-                            resolve();
-                        },
-                        onError: (err) => {
-                            if (window.alert) window.alert(`Reply Error: ${err.message}`);
-                            reject(err);
-                        }
-                    });
-                } else {
-                    reject(new Error("Failed to queue reply."));
-                }
-            } catch (e) {
-                console.error(e);
-                reject(e);
+                if (window.alert) window.alert(`Resolve Error: ${err.message}`);
             }
         });
+    }
+    async resolveTicket(ticketId) {
+        FreshdeskStore.setState({ loadingMsg: "Resolving ticket...", activeJobId: 'starting' });
+        try { await this._getResolveTicketAction(ticketId)(); } catch(e) {}
+    }
+
+    _getTakeTicketAction(ticketId) {
+        return this.api.bindJobAction(`tickets/${ticketId}/take`, {}, {
+            onProgress: (msg) => FreshdeskStore.setState({ loadingMsg: msg }),
+            onComplete: (statusData) => {
+                const updatedTicket = statusData.artifact.ticket;
+                const state = FreshdeskStore.getState();
+                const newTickets = state.tickets.map(t => t.id === ticketId ? { ...t, ...updatedTicket } : t);
+                const newSelected = state.selectedTicket?.id === ticketId ? { ...state.selectedTicket, ...updatedTicket } : state.selectedTicket;
+                FreshdeskStore.setState({ tickets: newTickets, selectedTicket: newSelected, activeJobId: null, loadingMsg: null });
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Ticket Assigned!", 2000);
+            },
+            onError: (err) => {
+                FreshdeskStore.setState({ activeJobId: null, loadingMsg: null });
+                if (window.alert) window.alert(`Assignment Error: ${err.message}`);
+            }
+        });
+    }
+    async takeTicket(ticketId) {
+        FreshdeskStore.setState({ loadingMsg: "Assigning ticket to you...", activeJobId: 'starting' });
+        try { await this._getTakeTicketAction(ticketId)(); } catch(e) {}
+    }
+
+    _getSendReplyAction() {
+        return this.api.bindJobAction(`tickets/${this.selectedTicket?.id}/reply`, () => {
+            const content = FreshdeskStore.getState().replyContent;
+            if (!content.trim()) throw new Error("Reply content missing.");
+            return { body: content };
+        }, {
+            onComplete: async () => {
+                FreshdeskStore.setState({ replyContent: '' });
+                this.fetchConversations(this.selectedTicket?.id);
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus("✅ Reply Sent & Saved Locally!", 2000);
+            },
+            onError: (err) => {
+                if (window.alert) window.alert(`Reply Error: ${err.message}`);
+            }
+        });
+    }
+    async sendReply() {
+        try { await this._getSendReplyAction()(); } catch(e) {}
     }
     async copyThread() {
         const ticketId = this.selectedTicket?.id;
@@ -252,29 +220,20 @@ export class InSetuExtFreshdesk extends InSetuElement {
             if (window.alert) window.alert("Error copying thread: " + e);
         }
     }
-
+    _getFetchConversationsAction(ticketId) {
+        return this.api.bindJobAction(`tickets/${ticketId}/conversations`, {}, {
+            onComplete: (statusData) => {
+                FreshdeskStore.setState({ conversations: statusData.artifact.conversations || [], conversationsLoading: false });
+            },
+            onError: (err) => {
+                FreshdeskStore.setState({ conversationsLoading: false });
+                if (window.alert) window.alert(`Conversations Error: ${err.message}`);
+            }
+        });
+    }
     async fetchConversations(ticketId) {
         FreshdeskStore.setState({ conversationsLoading: true, conversations: [] });
-        try {
-            const res = await this.api.post(`tickets/${ticketId}/conversations`, {});
-            if (res.ok) {
-                const data = await res.json();
-                this.api.pollJob(data.job_id, {
-                    onComplete: (statusData) => {
-                        FreshdeskStore.setState({ conversations: statusData.artifact.conversations || [], conversationsLoading: false });
-                    },
-                    onError: (err) => {
-                        FreshdeskStore.setState({ conversationsLoading: false });
-                        if (window.alert) window.alert(`Conversations Error: ${err.message}`);
-                    }
-                });
-            } else {
-                FreshdeskStore.setState({ conversationsLoading: false });
-            }
-        } catch(e) {
-            console.error(e);
-            FreshdeskStore.setState({ conversationsLoading: false });
-        }
+        try { await this._getFetchConversationsAction(ticketId)(); } catch(e) { FreshdeskStore.setState({ conversationsLoading: false }); }
     }
     async fetchTickets(loadMore = false) {
         // Guardrail: Don't fetch if the extension isn't active in this workspace
@@ -405,7 +364,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                             </insetu-markdown-editor>
                         </div>
                         <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                            <sutram-async-btn label="📤 Send Reply" intent="primary" .onClick=${() => this.sendReply()}></sutram-async-btn>
+                            <sutram-async-btn label="📤 Send Reply" intent="primary" .onClick=${this._getSendReplyAction()}></sutram-async-btn>
                         </div>
                     </div>
                 </div>

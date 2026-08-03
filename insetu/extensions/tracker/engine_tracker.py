@@ -43,21 +43,19 @@ def _background_archive_stale_tickets(ctx):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
-@hooks.on('system_boot')
-def init_tracker_db():
-    from insetu.utils_core import get_all_workspace_ids
-    for ws_id in get_all_workspace_ids():
-        _sync_disk_to_db(workspace_id=ws_id)
+@hooks.on('workspace_boot')
+def init_tracker_db(workspace_id=None):
+    _sync_disk_to_db(workspace_id=workspace_id)
 
-        # Schedule background archiving to run silently every 1 hour
-        from insetu.core.sdk import ExtensionContext
-        w_ctx = ExtensionContext('workers', ws_id)
-        conn = w_ctx.db
-        conn.execute("""
-            INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-            VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
-        """, (f"trk_arch_{ws_id}",))
-        conn.commit()
+    # Schedule background archiving to run silently every 1 hour
+    from insetu.core.sdk import ExtensionContext
+    w_ctx = ExtensionContext('workers', workspace_id)
+    conn = w_ctx.db
+    conn.execute("""
+        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+        VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
+    """, (f"trk_arch_{workspace_id}",))
+    conn.commit()
 @hooks.on('vfs_mutated')
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
@@ -74,10 +72,8 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
                 abs_path = ctx.resolve_path(filepath)
                 if os.path.exists(abs_path):
                     _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
-                    try:
-                        enforce_declarative_tickets(workspace_id=workspace_id, specific_file=filepath)
-                    except Exception as e:
-                        print(f"Targeted tracker housekeeping failed: {e}")
+                    # Offload single-file AST enforcement to prevent synchronous write-blocking
+                    ctx.jobs.submit("enforce_tickets_task", specific_file=filepath)
             elif op == "delete":
                 ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
                 ctx.db.commit()
@@ -87,7 +83,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     from insetu.core.utils_core import parse_frontmatter
     ctx = ExtensionContext('tracker', workspace_id)
     try:
-        content = ctx.vfs.read(abs_path)
+        content = ctx.vfs.read(rel_path)
         if content is None:
             return
 
@@ -373,13 +369,19 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     conn.commit()
 
     return new_rel_path
+@tracker_bp.worker("enforce_tickets_task")
+def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
+    ctx.jobs.update_progress("Enforcing declarative ticket states...")
+    enforce_declarative_tickets(workspace_id=ctx.workspace_id, specific_file=specific_file)
+    return "Ticket housekeeping complete."
+
 @hooks.on('pre_compile')
 def pre_compile_tracker_housekeeping(workspace_id=None, is_full_sweep=False, **kwargs):
     if is_full_sweep:
-        try:
-            enforce_declarative_tickets(workspace_id=workspace_id)
-        except Exception as e:
-            print(f"Tracker housekeeping failed: {e}")
+        from insetu.core.sdk import ExtensionContext
+        ctx = ExtensionContext('tracker', workspace_id)
+        # Offload heavy disk-walk to the async worker pool to prevent Event Loop starvation
+        ctx.jobs.submit("enforce_tickets_task")
 
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
@@ -447,28 +449,9 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 content = ctx.vfs.read(ws_rel_path)
                 if content is None:
                     continue
-                # Heal double-YAML malformations created by prior regex failures
-                pseudo_match = re.search(r'^\s*---\n[\s\S]*?\n\s*---\n+((?:repo|type|status|id|title|created_at|closed_at|sub_bucket|tags):[\s\S]*?\n\s*---)', content)
-                yaml_data_rescue = {}
-                if pseudo_match:
-                    bad_block = pseudo_match.group(1)
-                    for line in bad_block.split('\n'):
-                        if ':' in line and not line.strip().startswith('---'):
-                            k, v = line.split(':', 1)
-                            yaml_data_rescue[k.strip()] = v.strip().strip('\'"')
-                    content = content.replace(bad_block, '').strip()
 
-                yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-
-                yaml_data = {}
-                if yaml_match:
-                    yaml_lines = yaml_match.group(1).split('\n')
-                    for line in yaml_lines:
-                        if ':' in line:
-                            k, v = line.split(':', 1)
-                            yaml_data[k.strip()] = v.strip().strip('\'"')
-
-                yaml_data.update(yaml_data_rescue)
+                from insetu.core.utils_core import parse_frontmatter, update_frontmatter
+                yaml_data, body, yaml_match = parse_frontmatter(content)
 
                 # Read declarative values or fallback to inferred values if missing
                 raw_repo = yaml_data.get('repo', current_repo)
@@ -567,8 +550,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 needs_rewrite = (
                     'repo' not in yaml_data or 'type' not in yaml_data or 
                     'status' not in yaml_data or yaml_data.get('closed_at', '').lower() != decl_closed.lower() or
-                    yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type or
-                    bool(pseudo_match)
+                    yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type
                 )
                 # Determine intended physical destination based on declarative state
                 intended_dir = get_tracker_path(decl_repo, decl_type, decl_status)
@@ -710,9 +692,17 @@ def api_tracker_files(ctx):
             cursor = conn.execute("SELECT * FROM tracker_tickets")
         else:
             cursor = conn.execute("SELECT * FROM tracker_tickets WHERE status != 'archived'")
-
         tasks = []
         for row in cursor.fetchall():
+            tags_parsed = []
+            if row['tags']:
+                try:
+                    tags_parsed = json.loads(row['tags'])
+                    if not isinstance(tags_parsed, list):
+                        tags_parsed = [str(tags_parsed)]
+                except Exception:
+                    tags_parsed = [t.strip() for t in str(row['tags']).split(',') if t.strip()]
+
             tasks.append({
                 "id": row['id'],
                 "repo": row['repo'],
@@ -722,7 +712,7 @@ def api_tracker_files(ctx):
                 "status": row['status'],
                 "title": row['title'],
                 "description": row['description'],
-                "tags": json.loads(row['tags']) if row['tags'] else [],
+                "tags": tags_parsed,
                 "subBucket": row['sub_bucket'],
                 "timestamp": row['created_at'],
                 "closedAt": row['closed_at'],
@@ -731,6 +721,7 @@ def api_tracker_files(ctx):
             })
         return jsonify({"tasks": tasks})
     except Exception as e:
+        print(f"⚠️ [Tracker Error] api_tracker_files failed: {e}")
         return jsonify({"error": str(e)}), 500
 @tracker_bp.route('transition', methods=['POST'])
 def api_tracker_transition(ctx):

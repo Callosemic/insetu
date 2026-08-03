@@ -127,18 +127,15 @@ def sweep_telemetry_worker(ctx, **kwargs):
     
     ctx.db.commit()
     return "Telemetry swept."
-
-@hooks.on('system_boot')
-def init_dev_workers():
-    from insetu.kernel.utils import get_all_workspace_ids
-    for ws_id in get_all_workspace_ids():
-        try:
-            w_ctx = ExtensionContext('workers', ws_id)
-            conn = w_ctx.db
-            conn.execute("""
-                INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, next_run_at, status, args_json)
-                VALUES ('dev_telemetry_sweeper', 'dev', 'sweep_telemetry', 60000, 0, 'pending', '{}')
-            """)
-            conn.commit()
-        except Exception:
-            pass
+@hooks.on('workspace_boot')
+def init_dev_workers(workspace_id=None):
+    try:
+        w_ctx = ExtensionContext('workers', workspace_id)
+        conn = w_ctx.db
+        conn.execute("""
+            INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, next_run_at, status, args_json)
+            VALUES ('dev_telemetry_sweeper', 'dev', 'sweep_telemetry', 60000, 0, 'pending', '{}')
+        """)
+        conn.commit()
+    except Exception:
+        pass

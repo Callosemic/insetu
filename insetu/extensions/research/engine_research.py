@@ -202,11 +202,10 @@ class GooglePlaywrightProvider(SearchProvider):
                 browser.close()
         return results
 class SerperDevProvider(SearchProvider):
-    def execute_search(self, query, max_results=10, date_range=None, start_index=0):
+    def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
         from insetu.core.sdk import ExtensionContext
         import urllib.error
-        # We look up settings in 'default' context as API keys are generally instance-wide
-        ctx = ExtensionContext('research', 'default')
+        ctx = ExtensionContext('research', workspace_id)
 
         api_key = ctx.settings.get("serper_api_key")
 
@@ -286,10 +285,9 @@ def gather_next_page(job_id, workspace_id=None):
   start_index = meta.get('start_index', 0)
   max_results = meta.get('max_results', 10)
   date_range = meta.get('date_range', '')
-
   try:
     provider = get_provider(job['provider'])
-    links = provider.execute_search(job['query'], max_results=max_results, date_range=date_range, start_index=start_index)
+    links = provider.execute_search(job['query'], max_results=max_results, date_range=date_range, start_index=start_index, workspace_id=workspace_id)
     new_links_count = 0
     for link in links:
       exists = conn.execute("SELECT id FROM research_inbox WHERE job_id=? AND url=?", (job_id, link['url'])).fetchone()

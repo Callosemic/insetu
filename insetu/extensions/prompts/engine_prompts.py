@@ -8,53 +8,54 @@ prompts_bp = InSetuExtension(
     'prompts', 
     __name__, 
     title="Prompt Library", 
-    description="Prompt template management and embedding.", 
-    virtual_contexts=[{
-        "title": "Prompts",
-        "domain": "Prompts & State",
-        "description": "The Master Ingestion Prompt and CLI templates.",
-        "out_file": "prompts_context.txt"
-    }]
+    description="Prompt template management and embedding."
 )
 __depends__ = []
+@hooks.on('request_paths')
+def hook_prompts_request_paths(workspace_id=None, **kwargs):
+    """Dynamically injects the prompts directory into the ecosystem path dictionary."""
+    try:
+        from pathlib import Path
+        import os
+        from insetu.kernel.utils import get_tenant_control_dir
 
-@hooks.on('compile_contexts')
-def compile_prompts_context(manifest, workspace_id=None, **kwargs):
-    """Injects the prompt library into the UI manifest without dumping redundant RAG text payloads."""
-    from insetu.core.utils_core import get_valid_workspace_files
+        # Guardrail: Never call ctx.paths here, as it triggers an infinite recursion loop
+        control_dir = get_tenant_control_dir(workspace_id)
+        prompts_dir = Path(control_dir).joinpath("prompts").as_posix()
+        os.makedirs(prompts_dir, exist_ok=True)
+        return {"prompts_dir": prompts_dir}
+    except Exception:
+        return {}
+
+@hooks.on('vfs_resolve_file')
+def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
+    """Resolves system://prompts URIs and prompt fallback searches."""
+    if not filename: return None
+    from insetu.core.sdk import ExtensionContext
+    from pathlib import Path
+    import os
     ctx = ExtensionContext('prompts', workspace_id)
+    safe_basename = Path(filename).name
+    cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
 
-    for config in ctx.config.get("target_repos", []):
-        if config.get("archive_type") == "prompt-library":
-            repo_path = ctx.resolve_path(config["repo_dir"])
-            if os.path.exists(repo_path):
-                final_list = get_valid_workspace_files(repo_path, config)
-                if final_list:
-                    manifest["prompts_context.txt"] = {
-                        "files": [f"{config['repo_dir']}/{f}" for f in final_list],
-                        "meta": {
-                            "type": "prompt",
-                            "title": config.get("title", "Prompts"),
-                            "domain": config.get("domain", "Prompts & State"),
-                            "desc": config.get("description", "The Master Ingestion Prompt and CLI templates.")
-                        }
-                    }
+    if filename.startswith("system://prompts/") or os.path.exists(cand):
+        if os.path.exists(cand): 
+            return cand, True
+    return None
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
-    """Soft-dependency provider: Supplies available prompts to the Gather extension's UI dropdowns."""
+    """Soft-dependency provider: Supplies available OS-managed prompts to the Gather extension's UI dropdowns."""
+    from insetu.core.sdk import ExtensionContext
+    from pathlib import Path
+    import os
+
     ctx = ExtensionContext('prompts', workspace_id)
     prompts = []
 
-    # Read natively from the OS manifest to ensure SSOT synchronization
-    manifest = ctx.manifest
-    if "prompts_context.txt" in manifest:
-        prompts = manifest["prompts_context.txt"].get("files", [])
-    # Fallback to physical disk walk if the manifest hasn't compiled yet
-    if not prompts:
-        prompts_dir = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
-        os.makedirs(prompts_dir, exist_ok=True)
-        for ws_rel_path in ctx.vfs.walk(prompts_dir):
-            prompts.append(ws_rel_path)
+    prompts_dir = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
+    os.makedirs(prompts_dir, exist_ok=True)
+    for ws_rel_path in ctx.vfs.walk(prompts_dir):
+        prompts.append(ws_rel_path)
 
     # Enforce extension filtering so UI code isn't treated as a prompt.
     # Include .gitkeep to ensure empty folders render structurally in the file tree.

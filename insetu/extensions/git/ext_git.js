@@ -118,15 +118,12 @@ export class InSetuExtGitDiffs extends InSetuElement {
         currentPushRepo: { type: String },
         currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
-        pinnedRepos: { type: Object },
-        allRepos: { type: Array },
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         .git-body { flex: 1; overflow-y: auto; padding: 20px; }
     `];
-
     constructor() {
         super();
         this.cachedDiffFiles = [];
@@ -146,15 +143,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.currentPushRepo = '';
         this.currentPushDiffFile = '';
         this.activePushJobId = null;
-        this.pinnedRepos = new Set(['ALL']);
-        this.allRepos = [];
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-            this.requestUpdate();
-        });
         this.subscribe(GitStore, (state) => {
             let cached = state.cachedDiffFiles;
             const manifest = AppStore.getState().manifest || {};
@@ -174,7 +165,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.subscribe('Gather', (state) => {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
-            this.allRepos = state.allRepos || [];
             this.requestUpdate();
         });
         this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
@@ -198,8 +188,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activePushJobId = gitState.activePushJobId;
         this.categoryOrder = gatherState.categoryOrder || [];
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
-        this.allRepos = gatherState.allRepos || [];
-        this.pinnedRepos = gatherState.pinnedRepos || new Set(['ALL']);
 
         this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
@@ -236,52 +224,26 @@ disconnectedCallback() {
             console.error("Failed to load changelogs.");
         }
     }
-    async _executePush() {
-        const msg = this.gitPushMessage.trim();
-        if (!msg) return alert("Please enter a commit message.");
-        if (!this.currentPushRepo) return alert("Repository context missing.");
-        try {
-            const res = await this.api.post('push', {
-                repo: this.currentPushRepo,
-                message: msg,
-                diff_file: this.currentPushDiffFile
-            });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || "Push request failed.");
-            }
-            const data = await res.json();
-            GitStore.setState({ activePushJobId: data.job_id });
+    _getPushAction() {
+        return this.api.bindJobAction('push', () => {
+            const msg = this.gitPushMessage.trim();
+            if (!msg) throw new Error("Please enter a commit message.");
+            if (!this.currentPushRepo) throw new Error("Repository context missing.");
             this.pushModalOpen = false;
-            this.api.pollJob(data.job_id, {
-                onProgress: (progressMsg) => {
-                    this.gitPushMessage = progressMsg || "Pushing to remote... please wait.";
-                },
-                onComplete: async (statusData) => {
-                    const { currentPushRepo, dirtyDiffRepos } = GitStore.getState();
-                    const newDirty = new Set(dirtyDiffRepos);
-                    newDirty.add(currentPushRepo);
-                    GitStore.setState({ activePushJobId: null, dirtyDiffRepos: newDirty });
-
-                    alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
-                    this.pushModalOpen = false;
-                    try {
-                        await this.compileSystem();
-                    } catch (refreshErr) {
-                        console.warn("Background refresh failed:", refreshErr);
-                    } finally {
-                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
-                    }
-                },
-                onError: (err) => {
-                    GitStore.setState({ activePushJobId: null });
-                    alert(`❌ Push failed:\n\n${err.message}`);
-                }
-            });
-
-        } catch (err) {
-            alert("Network error executing push: " + err.message);
-        }
+            return { repo: this.currentPushRepo, message: msg, diff_file: this.currentPushDiffFile };
+        }, {
+            onProgress: (progressMsg) => { this.gitPushMessage = progressMsg || "Pushing to remote... please wait."; },
+            onComplete: async (statusData) => {
+                const { currentPushRepo, dirtyDiffRepos } = GitStore.getState();
+                const newDirty = new Set(dirtyDiffRepos);
+                newDirty.add(currentPushRepo);
+                GitStore.setState({ dirtyDiffRepos: newDirty });
+                alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
+                try { await this.compileSystem(); } catch (e) {}
+                window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
+            },
+            onError: (err) => alert(`❌ Push failed:\n\n${err.message}`)
+        });
     }
     async _fetchSweepStatusSilent() {
         this.sweepLoading = true;
@@ -312,99 +274,66 @@ disconnectedCallback() {
             this.sweepLoading = false;
         }
     }
-    async _executeSweepAll() {
-        const selections = {};
-        let totalFiles = 0;
-
-        Object.keys(this.sweepFiles).forEach(repo => {
-            if (this.pinnedRepos.has('ALL') || this.pinnedRepos.has(repo)) {
-                const selected = this.selectedSweepFiles[repo] || [];
-                if (selected.length > 0) {
-                    selections[repo] = selected;
-                    totalFiles += selected.length;
-                }
-            }
-        });
-
-        if (totalFiles === 0) return alert("No files selected to sweep.");
-
-        const msg = prompt(`Enter a commit message to sweep ${totalFiles} file(s) across multiple repositories:`, "chore: global workspace sweep");
-        if (!msg) return;
-
-        try {
-            const res = await this.api.post('sweep/push', { selections, message: msg });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || "Sweep request failed.");
-            }
-            const data = await res.json();
-            this.api.pollJob(data.job_id, {
-                onProgress: (progressMsg) => {
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping workspaces...");
-                },
-                onComplete: async (statusData) => {
-                    const { dirtyDiffRepos } = GitStore.getState();
-                    const newDirty = new Set(dirtyDiffRepos);
-                    newDirty.add("ALL");
-                    GitStore.setState({ dirtyDiffRepos: newDirty });
-
-                    alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
-                    this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
-                },
-                onError: (err) => {
-                    alert(`❌ Global Sweep failed:\n\n${err.message}`);
+    _getSweepAllAction() {
+        return this.api.bindJobAction('sweep/push', () => {
+            const selections = {};
+            let totalFiles = 0;
+            Object.keys(this.sweepFiles).forEach(repo => {
+                if (this.pinnedRepos.has('ALL') || this.pinnedRepos.has(repo)) {
+                    const selected = this.selectedSweepFiles[repo] || [];
+                    if (selected.length > 0) { selections[repo] = selected; totalFiles += selected.length; }
                 }
             });
-        } catch (e) {
-            alert("Network error executing sweep: " + e.message);
-        }
+            if (totalFiles === 0) throw new Error("No files selected to sweep.");
+            const msg = prompt(`Enter a commit message to sweep ${totalFiles} file(s) across multiple repositories:`, "chore: global workspace sweep");
+            if (!msg) throw new Error("Commit message required.");
+            return { selections, message: msg };
+        }, {
+            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(msg || "Sweeping workspaces..."); },
+            onComplete: async (statusData) => {
+                const { dirtyDiffRepos } = GitStore.getState();
+                const newDirty = new Set(dirtyDiffRepos);
+                newDirty.add("ALL");
+                GitStore.setState({ dirtyDiffRepos: newDirty });
+                alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
+                this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
+            },
+            onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
+        });
+    }
+
+    _getRepoSweepAction(repo) {
+        return this.api.bindJobAction('sweep/push', () => {
+            const files = this.selectedSweepFiles[repo] || [];
+            if (files.length === 0) throw new Error("No files selected to sweep.");
+            const msg = prompt(`Enter a commit message to sweep metadata for ${repo}:`, "chore: sweep remaining state");
+            if (!msg) throw new Error("Cancelled by user.");
+            return { selections: { [repo]: files }, message: msg };
+        }, {
+            onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(msg || "Sweeping repo..."); },
+            onComplete: async (statusData) => {
+                const { dirtyDiffRepos } = GitStore.getState();
+                const newDirty = new Set(dirtyDiffRepos);
+                newDirty.add("ALL");
+                GitStore.setState({ dirtyDiffRepos: newDirty });
+                alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
+                this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
+            },
+            onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
+        });
     }
 
     async _executeRepoSweep(repo) {
-        const files = this.selectedSweepFiles[repo] || [];
-        if (files.length === 0) return alert("No files selected to sweep.");
-
-        const msg = prompt(`Enter a commit message to sweep metadata for ${repo}:`, "chore: sweep remaining state");
-        if (!msg) return; // Cancelled
-
-        const selections = { [repo]: files };
-
-        try {
-            const res = await this.api.post('sweep/push', { selections, message: msg });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || "Sweep request failed.");
-            }
-            const data = await res.json();
-            this.api.pollJob(data.job_id, {
-                onProgress: (progressMsg) => {
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(progressMsg || "Sweeping repo...");
-                },
-                onComplete: async (statusData) => {
-                    const { dirtyDiffRepos } = GitStore.getState();
-                    const newDirty = new Set(dirtyDiffRepos);
-                    newDirty.add("ALL");
-                    GitStore.setState({ dirtyDiffRepos: newDirty });
-
-                    alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
-                    this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
-                },
-                onError: (err) => {
-                    alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`);
-                }
-            });
-        } catch (e) {
-            alert("Network error executing sweep: " + e.message);
-        }
+        try { await this._getRepoSweepAction(repo)(); } catch(e) {}
     }
     render() {
         const categories = {};
         const repoFilteredFiles = this.cachedDiffFiles.filter(f => {
-            if (this.pinnedRepos.has('ALL')) return true;
+            if (this.ecosystem.pinnedRepos.has('ALL')) return true;
             const fileStr = typeof f === 'string' ? f : f.filename;
             const repoDir = typeof f === 'object' ? f.repo : null;
-            if (repoDir && this.pinnedRepos.has(repoDir)) return true;
-            return Array.from(this.pinnedRepos).some(repo => fileStr.startsWith(repo + '_') || fileStr.includes('_' + repo + '_'));
+            if (repoDir && this.ecosystem.pinnedRepos.has(repoDir)) return true;
+            return Array.from(this.ecosystem.pinnedRepos).some(repo => fileStr.startsWith(repo + '_') || fileStr.includes('_' + repo + '_'));
         });
         const sq = this.searchQuery;
         const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : `${f.repo || ''} ${f.filename}`)) : repoFilteredFiles;
@@ -456,12 +385,12 @@ disconnectedCallback() {
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => this.searchQuery = e.detail.value}
                 .enableFilterDropdown=${true}
-                .activeFilters=${Array.from(this.pinnedRepos)}>
+                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
                     label="📌 Repos:"
-                    .repos=${this.allRepos}
-                    .activeRepos=${Array.from(this.pinnedRepos)}
+                    .repos=${this.ecosystem.allRepos}
+                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
                     @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
@@ -494,11 +423,11 @@ disconnectedCallback() {
                     </sutram-category-section>
                 `)}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
-                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)) ? html`
+                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
                     <sutram-category-section titleText="🧹 Sweepable State">
-                        <button slot="header-actions" class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${this._executeSweepAll}>🚀 Sweep All</button>
+                        <sutram-async-btn slot="header-actions" label="🚀 Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
                         <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
-                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.pinnedRepos.has('ALL') || this.pinnedRepos.has(r)).map(([repo, files]) => {
+                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
                             const branch = GitStore.getState().reposStatus[repo]?.current;
                             const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                             return html`
@@ -560,7 +489,7 @@ disconnectedCallback() {
                     <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
                     <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._executePush}>🚀 Execute Push</button>
+                <sutram-async-btn slot="footer" label="🚀 Execute Push" intent="primary" .onClick=${this._getPushAction()}></sutram-async-btn>
             </sutram-modal>
         `;
     }
@@ -570,7 +499,6 @@ export class InSetuExtGitCtrl extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
         reposStatus: { type: Object },
-        allRepos: { type: Array },
         branchModalOpen: { type: Boolean },
         activeRepo: { type: String },
         newBranchName: { type: String },
@@ -589,11 +517,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; }
     `];
-
     constructor() {
         super();
         this.reposStatus = {};
-        this.allRepos = [];
         this.branchModalOpen = false;
         this.activeRepo = '';
         this.newBranchName = '';
@@ -615,11 +541,6 @@ export class InSetuExtGitCtrl extends InSetuElement {
             this.reposStatus = reposStatus || {};
             this.requestUpdate();
         });
-        this.subscribe('Gather', state => {
-            this.allRepos = state.allRepos || [];
-            this.requestUpdate();
-        });
-        this.allRepos = window.inSetu?.stores?.Gather?.getState?.()?.allRepos || [];
         this.reposStatus = GitStore.getState().reposStatus || {};
         GitStore.getState().fetchStatus();
         this._loadSettings();
@@ -645,178 +566,122 @@ export class InSetuExtGitCtrl extends InSetuElement {
             }
         } catch(e) { console.error("Failed to load extension settings", e); }
     }
-    async _previewPull(repo) {
-        try {
-            this.pullMessage = `Initializing fetch for ${repo}...`;
-            this.activePullJobId = 'starting';
-
-            const res = await this.api.post('fetch_preview', { repo });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || "Fetch failed");
+    _getPreviewPullAction(repo) {
+        return this.api.bindJobAction('fetch_preview', { repo }, {
+            onProgress: (msg) => {
+                this.pullMessage = msg;
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
+            },
+            onComplete: (statusData) => {
+                this.activePullJobId = null;
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Fetch complete.`, 2000);
+                this.previewRepo = repo;
+                this.previewMessage = statusData.message || 'Already up to date.';
+                this.previewModalOpen = true;
+            },
+            onError: (err) => {
+                this.activePullJobId = null;
+                alert(`❌ Fetch failed for ${repo}\n\n${err.message}`);
             }
-            const data = await res.json();
+        });
+    }
+    async _previewPull(repo) {
+        this.pullMessage = `Initializing fetch for ${repo}...`;
+        this.activePullJobId = 'starting';
+        try { await this._getPreviewPullAction(repo)(); } catch(e) { this.activePullJobId = null; }
+    }
 
-            this.activePullJobId = data.job_id;
-            this.pullMessage = `Fetching remote for ${repo}...`;
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => {
-                    this.pullMessage = msg;
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                },
-                onComplete: (statusData) => {
-                    this.activePullJobId = null;
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Fetch complete.`, 2000);
-
-                    this.previewRepo = repo;
-                    this.previewMessage = statusData.message || 'Already up to date.';
-                    this.previewModalOpen = true;
-                },
-                onError: (err) => {
-                    this.activePullJobId = null;
-                    alert(`❌ Fetch failed for ${repo}\n\n${err.message}`);
-                }
-            });
-        } catch (err) {
-            this.activePullJobId = null;
-            alert(`Network error fetching ${repo}: ${err.message}`);
-        }
+    _getInitRepoAction(repo, branch = 'main') {
+        return this.api.bindJobAction('init', { repo, branch }, {
+            onProgress: (msg) => this.pullMessage = msg,
+            onComplete: (statusData) => {
+                this.activePullJobId = null;
+                alert(`✅ ${statusData.message}`);
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => {
+                this.activePullJobId = null;
+                alert(`❌ Init failed for ${repo}\n\n${err.message}`);
+            }
+        });
     }
     async _initRepo(repo, branch = 'main') {
-        try {
-            const res = await this.api.post('init', { repo, branch });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || "Init failed");
-            }
-            const data = await res.json();
-
-            this.activePullJobId = data.job_id;
-            this.pullMessage = `Initializing ${repo}...`;
-
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => this.pullMessage = msg,
-                onComplete: (statusData) => {
-                    this.activePullJobId = null;
-                    alert(`✅ ${statusData.message}`);
-                    GitStore.getState().fetchStatus();
-                },
-                onError: (err) => {
-                    this.activePullJobId = null;
-                    alert(`❌ Init failed for ${repo}\n\n${err.message}`);
-                }
-            });
-        } catch (err) {
-            alert(`Network error initializing ${repo}: ${err.message}`);
-        }
+        this.pullMessage = `Initializing ${repo}...`;
+        this.activePullJobId = 'starting';
+        try { await this._getInitRepoAction(repo, branch)(); } catch(e) { this.activePullJobId = null; }
     }
-    async _executePull() {
-        const repo = this.previewRepo;
-        this.previewModalOpen = false;
 
-        const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
-        const strategy = (currentStrategy === 'runtime') ? this._runtimeStrategy : currentStrategy;
-        try {
-            this.pullMessage = `Initializing pull for ${repo}...`;
-            this.activePullJobId = 'starting';
-
-            const res = await this.api.post('pull', { repo, strategy });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || "Pull failed");
+    _getExecutePullAction() {
+        return this.api.bindJobAction('pull', () => {
+            const repo = this.previewRepo;
+            this.previewModalOpen = false;
+            const currentStrategy = this._repoStrategies?.[repo] || 'rebase';
+            const strategy = (currentStrategy === 'runtime') ? this._runtimeStrategy : currentStrategy;
+            return { repo, strategy };
+        }, {
+            onProgress: (msg) => {
+                this.pullMessage = msg;
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
+            },
+            onComplete: (statusData) => {
+                this.activePullJobId = null;
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Pull complete.`, 2000);
+                alert(`✅ Pull successful for ${this.previewRepo}\n\n${statusData.message}`);
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => {
+                this.activePullJobId = null;
+                alert(`❌ Pull failed for ${this.previewRepo}\n\n${err.message}`);
             }
-            const data = await res.json();
-            this.activePullJobId = data.job_id;
-            this.pullMessage = `Pulling ${repo}...`;
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => {
-                    this.pullMessage = msg;
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                },
-                onComplete: (statusData) => {
-                    this.activePullJobId = null;
-                    if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Pull complete.`, 2000);
-                    alert(`✅ Pull successful for ${repo}\n\n${statusData.message}`);
-                    GitStore.getState().fetchStatus();
-                },
-                onError: (err) => {
-                    this.activePullJobId = null;
-                    alert(`❌ Pull failed for ${repo}\n\n${err.message}`);
-                }
-            });
-        } catch (err) {
-            alert(`Network error pulling ${repo}: ${err.message}`);
-        }
+        });
+    }
+
+    _getCheckoutBranchAction(repo, branch, createNew = false) {
+        return this.api.bindJobAction('checkout', { repo, branch, create_new: createNew }, {
+            onProgress: (msg) => this.pullMessage = msg,
+            onComplete: (statusData) => {
+                this.activePullJobId = null;
+                alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
+                this.branchModalOpen = false;
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => {
+                this.activePullJobId = null;
+                alert(`❌ Checkout failed for ${repo}\n\n${err.message}`);
+            }
+        });
     }
     async _checkoutBranch(repo, branch, createNew = false) {
-        try {
-            const res = await this.api.post('checkout', { repo, branch, create_new: createNew });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || "Checkout failed");
-            }
-            const data = await res.json();
-
-            this.activePullJobId = data.job_id; // Reuse the loading spinner state variable
-            this.pullMessage = `Checking out ${branch}...`;
-
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => this.pullMessage = msg,
-                onComplete: (statusData) => {
-                    this.activePullJobId = null;
-                    alert(`✅ Checkout successful for ${repo}\n\n${statusData.message}`);
-                    this.branchModalOpen = false;
-                    GitStore.getState().fetchStatus();
-                },
-                onError: (err) => {
-                    this.activePullJobId = null;
-                    alert(`❌ Checkout failed for ${repo}\n\n${err.message}`);
-                }
-            });
-        } catch (err) {
-            alert(`Network error during checkout for ${repo}: ${err.message}`);
-        }
+        this.activePullJobId = 'starting';
+        this.pullMessage = `Checking out ${branch}...`;
+        try { await this._getCheckoutBranchAction(repo, branch, createNew)(); } catch(e) { this.activePullJobId = null; }
     }
-    async _connectRemote(resolution = null) {
-        const repo = this.activeRemoteRepo;
-        const url = this.remoteUrlInput.trim();
-        if (!url) return alert("Please enter a valid Git URL.");
 
-        this.remoteModalOpen = false;
-        try {
-            this.pullMessage = `Connecting ${repo} to remote...`;
-            this.activePullJobId = 'starting';
-
-            const res = await this.api.post('remote/add', { repo, url, resolution });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || "Failed to add remote");
-            }
-            const data = await res.json();
-
-            this.activePullJobId = data.job_id;
-            this.api.pollJob(data.job_id, {
-                onProgress: (msg) => this.pullMessage = msg,
-                onComplete: (statusData) => {
-                    this.activePullJobId = null;
-                    this.remoteConflict = false;
-                    alert(`✅ Remote connected and pushed successfully!\n\n${statusData.message}`);
-                    GitStore.getState().fetchStatus();
-                },
-                onError: (err) => {
-                    this.activePullJobId = null;
-                    if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('tip of your current branch is behind')) {
-                        this.remoteConflict = true;
-                        this.remoteModalOpen = true;
-                    } else {
-                        alert(`❌ Failed to connect remote for ${repo}\n\n${err.message}`);
-                    }
+    _getConnectRemoteAction(resolution = null) {
+        return this.api.bindJobAction('remote/add', () => {
+            const repo = this.activeRemoteRepo;
+            const url = this.remoteUrlInput.trim();
+            if (!url) throw new Error("Please enter a valid Git URL.");
+            this.remoteModalOpen = false;
+            return { repo, url, resolution };
+        }, {
+            onProgress: (msg) => this.pullMessage = msg,
+            onComplete: (statusData) => {
+                this.activePullJobId = null;
+                this.remoteConflict = false;
+                alert(`✅ Remote connected and pushed successfully!\n\n${statusData.message}`);
+                GitStore.getState().fetchStatus();
+            },
+            onError: (err) => {
+                this.activePullJobId = null;
+                if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('tip of your current branch is behind')) {
+                    this.remoteConflict = true;
+                    this.remoteModalOpen = true;
+                } else {
+                    alert(`❌ Failed to connect remote for ${this.activeRemoteRepo}\n\n${err.message}`);
                 }
-            });
-        } catch (err) {
-            this.activePullJobId = null;
-            alert(`Network error connecting remote: ${err.message}`);
-        }
+            }
+        });
     }
 
     render() {
@@ -824,8 +689,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
             <div style="display: flex; flex-direction: column; gap: 15px; padding: 15px;">
                 ${this.activePullJobId ? html`<div class="spinner" style="display: block;">${this.pullMessage || 'Pulling from remote...'}</div>` : ''}
 
-                ${this.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
-                ${this.allRepos.map(repo => {
+                ${this.ecosystem.allRepos.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic;">No repositories tracked.</div>` : ''}
+                ${this.ecosystem.allRepos.map(repo => {
                     const status = this.reposStatus[repo] || {};
                     if (status.is_git === false) {
                         return html`
@@ -924,7 +789,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     })()}
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${() => this.previewModalOpen = false}>Cancel</button>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${() => this._executePull()}>⬇️ Confirm & Pull</button>
+                <sutram-async-btn slot="footer" label="⬇️ Confirm & Pull" intent="primary" .onClick=${this._getExecutePullAction()}></sutram-async-btn>
             </sutram-modal>
             <sutram-modal ?open=${this.remoteModalOpen} ?fullscreen=${true} titleText="Connect Remote: ${this.activeRemoteRepo}" @sutram-modal-closed=${() => this.remoteModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
@@ -955,10 +820,10 @@ export class InSetuExtGitCtrl extends InSetuElement {
                     `}
                 </div>
                 ${this.remoteConflict ? html`
-                    <button slot="footer" style="background: var(--intent-danger); color: white; margin-right: auto;" @click=${() => this._connectRemote('force')}>⚠️ Force Push (Overwrite)</button>
-                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote('pull')}>⬇️ Pull & Merge</button>
+                    <sutram-async-btn slot="footer" label="⚠️ Force Push (Overwrite)" intent="danger" style="margin-right: auto;" .onClick=${this._getConnectRemoteAction('force')}></sutram-async-btn>
+                    <sutram-async-btn slot="footer" label="⬇️ Pull & Merge" intent="success" .onClick=${this._getConnectRemoteAction('pull')}></sutram-async-btn>
                 ` : html`
-                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => this._connectRemote()}>☁️ Connect & Push</button>
+                    <sutram-async-btn slot="footer" label="☁️ Connect & Push" intent="success" .onClick=${this._getConnectRemoteAction()}></sutram-async-btn>
                 `}
             </sutram-modal>
         `;
