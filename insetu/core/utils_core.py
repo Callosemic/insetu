@@ -9,32 +9,13 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
     if filepath:
         if filepath.startswith("system://"):
-            from insetu.core.routes_fs import resolve_vfs_file
-            resolved, _ = resolve_vfs_file(workspace_id, filepath)
-            if resolved:
-                return resolved
+            from insetu.kernel.hooks import hooks
+            overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
+            for res in overrides:
+                if res and isinstance(res, tuple) and len(res) == 2 and os.path.exists(res[0]):
+                    return res[0]
         return resolve_logical_path(filepath, workspace_id)
     return None
-
-def get_gather_paths(workspace_id=None):
-    cfg_path, ws_root, wf_path = get_workspace_physics(workspace_id)
-    workspace_dir = Path(cfg_path).parent.as_posix()
-    artifacts_base = Path(workspace_dir).joinpath("data").as_posix()
-    paths = {
-        "config_path": cfg_path,
-        "control_dir": workspace_dir,
-        "workspace_root": ws_root,
-        "workflows_path": wf_path,
-        "artifacts_base": artifacts_base,
-        "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix(),
-        "diffs_dir": Path(artifacts_base).joinpath("diffs").as_posix(),
-        "gather_dir": Path(artifacts_base).joinpath("workflows").as_posix()
-    }
-    os.makedirs(paths["contexts_dir"], exist_ok=True)
-    os.makedirs(paths["diffs_dir"], exist_ok=True)
-    os.makedirs(paths["gather_dir"], exist_ok=True)
-    return paths
-
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
     return load_json_file(wf_path, {"context_batches": []})
@@ -189,53 +170,10 @@ def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, i
                 if isinstance(f, str):
                     all_files.add(f)
     return sorted(list(all_files))
-
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
-def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
-    cfg = load_config(workspace_id)
-    paths = get_gather_paths(workspace_id)
-    flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
-    expected_contexts = set()
-
-    for c in cfg.get("target_repos", []):
-        repo_excluded = any(c.get(flag) for flag in flags)
-        r_dir = c.get("repo_dir", "")
-        safe_r_dir = get_safe_repo_id(r_dir)
-        subs = c.get("sub_buckets", [])
-
-        if not repo_excluded and not any(b.get("is_catch_all") for b in subs):
-            out = c.get("out_file", f"{safe_r_dir}_context.txt")
-            expected_contexts.add(f"contexts/{out}")
-
-        if subs:
-            for b in subs:
-                if repo_excluded or any(b.get(flag) for flag in flags):
-                    continue
-                if not b.get("dynamic_split_prefix"):
-                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
-                    expected_contexts.add(f"contexts/{sub_out}")
-                else:
-                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                    if os.path.exists(dyn_dir):
-                        for module in os.listdir(dyn_dir):
-                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                                expected_contexts.add(f"contexts/{module}_context.txt")
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest_data = load_json_file(manifest_path, {})
-
-    for k, v in manifest_data.items():
-        if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
-            item_type = v.get("meta", {}).get("type", "unknown")
-            if exclude_types and item_type in exclude_types:
-                continue
-            if include_types and item_type not in include_types:
-                continue
-            expected_contexts.add(f"contexts/{k}")
-
-    return expected_contexts
 
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     from pathlib import Path
@@ -285,6 +223,77 @@ def get_flattened_buckets(workspace_id=None, target_configs=None):
                     b_copy["repo_title"] = repo.get("title") or repo.get("repo_dir", "")
                     flattened.append(b_copy)
     return flattened
+
+def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
+    from insetu.kernel.utils import load_config, load_json_file
+    from insetu.kernel.extension import ExtensionContext
+    from insetu.core.utils_core import get_safe_repo_id
+    cfg = load_config(workspace_id)
+    ctx = ExtensionContext('gather', workspace_id)
+    paths = ctx.paths
+    flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
+    expected_contexts = set()
+
+    for c in (cfg.get("target_repos") or []):
+        if not isinstance(c, dict): continue
+        repo_excluded = any(c.get(flag) for flag in flags if isinstance(flag, str))
+        r_dir = c.get("repo_dir", "")
+        safe_r_dir = get_safe_repo_id(r_dir)
+        subs = [b for b in (c.get("sub_buckets") or []) if isinstance(b, dict)]
+
+        if not repo_excluded and not any(b.get("is_catch_all") for b in subs):
+            out = c.get("out_file", f"{safe_r_dir}_context.txt")
+            if out: expected_contexts.add(f"contexts/{out}")
+
+        if subs:
+            for b in subs:
+                if repo_excluded or any(b.get(flag) for flag in flags if isinstance(flag, str)):
+                    continue
+                if not b.get("dynamic_split_prefix"):
+                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id', 'bucket')}_context.txt")
+                    if sub_out: expected_contexts.add(f"contexts/{sub_out}")
+                else:
+                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
+                    if os.path.exists(dyn_dir):
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
+                                expected_contexts.add(f"contexts/{module}_context.txt")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+    manifest_data = load_json_file(manifest_path, {})
+
+    for k, v in manifest_data.items():
+        if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
+            item_type = v.get("meta", {}).get("type", "unknown")
+            if exclude_types and item_type in exclude_types:
+                continue
+            if include_types and item_type not in include_types:
+                continue
+            expected_contexts.add(f"contexts/{k}")
+
+    return expected_contexts
+
+def resolve_file_bucket(filepath, sub_buckets):
+    """DRY Helper to map a filepath to its configured sub-bucket."""
+    import re
+    clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
+
+    if ' -> ' in clean_filepath:
+        clean_filepath = clean_filepath.split(' -> ')[-1].strip()
+
+    for b in sub_buckets:
+        prefix = b.get("dynamic_split_prefix")
+        if prefix:
+            if prefix == "." or clean_filepath.startswith(prefix):
+                parts = clean_filepath.split("/")
+                module_idx = len([p for p in prefix.split('/') if p and p != '.'])
+                if len(parts) > module_idx + 1:
+                    return b, parts[module_idx]
+                continue
+        elif b.get("match_prefixes") and any(clean_filepath.startswith(p) for p in b["match_prefixes"]):
+            return b, None
+
+    catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
+    return catch_all, None
 
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
@@ -358,56 +367,6 @@ def resolve_logical_path(path, workspace_id=None):
                     return stripped_cand.as_posix()
 
     return direct_cand.as_posix()
-
-
-def search_workspace_files(workspace_id, query):
-    terms = [t for t in query.split() if t]
-    if not terms: return []
-
-    import json
-    paths = get_gather_paths(workspace_id)
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    md_files = set()
-    if os.path.exists(manifest_path):
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            try:
-                manifest = json.load(f)
-                for filepath in extract_manifest_files(manifest):
-                    if filepath.lower().endswith('.md'):
-                        md_files.add(filepath)
-            except Exception:
-                pass
-    results = []
-    for filepath in md_files:
-        abs_path = resolve_logical_path(filepath, workspace_id)
-        if not os.path.exists(abs_path): continue
-        try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            content_lower = content.lower()
-            score = 0
-            snippet = ""
-            file_lower = filepath.lower()
-
-            for term in terms:
-                if term in file_lower: score += 2
-                if term in content_lower: score += 1
-
-            if score > 0:
-                first_term = next((t for t in terms if t in content_lower), None)
-                if first_term:
-                    idx = content_lower.find(first_term)
-                    start = max(0, idx - 30)
-                    end = min(len(content), idx + 70)
-                    snippet = content[start:end].replace('\n', ' ').strip()
-                results.append({"path": filepath, "score": score, "snippet": snippet})
-        except Exception:
-            pass
-
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:50]
-
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
     if not exts:
         exts = [".py", ".json", ".md", ".sh", ".txt", ".html", ".css", ".js"]

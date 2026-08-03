@@ -21,32 +21,27 @@ GATHER_SETTINGS_SCHEMA = [
 ]
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
 __depends__ = []
+
+@hooks.on('vfs_resolve_file')
+def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
+    """Resolves system://contexts and system://gather URIs and fallback searches."""
+    if not filename: return None
+    from insetu.core.sdk import ExtensionContext
+    from pathlib import Path
+    import os
+    ctx = ExtensionContext('gather', workspace_id)
+
+    safe_basename = Path(filename).name
+    search_dirs = [ctx.paths["contexts_dir"], ctx.paths["gather_dir"]]
+
+    for d in search_dirs:
+        cand = Path(d).joinpath(safe_basename).as_posix()
+        if os.path.exists(cand):
+            return cand, True
+    return None
 from insetu.kernel.hooks import hooks
+from insetu.core.utils_core import resolve_file_bucket
 
-def resolve_file_bucket(filepath, sub_buckets):
-    """DRY Helper to map a filepath to its configured sub-bucket."""
-    import re
-    # Strip potential Git status decorators (e.g. '[??] ', '[ M] ', '?? ', 'D  ') to ensure clean path matching
-    clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
-
-    # Handle Git rename syntax 'old -> new'
-    if ' -> ' in clean_filepath:
-        clean_filepath = clean_filepath.split(' -> ')[-1].strip()
-
-    for b in sub_buckets:
-        prefix = b.get("dynamic_split_prefix")
-        if prefix:
-            if prefix == "." or clean_filepath.startswith(prefix):
-                parts = clean_filepath.split("/")
-                module_idx = len([p for p in prefix.split('/') if p and p != '.'])
-                if len(parts) > module_idx + 1:
-                    return b, parts[module_idx]
-                continue # Let boundary files fall through to explicit buckets or the catch-all
-        elif b.get("match_prefixes") and any(clean_filepath.startswith(p) for p in b["match_prefixes"]):
-            return b, None
-
-    catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
-    return catch_all, None
 def compile_context_payload(workspace_id, output_dir, base_filename, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
     from insetu.kernel.vfs import VFSTransaction
@@ -352,6 +347,102 @@ def on_gather_settings_updated(workspace_id=None, **kwargs):
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
     submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
     return {"job_id": job_id}
+def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
+    from insetu.kernel.utils import load_config, load_json_file
+    from insetu.kernel.extension import ExtensionContext
+    from insetu.core.utils_core import get_safe_repo_id
+    cfg = load_config(workspace_id)
+    ctx = ExtensionContext('gather', workspace_id)
+    paths = ctx.paths
+    flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
+    expected_contexts = set()
+
+    for c in cfg.get("target_repos", []):
+        repo_excluded = any(c.get(flag) for flag in flags)
+        r_dir = c.get("repo_dir", "")
+        safe_r_dir = get_safe_repo_id(r_dir)
+        subs = c.get("sub_buckets", [])
+
+        if not repo_excluded and not any(b.get("is_catch_all") for b in subs):
+            out = c.get("out_file", f"{safe_r_dir}_context.txt")
+            expected_contexts.add(f"contexts/{out}")
+
+        if subs:
+            for b in subs:
+                if repo_excluded or any(b.get(flag) for flag in flags):
+                    continue
+                if not b.get("dynamic_split_prefix"):
+                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id')}_context.txt")
+                    expected_contexts.add(f"contexts/{sub_out}")
+                else:
+                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
+                    if os.path.exists(dyn_dir):
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
+                                expected_contexts.add(f"contexts/{module}_context.txt")
+    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+    manifest_data = load_json_file(manifest_path, {})
+
+    for k, v in manifest_data.items():
+        if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
+            item_type = v.get("meta", {}).get("type", "unknown")
+            if exclude_types and item_type in exclude_types:
+                continue
+            if include_types and item_type not in include_types:
+                continue
+            expected_contexts.add(f"contexts/{k}")
+
+    return expected_contexts
+
+@hooks.on('vfs_search')
+def hook_vfs_search(workspace_id=None, query=None, **kwargs):
+    if not query: return []
+    terms = [t for t in query.split() if t]
+    if not terms: return []
+
+    import json
+    from insetu.kernel.extension import ExtensionContext
+    from insetu.core.utils_core import extract_manifest_files, resolve_logical_path
+    ctx = ExtensionContext('gather', workspace_id)
+    manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+    md_files = set()
+    if os.path.exists(manifest_path):
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            try:
+                manifest = json.load(f)
+                for filepath in extract_manifest_files(manifest):
+                    if filepath.lower().endswith('.md'):
+                        md_files.add(filepath)
+            except Exception:
+                pass
+    results = []
+    for filepath in md_files:
+        abs_path = resolve_logical_path(filepath, workspace_id)
+        if not os.path.exists(abs_path): continue
+        try:
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            content_lower = content.lower()
+            score = 0
+            snippet = ""
+            file_lower = filepath.lower()
+
+            for term in terms:
+                if term in file_lower: score += 2
+                if term in content_lower: score += 1
+
+            if score > 0:
+                first_term = next((t for t in terms if t in content_lower), None)
+                if first_term:
+                    idx = content_lower.find(first_term)
+                    start = max(0, idx - 30)
+                    end = min(len(content), idx + 70)
+                    snippet = content[start:end].replace('\n', ' ').strip()
+                results.append({"path": filepath, "score": score, "snippet": snippet})
+        except Exception:
+            pass
+    return results
 
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Surgically regenerates context payloads and updates the manifest only for touched buckets."""
@@ -374,7 +465,6 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         dirty = False
         all_touched_buckets = set()
         # --- Bucket Ratio Circuit Breaker ---
-        from insetu.core.utils_core import get_available_contexts
         total_known_buckets = len(get_available_contexts(workspace_id, exclusion_flags=["exclude_from_context"]))
         total_touched_count = 0
 
@@ -420,13 +510,14 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                 dirty = True
         if dirty:
             # Note: Ledger wipe is handled in Phase 3 once Gather fully owns the event loop.
-            from insetu.kernel.vfs import _VFS_WRITE_QUEUE
-            _VFS_WRITE_QUEUE.join()
+            ctx.sync_vfs_barrier()
 
             hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
             ctx.save_manifest(manifest)
 def generate_context_file(workspace_id=None, target_repos=None):
     from insetu.kernel.extension import ExtensionContext
+    import concurrent.futures
+
     ctx = ExtensionContext('gather', workspace_id)
     paths = ctx.paths
     # Pre-flight purge: destroy all stale contexts to prevent ghost files (excluding active ephemerals)
@@ -447,14 +538,30 @@ def generate_context_file(workspace_id=None, target_repos=None):
     vfs = VFSTransaction(workspace_id)
     live_cfg = ctx.config
     manifest = {} if target_repos is None else ctx.manifest
-    for config in live_cfg.get("target_repos", []):
-        if config.get("exclude_from_context"): continue
-        if target_repos and config.get("repo_dir") not in target_repos: continue
-        _compile_repo_buckets(config, paths, workspace_id, manifest)
+
+    target_configs = [
+        config for config in live_cfg.get("target_repos", [])
+        if not config.get("exclude_from_context") and (not target_repos or config.get("repo_dir") in target_repos)
+    ]
+
+    def process_single_repo(config):
+        local_manifest = {}
+        _compile_repo_buckets(config, paths, workspace_id, local_manifest)
+        return local_manifest
+
+    # ThreadPoolExecutor parallelizes file reads and text formatting across sister repositories
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(process_single_repo, config) for config in target_configs]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                manifest.update(res)
+    # Save Gather contexts to disk first so manifest SSOT contains base contexts before hooks
+    ctx.save_manifest(manifest, is_full_compile=(target_repos is None))
+
     # --- EXTENSION HOOKS ---
     from insetu.kernel.hooks import hooks
-    from insetu.kernel.vfs import execute_vfs_save, _VFS_WRITE_QUEUE
-    _VFS_WRITE_QUEUE.join()
+    ctx.sync_vfs_barrier()
 
     sweep_payload = True if target_repos is None else target_repos
     hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, is_full_sweep=sweep_payload)
@@ -494,18 +601,10 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 "files": [f"data/contexts/{f_name}"],
                 "meta": {"type": "gather", "title": f"📦 {f_name.replace('.txt','')}", "domain": "Exported Contexts", "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
             }
-    manifest_out_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    execute_vfs_save(workspace_id, manifest_out_path, json.dumps(manifest, indent=2), data={"is_absolute_artifact": True})
 
-    import time
-    cache_path = Path(paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
-    cache_data = {
-        "manifest": manifest,
-        "last_full_compile_time": time.time()
-    }
-    execute_vfs_save(workspace_id, cache_path, json.dumps(cache_data, indent=2), data={"is_absolute_artifact": True})
-    # Block until the manifest and workflows are flushed so the UI can fetch them instantly
-    _VFS_WRITE_QUEUE.join()
+    # Save complete merged manifest to disk
+    ctx.save_manifest(manifest, is_full_compile=(target_repos is None))
+    ctx.sync_vfs_barrier()
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items, job_id=None):
     ctx.jobs.update_progress("Compiling selected files into context payload...")
@@ -568,12 +667,10 @@ def _pack_selection_worker(ctx, items, job_id=None):
         files,
         {"type": "gather", "title": "⚡ Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}
     )
-
     manifest_data = ctx.manifest
     manifest_data[base_filename] = manifest_entry
     ctx.save_manifest(manifest_data)
-    from insetu.kernel.vfs import _VFS_WRITE_QUEUE
-    _VFS_WRITE_QUEUE.join()
+    ctx.sync_vfs_barrier()
 
     from insetu.kernel.workers import register_ephemeral_artifact
     chunks = manifest_entry.get("chunks", [base_filename])
@@ -641,12 +738,14 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.RLock()
         return _COMPILER_LOCKS[wid]
-
 @gather_bp.worker("compile_contexts")
 def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
     ws_lock = get_compiler_lock(ctx.workspace_id)
+    # Increased to 15s to survive heavy Boot-Time Heuristic Git sweeps
+    acquired = ws_lock.acquire(timeout=15.0)
+    if not acquired:
+        raise RuntimeError("Compiler lock timeout. A previous compilation or hook is stalled and holding the lock.")
     try:
-        ws_lock.acquire()
         paths = ctx.paths
         manifest_data = ctx.manifest
 
@@ -701,7 +800,6 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
                         if repo_cfg.get("exclude_from_context"): continue
                         repo_dir = repo_cfg.get("repo_dir")
                         subs = repo_cfg.get("sub_buckets", [])
-
                         repo_files = [f for f in changed_files if f.startswith(f"{repo_dir}/")]
                         for f in repo_files:
                             rel_path = f[len(repo_dir)+1:]
@@ -713,8 +811,11 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
                             else:
                                 touched_buckets.add(f"{repo_dir}__main")
 
-                    ctx.jobs.update_progress(f"Surgically compiling {len(touched_buckets)} touched bucket(s)...")
-                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None)
+                    if len(touched_buckets) == 0:
+                        ctx.jobs.update_progress("Changes isolated to ignored files. Bypassing payload compilation.")
+                    else:
+                        ctx.jobs.update_progress(f"Surgically compiling {len(touched_buckets)} touched bucket(s)...")
+                        _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None)
                 else:
                     ctx.jobs.update_progress("No pending changes. Syncing extensions...")
                     all_repo_dirs = [r.get("repo_dir") for r in live_cfg.get("target_repos", []) if not r.get("exclude_from_context")]
@@ -750,61 +851,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, job_id=None):
         print(f"CRITICAL COMPILER ERROR:\\n{traceback.format_exc()}")
         raise e
     finally:
-        ws_lock.release()
-@gather_bp.route('repos', methods=['GET'])
-def api_repos(ctx):
-    from insetu.core.utils_core import get_sister_repos
-    import os
-    from pathlib import Path
-    from flask import jsonify
-    cfg = ctx.config
-    targets = cfg.get("target_repos", []) or []
-    _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
-
-    for c in targets:
-        if not c: continue
-        r_dir = c.get("repo_dir", "")
-        for b in (c.get("sub_buckets") or []):
-            if b and b.get("dynamic_split_prefix"):
-                if "meta_map" not in b:
-                    b["meta_map"] = {}
-                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                if os.path.exists(dyn_dir):
-                    for module in os.listdir(dyn_dir):
-                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                            if module not in b["meta_map"]:
-                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-    return jsonify({
-        "repos": get_sister_repos(ctx.workspace_id),
-        "term_port": cfg.get("term_port", 8181),
-        "targets": targets,
-        "virtual_contexts": cfg.get("virtual_contexts", []),
-        "category_order": cfg.get("category_order", []),
-        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
-        "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
-        "config_missing": not os.path.exists(ctx.paths["config_path"])
-    })
-
-@gather_bp.route('manifest', methods=['GET'])
-def api_manifest(ctx):
-    import os
-    from pathlib import Path
-    from flask import jsonify
-    headers = {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
-    }
-    try:
-        from insetu.core.utils_core import get_gather_paths
-        paths = get_gather_paths(ctx.workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        if os.path.exists(manifest_path):
-            with open(manifest_path, 'r', encoding='utf-8') as f: 
-                return f.read(), 200, headers
-    except Exception:
-        pass
-    return jsonify({}), 200, headers
-
+        if acquired:
+            ws_lock.release()
 @gather_bp.route('repos/template', methods=['GET'])
 def api_repo_template(ctx):
     from insetu.core.utils_core import get_default_repo_template
@@ -825,23 +873,32 @@ def api_gather_submit(ctx):
 
     job_id = ctx.jobs.submit("compile_contexts", force_full=force_full)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @hooks.on('request_paths')
 def hook_request_paths(workspace_id=None, **kwargs):
     try:
-        from insetu.core.utils_core import get_gather_paths
-        return get_gather_paths(workspace_id)
+        from pathlib import Path
+        import os
+        from insetu.kernel.utils import get_workspace_physics
+        cfg_path, _, _ = get_workspace_physics(workspace_id)
+        artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
+        paths = {
+            "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix(),
+            "gather_dir": Path(artifacts_base).joinpath("workflows").as_posix()
+        }
+        os.makedirs(paths["contexts_dir"], exist_ok=True)
+        os.makedirs(paths["gather_dir"], exist_ok=True)
+        return paths
     except Exception: return {}
 
 @hooks.on('request_manifest')
 def hook_request_manifest(workspace_id=None, **kwargs):
     try:
         from insetu.kernel.utils import load_json_file
-        from insetu.core.utils_core import get_gather_paths
+        from insetu.kernel.extension import ExtensionContext
         import os
         from pathlib import Path
-        paths = get_gather_paths(workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        ctx = ExtensionContext('gather', workspace_id)
+        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         if os.path.exists(manifest_path): return load_json_file(manifest_path, {})
     except Exception: pass
     return {}
@@ -850,26 +907,34 @@ def hook_request_manifest(workspace_id=None, **kwargs):
 def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
     try:
         from insetu.kernel.utils import load_json_file
-        from insetu.core.utils_core import get_gather_paths, extract_manifest_files
+        from insetu.kernel.extension import ExtensionContext
+        from insetu.core.utils_core import extract_manifest_files
         import os
         from pathlib import Path
-        paths = get_gather_paths(workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        ctx = ExtensionContext('gather', workspace_id)
+        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
         manifest = load_json_file(manifest_path, {}) if os.path.exists(manifest_path) else {}
         return extract_manifest_files(manifest, target_key)
     except Exception: return []
-
 @hooks.on('save_manifest')
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
     try:
         from insetu.kernel.utils import save_json_file, load_json_file
-        from insetu.core.utils_core import get_gather_paths
-        import time
+        from insetu.kernel.extension import ExtensionContext
+        import time, os
         from pathlib import Path
-        paths = get_gather_paths(workspace_id)
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        save_json_file(manifest_path, manifest_data, workspace_id)
-        cache_path = Path(paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
-        cache_data = {"manifest": manifest_data, "last_full_compile_time": time.time() if is_full_compile else load_json_file(cache_path, {}).get("last_full_compile_time", 0)}
+        ctx = ExtensionContext('gather', workspace_id)
+        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+
+        if is_full_compile or not os.path.exists(manifest_path):
+            current_on_disk = manifest_data or {}
+        else:
+            current_on_disk = load_json_file(manifest_path, {})
+            if manifest_data:
+                current_on_disk.update(manifest_data)
+
+        save_json_file(manifest_path, current_on_disk, workspace_id)
+        cache_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
+        cache_data = {"manifest": current_on_disk, "last_full_compile_time": time.time() if is_full_compile else load_json_file(cache_path, {}).get("last_full_compile_time", 0)}
         save_json_file(cache_path, cache_data, workspace_id)
     except Exception: pass

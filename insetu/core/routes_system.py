@@ -169,6 +169,56 @@ def api_system_config(workspace_id=None):
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+@system_bp.route('/api/system/topology', methods=['GET'])
+@system_bp.route('/api/<workspace_id>/system/topology', methods=['GET'])
+def api_system_topology(workspace_id=None):
+    if not workspace_id:
+        workspace_id = sniff_tenant_id()
+    from insetu.core.utils_core import get_sister_repos
+    import os
+    from pathlib import Path
+    cfg = load_config(workspace_id)
+    targets = cfg.get("target_repos", []) or []
+    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+
+    for c in targets:
+        if not c: continue
+        r_dir = c.get("repo_dir", "")
+        for b in (c.get("sub_buckets") or []):
+            if b and b.get("dynamic_split_prefix"):
+                if "meta_map" not in b:
+                    b["meta_map"] = {}
+                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
+                if os.path.exists(dyn_dir):
+                    for module in os.listdir(dyn_dir):
+                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
+                            if module not in b["meta_map"]:
+                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
+    return jsonify({
+        "repos": get_sister_repos(workspace_id),
+        "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
+        "term_port": cfg.get("term_port", 8181),
+        "targets": targets,
+        "virtual_contexts": cfg.get("virtual_contexts", []),
+        "category_order": cfg.get("category_order", []),
+        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
+        "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
+        "config_missing": not os.path.exists(cfg_path)
+    })
+
+@system_bp.route('/api/system/manifest', methods=['GET'])
+@system_bp.route('/api/<workspace_id>/system/manifest', methods=['GET'])
+def api_system_manifest(workspace_id=None):
+    if not workspace_id:
+        workspace_id = sniff_tenant_id()
+    headers = {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+    }
+    manifests = hooks.emit('request_manifest', workspace_id=workspace_id)
+    manifest_data = next((m for m in manifests if m), {})
+    return jsonify(manifest_data), 200, headers
+
 @system_bp.route('/api/system/workspaces/create', methods=['POST'])
 def api_create_workspace():
     data = request.json or {}

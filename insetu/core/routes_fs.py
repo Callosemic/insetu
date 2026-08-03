@@ -4,7 +4,6 @@ import json
 import uuid
 import datetime
 from pathlib import Path
-from insetu.core.utils_core import resolve_logical_path
 from insetu.kernel.vfs import execute_vfs_move, execute_vfs_archive, execute_vfs_delete, execute_vfs_save
 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
@@ -16,36 +15,17 @@ def resolve_vfs_file(workspace_id, filename):
 
     filename = filename.strip()
 
-    # 1. Handle system:// URIs (e.g., system://contexts/part.txt)
-    if filename.startswith("system://"):
-        clean_path = filename.replace("system://", "")
-        parts = clean_path.split('/')
-        bucket = parts[0]
-        base_name = parts[-1]
-        from insetu.core.utils_core import get_gather_paths
-        paths = get_gather_paths(workspace_id)
+    from insetu.kernel.hooks import hooks
+    overrides = hooks.emit('vfs_resolve_file', filename=filename, workspace_id=workspace_id)
+    for res in overrides:
+        if res and isinstance(res, tuple) and len(res) == 2:
+            if os.path.exists(res[0]):
+                return res
 
-        target_dir = next((p for p in paths.values() if isinstance(p, str) and (p.endswith(f"/{bucket}") or Path(p).name == bucket)), paths["artifacts_base"])
-        candidate = Path(target_dir).joinpath(base_name).as_posix()
-        if os.path.exists(candidate):
-            return candidate, True
-
-    # 2. Multi-pass logical path resolution (Direct -> {repo}/path -> Deduplicated)
-    resolved_logical = resolve_logical_path(filename, workspace_id)
-    if resolved_logical and os.path.exists(resolved_logical):
-        return resolved_logical, False
-
-    # 3. Fallback search across artifact and context directories
-    from insetu.core.utils_core import get_gather_paths
-    paths = get_gather_paths(workspace_id)
-    safe_basename = Path(filename).name
-    prompts_dir = Path(paths["control_dir"]).joinpath("prompts").as_posix()
-    search_dirs = [paths["contexts_dir"], paths["diffs_dir"], paths["gather_dir"], prompts_dir]
-
-    for d in search_dirs:
-        cand = Path(d).joinpath(safe_basename).as_posix()
-        if os.path.exists(cand):
-            return cand, True
+    from insetu.kernel.utils import resolve_sandbox_path
+    resolved = resolve_sandbox_path(filename, workspace_id)
+    if os.path.exists(resolved):
+        return resolved, False
 
     return None, False
 @fs_bp.route('/api/<workspace_id>/fs/exists', methods=['GET'])
@@ -96,12 +76,16 @@ def download_file(filename):
         return send_file(resolved_path, as_attachment=False)
 
     return send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
-
 def _background_fs_search(job_id, workspace_id, query):
     try:
         update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
-        from insetu.core.utils_core import search_workspace_files
-        results = search_workspace_files(workspace_id, query)
+        from insetu.kernel.hooks import hooks
+        results = []
+        search_responses = hooks.emit('vfs_search', workspace_id=workspace_id, query=query)
+        for res in search_responses:
+            if res: results.extend(res)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        results = results[:50]
         update_immediate_job_status(job_id, 'completed', "Search complete.", artifact={"results": results}, workspace_id=workspace_id)
     except Exception as e:
         update_immediate_job_status(job_id, 'failed', f"Search failed: {str(e)}", workspace_id=workspace_id)

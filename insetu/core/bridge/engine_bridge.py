@@ -7,13 +7,29 @@ from insetu.kernel.extension import InSetuExtension
 
 # Import the extracted math & validation logic
 from .bridge_vfs import execute_bridge_sync
-
 # 1. Initialize the Single Source of Truth Blueprint
+BRIDGE_SCHEMA = {
+    "bridge_ledger": {
+        "patch_id": "TEXT PRIMARY KEY",
+        "transaction_id": "TEXT",
+        "repo": "TEXT",
+        "filepath": "TEXT",
+        "search_block": "TEXT",
+        "replace_block": "TEXT",
+        "post_patch_hash": "TEXT",
+        "is_snapshot": "INTEGER DEFAULT 0",
+        "compressed_state": "BLOB",
+        "timestamp": "REAL",
+        "ttl_expires_at": "REAL"
+    }
+}
+
 bridge_bp = InSetuExtension(
     'bridge', 
     __name__,
     title="Sync Bridge",
     description="Yomama Patch Protocol and AST Validation Engine.",
+    schema=BRIDGE_SCHEMA,
     core=True
 )
 
