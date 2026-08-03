@@ -4,6 +4,9 @@
 
 🔍 Sweeping Python Backend (AST Analysis)...
 🔍 Sweeping JavaScript Frontend (Regex Analysis)...
+❌ [VIOLATION: DATE_FORMATTING_MANDATE] [workspace]/insetu/insetu/static/js/extensions/ext_notes.js:316
+   ↳ Inline new Date().toLocaleString() detected in extension. Consume this.utils.formatDate() instead to ensure theme and locale consistency.
+
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-✅ SUCCESS: Codebase complies with all engineering standards.
+❌ FAILED: Found 1 architectural violations.

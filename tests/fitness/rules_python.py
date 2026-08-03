@@ -273,7 +273,6 @@ def check_python_files():
                             )
                             if not has_core_modules:
                                 report_violation("CORE_MODULES_SSOT_MANDATE", filepath, 1, "Tier 1 kernel/utils.py is missing the CORE_MODULES SSOT definition.")
-
                         if file == "utils_core.py" and "core" in filepath.parts:
                             has_vfs_hook = any(
                                 isinstance(n, ast.FunctionDef) and any(
@@ -285,6 +284,19 @@ def check_python_files():
                             )
                             if not has_vfs_hook:
                                 report_violation("VFS_HOOK_MANDATE", filepath, 1, "Tier 2 core/utils_core.py is missing the mandatory @hooks.on('vfs_resolve_path') hook.")
+
+                            banned_utils = {"get_gather_paths", "search_workspace_files"}
+                            found_banned = [
+                                n.name for n in ast.walk(tree)
+                                if isinstance(n, ast.FunctionDef) and n.name in banned_utils
+                            ]
+                            for banned_func in found_banned:
+                                report_violation(
+                                    "DECOUPLED_UTIL_BAN",
+                                    filepath,
+                                    1,
+                                    f"Banned decoupled domain function '{banned_func}' found in core/utils_core.py. Route through event bus hooks instead."
+                                )
 
                         is_ext = file.startswith("engine_") and 'extensions' in filepath.parts
                         if is_ext:

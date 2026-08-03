@@ -43,7 +43,8 @@ insetu/
 │   │   ├── 0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md # [comment required]
 │   │   ├── 0032-dynamic-polyglot-vendorization-and-importmap-resolution.md # [comment required]
 │   │   ├── 0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md # [comment required]
-│   │   └── 0034-async-job-action-binding-and-gather-decoupling.md # [comment required]
+│   │   ├── 0034-async-job-action-binding-and-gather-decoupling.md # [comment required]
+│   │   └── 0035-vfs-file-resolution-hooks-and-topology-gateway.md # [comment required]
 │   ├── sdk_v2_contracts.md         # [comment required]
 │   └── standups/                   # R&D scratchpads and engineering notes.
 │       ├── 2026-07-08-insetu-release-timeline.md # [comment required]
