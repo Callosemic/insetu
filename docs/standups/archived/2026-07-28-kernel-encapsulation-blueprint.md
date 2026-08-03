@@ -43,8 +43,8 @@ The Kernel's routing, VFS, and bootloading files are actively polluted with Deve
     *   *Fix:* Relocate these routes to `insetu/core/gather/engine_gather.py` (Tier 2).
 *   **Violation 4 (Routing):** `routes_system.py` contains `@system_bp.route('/api/system/repos/template')`. 
     *   *Fix:* Move this to the `config` extension.
-*   **Violation 5 (File Fetching):** Both `/download/<path:filename>` (`app.py`) and `api_fs_fetch` (`routes_fs.py`) import `get_gather_paths` and manually search `contexts_dir`, `prompts_dir`, and `diffs_dir`.
-    *   *Fix:* The Kernel should only serve absolute or workspace-relative physical files. Tier 2 artifact resolution must be intercepted by the specific engines that generated them via route overrides.
+*   **Violation 5 (File Fetching): [RESOLVED]** Both `/download/<path:filename>` (`app.py`) and `api_fs_fetch` (`routes_fs.py`) import `get_gather_paths` and manually search `contexts_dir`, `prompts_dir`, and `diffs_dir`.
+    *   *Fix:* The Kernel file router `routes_fs.py` was scrubbed of all domain knowledge and now broadcasts a `vfs_resolve_file` hook. The Tier 2 utility `utils_core.py` securely intercepts this to map `system://` URIs and fallback artifact resolutions.
 *   **Violation 6 (VFS Domain Logic):** `execute_vfs_save_physical` (`routes_fs.py`) contains hardcoded string-matching for `archive_path`, `{date}` replacements (for the `flow` extension), and `is_new_repo` template injection.
     *   *Fix:* Strip this logic from the VFS. The `flow` and `config` extensions must intercept the payload via a `@hooks.on('pre_file_save')` event to mutate the paths or configurations *before* the VFS executes the write.
 *   **Violation 7 (Worker Ledger):** `_init_worker_schema` (`workers.py`) executes an explicit `INSERT` to queue the `sys_vfs_ledger_daemon` job owned by the `gather` extension.
@@ -52,9 +52,8 @@ The Kernel's routing, VFS, and bootloading files are actively polluted with Deve
 
 ### Phase 4: Frontend UDF & Shell Pollution Audit
 To pass the Acid Test, the frontend App Shell (`app.js`, `store.js`) must remain completely stable and error-free even if the entire Tier 2 `core/` directory is missing.
-
-*   **Violation 8 (State Bloat):** `store.js` defines state keys for `allRepos`, `targetConfigs`, `gatherOptions`, `dirtyDiffRepos`, etc. 
-    *   *Fix:* Move Git-related keys to a `GitStore`, and topology keys to `GatherStore`. The Kernel `AppStore` should only know about framework-level state (`activeWorkspace`, `activeTab`, `configMissing`, `authToken`).
+*   **Violation 8 (State Bloat): [REJECTED/RESOLVED]** `store.js` defines state keys for `allRepos`, `targetConfigs`, `pinnedRepos`. 
+    *   *Fix:* Rejected. Upon review, workspace physics (repositories and configs) are fundamental to the OS shell, not just the `Gather` extension. Pushing them down would create a reverse-dependency where all extensions must rely on `Gather`. Extension-specific data (like Git state) was moved to local stores, but workspace topologies rightly remain in `AppStore` to serve the broader ecosystem.
 *   **Violation 9 (Bootloader Logic):** `app.js` exports `getFlattenedBuckets(repoDir)`, parsing `sub_buckets` directly.
     *   *Fix:* Relocate to `static/js/core/gather.js`.
 *   **Violation 10 (Shortcuts & Batch Actions):** `app.js` hardcodes `registerShortcut` for `tracker` modals, and defines the entire `batch-actions` extension and `packSelectionPayload` (Quickpacks) directly in the bootloader.

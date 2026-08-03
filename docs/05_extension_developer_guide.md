@@ -125,7 +125,7 @@ Directly assigning `window.addEventListener` inside extensions is highly dangero
 ### Network Requests & Domain Accessors
 
 Raw `fetch()` calls and manual URL strings are strictly banned. Use the native `this.api` wrapper. Furthermore, extensions are strictly banned from importing directly from core chassis files (`../app.js`, `../fs.js`, `../store.js`). Use native SDK getters instead (ADR 0024):
-
+* **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
 * **`this.vfs`**: Virtual File System methods (`this.vfs.viewSourceFile()`, `this.vfs.fetchAndCopy()`, `this.vfs.downloadFile()`).
 * **`this.ui`**: UI/Modal orchestrations (`this.ui.openFolderBrowser()`, `this.ui.setGlobalStatus()`).
 * **`this.sys`**: System/Workspace commands (`this.sys.executeWorkspaceMutation()`, `this.sys.switchTab()`).

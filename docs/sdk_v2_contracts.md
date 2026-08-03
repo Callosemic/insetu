@@ -39,7 +39,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.
 * **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.read(filepath)`, and `.walk(directory)`. Directly utilizing `os.walk` or `open()` is strictly banned.
-* **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.update_progress(message)` and `.update_meta(meta_dict)` to emit streaming updates and discrete metrics to the UI.
+* **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)`, `.is_in_flight(task_name)`, `.update_progress(message)`, and `.update_meta(meta_dict)` to emit streaming updates and discrete metrics to the UI.
 
 ---
 
@@ -55,24 +55,26 @@ All extension states must be declared using the centralized object store factory
 ## 3. Web Component Substrate (`InSetuElement`)
 
 UI elements must inherit from `InSetuElement` (which extends LitElement) rather than native browser elements to capture lifecycle state tracking and SDK accessors automatically. Components **must** declare `static get extensionName() { return 'ext_name'; }`.
-
 ### 3.1 Domain Accessors (ADR 0024)
 
 Extensions are strictly forbidden from relative-importing OS chassis functions. They must consume domain getters attached to `this`:
-
+* **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
+* **`.setStatus(msg, timeout, isError)`**: Base helper to emit global status updates via `this.ui.setGlobalStatus`.
+* **`.compileSystem()`**: Base helper to trigger background system compilations via `this.sys.executeSystemCompile`.
 * **`this.vfs`**: `.viewSourceFile(path)`, `.fetchAndCopy(path)`, `.downloadFile(url)`, `.shareFiles(file, chunks)`
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`
-* **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`
+* **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
 * **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`
 
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned.
-
 * `this.api.get(path, options)`
 * `this.api.post(path, payload, options)`
 * `this.api.delete(path, options)`
+* `this.api.getJson(path, options)` / `postJson` / `deleteJson`
+* `this.api.bindJobAction(endpoint, payloadGetter, options)`
 * `this.api.pollJob(jobId, { interval, onProgress, onComplete, onError })`
 
 ### 3.3 Brokered Lifecycle Managers

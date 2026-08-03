@@ -61,6 +61,9 @@ These are fully built and compliant extensions currently operating within the sy
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
 * **Status:** Active Extensions (`prompts` upgraded to SDK V2).
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
+* **Dependencies (`__depends__`):** `['prompts', 'gather']`
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('vfs_mutated')`, `@hooks.on('compile_contexts')`, and `@hooks.on('git_evaluation_complete')` triggering coalesced background batch recompilation.
 
 ### G. Favorites (`engine_favorites.py`)
 * **Status:** Active Extension (Upgraded to SDK V2).
@@ -81,23 +84,39 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
 ### J. Freshdesk Support (`engine_freshdesk.py`)
-* **Status:** Active Extension (SDK V2)[cite: 1].
-* **Role:** Support ticket synchronization, reply management, and agent triaging[cite: 1].
-* **Dependencies (`__depends__`):** `None`[cite: 1]
-* **Data Containment:** `~/.insetu/data/freshdesk.db`[cite: 1]
+* **Status:** Active Extension (SDK V2).
+* **Role:** Support ticket synchronization, reply management, and agent triaging.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `~/.insetu/data/freshdesk.db`
 * **Injection Surfaces:**
-    * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets[cite: 1].
-    * UI Hooks: Primary Edit Sub-navigation Tab injection[cite: 1].
-
+    * Polymorphic Cards: Registers actions for taking, resolving, and ignoring tickets.
+    * UI Hooks: Primary Edit Sub-navigation Tab injection.
 ### K. Automation Hooks (`engine_hooks.py`)
-* **Status:** Active Extension (SDK V2)[cite: 2].
-* **Role:** IFTTT-style local command automation triggered by VFS events[cite: 2].
-* **Dependencies (`__depends__`):** `None`[cite: 2]
-* **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table) and `workers.db` execution logs[cite: 2].
+* **Status:** Active Extension (SDK V2).
+* **Role:** IFTTT-style local command automation triggered by VFS events.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `{ARTIFACTS_BASE}/hooks.db` (`hooks_rules` table) and `workers.db` execution logs.
 * **Injection Surfaces:**
-    * VFS Hooks: `@hooks.on('vfs_mutated')`[cite: 2].
-    * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`)[cite: 2].
-    * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities[cite: 2].
+    * VFS Hooks: `@hooks.on('vfs_mutated')`.
+    * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `hooks`).
+    * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities.
+### L. Developer Dashboard (`engine_dev.py`)
+* **Status:** Active Extension (SDK V2).
+* **Role:** Telemetry tracking for file thrashing and Yomama Sync Bridge errors.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `{ARTIFACTS_BASE}/dev.db` (`file_telemetry` and `bridge_errors` tables).
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('bridge_error')`.
+    * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`).
+
+### M. Notes Library (`engine_notes.py` & `ext_notes.js`)
+* **Status:** Active Extension (SDK V2).
+* **Role:** Workspace-level markdown notes management with frontmatter indexing.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by `.insetu/notes/` markdown assets.
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`.
+    * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `zone:file-edit-override` for `.insetu/notes/` pathing.
 
 ---
 
@@ -120,13 +139,15 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `ingest` | `<Micro-Kernel>` | `research` |
 | `research` | `ingest` | None (Currently) |
 | `tracker` | `<Micro-Kernel>` | None (Currently) |
-| `git` | `<Micro-Kernel>` | `release` |
+| `git` | `gather` | `release` |
 | `release` | `git` | None |
 | `favorites` | `<Micro-Kernel>` | None (Currently) |
 | `skills` | `<Micro-Kernel>` | None (Currently) |
 | `term` | `<Micro-Kernel>` | None (Currently) |
 | `freshdesk` | `<Micro-Kernel>` | None (Currently) |
-| `hooks` | `<Micro-Kernel>` | None (Currently) |
+| `hooks` | `gather` | None (Currently) |
+| `dev` | `<Micro-Kernel>` | None (Currently) |
+| `flow` | `prompts`, `gather` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
 > For **Soft Dependencies** (opportunistic cross-talk, such as the `git` extension asking the `tracker` extension for recent tickets to populate a UI), extensions MUST use the Event Bus. This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing.
@@ -151,6 +172,8 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `request_changelog_suggestions` | `git` | `tracker` | Requests a list of recently closed tasks to populate the Git commit/release suggestion UI. |
 | `pre_compile_document` | `<Micro-Kernel>` | `citations` | A generic middleware pipeline hook allowing extensions to inject temp files and CLI flags right before OS compilation. |
 | `vfs_resolve_path` | `<Micro-Kernel>` | `utils_core` | Intercepts VFS path resolution to resolve logical repo boundaries (`repo::path`) and `system://` URIs before physical I/O operations. |
+| `vfs_resolve_file` | `<Micro-Kernel>` | `engine_gather` | Intercepts physical and virtual URI (`system://`) file resolution before I/O execution. |
+| `vfs_search` | `<Micro-Kernel>` | `engine_gather` | Dispatches workspace deep text search queries to active index handlers. |
 
 ### 2. Frontend UI Zones (`ExtensionRegistry`)
 | Zone ID | Context / Trigger | Primary Use Case |

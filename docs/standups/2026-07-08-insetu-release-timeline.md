@@ -16,7 +16,7 @@
 
 * **The Offline Typewriter (`INS-QUEUE-20260704_1700_OFFLINE_TYPEWRITER`)**: Build an IndexedDB fallback layer and queue. Benefits from the new API Client intercept.
 * **The Unified Token Gatehouse**: Wire up the unauthenticated `/auth/bootstrap` to verify Tailscale Unix socket user profiles.
-* **Tier 2 Credentials Vaulting (`INS-TODO-20260703_1300_TIER2_CONFIG_EDITOR`)**: Securely manage global API keys in `~/.insetu/global_settings.json`.
+* **Tier 2 Credentials Vaulting (`INS-TODO-20260703_1300_TIER2_CONFIG_EDITOR`)**: Securely manage workspace-scoped API keys in `secrets.json` (Resolved: Tenant isolation prioritized over global access).
 * **UI Component Graduation**: Complete deprecation of legacy `UIFactory` menu states for declarative dropdown templates (`INS-TODO-20260711_1500_DEPRECATE_UIFACTORY`) and engineer cross-boundary `EditorBridge` primitives (`INSETU-TRANS-20260711_2101`).
 * **Ecosystem Extension Polish**: Inject background task orchestration decorators into the SDK (`INS-QUEUE-20260713_0210_BACKEND_WORKERS`), sweep active technical debt (`INS-QUEUE-20260713_0204_SDK_DEBT_SWEEP`), and map universal repo pins (`INS-TODO-20260709_1121`).
 ---
