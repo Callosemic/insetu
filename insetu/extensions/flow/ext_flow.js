@@ -38,6 +38,7 @@ export const FlowStore = createExtensionStore('Flow', {
 });
 window.inSetu.stores.Flow = FlowStore;
 export class InSetuExtFlow extends InSetuElement {
+    static get extensionName() { return 'flow'; }
     static properties = {
         batches: { type: Array },
         loading: { type: Boolean },
@@ -96,15 +97,8 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
         });
-        // Opportunistic UI Routing: Wait for Git's checkpoint if Git is installed, otherwise react to raw manifest updates
-        const isGitActive = window.ExtensionRegistry?.hasExtension?.('git') && 
-                            (!window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes('git'));
-
-        if (isGitActive) {
-            this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
-        } else {
-            this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
-        }
+        this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
+        this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);

@@ -17,6 +17,7 @@ flow_bp = InSetuExtension(
     }]
 )
 __depends__ = ['prompts', 'gather']
+
 @hooks.on('vfs_mutated')
 def on_vfs_mutated_flow(mutations=None, workspace_id=None, **kwargs):
     """Native event listener to intercept filesystem changes completely agnostic of Gather."""
@@ -25,43 +26,71 @@ def on_vfs_mutated_flow(mutations=None, workspace_id=None, **kwargs):
     ctx = ExtensionContext('flow', workspace_id)
     if "flow" not in ctx.config.get("extensions", []): return
 
-    # Only trigger compile if files were added, modified, or deleted and aren't ledger-ignored
-    relevant_mutations = [m["filepath"] for m in mutations if not m.get("ignore_ledger")]
+    relevant_mutations = [m["filepath"] for m in mutations if m.get("filepath")]
     if not relevant_mutations: return
+    ctx.jobs.submit("compile_flow_batches", coalesce=True, mutations=relevant_mutations)
 
-    # Submit Flow's own dedicated immediate worker to compile the batches statelessly
-    import uuid
-    job_id = f"flo_{uuid.uuid4().hex[:8]}"
-    ctx.jobs.submit("compile_flow_batches", mutations=relevant_mutations)
 @hooks.on('compile_contexts')
 def on_compile_contexts_flow(manifest, workspace_id=None, **kwargs):
-    """Delegates workflow batch generation to a background worker to prevent event loop starvation."""
-    if not kwargs.get('is_full_sweep'):
-        return
-
+    """Delegates workflow batch generation to a background worker on Gather context updates."""
     from insetu.core.sdk import ExtensionContext
-    import uuid
-
     ctx = ExtensionContext('flow', workspace_id)
+    if "flow" not in ctx.config.get("extensions", []): return
+
     context_batches = ctx.store.get("workflows.json", "context_batches", [])
     if not context_batches: return
 
-    # ADR: Decouple Flow from the synchronous Gather loop.
-    # Submit a background job to recompile workflows dynamically. This allows Gather 
-    # to release the compiler lock instantly, preventing surgical sweep lockouts on boot.
-    job_id = f"flo_{uuid.uuid4().hex[:8]}"
+    is_full_sweep = kwargs.get('is_full_sweep')
+    touched = kwargs.get('touched_buckets') or []
+    target_repos = kwargs.get('target_repos') or []
 
-    # We pass a synthetic mutation list containing a dummy flag to force the worker to recompile all
-    ctx.jobs.submit("compile_flow_batches", mutations=["__FORCE_FULL_RECOMPILE__"])
+    mutations = ["__FORCE_FULL_RECOMPILE__"] if is_full_sweep else list(touched)
+    ctx.jobs.submit("compile_flow_batches", coalesce=True, mutations=mutations, target_repos=target_repos)
+
+@hooks.on('git_evaluation_complete')
+def on_git_eval_complete_flow(manifest=None, workspace_id=None, **kwargs):
+    """Listens for Git diff generation updates and recompiles dependent workflow batches."""
+    from insetu.core.sdk import ExtensionContext
+    ctx = ExtensionContext('flow', workspace_id)
+    if "flow" not in ctx.config.get("extensions", []): return
+
+    context_batches = ctx.store.get("workflows.json", "context_batches", [])
+    if not context_batches: return
+
+    is_full_sweep = kwargs.get('is_full_sweep')
+    touched = kwargs.get('touched_buckets') or []
+    target_repos = kwargs.get('target_repos') or []
+
+    touched_files = []
+    for item in touched:
+        if isinstance(item, dict):
+            if item.get("filename"): touched_files.append(item["filename"])
+        elif isinstance(item, str):
+            touched_files.append(item)
+
+    mutations = ["__FORCE_FULL_RECOMPILE__"] if is_full_sweep else touched_files
+    ctx.jobs.submit("compile_flow_batches", coalesce=True, mutations=mutations, target_repos=target_repos)
 
 @flow_bp.worker("compile_flow_batches")
-def _background_compile_flow(ctx, mutations=None, job_id=None):
+def _background_compile_flow(ctx, mutations=None, target_repos=None, job_id=None):
     """Independent background worker for Flow that surgically recompiles only affected batches."""
-    if not mutations: return
+    if not mutations and not target_repos: return
     context_batches = ctx.store.get("workflows.json", "context_batches", [])
     if not context_batches: return
+
+    mutations = mutations or []
+    target_repos = target_repos or []
     force_all = "__FORCE_FULL_RECOMPILE__" in mutations
-    mutated_basenames = {Path(m).name for m in mutations}
+
+    def normalize_item(item_str):
+        clean = item_str.replace("system://", "").replace("\\", "/")
+        return clean, Path(clean).name
+
+    mutated_items = [normalize_item(m) for m in mutations if m != "__FORCE_FULL_RECOMPILE__"]
+    mutated_repos = {clean.split('/')[0] for clean, _ in mutated_items if '/' in clean}
+    for tr in target_repos:
+        if isinstance(tr, str):
+            mutated_repos.add(tr)
 
     compiled_count = 0
     for batch in context_batches:
@@ -70,16 +99,33 @@ def _background_compile_flow(ctx, mutations=None, job_id=None):
 
         if not needs_compile:
             for inc in includes:
-                inc_basename = Path(inc).name
-                # Check if the mutated file matches the exact include, or if it matches the generated context chunk
-                if inc in mutations or inc_basename in mutated_basenames:
+                inc_clean, inc_basename = normalize_item(inc)
+
+                # 1. Direct or basename match against mutated items
+                if any(m_clean == inc_clean or m_base == inc_basename for m_clean, m_base in mutated_items):
                     needs_compile = True
                     break
-                # Always safely recompile if an underlying raw repo file was touched that maps to this batch
-                if not inc_basename.endswith('_context.txt') and not inc_basename.endswith('_diffs.txt'):
-                    if any(m.startswith(inc + '/') for m in mutations):
+
+                # 2. Folder include match: e.g. if inc is a directory like "myrepo/src"
+                inc_dir = inc_clean.rstrip('/') + '/'
+                if any(m_clean.startswith(inc_dir) for m_clean, _ in mutated_items):
+                    needs_compile = True
+                    break
+
+                # 3. Repo match: if inc is associated with a mutated repo
+                inc_repo = inc_clean.split('/')[0] if '/' in inc_clean else None
+                if inc_repo and inc_repo in mutated_repos:
+                    needs_compile = True
+                    break
+
+                for r in mutated_repos:
+                    from insetu.core.utils_core import get_safe_repo_id
+                    safe_r = get_safe_repo_id(r)
+                    if (inc_basename.startswith(f"{r}_") or inc_basename.startswith(f"{safe_r}_")) and ("_context.txt" in inc_basename or "_diffs.txt" in inc_basename):
                         needs_compile = True
                         break
+                if needs_compile:
+                    break
 
         if needs_compile:
             ctx.jobs.update_progress(f"Recompiling workflow batch: {batch.get('title', batch.get('id'))}...")
