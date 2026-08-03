@@ -151,7 +151,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 if not dry_run:
                     print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1}/{len(blocks)} failed.")
                     print(f"  [ACTION_REQUIRED: COPY_STATE |\n{target_file} ]")
-                import json
                 from insetu.kernel.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='patch_failed', details=f"Chunk {idx + 1}/{len(blocks)} failed to anchor.", file_content=working_content, patch_payload=json.dumps(b))
                 file_success = False
@@ -182,7 +181,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             print(f"      {err_str}")
                             print(f"  [ACTION_REQUIRED: COPY_ERROR |\n{err_b64} ]")
                             print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                            import json
                             from insetu.kernel.hooks import hooks
                             hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_js', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
                             file_success = False
@@ -195,7 +193,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 print(f"      {err_str}")
                 print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64}\n]")
                 print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                import json
                 from insetu.kernel.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_python', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
                 file_success = False
@@ -206,7 +203,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 print(f"      Details: {err_str}")
                 print(f"  [ACTION_REQUIRED: COPY_ERROR |\n{err_b64} ]")
                 print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                import json
                 from insetu.kernel.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_json', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
                 file_success = False

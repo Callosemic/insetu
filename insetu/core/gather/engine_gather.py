@@ -313,11 +313,17 @@ def _process_vfs_ledger(workspace_id="default"):
     submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=workspace_id)
 from insetu.kernel.workers import register_callback
 register_callback("gather", "process_vfs_ledger", _process_vfs_ledger)
-@hooks.on('system_boot')
+import time
+SYSTEM_BOOT_TIME = time.time()
+@hooks.on('system_boot', priority=90)
 def init_gather_workers():
     from insetu.kernel.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
         from insetu.kernel.extension import ExtensionContext
+        import uuid, json
+        from pathlib import Path
+        from insetu.kernel.utils import load_json_file
+
         w_ctx = ExtensionContext('workers', ws_id)
         conn = w_ctx.db
         conn.execute("""
@@ -325,6 +331,20 @@ def init_gather_workers():
             VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
         """)
         conn.commit()
+
+        # Boot-Time Heuristic: Offline Mutation Guard (Tier 2 Physics)
+        ctx = ExtensionContext('gather', ws_id)
+        contexts_dir = ctx.paths.get("contexts_dir")
+        if contexts_dir:
+            cache_path = Path(contexts_dir).joinpath("manifest_cache.json").as_posix()
+            cache_data = load_json_file(cache_path, {})
+            last_compile = cache_data.get("last_full_compile_time", 0)
+            if SYSTEM_BOOT_TIME > last_compile:
+                job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+                args_json = json.dumps({"force_full": True})
+                from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status
+                submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=ws_id)
+                update_immediate_job_status(job_id, 'processing', 'Healing offline mutations...', workspace_id=ws_id)
 @hooks.on('gather_settings_updated')
 def on_gather_settings_updated(workspace_id=None, **kwargs):
     from insetu.kernel.workers import submit_immediate_job
