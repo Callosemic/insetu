@@ -16,11 +16,13 @@ The ecosystem currently relies on a flat `manifest.json` file as the central ind
 1. **The Monolithic Write Bottleneck:** Any single file mutation (e.g., via the Yomama Sync Bridge or a VFS commit) forces the engine to serialize and rewrite the entire JSON ecosystem to disk.
 2. **Synchronous I/O Block:** The `save_json_file` utility explicitly bypasses the asynchronous `_VFS_WRITE_QUEUE` for `manifest.json`, meaning these massive rewrites execute synchronously on the main HTTP event loop, risking thread starvation.
 3. **Frontend Polling Inefficiency:** Following a VFS commit, the frontend blindly re-fetches the entire manifest via `/api/<workspace_id>/manifest` to rehydrate its Zustand state, wasting bandwidth and triggering heavy reconciliation cycles.
-
 ### Action Items
-- [ ] **SQLite VFS Index Migration:** Deprecate the flat `manifest.json` file on disk. Establish a new embedded SQLite ledger (`vfs_index.db`) initialized during `@hooks.on('system_boot')`.
-- [ ] **Surgical Atomic Writes:** Refactor the Gather engine's VFS commit listener (`_surgically_update_manifest`) to execute targeted SQL `UPSERT`/`DELETE` queries for modified files rather than reconstructing the entire index object.
-- [ ] **Version Hash & Delta Endpoints:** Expose `/api/<workspace_id>/manifest/version` (returning `MAX(timestamp)` from `vfs_event_log`) and `/api/<workspace_id>/manifest/deltas?since=<timestamp>` for stateless multi-instance polling.
+- [ ] **Schema Isolation (`vfs_index.db`):** Explicitly call `register_schema('vfs_index', {...})` to isolate the `manifest_ledger` and `sync_metadata` tables from the standard `gather.db`.
+- [ ] **Initial Load Hooks:** Rewrite `request_manifest` and `request_manifest_chunks` to query `vfs_index.db` using `SELECT * FROM manifest_ledger` instead of reading the physical JSON file.
+- [ ] **Full Sweep Overhaul:** Refactor `generate_context_file` to execute a bulk `DELETE FROM manifest_ledger` followed by mass `INSERT` transactions, replacing the `manifest.json` physical dump.
+- [ ] **Offline Mutation Guard:** Update the `system_boot` heuristic to read `last_full_compile_time` from the `sync_metadata` SQLite table instead of relying on `manifest_cache.json`.
+- [ ] **Surgical Atomic Writes:** Refactor `hook_save_manifest` and `_surgically_update_manifest` to execute targeted SQL `UPSERT`/`DELETE` queries for modified files.
+- [ ] **Version Hash & Delta Endpoints:** Expose `/api/<workspace_id>/manifest/version` (returning `MAX(timestamp)` from `vfs_event_log` in `workers.db`) and `/api/<workspace_id>/manifest/deltas?since=<timestamp>` for stateless multi-instance polling.
 - [ ] **Frontend Metronome Synchronization:** Wire a 3-second background metronome tick (`registerTick`) in the frontend SDK to query the version endpoint and pull deltas for passive observer instances.
 - [ ] **Optimistic Zustand Splicing:** Maintain zero-latency snappiness for active actor instances via optimistic `AppStore` manifest splicing, using the background metronome delta fetch as an idempotent true-up.
 
