@@ -48,13 +48,13 @@ export class InSetuRepoFilter extends LitElement {
             <div class="wrap">
                 ${this.label ? html`<span class="label">${this.label}</span>` : ''}
 
-                <div @yenvui-pill-toggled=${this._handleRepoToggle} style="display: contents;">
-                    <yenvui-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></yenvui-pill>
+                <div @sutram-pill-toggled=${this._handleRepoToggle} style="display: contents;">
+                    <sutram-pill pillId="ALL" labelText="All" ?active=${activeRepoSet.has('ALL')}></sutram-pill>
                     ${visibleExtra.map(ex => html`
-                        <yenvui-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></yenvui-pill>
+                        <sutram-pill pillId=${ex.id} labelText=${ex.label} ?active=${activeRepoSet.has(ex.id)}></sutram-pill>
                     `)}
                     ${visibleRepos.map(repo => html`
-                        <yenvui-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></yenvui-pill>
+                        <sutram-pill pillId=${repo} labelText=${repo} ?active=${activeRepoSet.has(repo)}></sutram-pill>
                     `)}
                 </div>
             </div>

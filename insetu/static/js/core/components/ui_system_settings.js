@@ -118,7 +118,7 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                 ` : ''}
             </div>
-            <yenvui-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="System Settings & Extensions" @yenvui-modal-closed=${() => this.modalOpen = false}>
+            <sutram-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="System Settings & Extensions" @sutram-modal-closed=${() => this.modalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto; margin-bottom: 20px;">
                     ${sortedSections.map(section => html`
                         <div style="font-weight: bold; font-size: 0.85rem; color: var(--intent-primary); margin-top: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">${section}:</div>
@@ -144,7 +144,7 @@ export class InSetuSystemSettings extends InSetuElement {
                         <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic(); }}>⚠️ Test Recovery</button>
                     </div>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }
@@ -287,7 +287,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     render() {
         return html`
-            <yenvui-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @yenvui-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
+            <sutram-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
                         <div>
@@ -303,7 +303,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                         </div>
                         <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin: 0; font-size: 0.9rem; border-radius: 4px;">➕ Provision & Mount Isolated Workspace</button>
                     </form>
-                    <yenvui-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @yenvui-modal-closed=${() => this._showHostBrowser = false}>
+                    <sutram-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">
                             <div style="display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0;">
                                 <button type="button" class="btn-sm" style="background: var(--intent-neutral); margin:0;" @click=${this._goUpHostDir}>Parent Dir</button>
@@ -322,7 +322,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                             </div>
                         </div>
                         <button slot="footer" type="button" style="background: var(--intent-success); color: white;" @click=${this._confirmHostDir}>✅ Select This Path</button>
-                    </yenvui-modal>
+                    </sutram-modal>
 
                     <div>
                         <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 8px; color: var(--intent-primary);">Registered Workspaces Index</label>
@@ -346,7 +346,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
                         </div>
                     </div>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 }

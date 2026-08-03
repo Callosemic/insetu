@@ -131,12 +131,12 @@ export class InSetuExtConfig extends InSetuElement {
             const headerTitle = b.title || b.dynamic_split_prefix || `Bucket ${bIdx + 1}`;
             const isExpanded = !!this._expandedBuckets[bIdx]; // Default false
             return html`
-                <yenvui-collapsible 
+                <sutram-collapsible 
                     titleText="📦 ${headerTitle}" 
                     intent="neutral" 
                     .open=${isExpanded} 
                     style="--title-weight: normal; --title-size: 0.95rem;"
-                    @yenvui-collapsible-toggled=${(e) => {
+                    @sutram-collapsible-toggled=${(e) => {
                         e.stopPropagation();
                         this._expandedBuckets = { ...this._expandedBuckets, [bIdx]: e.detail.open };
                         this.requestUpdate();
@@ -227,7 +227,7 @@ export class InSetuExtConfig extends InSetuElement {
                         </div>
                     `}
                     </div>
-                </yenvui-collapsible>
+                </sutram-collapsible>
             `;
         });
     }
@@ -236,9 +236,9 @@ export class InSetuExtConfig extends InSetuElement {
         const repos = this.configForm.target_repos || [];
         return html`
             <div style="padding: 15px;">
-                <yenvui-card-group>
+                <sutram-card-group>
                     ${repos.map((repo, idx) => html`
-                        <yenvui-card
+                        <insetu-card
                             titleText=${repo.repo_dir || 'New Repository'}
                             descriptionText=${repo.title || 'No Title'}
                             detailText=${repo.domain || 'Workspaces'}
@@ -265,9 +265,9 @@ export class InSetuExtConfig extends InSetuElement {
                                     }
                                 }}>🗑️ Remove</button>
                             </div>
-                        </yenvui-card>
+                        </insetu-card>
                     `)}
-                </yenvui-card-group>
+                </sutram-card-group>
             </div>
         `;
     }
@@ -275,14 +275,13 @@ export class InSetuExtConfig extends InSetuElement {
         const idx = this._editingRepoIdx;
         const repo = (idx !== null && this.configForm) ? this.configForm.target_repos[idx] : null;
         const isOpen = idx !== null && repo !== null;
-
         return html`
-            <yenvui-modal 
+            <sutram-modal 
                 ?open=${isOpen} 
                 titleText="Edit Repository: ${repo ? (repo.repo_dir || 'New') : ''}" 
                 ?fullscreen=${true}
                 ?flush=${true}
-                @yenvui-modal-closed=${() => { 
+                @sutram-modal-closed=${() => { 
                     if (this._repoBackup && this._editingRepoIdx !== null) {
                         this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
                     }
@@ -296,11 +295,11 @@ export class InSetuExtConfig extends InSetuElement {
                         <span style="font-size: 1.2rem;">📦</span>
                         <input type="text" .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="font-weight: bold; width: 100%; background: var(--input-bg);" @input=${(e) => { repo.repo_dir = e.target.value; this.requestUpdate(); }}>
                     </div>
-                    <yenvui-collapsible 
+                    <sutram-collapsible 
                         titleText="Repo Settings" 
                         intent="primary"
                         .open=${this._repoSettingsExpanded}
-                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
+                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
                         <div style="display: flex; flex-direction: column; gap: 15px;">
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 150px;">
@@ -361,13 +360,13 @@ export class InSetuExtConfig extends InSetuElement {
                                 })()}
                             </div>
                         </div>
-                    </yenvui-collapsible>
-                    <yenvui-collapsible 
+                    </sutram-collapsible>
+                    <sutram-collapsible 
                         titleText="Sub-Buckets" 
                         intent="highlight" 
                         ?flush=${true}
                         .open=${this._repoBucketsExpanded}
-                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
+                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
                         <div slot="actions">
                             <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
@@ -379,7 +378,7 @@ export class InSetuExtConfig extends InSetuElement {
                         <div style="display: flex; flex-direction: column;">
                             ${this.renderSubBuckets(repo, idx)}
                         </div>
-                    </yenvui-collapsible>
+                    </sutram-collapsible>
                     ` : ''}
                 </div>
                 ${repo ? html`
@@ -401,7 +400,7 @@ export class InSetuExtConfig extends InSetuElement {
                         ✅ Keep Edits
                     </button>
                 ` : ''}
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 
@@ -410,11 +409,11 @@ export class InSetuExtConfig extends InSetuElement {
             ? html`<div class="spinner" style="display:block; padding: 20px;">Loading configuration...</div>`
             : html`
                 <div style="display: flex; flex-direction: column;">
-                    <yenvui-collapsible 
+                    <sutram-collapsible 
                         titleText="General Settings" 
                         intent="success"
                         .open=${this._generalExpanded}
-                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
+                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
                         <div style="display: flex; flex-direction: column; gap: 12px;">
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 2; min-width: 200px;">
@@ -477,20 +476,20 @@ export class InSetuExtConfig extends InSetuElement {
                                 </div>
                             </div>
                         </div>
-                    </yenvui-collapsible>
-                    <yenvui-collapsible 
+                    </sutram-collapsible>
+                    <sutram-collapsible 
                         titleText="Active Extensions" 
                         intent="highlight"
                         .open=${this._extExpanded}
-                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._extExpanded = e.detail.open; }}>
+                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._extExpanded = e.detail.open; }}>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Enable or disable system extensions. The 'config' extension is locked.</p>
                         ${this.renderExtensions()}
-                    </yenvui-collapsible>
-                    <yenvui-collapsible 
+                    </sutram-collapsible>
+                    <sutram-collapsible 
                         titleText="Target Repositories" 
                         intent="primary"
                         .open=${this._reposExpanded}
-                        @yenvui-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
+                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
                         <div slot="actions">
                             <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 10px; font-size: 0.75rem;"
                                 @click=${async () => {
@@ -510,24 +509,24 @@ export class InSetuExtConfig extends InSetuElement {
                         </div>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>
                         ${this.renderRepos()}
-                    </yenvui-collapsible>
+                    </sutram-collapsible>
                 </div>
             `;
-            
+
         return html`
             ${this.renderRepoEditorModal()}
-            <yenvui-modal 
+            <sutram-modal 
                 ?open=${this._isOpen} 
                 titleText="Workspace Configuration" 
                 ?fullscreen=${true} 
                 ?flush=${true}
-                @yenvui-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
+                @sutram-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
                 <div slot="body">${bodyContent}</div>
 
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveConfig}>
                     💾 Save & Reload
                 </button>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
 
@@ -549,13 +548,21 @@ export class InSetuExtConfig extends InSetuElement {
                 if (window.inSetu.sys.executeSystemCompile) {
                     await window.inSetu.sys.executeSystemCompile(null, true);
                 }
-
                 if (data.requires_reboot) {
                     btn.innerText = '⏳ Rebooting...';
+
+                    // Declarative UI State Transition
+                    AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
+
                     try {
                         await window.inSetu.api.system('reboot', { method: 'POST' });
                     } catch(err) {}
-                    setTimeout(() => window.location.reload(), 2000);
+                    setInterval(async () => {
+                        try {
+                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
+                            if (ping.ok) window.location.reload();
+                        } catch(err) {}
+                    }, 1000);
                 } else {
                     btn.innerText = '⏳ Refreshing UI...';
                     this._isOpen = false;

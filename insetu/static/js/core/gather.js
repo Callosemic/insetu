@@ -16,7 +16,13 @@ export const GatherStore = createExtensionStore('Gather', {
     quickPacks: [],
     activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
-    setSearchQuery: (q) => GatherStore.setState({ searchQuery: q })
+    setSearchQuery: (q) => GatherStore.setState({ searchQuery: q }),
+    pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
+    setPinnedRepos: (repos) => {
+        const ws = window.inSetu.stores.App?.getState()?.activeWorkspace || 'default';
+        localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));
+        GatherStore.setState({ pinnedRepos: repos });
+    }
 });
 
 // Reactively synchronize topology from AppStore to GatherStore
@@ -130,13 +136,14 @@ export class InSetuExtGather extends InSetuElement {
         searchQuery: { type: String },
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
-        _showFilters: { type: Boolean }
+        _showFilters: { type: Boolean },
+        _expandedCats: { type: Object }
     };
     static styles = [
         sharedStyles,
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-            .gather-body { flex: 1; overflow-y: auto; padding: 20px; }
+            .gather-body { flex: 1; overflow-y: auto; padding: 0; }
         `
     ];
 
@@ -148,6 +155,7 @@ export class InSetuExtGather extends InSetuElement {
         this.searchQuery = '';
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
+        this._expandedCats = {};
     }
     onWorkspaceChanged(newWorkspaceId) {
         this.loadContext(false);
@@ -161,11 +169,11 @@ export class InSetuExtGather extends InSetuElement {
         });
         this.subscribe(AppStore, state => {
             this.manifestFiles = Object.keys(state.manifest || {});
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
         this.subscribe(GatherStore, state => {
             this.allRepos = state.allRepos || [];
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
 
@@ -174,8 +182,8 @@ export class InSetuExtGather extends InSetuElement {
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest || {});
-        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
         const gState = GatherStore.getState();
+        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
         this.allRepos = gState.allRepos || [];
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
@@ -203,7 +211,7 @@ export class InSetuExtGather extends InSetuElement {
     render() {
         const categories = {};
         const manifest = AppStore.getState().manifest;
-        const { categoryOrder } = GatherStore.getState();
+        const { categoryOrder, hiddenOutputs } = GatherStore.getState();
         // 1. Enrich data with metadata for searching
         const enrichedFiles = this.manifestFiles.map(file => {
                 const manifestObj = manifest[file] || {};
@@ -228,6 +236,7 @@ export class InSetuExtGather extends InSetuElement {
                         finalDesc = extMeta.desc;
                         finalTitle = extMeta.displayName;
                 }
+
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
         if (this.loading) {
@@ -261,7 +270,7 @@ export class InSetuExtGather extends InSetuElement {
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, this.searchQuery, f => `${f.repoDir || ''} ${f.finalTitle} ${f.finalCat} ${f.finalDesc}`)
                 : repoFilteredFiles;
         return html`
-            <yenvui-toolbar
+            <sutram-toolbar
                 searchPlaceholder="🔍 Fuzzy search contexts..."
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
@@ -272,77 +281,110 @@ export class InSetuExtGather extends InSetuElement {
                     label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
-                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    @repo-filter-changed=${(e) => GatherStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
-            </yenvui-toolbar>
-
+            </sutram-toolbar>
             <div class="gather-body">
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
-                <div style="display: ${this.loading ? 'none' : 'block'};">
-                    <sutram-categorized-list
-                    .items=${filteredFiles}
-                    categoryKey="finalCat"
-                    .categoryOrder=${categoryOrder}
-                    .renderCategoryHeader=${(cat) => {
-                        if (cat === 'Quickpacks') {
-                            return html`
-                                <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-                                    <sutram-async-btn label="🧹 Clear Quickpacks" intent="danger" .onClick=${async () => {
-                                        try {
-                                            const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
-                                            if (res.ok) {
-                                                const data = await res.json();
-                                                if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                                const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
-                                                if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
-                                            }
-                                        } catch(e) {
-                                            console.error("Failed to clear quickpacks: " + e.message);
-                                        }
-                                    }}></sutram-async-btn>
-                                </div>
-                            `;
-                        }
-                        return '';
-                    }}
-                    .renderItem=${(f) => html`
-                        <insetu-card
-                            .filename=${f.filename}
-                            .titleText=${f.finalTitle || f.filename}
-                            .descriptionText=${f.finalDesc || ''}
-                            .detailText=${f.sizeStr ? `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename} | ${f.sizeStr}` : `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename}`}
-                            icon="📦"
-                            intentColor="var(--intent-highlight)"
-                            entityType="file:context"
-                            .entityData=${{ 
-                                filepath: `system://contexts/${f.filename}`, 
-                                repoDir: f.repoDir, 
-                                isFS: false, 
-                                isSkeleton: f.isSkeleton, 
-                                suppress: ['copy', 'browse'],
-                                chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
-                            }}
-                            @card-clicked=${() => {
-                                if (f.isSkeleton) return;
-                                const manifest = AppStore.getState().manifest || {};
-                                const chunks = window.inSetu?.utils?.extractManifestFiles 
-                                    ? window.inSetu.utils.extractManifestFiles(manifest, f.filename) 
-                                    : [];
-                                if (Array.isArray(chunks) && chunks.length > 1) {
-                                    window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: f.filename } }));
-                                } else if (window.inSetu?.vfs?.viewAndCopy) {
-                                    window.inSetu.vfs.viewAndCopy(f.filename);
-                                } else if (typeof viewAndCopy === 'function') {
-                                    viewAndCopy(f.filename);
-                                }
-                            }}>
+                <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
+                    ${(() => {
+                        const groups = {};
+                        filteredFiles.forEach(f => {
+                            if (!groups[f.finalCat]) groups[f.finalCat] = [];
+                            groups[f.finalCat].push(f);
+                        });
 
-                            ${f.isSkeleton ? html`
-                                <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
-                            ` : ''}
-                        </insetu-card>
-                    `}>
-                </sutram-categorized-list>
+                        const sortedCats = Object.keys(groups).sort((a, b) => {
+                            if (a === 'Quickpacks') return -1;
+                            if (b === 'Quickpacks') return 1;
+
+                            const isHiddenA = a === 'Hidden Context' || a === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(a));
+                            const isHiddenB = b === 'Hidden Context' || b === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(b));
+
+                            if (isHiddenA && !isHiddenB) return 1;
+                            if (!isHiddenA && isHiddenB) return -1;
+
+                            const idxA = categoryOrder.indexOf(a);
+                            const idxB = categoryOrder.indexOf(b);
+                            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                            if (idxA !== -1) return -1;
+                            if (idxB !== -1) return 1;
+                            return a.localeCompare(b);
+                        });
+
+                        return sortedCats.map(cat => {
+                            const isAutoCollapsed = cat === 'Hidden Context' || cat === 'Tracker Issues' || (hiddenOutputs && hiddenOutputs.includes(cat));
+                            const isOpen = this._expandedCats[cat] ?? !isAutoCollapsed;
+                            return html`
+                                <sutram-collapsible 
+                                    titleText=${cat} 
+                                    intent="neutral" 
+                                    .open=${isOpen}
+                                    ?flush=${true}
+                                    @sutram-collapsible-toggled=${(e) => {
+                                        this._expandedCats = { ...this._expandedCats, [cat]: e.detail.open };
+                                        this.requestUpdate();
+                                    }}
+                                    style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
+
+                                    ${cat === 'Quickpacks' ? html`
+                                        <sutram-async-btn slot="actions" label="Clear" intent="danger" .onClick=${async () => {
+                                            try {
+                                                const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
+                                                if (res.ok) {
+                                                    const data = await res.json();
+                                                    if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
+                                                    const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+                                                    if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+                                                }
+                                            } catch(e) {
+                                                console.error("Failed to clear quickpacks: " + e.message);
+                                            }
+                                        }}></sutram-async-btn>
+                                    ` : ''}
+                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                                        ${groups[cat].map(f => html`
+                                            <insetu-card
+                                                .filename=${f.filename}
+                                                .titleText=${f.finalTitle || f.filename}
+                                                .descriptionText=${f.finalDesc || ''}
+                                                .detailText=${f.sizeStr ? `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename} | ${f.sizeStr}` : `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename}`}
+                                                icon="📦"
+                                                intentColor="var(--intent-highlight)"
+                                                entityType="file:context"
+                                                .entityData=${{ 
+                                                    filepath: `system://contexts/${f.filename}`, 
+                                                    repoDir: f.repoDir, 
+                                                    isFS: false, 
+                                                    isSkeleton: f.isSkeleton, 
+                                                    suppress: ['file-copy', 'file-browse', 'file-edit'],
+                                                    chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
+                                                }}
+                                                @card-clicked=${() => {
+                                                    if (f.isSkeleton) return;
+                                                    const manifest = AppStore.getState().manifest || {};
+                                                    const chunks = window.inSetu?.utils?.extractManifestFiles 
+                                                        ? window.inSetu.utils.extractManifestFiles(manifest, f.filename) 
+                                                        : [];
+                                                    if (Array.isArray(chunks) && chunks.length > 1) {
+                                                        window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: f.filename } }));
+                                                    } else if (window.inSetu?.vfs?.viewAndCopy) {
+                                                        window.inSetu.vfs.viewAndCopy(f.filename);
+                                                    } else if (typeof viewAndCopy === 'function') {
+                                                        viewAndCopy(f.filename);
+                                                    }
+                                                }}>
+
+                                                ${f.isSkeleton ? html`
+                                                    <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
+                                                ` : ''}
+                                            </insetu-card>
+                                        `)}
+                                    </div>
+                                </sutram-collapsible>
+                            `;
+                        });
+                    })()}
                 </div>
             </div>
         `;

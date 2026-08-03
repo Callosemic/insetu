@@ -65,6 +65,39 @@ export class InSetuJobTracker extends InSetuElement {
     }
 }
 customElements.define('insetu-job-tracker', InSetuJobTracker);
+export class InSetuRebootOverlay extends InSetuElement {
+    static properties = { 
+        isRebooting: { type: Boolean },
+        rebootType: { type: String }
+    };
+    static styles = css`:host { display: block; }`;
+
+    constructor() {
+        super();
+        this.isRebooting = false;
+        this.rebootType = 'reboot';
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.App, state => { 
+            this.isRebooting = !!state.isRebooting;
+            this.rebootType = state.rebootType || 'reboot';
+        });
+    }
+
+    render() {
+        if (!this.isRebooting) return html``;
+        const isPanic = this.rebootType === 'panic';
+        return html`
+            <div style="position:fixed; top:0; left:0; width:100vw; height:100dvh; background:rgba(15,23,42,0.95); z-index:999999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:${isPanic ? '#ef4444' : '#38bdf8'}; font-family:monospace; backdrop-filter:blur(5px);">
+                <h2>${isPanic ? '⚠️ Initiating Kernel Panic...' : '🔄 Rebooting inSetu OS...'}</h2>
+                <p style="color:#94a3b8;">${isPanic ? 'Awaiting Lifeboat FS binding...' : 'Awaiting kernel binding...'}</p>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-reboot-overlay', InSetuRebootOverlay);
 
 export class InSetConfigBanner extends InSetuElement {
     static properties = { configMissing: { type: Boolean } };
@@ -99,9 +132,14 @@ import { SutramCard, SutramModal, SutramAsyncBtn } from '../../../vendor/sutram/
 if (!customElements.get('insetu-card')) customElements.define('insetu-card', class extends SutramCard {});
 if (!customElements.get('insetu-modal')) customElements.define('insetu-modal', class extends SutramModal {});
 if (!customElements.get('insetu-async-btn')) customElements.define('insetu-async-btn', class extends SutramAsyncBtn {});
-
 if (!document.getElementById('insetu-toast-root')) {
     const toastRoot = document.createElement('sutram-toast-container');
     toastRoot.id = 'insetu-toast-root';
     document.body.appendChild(toastRoot);
+}
+
+if (!document.getElementById('insetu-reboot-overlay-root')) {
+    const rebootRoot = document.createElement('insetu-reboot-overlay');
+    rebootRoot.id = 'insetu-reboot-overlay-root';
+    document.body.appendChild(rebootRoot);
 }

@@ -2,6 +2,7 @@ import { LitElement, html, css } from 'lit';
 import { InSetuElement } from '../sdk.js';
 import { FsStore } from '../fs.js';
 import { AppStore } from '../store.js';
+import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
 
 export function resolveEditorMode(filename) {
     if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };
@@ -230,6 +231,183 @@ export class InSetuMarkdownEditor extends InSetuElement {
 if (!customElements.get('insetu-markdown-editor')) {
     customElements.define('insetu-markdown-editor', InSetuMarkdownEditor);
 }
+export class InSetuFrontmatterEditor extends InSetuElement {
+    static properties = {
+        filepath: { type: String },
+        defaultExpanded: { type: Boolean },
+        _content: { type: String },
+        _yamlData: { type: Object },
+        _loading: { type: Boolean },
+        _isDirty: { type: Boolean },
+        _metadataExpanded: { type: Boolean }
+    };
+
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; container-type: inline-size; overflow: hidden; }
+        `
+    ];
+
+    constructor() {
+        super();
+        this.filepath = '';
+        this._content = '';
+        this._yamlData = {};
+        this._loading = false;
+        this._isDirty = false;
+        this._originalContent = '';
+        this._originalYaml = '';
+        this.defaultExpanded = false;
+        this._metadataExpanded = false;
+    }
+
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has('filepath') && this.filepath) {
+            this._loadFile();
+        }
+    }
+
+    async _loadFile() {
+        if (!this.filepath) return;
+        this._loading = true;
+        try {
+            const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(this.filepath)}`);
+            if (res.ok) {
+                const text = await res.text();
+                const { meta, content } = window.inSetu.utils.parseFrontmatter(text);
+                this._yamlData = meta;
+                this._content = content.replace(/^\s+/, ''); // Strip leading newlines to keep it clean
+                this._originalContent = this._content;
+                this._originalYaml = JSON.stringify(meta);
+                this._isDirty = false;
+                this._metadataExpanded = this.defaultExpanded;
+
+                // Alert the parent extension so it can bind to its Zustand store if needed
+                this.dispatchEvent(new CustomEvent('insetu:frontmatter-loaded', { 
+                    detail: { yaml: meta, content: this._content },
+                    bubbles: true, composed: true 
+                }));
+            } else {
+                throw new Error("Failed to read file.");
+            }
+        } catch(e) {
+            console.error("Editor load failed:", e);
+        } finally {
+            this._loading = false;
+        }
+    }
+
+    _checkDirty() {
+        this._isDirty = (this._content !== this._originalContent) || (JSON.stringify(this._yamlData) !== this._originalYaml);
+    }
+
+    async _handleSave() {
+        // Pub/Sub Intercept: Ask the extension for its latest UI state before saving
+        let latestYaml = { ...this._yamlData };
+        this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
+            detail: {
+                currentYaml: latestYaml,
+                respond: (newYaml) => { latestYaml = newYaml; }
+            },
+            bubbles: true, composed: true
+        }));
+        // Reconstruct the frontmatter using the centralized SDK utility
+        const newFileText = window.inSetu.utils.serializeFrontmatter(latestYaml, this._content);
+
+        await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
+            filepath: this.filepath,
+            content: newFileText
+        }, {
+            loadingText: 'Saving...',
+            onSuccess: () => {
+                this._originalContent = this._content;
+                this._originalYaml = JSON.stringify(latestYaml);
+                this._isDirty = false;
+
+                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
+
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus("💾 File Saved Successfully", 2000);
+                }
+            }
+        });
+    }
+
+    render() {
+        if (this._loading) {
+            return html`<div class="spinner" style="display:block; padding: 20px;">Loading file...</div>`;
+        }
+
+        return html`
+            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg);">
+                <!-- YAML Metadata Injection Slot -->
+                <div style="background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
+                    <slot name="title-control"></slot>
+                    <sutram-collapsible 
+                        titleText="Properties & Metadata" 
+                        intent="neutral" 
+                        ?flush=${true}
+                        .open=${this._metadataExpanded}
+                        @sutram-collapsible-toggled=${(e) => this._metadataExpanded = e.detail.open}
+                        style="--title-weight: bold; --title-size: 0.85rem; color: var(--text-muted);">
+                        <div style="padding: 5px 20px 20px 20px;">
+                        <slot name="metadata-controls">
+                            <!-- Graceful Fallback: Render raw YAML keys if the extension doesn't provide a custom UI -->
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                ${Object.keys(this._yamlData || {}).map(k => html`
+                                    <div style="flex: 1; min-width: 150px;">
+                                        <sutram-input label=${k} .value=${this._yamlData[k]} @sutram-input-changed=${e => {
+                                            this._yamlData = { ...this._yamlData, [k]: e.detail.value };
+                                            this._checkDirty();
+                                        }}></sutram-input>
+                                    </div>
+                                `)}
+                            </div>
+                        </slot>
+                        </div>
+                    </sutram-collapsible>
+                </div>
+
+                <!-- Core Markdown Editor -->
+                <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                    <insetu-markdown-editor 
+                        .value=${this._content}
+                        language="markdown"
+                        @content-changed=${e => {
+                            this._content = e.detail.value;
+                            this._checkDirty();
+                        }}>
+                    </insetu-markdown-editor>
+                </div>
+                <!-- Execution Toolbar -->
+                <div style="padding: 12px 20px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+                    <div style="display: flex; gap: 8px;">
+                        <sutram-entity-actions 
+                            .entityType=${'file'} 
+                            .entityData=${{ 
+                                filepath: this.filepath, 
+                                isFS: true,
+                                suppress: ['file-edit']
+                            }}>
+                        </sutram-entity-actions>
+                    </div>
+                    <sutram-async-btn 
+                        label="💾 Save Changes" 
+                        intent="success" 
+                        ?disabled=${!this._isDirty} 
+                        .onClick=${() => this._handleSave()}>
+                    </sutram-async-btn>
+                </div>
+            </div>
+        `;
+    }
+}
+if (!customElements.get('insetu-frontmatter-editor')) {
+    customElements.define('insetu-frontmatter-editor', InSetuFrontmatterEditor);
+}
+
 // Register local schema and action for the generic settings modal
 if (window.ExtensionRegistry) {
     window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};

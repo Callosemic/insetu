@@ -53,11 +53,23 @@ export class InSetuElement extends SutramElement {
         if (this.constructor.extensionName) return this.constructor.extensionName;
         return myTag.replace('insetu-ext-', '');
     }
-
     get vfs() { return window.inSetu.vfs; }
     get ui() { return window.inSetu.ui; }
     get sys() { return window.inSetu.sys; }
     get editor() { return window.inSetu.editor; }
+
+    setStatus(msg, timeout = 3000, isError = false) {
+        if (window.inSetu?.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus(msg, timeout, isError);
+        }
+    }
+
+    compileSystem() {
+        if (window.inSetu?.sys?.executeSystemCompile) {
+            return window.inSetu.sys.executeSystemCompile();
+        }
+        return Promise.resolve();
+    }
 
     get utils() {
         return {
@@ -282,6 +294,21 @@ window.inSetu.utils.parseFrontmatter = function(text) {
     });
 
     return { meta, content, rawFrontmatter: match[0] };
+};
+window.inSetu.utils.serializeFrontmatter = function(yamlObj, markdownBody) {
+    if (!yamlObj || Object.keys(yamlObj).length === 0) return markdownBody;
+
+    let text = '---\n';
+    for (const [k, v] of Object.entries(yamlObj)) {
+        let safeVal = v;
+        if (typeof v === 'string' && (v.includes(':') || v.includes('#') || v.includes('\n') || v.includes('{') || v.includes('['))) {
+            // Escape inner quotes and wrap the whole string
+            safeVal = `"${v.replace(/"/g, '\\"')}"`;
+        }
+        text += `${k}: ${safeVal}\n`;
+    }
+    text += '---\n\n' + markdownBody;
+    return text;
 };
 
 window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null) {

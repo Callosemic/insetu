@@ -3,7 +3,7 @@ import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { InSetuElement, createExtensionStore } from './sdk.js';
 import { resolveEditorMode } from './components/ui_editor.js';
 import { AppStore } from './store.js';
-import { buildFileTree } from '../../vendor/sutram/js/utils.js';
+import { buildFileTree, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
     const safeName = filename.split('/').pop();
@@ -16,19 +16,11 @@ export function bindDownloadDrag(e, filename, fetchUrl) {
     else if (ext === 'py') mime = 'text/x-python';
     else if (ext === 'js') mime = 'text/javascript';
 
-    const ghost = document.createElement('div');
-    ghost.style.cssText = 'position: absolute; top: -1000px; left: -1000px; background: var(--pane-bg); color: var(--text); border: 1px solid var(--btn); padding: 8px 12px; border-radius: 4px; font-family: monospace; font-weight: bold; z-index: -1; box-shadow: 0 4px 10px rgba(0,0,0,0.3);';
-    ghost.innerText = `📄 ${safeName}`;
-    document.body.appendChild(ghost);
-    e.dataTransfer.setDragImage(ghost, 15, 15);
-
-    setTimeout(() => ghost.remove(), 50);
-
-    e.dataTransfer.setData('DownloadURL', `${mime}:${safeName}:${absoluteUrl}`);
-    e.dataTransfer.setData('text/uri-list', absoluteUrl);
-    e.dataTransfer.setData('text/plain', absoluteUrl);
-
-    e.dataTransfer.effectAllowed = 'copy';
+    bindGhostDrag(e, safeName, '📄', {
+        'DownloadURL': `${mime}:${safeName}:${absoluteUrl}`,
+        'text/uri-list': absoluteUrl,
+        'text/plain': absoluteUrl
+    });
 }
 
 document.addEventListener('dragstart', (e) => {
@@ -68,6 +60,21 @@ export const FsStore = createExtensionStore('Fs', {
         newFolder: { open: false, basePath: '', folderName: '', repoTitle: '', repoDomain: 'Workspaces', repoDesc: '', repoExts: '.py, .json, .md, .sh, .txt, .html, .css, .js' },
         linkInsert: { open: false, activeTab: 'filename', searchQuery: '', searchResults: [], deepSearchLoading: false },
         browser: { open: false, title: '', manifest: [], searchQuery: '' }
+    },
+    fileVerificationCache: {},
+    verifyFiles: (files, force = false) => {
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        files.forEach(file => {
+            if (force || FsStore.getState().fileVerificationCache[file] === undefined) {
+                if (window.inSetu?.extensions?.Registry?.utils) {
+                    window.inSetu.extensions.Registry.utils.debounceVerifyFile(activeWs, file, (exists) => {
+                        FsStore.setState(state => ({
+                            fileVerificationCache: { ...state.fileVerificationCache, [file]: exists }
+                        }));
+                    });
+                }
+            }
+        });
     },
     setSearchQuery: (q) => FsStore.setState({ searchQuery: q }),
     setModal: (modalName, data) => FsStore.setState(state => ({
@@ -189,32 +196,11 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
         }
     }
 }
-
 export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}) {
     if (!fetchOptions.headers && window.inSetu?.api?._getHeaders) {
         fetchOptions.headers = window.inSetu.api._getHeaders(true);
     }
-    const res = await fetch(fetchUrl, fetchOptions);
-    if (!res.ok) throw new Error('Download failed from server.');
-    const blob = await res.blob();
-
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.style.display = 'none';
-    a.href = url;
-
-    let dlName = fallbackFilename;
-    const disposition = res.headers.get('Content-Disposition');
-    if (disposition && disposition.indexOf('attachment') !== -1) {
-        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
-        if (matches != null && matches[1]) dlName = matches[1].replace(/['"]/g, '');
-    }
-
-    a.download = dlName;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    a.remove();
+    await sutramDownloadFile(fetchUrl, fallbackFilename, fetchOptions);
 }
 export async function viewAndCopy(filename) {
     const cleanName = filename ? filename.replace(/^system:\/\/contexts\//, '') : filename;
@@ -452,15 +438,7 @@ async function downloadFromModal() {
         if (state.isMemoryOnly) {
             let text = state.isTruncated ? state.fullText : state.content;
             const blob = new Blob([text], { type: 'text/plain' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = state.filename;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
+            downloadBlob(blob, state.filename);
         } else {
             let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
             const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
@@ -675,17 +653,32 @@ window.ExtensionRegistry.registerExtension('files', {
     entityActions: [
         {
             targetEntity: 'file',
+            id: 'file-edit',
+            label: 'Edit',
+            icon: '✏️',
+            intent: 'neutral',
+            order: 70,
+            match: (data) => !data.isSkeleton,
+            onClick: (data, e) => {
+                if (window.inSetu.vfs.viewSourceFile) {
+                    window.inSetu.vfs.viewSourceFile(data.filepath, data.isFS || false);
+                }
+            }
+        },
+        {
+            targetEntity: 'file',
             id: 'file-copy',
             label: 'Copy',
             icon: '📋',
             intent: 'success',
             order: 90,
-            match: (data) => {
-                if (data.suppressCopy) return false;
-                if (data.isSkeleton) return false;
-                return true;
-            },
+            match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
+                if (data.fromModal) {
+                    await copyFromModal();
+                    return;
+                }
+
                 let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
@@ -699,13 +692,13 @@ window.ExtensionRegistry.registerExtension('files', {
             }
         },
         {
-            targetEntity: 'file',
+            targetEntity: 'file:context',
             id: 'file-browse',
             label: 'Browse',
             icon: '📁',
             intent: 'neutral',
             order: 80,
-            match: (data) => !data.suppressBrowse && !data.isFS && !data.isSkeleton,
+            match: (data) => !data.isSkeleton,
             onClick: (data, e) => {
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(basename);
@@ -719,12 +712,22 @@ window.ExtensionRegistry.registerExtension('files', {
             intent: 'primary',
             order: 95,
             match: (data) => {
-                if (data.suppressDownload) return false;
                 if (data.isSkeleton) return false;
                 // Only render if the device natively supports Web Sharing
                 return !!navigator.share && !!navigator.canShare;
             },
             asyncAction: async (data, e) => {
+                if (data.fromModal) {
+                    const state = FsStore.getState().fileModal;
+                    const blob = new Blob([state.content], { type: 'text/plain' });
+                    const filename = state.filename ? state.filename.split('/').pop() : 'shared_file.txt';
+                    const file = new File([blob], filename, { type: 'text/plain' });
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        await navigator.share({ files: [file] });
+                    }
+                    return;
+                }
+
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 await shareFiles(data.filepath, chunks, data.isFS);
@@ -745,12 +748,13 @@ window.ExtensionRegistry.registerExtension('files', {
             },
             intent: 'primary',
             order: 100,
-            match: (data) => {
-                if (data.suppressDownload) return false;
-                if (data.isSkeleton) return false;
-                return true;
-            },
+            match: (data) => !data.isSkeleton,
             asyncAction: async (data, e) => {
+                if (data.fromModal && (!data.chunks || data.chunks.length <= 1)) {
+                    await downloadFromModal();
+                    return;
+                }
+
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
 
@@ -1072,7 +1076,12 @@ export class InSetuFileModal extends InSetuElement {
         fileModal: { type: Object }
     };
     static styles = [sharedStyles, css`
-        .fs-modal-container { position: fixed; top: 0; left: 0; width: 100vw; height: calc(100dvh - 30px); }
+        .fs-modal-container { 
+            padding: 0; margin: 0; border: none; 
+            width: 100vw; height: calc(100dvh - 30px); max-width: 100vw; max-height: calc(100dvh - 30px);
+            background: transparent; overflow: hidden;
+        }
+        .fs-modal-container::backdrop { background: transparent; }
         .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
         insetu-async-btn { flex: 1; display: block; --btn-padding: 12px; --btn-border-radius: 6px; }
     `];
@@ -1087,23 +1096,30 @@ export class InSetuFileModal extends InSetuElement {
             this.fileModal = state.fileModal || {};
         });
     }
-
     get isDirty() {
         return this.fileModal.isFS && this.fileModal.content !== this.fileModal.originalContent;
     }
 
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        const dialog = this.shadowRoot.querySelector('dialog');
+        if (dialog) {
+            if (this.fileModal.open && !dialog.open) dialog.showModal();
+            else if (!this.fileModal.open && dialog.open) dialog.close();
+        }
+    }
+
     render() {
-        const m = this.fileModal;
-        if (!m || !m.open) return html``;
+        const m = this.fileModal || {};
         const shouldBeReadOnly = !(m.isFS || m.forceEdit);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
 
         let extMenuItems = [];
-        if (m.isFS) {
+        if (m.isFS && m.filename) {
             window.inSetu.events.emitHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
         }
         return html`
-            <div class="fs-modal-container" style="display: block; z-index: 3000; padding: 0;">
+            <dialog class="fs-modal-container" @cancel=${(e) => { e.preventDefault(); closeFileModal(); }}>
                 <div class="fullscreen-wrapper">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
                         <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
@@ -1160,12 +1176,14 @@ export class InSetuFileModal extends InSetuElement {
                     </div>
                     <div class="modal-footer" style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
                         <sutram-entity-actions 
-                            entityType="file" 
+                            .entityType=${'file'} 
                             .entityData=${{ 
                                 filepath: m.filename, 
                                 isFS: m.isFS,
                                 isSkeleton: false,
-                                chunks: getChunks(m.filename)
+                                suppress: ['file-edit'],
+                                chunks: getChunks(m.filename),
+                                fromModal: true
                             }}>
                         </sutram-entity-actions>
 
@@ -1174,7 +1192,7 @@ export class InSetuFileModal extends InSetuElement {
                         ` : ''}
                     </div>
                 </div>
-            </div>
+            </dialog>
         `;
     }
 }
@@ -1369,7 +1387,10 @@ export class InSetuVFSModals extends InSetuElement {
         browserConfig: { type: Object },
         currentBrowsePath: { type: Array }
     };
-    static styles = [sharedStyles, css`:host { display: contents; }`];
+    static styles = [sharedStyles, css`
+        :host { display: contents; }
+        sutram-async-btn { flex: 1; display: block; --btn-padding: 12px; --btn-border-radius: 6px; margin: 0; }
+    `];
 
     constructor() {
         super();
@@ -1418,17 +1439,27 @@ export class InSetuVFSModals extends InSetuElement {
                         }}></sutram-folder-browser>
                     </div>
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${executeMove}>🚚 Move File</button>
+                <sutram-async-btn slot="footer" label="🚚 Move File" intent="primary" .onClick=${executeMove}></sutram-async-btn>
             </sutram-modal>
-            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text); word-break: break-all;">Path: <span style="font-family: monospace; color: var(--intent-highlight);">${m.newFile?.basePath}</span></label>
-                    <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="margin-bottom: 5px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box; min-width: 0;">
-                    <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-bottom: 15px;"></div>
-                    ${window.inSetu.events.emitHook('zone:new-file-options-lit', null) || ''}
-                    <textarea style="flex: 1; margin-bottom: 0; font-size: 13px; margin-top: 0; width: 100%; box-sizing: border-box; min-width: 0; min-height: 200px; resize: vertical;" placeholder="Enter file content here..." .value=${m.newFile?.content || ''} @input=${e => FsStore.getState().setModal('newFile', { content: e.target.value })}></textarea>
+            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} ?flush=${true} style="--modal-backdrop: transparent; --modal-backdrop-filter: none;" titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%;">
+                    <div style="padding: 10px 20px; display: flex; flex-direction: column; gap: 6px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
+                        <div style="font-size: 0.85rem; color: var(--text-muted); word-break: break-all;">
+                            Path: <span style="font-family: var(--font-mono); color: var(--intent-highlight); font-weight: bold;">/${m.newFile?.basePath || ''}</span>
+                        </div>
+                        <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="font-weight: bold; font-size: 0.95rem; border: 1px solid var(--border); padding: 8px 10px; background: var(--bg); color: var(--text); border-radius: 4px;">
+                        <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-top: 2px;"></div>
+                        ${window.inSetu.events.emitHook('zone:new-file-options-lit', null) || ''}
+                    </div>
+                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);">
+                        <insetu-markdown-editor 
+                            .value=${m.newFile?.content || ''}
+                            .language=${resolveEditorMode(m.newFile?.fileName || '').mode || 'markdown'}
+                            @content-changed=${e => FsStore.getState().setModal('newFile', { content: e.detail.value })}>
+                        </insetu-markdown-editor>
+                    </div>
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFile}>💾 Create & Save File</button>
+                <sutram-async-btn slot="footer" label="💾 Create & Save File" intent="primary" .onClick=${saveNewFile}></sutram-async-btn>
             </sutram-modal>
             <sutram-modal ?open=${m.newFolder?.open} ?fullscreen=${true} titleText=${m.newFolder?.basePath === '' ? 'Create New Repository' : 'Create New Folder'} @sutram-modal-closed=${() => FsStore.getState().setModal('newFolder', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
@@ -1457,9 +1488,7 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                     ` : ''}
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${saveNewFolder}>
-                    ${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}
-                </button>
+                <sutram-async-btn slot="footer" label="${m.newFolder?.basePath === '' ? '📦 Initialize Repository' : '📁 Create Folder'}" intent="primary" .onClick=${saveNewFolder}></sutram-async-btn>
             </sutram-modal>
             <sutram-modal ?open=${m.linkInsert?.open} ?fullscreen=${true} titleText="Insert Link" @sutram-modal-closed=${() => FsStore.getState().setModal('linkInsert', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
@@ -1582,7 +1611,7 @@ export class InSetuVFSModals extends InSetuElement {
             </sutram-async-btn>
         ` : ''}
     ` : (this.browserConfig?.mode === 'folder' ? html`
-        <button slot="footer" style="background: var(--intent-success); color: white;" @click=${confirmFolderSelection}>✅ Select This Folder</button>
+        <sutram-async-btn slot="footer" label="✅ Select This Folder" intent="success" .onClick=${confirmFolderSelection}></sutram-async-btn>
     ` : '')}
 </sutram-modal>
         `;

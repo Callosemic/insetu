@@ -24,13 +24,9 @@ export const AppStore = createExtensionStore('App', {
     isConfigOpen: false,
     isWorkspaceEditorOpen: false,
     configMissing: false,
+    isRebooting: false,
+    rebootType: 'reboot',
 
-    pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
-    setPinnedRepos: (repos) => {
-        const ws = AppStore.getState().activeWorkspace || 'default';
-        localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));
-        AppStore.setState({ pinnedRepos: repos });
-    },
     activeTab: 'context',
     activeSubTabs: {},
     globalBrowsePath: [],

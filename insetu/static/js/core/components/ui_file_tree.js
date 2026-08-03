@@ -91,7 +91,7 @@ constructor() {
         }
         return html`
             ${this.enableSearch ? html`
-                <yenvui-toolbar
+                <sutram-toolbar
                     searchPlaceholder=${this.searchPlaceholder}
                     .searchQuery=${this._searchQuery || ''}
                     @search-changed=${(e) => this._searchQuery = e.detail.value}
@@ -102,7 +102,7 @@ constructor() {
                             <span style="font-family: monospace; color: var(--text); opacity: 0.7; font-size: 0.85rem; word-break: break-all;">/${this.currentPath.join('/')}</span>
                         </div>
                     ` : ''}
-                </yenvui-toolbar>
+                </sutram-toolbar>
             ` : ((!isSearching && this.currentPath.length > 0 && !this.hidePath) ? html`
                 <div class="toolbar-row" style="background: var(--input-bg); border-bottom: 1px solid var(--border);">
                     <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._setPath(this.currentPath.slice(0, -1))}>⬆️ Up</button>

@@ -85,11 +85,9 @@ export class InSetuExtBridge extends InSetuElement {
         allRepos: { type: Array },
         pinnedRepos: { type: Object },
         _fileVerificationCache: { type: Object },
-        _tocModalOpen: { type: Boolean },
-        _activeTocFile: { type: String },
-        _showFilters: { type: Boolean },
-        _activeCellId: { type: String },
-        _dropdownOpen: { type: Boolean }
+        _editCellId: { type: String },
+        _editContent: { type: String },
+        _editCellOriginalFile: { type: String }
     };
     static styles = [
         sharedStyles,
@@ -106,91 +104,155 @@ export class InSetuExtBridge extends InSetuElement {
         this.pinnedRepos = new Set(['ALL']);
         this._fileVerificationCache = {};
         this._globalBypassSandwich = false;
-        this._showFilters = false;
-        this._activeCellId = null;
-        this._dropdownOpen = false;
-        this._docClickListener = this._handleDocumentClick.bind(this);
-    }
-    _handleDocumentClick(e) {
-        if (!e.isTrusted) return; // Ignore synthetic clicks like auto-downloads
-        const path = e.composedPath();
-
-        // Prevent interactions inside fullscreen modals from closing background UI
-        const isInsideModal = path.some(node => 
-            (node.tagName && node.tagName.includes('MODAL')) || 
-            (node.classList && node.classList.contains('fullscreen-modal'))
-        );
-        if (isInsideModal) return;
-
-        if (this._dropdownOpen) {
-            const isDropdownContent = path.some(node => node.dataset && node.dataset.customDropdown === 'true');
-            if (!isDropdownContent) {
-                this._dropdownOpen = false;
-                this.requestUpdate();
-            }
-        }
-        if (this._tocModalOpen) {
-            const isTocContent = path.some(node => node.classList && (node.classList.contains('toc-container') || node.classList.contains('toc-toggle-btn')));
-            if (!isTocContent) {
-                this._tocModalOpen = false;
-                this.requestUpdate();
-            }
-        }
+        this._editCellId = null;
+        this._editContent = '';
+        this._editCellOriginalFile = '';
+        this._headerTouchStartX = null;
+        this._headerTouchStartY = null;
     }
 
     onWorkspaceChanged(newWorkspaceId) {
-        this._fileVerificationCache = {};
+        window.inSetu.stores.Fs.setState({ fileVerificationCache: {} });
         if (this.cells && this.cells.length > 0) {
-            this._verifyFiles(this.cells.map(c => c.file));
+            window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
         }
     }
     connectedCallback() {
         super.connectedCallback();
-        this.registerGlobalListener('click', document, this._docClickListener);
         this.subscribe(BridgeStore, (state) => {
             this.cells = state.cells || [];
             this.consoleOutput = state.consoleOutput;
             this.viewMode = state.viewMode;
-            this._verifyFiles(this.cells.map(c => c.file));
-
-            if (this.cells.length > 0 && !this.cells.find(c => c.id === this._activeCellId)) {
-                this._activeCellId = this.cells[0].id;
-            } else if (this.cells.length === 0) {
-                this._activeCellId = null;
-            }
+            window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
         });
-        this.subscribe(AppStore, (state) => {
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
         });
+        this.subscribe(window.inSetu.stores.Fs, (state) => {
+            this._fileVerificationCache = state.fileVerificationCache || {};
+        });
 
+        // Event listeners for Yomama Actions
+        this.registerGlobalListener('bridge-cell-deleted', window, (e) => {
+            if (this._editCellId === e.detail.id) {
+                this._editCellId = null;
+                this.requestUpdate();
+            }
+        });
+        this.registerGlobalListener('bridge-cell-swap', window, (e) => this._handleSwap(e.detail.id));
         // Initial sync
         const bState = BridgeStore.getState();
         this.cells = bState.cells || [];
-        if (this.cells.length > 0) this._activeCellId = this.cells[0].id;
         this.consoleOutput = bState.consoleOutput;
         this.viewMode = bState.viewMode;
-        const aState = AppStore.getState();
-        this.allRepos = aState.allRepos || [];
-        this.pinnedRepos = aState.pinnedRepos || new Set(['ALL']);
+        const gState = window.inSetu.stores.Gather.getState();
+        this.allRepos = gState.allRepos || [];
+        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
+        const fsState = window.inSetu.stores.Fs.getState();
+        this._fileVerificationCache = fsState.fileVerificationCache || {};
 
-        this._verifyFiles(this.cells.map(c => c.file));
+        window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
     }
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    _verifyFiles(files, force = false) {
-        const activeWs = AppStore.getState().activeWorkspace || 'default';
-        files.forEach(file => {
-            if (force || this._fileVerificationCache[file] === undefined) {
-                if (window.inSetu?.extensions?.Registry?.utils) {
-                    window.inSetu.extensions.Registry.utils.debounceVerifyFile(activeWs, file, (exists) => {
-                        this._fileVerificationCache = { ...this._fileVerificationCache, [file]: exists };
-                        this.requestUpdate();
-                    });
-                }
+
+    _handleSwap(id) {
+        const textToSwap = this._editCellId === id ? this._editContent : this.cells.find(c => c.id === id)?.content;
+        if (!textToSwap) return;
+
+        const chunkMatch = textToSwap.match(/<<<<<<< SEARCH([\s\S]*?)^=======\s*([\s\S]*?)^>>>>>>> REPLACE/m);
+        if (chunkMatch) {
+            const searchBlock = chunkMatch[1].replace(/^\n/, '').replace(/\n$/, '');
+            const replaceBlock = chunkMatch[2].replace(/^\n/, '').replace(/\n$/, '');
+            const swappedChunk = `<<<<<<< SEARCH\n${replaceBlock}\n=======\n${searchBlock}\n>>>>>>> REPLACE`;
+
+            if (this._editCellId === id) {
+                this._editContent = this._editContent.replace(chunkMatch[0], swappedChunk);
+                this.requestUpdate();
+            } else {
+                BridgeStore.getState().updateCellContent(id, swappedChunk);
             }
-        });
+        } else {
+            alert("Could not cleanly parse SEARCH/REPLACE blocks to swap.");
+        }
+    }
+
+    _openEditorModal(cell) {
+        this._editCellId = cell.id;
+        this._editCellOriginalFile = cell.file;
+        this._editContent = `<<<<<<< FILE: ${cell.file}\n${cell.content}`;
+        this.requestUpdate();
+    }
+    _navigateChunk(direction) {
+        if (!this._editCellId) return;
+
+        // Auto-save current edits before navigating away
+        const text = this._editContent;
+        const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
+        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
+        const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
+        BridgeStore.getState().updateCellFile(this._editCellId, newFile);
+        BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
+        // Find and open the next chunk in the entire payload
+        const allCells = this.cells;
+        if (allCells.length <= 1) return;
+
+        const currentIndex = allCells.findIndex(c => c.id === this._editCellId);
+        let newIndex = currentIndex + direction;
+
+        // Prevent wrapping at the boundaries
+        if (newIndex < 0 || newIndex >= allCells.length) return;
+
+        this._openEditorModal(allCells[newIndex]);
+    }
+
+    _handleHeaderTouchStart(e) {
+        this._headerTouchStartX = e.changedTouches[0].clientX;
+        this._headerTouchStartY = e.changedTouches[0].clientY;
+    }
+
+    _handleHeaderTouchEnd(e) {
+        if (this._headerTouchStartX === null) return;
+        const endX = e.changedTouches[0].clientX;
+        const endY = e.changedTouches[0].clientY;
+        const deltaX = this._headerTouchStartX - endX;
+        const deltaY = Math.abs(this._headerTouchStartY - endY);
+
+        if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 40) {
+            if (deltaX > 0) this._navigateChunk(1);
+            else this._navigateChunk(-1);
+        }
+        this._headerTouchStartX = null;
+        this._headerTouchStartY = null;
+    }
+    _handleParentToggle(file) {
+        const cells = BridgeStore.getState().cells || [];
+        const groupCells = cells.filter(c => c.file === file);
+        const selectedCount = groupCells.filter(c => c.active).length;
+        const totalCount = groupCells.length;
+
+        // Mathematical toggle: If the parent is fully unselected, turn all ON. Otherwise, turn all OFF.
+        const targetState = selectedCount === 0;
+
+        const updatedCells = cells.map(c =>  
+            c.file === file ? { ...c, active: targetState } : c
+        );
+
+        BridgeStore.setState({ cells: updatedCells });
+        this.requestUpdate();
+    }
+    _saveEditModal() {
+        const text = this._editContent;
+        const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
+        const newFile = fileMatch ? fileMatch[1].trim() : this._editCellOriginalFile;
+
+        const rawContent = text.replace(/^<<<<<<< FILE:.*\n?/m, '').trim();
+
+        BridgeStore.getState().updateCellFile(this._editCellId, newFile);
+        BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
+        this._editCellId = null;
     }
     async _sync(dryRunActive, bypassSandwich = false) {
         if (bypassSandwich) this._globalBypassSandwich = true;
@@ -206,7 +268,7 @@ export class InSetuExtBridge extends InSetuElement {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                pinned_repos: Array.from(AppStore.getState().pinnedRepos)
+                pinned_repos: Array.from(window.inSetu.stores.Gather.getState().pinnedRepos)
             });
 
             if (!res.ok) {
@@ -230,8 +292,8 @@ export class InSetuExtBridge extends InSetuElement {
                     let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     // Format raw log text into elegant inSetu cards
                     safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE ([^\r\n]+) ===[ \t]*\r?\n?/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
-                    safeData = safeData.replace(/^Targeting: ([^\r\n]+)[ \t]*\r?\n?/gm, '<yenvui-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono); margin-top: -5px; padding-bottom: 10px;">');
-                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.[ \t]*\r?\n?/gm, '</div></yenvui-card>');
+                    safeData = safeData.replace(/^Targeting: ([^\r\n]+)[ \t]*\r?\n?/gm, '<sutram-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono); margin-top: -5px; padding-bottom: 10px;">');
+                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.[ \t]*\r?\n?/gm, '</div></sutram-card>');
                     safeData = safeData.replace(/^=== PULSE ([^\r\n]+) COMPLETE ===[ \t]*\r?\n?/gm, '');
                     // Embellish semantic tags
                     safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
@@ -325,113 +387,48 @@ export class InSetuExtBridge extends InSetuElement {
 
         return html`
             <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden; background: var(--bg); height: 100%;">
-
+                <!-- EDITOR MODAL -->
+                ${(() => {
+                    const allCells = this.cells;
+                    const chunkIndex = allCells.findIndex(c => c.id === this._editCellId) + 1;
+                    const shortFile = this._editCellOriginalFile ? this._editCellOriginalFile.split('/').pop() : '';
+                    return html`
+                        <sutram-modal ?open=${!!this._editCellId} ?fullscreen=${true} ?flush=${true} titleText="Patch for ${shortFile}" @sutram-modal-closed=${() => this._editCellId = null}>
+                            <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--bg);">
+                                <div style="display: flex; align-items: stretch; background: var(--pane-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0;"
+                                    @touchstart=${this._handleHeaderTouchStart}
+                                    @touchend=${this._handleHeaderTouchEnd}>
+                                    ${allCells.length > 1 ? html`
+                                        <button @click=${() => this._navigateChunk(-1)} ?disabled=${chunkIndex === 1} style="width: 26px; padding: 0; background: ${chunkIndex === 1 ? 'var(--input-bg)' : 'var(--intent-highlight)'}; border: none; color: ${chunkIndex === 1 ? 'var(--text-muted)' : 'white'}; cursor: ${chunkIndex === 1 ? 'not-allowed' : 'pointer'}; font-size: 1.6rem; font-weight: bold; transition: filter 0.2s; display: flex; align-items: center; justify-content: center; opacity: ${chunkIndex === 1 ? '0.5' : '1'};" onmouseover="if(!this.disabled) this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='none'">‹</button>
+                                    ` : ''}
+                                    <div style="flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 15px 20px;">
+                                        <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold; text-align: center;">Chunk ${chunkIndex} of ${allCells.length}</span>
+                                        <sutram-entity-actions entityType="yomama" .entityData=${{ id: this._editCellId, file: this._editCellOriginalFile, content: this._editContent }} style="justify-content: center;"></sutram-entity-actions>
+                                    </div>
+                                    ${allCells.length > 1 ? html`
+                                        <button @click=${() => this._navigateChunk(1)} ?disabled=${chunkIndex === allCells.length} style="width: 26px; padding: 0; background: ${chunkIndex === allCells.length ? 'var(--input-bg)' : 'var(--intent-highlight)'}; border: none; color: ${chunkIndex === allCells.length ? 'var(--text-muted)' : 'white'}; cursor: ${chunkIndex === allCells.length ? 'not-allowed' : 'pointer'}; font-size: 1.6rem; font-weight: bold; transition: filter 0.2s; display: flex; align-items: center; justify-content: center; opacity: ${chunkIndex === allCells.length ? '0.5' : '1'};" onmouseover="if(!this.disabled) this.style.filter='brightness(1.2)'" onmouseout="this.style.filter='none'">›</button>
+                                    ` : ''}
+                                </div>
+                                <sutram-editor 
+                                    .value=${this._editContent}
+                                    language="javascript"
+                                    @editor-changed=${e => { this._editContent = e.detail.value; this.requestUpdate(); }}>
+                                </sutram-editor>
+                            </div>
+                            <div slot="footer" style="display: flex; width: 100%; align-items: center; gap: 12px;">
+                                <button class="btn-sm" @click=${() => this._editCellId = null} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; background: var(--intent-neutral); color: white; border: none; cursor: pointer;">❌ Cancel</button>
+                                <sutram-async-btn label="💾 Save & Close" intent="primary" .onClick=${() => this._saveEditModal()} style="flex: 1; margin: 0; --btn-padding: 12px; --btn-font-size: 1.05rem;"></sutram-async-btn>
+                            </div>
+                        </sutram-modal>
+                    `;
+                })()}
                 <!-- INPUT VIEW -->
-                <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0;">
-                    <!-- THE COMBOBOX HEADER -->
-                    <div data-custom-dropdown="true" style="display: ${this.cells.length > 0 ? 'flex' : 'none'}; flex-direction: column; position: relative; z-index: 10; flex-shrink: 0; background: ${this._dropdownOpen ? 'var(--pane-bg)' : 'var(--bg)'}; border-bottom: ${this._dropdownOpen ? 'none' : '1px solid var(--border)'}; transition: background 0.2s;">
-                        <div class="toolbar-row" style="justify-content: space-between; cursor: pointer; user-select: none;" @click=${(e) => { if (!e.target.closest('yenvui-filter-dropdown')) this._dropdownOpen = !this._dropdownOpen; }}>
-                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text); display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-                                <span style="color: var(--text-muted); font-size: 0.7rem; flex-shrink: 0;">${this._dropdownOpen ? '▲' : '▼'}</span>
-                                ${this._activeCellId ? (() => {
-                                    const cell = this.cells.find(c => c.id === this._activeCellId);
-                                    if (!cell) return html`<span style="color: var(--text-muted); opacity: 0.6; font-weight: normal;">Select a patch...</span>`;
-                                    const chunkIndex = this.cells.findIndex(c => c.id === cell.id) + 1;
-                                    const totalChunks = this.cells.length;
-                                    const shortFile = cell.file.length > 40 ? '...' + cell.file.slice(-37) : cell.file;
-                                    return html`<span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left;">&lrm;${shortFile}&lrm; <span style="color: var(--text-muted); font-weight: normal; margin-left: 5px;">(${chunkIndex}/${totalChunks})</span></span>`;
-                                })() : html`<span style="color: var(--text-muted); opacity: 0.6; font-weight: normal;">Select a patch...</span>`}
-                            </span>
-                            <yenvui-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0} @click=${e => e.stopPropagation()}>
-                                <insetu-repo-filter
-                                    label="📌 Repos:"
-                                    .repos=${this.allRepos}
-                                    .activeRepos=${Array.from(this.pinnedRepos)}
-                                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                                </insetu-repo-filter>
-                            </yenvui-filter-dropdown>
-                        </div>
-                        <div style="display: ${this._dropdownOpen ? 'flex' : 'none'}; position: absolute; top: 100%; left: 0; right: 0; height: calc(100dvh - 170px); overflow-y: auto; background: var(--pane-bg); border-bottom: 1px solid var(--border); border-top: 1px dashed var(--border); padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); flex-direction: column;">
-                            ${this.cells.length === 0 ? html`<div style="padding: 15px; color: var(--text-muted); font-style: italic;">No patches available.</div>` : ''}
-                            ${Object.entries(groupedCells).map(([file, groupCells]) => {
-                                    const allChecked = groupCells.every(c => c.active);
-                                    const someChecked = groupCells.some(c => c.active);
-
-                                    return html`
-                                        <insetu-card
-                                            .filename=${file}
-                                            .titleText=${""}
-                                            icon=""
-                                            ?disableSelection=${true}
-                                            intentColor=${allChecked ? "var(--intent-success)" : (someChecked ? "var(--intent-warning)" : "var(--intent-neutral)")}
-                                            style="margin-bottom: 12px; display: block;">
-                                            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: -5px;">
-                                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-                                                    <input type="checkbox" style="transform: scale(1.2); margin: 0; cursor: pointer; margin-left: 2px;"
-                                                        .checked=${allChecked}
-                                                        .indeterminate=${someChecked && !allChecked}
-                                                        @click=${(e) => e.stopPropagation()}
-                                                        @change=${(e) => {
-                                                            e.stopPropagation();
-                                                            const newState = e.target.checked;
-                                                            groupCells.forEach(c => {
-                                                                if (c.active !== newState) BridgeStore.getState().toggleCellActive(c.id);
-                                                            });
-                                                        }}>
-                                                    <span style="font-size: 0.85rem; font-weight: bold; color: var(--intent-primary); word-break: break-all; direction: rtl; text-align: left; flex: 1;">&lrm;${file}&lrm;</span>
-                                                </div>
-
-                                                ${groupCells.map((c, i) => {
-                                                    const chunkIndex = this.cells.findIndex(cell => cell.id === c.id) + 1;
-                                                    const totalChunks = this.cells.length;
-                                                    return html`
-                                                        <div style="display: flex; align-items: center; gap: 10px;">
-                                                            <input type="checkbox" style="transform: scale(1.2); margin: 0; cursor: pointer; margin-left: 2px;" 
-                                                                .checked=${c.active} 
-                                                                @click=${(e) => e.stopPropagation()}
-                                                                @change=${(e) => { e.stopPropagation(); BridgeStore.getState().toggleCellActive(c.id); }}>
-                                                            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; cursor: pointer; background: ${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}; border-radius: 4px; transition: background 0.2s; border: 1px solid ${this._activeCellId === c.id ? 'var(--border)' : 'transparent'}; flex: 1;"
-                                                                @click=${() => { this._activeCellId = c.id; this._dropdownOpen = false; }}
-                                                                onmouseover="this.style.background='var(--input-bg)'"
-                                                                onmouseout="this.style.background='${this._activeCellId === c.id ? 'var(--input-bg)' : 'transparent'}'">
-                                                                <span style="font-size: 0.85rem; color: ${c.active ? 'var(--text)' : 'var(--text-muted)'}; flex: 1;">Chunk ${i + 1} &gt;&gt; Select</span>
-                                                                <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: bold;">(${chunkIndex}/${totalChunks})</span>
-                                                            </div>
-                                                        </div>
-                                                    `;
-                                                })}
-                                            </div>
-                                            <div slot="actions" style="display: flex; gap: 8px;" @click=${(e) => e.stopPropagation()}>
-                                                <button class="btn-sm" style="background: var(--intent-primary);" title="Change Target" @click=${(e) => {
-                                                    e.stopPropagation();
-                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
-                                                        this.ui.openWorkspaceBrowser({
-                                                            mode: 'file',
-                                                            title: 'Select File for Patch',
-                                                            callback: (filepath) => {
-                                                                delete this._fileVerificationCache[filepath];
-                                                                BridgeStore.getState().updateGroupFile(file, filepath);
-                                                                this._verifyFiles([filepath], true);
-                                                            }
-                                                        });
-                                                    }
-                                                }}>📁 Change</button>
-                                                ${this._fileVerificationCache[file] === true ? html`
-                                                    <button class="btn-sm" style="background: var(--intent-neutral);" title="View Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); this.vfs.viewSourceFile(file, true); }}>📋 View</button>
-                                                    <button class="btn-sm" style="background: var(--intent-highlight);" title="Download Original" @click=${(e) => { e.preventDefault(); e.stopPropagation(); this.vfs.fetchAndDownloadState(file); }}>⬇️ Download</button>
-                                                ` : html`
-                                                    <div title="Unknown Target" style="font-size: 1.2rem; cursor: help; padding: 4px; opacity: 0.6; text-align: center;">❓</div>
-                                                `}
-                                            </div>
-                                        </insetu-card>
-                                    `;
-                                })}
-                        </div>
-                    </div>
-
-                    <!-- TEXTAREA CONTAINER -->
+                <div style="display: ${this.viewMode === 'input' ? 'flex' : 'none'}; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 0; background: var(--bg);" @paste=${e => {
+                    const text = e.clipboardData.getData('text');
+                    if (text && text.includes('<<<<<<< FILE:')) { e.preventDefault(); BridgeStore.getState().parseAndAppendCells(text); }
+                }}>
                     ${this.cells.length === 0 ? html`
-                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--border); border-radius: 8px; margin: 20px; background: var(--input-bg); min-height: 300px; position: relative;"
+                        <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed var(--border); border-radius: 8px; background: var(--input-bg); min-height: 300px; position: relative; margin: 20px;"
                             @dragover=${e => e.preventDefault()}
                             @drop=${async e => {
                                 e.preventDefault();
@@ -441,26 +438,73 @@ export class InSetuExtBridge extends InSetuElement {
                             <div style="font-size: 3rem; margin-bottom: 10px;">🌉</div>
                             <h3 style="margin: 0 0 10px 0; color: var(--text);">Yomama Sync Bridge</h3>
                             <p style="color: var(--text-muted); margin-bottom: 20px; text-align: center; max-width: 400px;">Paste a patch sandwich from your LLM to begin parsing individual file blocks.</p>
-                            <textarea style="opacity: 0.01; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; resize: none;" autofocus @paste=${e => {
-                                const text = e.clipboardData.getData('text');
-                                if (text) { e.preventDefault(); BridgeStore.getState().parseAndAppendCells(text); }
-                            }}></textarea>
+                            <textarea style="opacity: 0.01; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; z-index: 1; resize: none;" autofocus></textarea>
                         </div>
                     ` : html`
-                        <div style="display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; background: var(--input-bg);">
-                            ${this.cells.map(cell => html`
-                                <textarea class="cell-textarea" style="display: ${this._activeCellId === cell.id ? 'block' : 'none'}; width: 100%; height: 100%; resize: none; border: none; padding: 20px; font-family: monospace; background: transparent; color: var(--text); box-sizing: border-box; outline: none; opacity: ${cell.active ? '1' : '0.5'}; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; overflow-y: auto;" 
-                                    .value=${cell.content}  
-                                    @input=${(e) => BridgeStore.getState().updateCellContent(cell.id, e.target.value)} 
-                                    @paste=${(e) => {
-                                        const text = e.clipboardData.getData('text');
-                                        if (text.includes('<<<<<<< FILE:')) {
-                                            e.preventDefault();
-                                            BridgeStore.getState().parseAndAppendCells(text);
-                                        }
-                                    }}></textarea>
-                            `)}
-                        </div>
+                        ${Object.entries(groupedCells).map(([file, groupCells]) => {
+                            const selectedCount = groupCells.filter(c => c.active).length;
+                            const totalCount = groupCells.length;
+                            const headerTitle = `${file.split('/').pop()} (${totalCount} patch${totalCount === 1 ? '' : 'es'})`;
+                            return html`
+                            <sutram-collapsible titleText=${headerTitle} intent="neutral" .open=${true} ?flush=${true} style="background: var(--bg);">
+                                <div style="padding: 15px 20px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border);">
+                                    <!-- Target File Card -->
+                                    <insetu-card
+                                        .titleText=${"Target File:"}
+                                        .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
+                                        .detailText=${`${selectedCount} of ${totalCount} patches selected`}
+                                        icon="📄"
+                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
+                                        entityType="file"
+                                        .entityData=${{ filepath: file, isFS: true, suppress: ['file-edit', 'file-browse'] }}
+                                        selectionStoreKey="none"
+                                        ?selected=${selectedCount > 0}
+                                        @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
+                                        style="margin-bottom: 10px; display: block;">
+
+                                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                                            <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
+                                                BridgeStore.getState().updateGroupFile(file, e.detail.value);
+                                                window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
+                                            }}></sutram-input>
+                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
+                                                if (this.ui && this.ui.openWorkspaceBrowser) {
+                                                    this.ui.openWorkspaceBrowser({
+                                                        mode: 'file',
+                                                        title: 'Select File for Patch',
+                                                        callback: (filepath) => {
+                                                            BridgeStore.getState().updateGroupFile(file, filepath);
+                                                            window.inSetu.stores.Fs.getState().verifyFiles([filepath], true);
+                                                        }
+                                                    });
+                                                }
+                                            }}>📁 Remap</button>
+                                        </div>
+                                    </insetu-card>
+
+                                    <!-- Patches -->
+                                    <sutram-card-group style="gap: 10px;">
+                                        ${groupCells.map((c, i) => {
+                                            const isGenesis = !!c.content.match(/<<<<<<< SEARCH\s*=======/);
+                                            const typeStr = isGenesis ? "Type: Create File" : "Type: Search & Replace";
+                                            return html`
+                                            <insetu-card
+                                                .titleText=${`Patch Chunk ${i + 1}`}
+                                                .descriptionText=${typeStr}
+                                                icon="🧩"
+                                                ?selected=${c.active}
+                                                intentColor=${c.active ? "var(--intent-success)" : "var(--intent-neutral)"}
+                                                selectionStoreKey="none"
+                                                entityType="yomama"
+                                                .entityData=${{...c, suppress: ['yomama-swap']}}
+                                                @sutram-card-select-toggled=${(e) => BridgeStore.getState().toggleCellActive(c.id)}
+                                                @card-clicked=${() => this._openEditorModal(c)}>
+                                            </insetu-card>
+                                        `})}
+                                    </sutram-card-group>
+                                </div>
+                            </sutram-collapsible>
+                        `;})}
                     `}
                 </div>
 
@@ -485,13 +529,13 @@ export class InSetuExtBridge extends InSetuElement {
                             } catch(e) { 
                                 alert('Clipboard access denied.\\n\\nPlease press Ctrl+V (or Cmd+V) anywhere on this screen to paste.'); 
                             }
-                        }} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-primary); color: white;">📋 Paste from Clipboard</button>
+                        }} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-primary); color: white;">📋 Paste from Clipboard</button>
                     ` : this.viewMode === 'input' ? html`
-                        <button @click=${() => BridgeStore.getState().clearPayload()} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-danger); color: white;">🗑️ Clear</button>
-                        <button @click=${() => this._sync(true)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-warning); color: #000;">🧪 Dry Run</button>
-                        <button @click=${() => this._sync(false)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-success); color: white;">⚡ Patch</button>
+                        <button @click=${() => BridgeStore.getState().clearPayload()} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-danger); color: white;">🗑️ Clear</button>
+                        <button @click=${() => this._sync(true)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-warning); color: #000;">🧪 Test</button>
+                        <button @click=${() => this._sync(false)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-success); color: white;">⚡ Patch</button>
                     ` : html`
-                        <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 1.05rem; font-weight: bold; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
+                        <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
                     `}
                 </div>
             </div>
@@ -501,15 +545,94 @@ export class InSetuExtBridge extends InSetuElement {
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuExtBridgeActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
+
+    static properties = {
+        allRepos: { type: Array },
+        pinnedRepos: { type: Object }
+    };
+
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this.allRepos = [];
+        this.pinnedRepos = new Set(['ALL']);
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
+            this.allRepos = state.allRepos || [];
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.requestUpdate();
+        });
+        const gState = window.inSetu.stores.Gather.getState();
+        this.allRepos = gState.allRepos || [];
+        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
+    }
+
     render() {
-        return html``;
+        const activeFilters = [];
+        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
+        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
+
+        return html`
+            <sutram-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0}>
+                <insetu-repo-filter
+                    label="📌 Repos:"
+                    .repos=${this.allRepos}
+                    .activeRepos=${Array.from(this.pinnedRepos)}
+                    @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                </insetu-repo-filter>
+            </sutram-filter-dropdown>
+        `;
     }
 }
 customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
-
 window.ExtensionRegistry.registerExtension('bridge', {
     name: "Yomama Sync Bridge",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'yomama',
+            id: 'yomama-copy',
+            label: 'Copy',
+            icon: '📋',
+            intent: 'neutral',
+            order: 10,
+            asyncAction: async (data) => {
+                const text = `<<<<<<< FILE: ${data.file}\n${data.content}`;
+                if (window.inSetu && window.inSetu.utils && window.inSetu.utils.copyRawText) {
+                    await window.inSetu.utils.copyRawText(text);
+                }
+            }
+        },
+        {
+            targetEntity: 'yomama',
+            id: 'yomama-delete',
+            label: 'Delete',
+            icon: '🗑️',
+            intent: 'danger',
+            order: 30,
+            onClick: (data) => {
+                if (confirm("Remove this patch?")) {
+                    window.inSetu.stores.Bridge.getState().removeCell(data.id);
+                    window.dispatchEvent(new CustomEvent('bridge-cell-deleted', { detail: { id: data.id } }));
+                }
+            }
+        },
+        {
+            targetEntity: 'yomama',
+            id: 'yomama-swap',
+            label: 'Swap',
+            icon: '🔄',
+            intent: 'warning',
+            order: 40,
+            onClick: (data) => {
+                window.dispatchEvent(new CustomEvent('bridge-cell-swap', { detail: { id: data.id } }));
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
