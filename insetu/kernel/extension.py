@@ -9,15 +9,25 @@ class JobManager:
         self.ext_name = ext_name
         self.workspace_id = workspace_id
         self.current_job_id = job_id
-
-    def submit(self, task_name, **kwargs):
+    def submit(self, task_name, coalesce=False, **kwargs):
         import uuid, json
         from insetu.kernel.workers import submit_immediate_job
         job_prefix = self.ext_name[:3].lower()
         job_id = f"{job_prefix}_{uuid.uuid4().hex[:8]}"
         args_json = json.dumps(kwargs)
-        submit_immediate_job(job_id, self.ext_name, task_name, args_json, self.workspace_id)
-        return job_id
+        return submit_immediate_job(
+            job_id, self.ext_name, task_name, args_json, self.workspace_id, coalesce=coalesce
+        )
+
+    def is_in_flight(self, task_name):
+        """SDK Helper: Checks if a specific background worker task is currently queued or processing."""
+        from insetu.kernel.db import get_connection
+        conn = get_connection("workers", workspace_id=self.workspace_id)
+        row = conn.execute(
+            "SELECT id FROM immediate_jobs WHERE ext_name=? AND callback_name=? AND status IN ('pending', 'processing')",
+            (self.ext_name, task_name)
+        ).fetchone()
+        return bool(row)
     def update_progress(self, message, artifact=None):
         if self.current_job_id:
             from insetu.kernel.workers import update_immediate_job_status

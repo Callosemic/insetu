@@ -677,7 +677,6 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
             }
-
             window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
             return result;
         } catch (error) {
@@ -689,6 +688,20 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     })();
     return compilePromise;
 };
+
+export async function refreshManifest() {
+    try {
+        const res = await window.inSetu.api.system('manifest?t=' + Date.now());
+        if (res.ok) {
+            const manifest = await res.json();
+            AppStore.setState({ manifest });
+            return manifest;
+        }
+    } catch (e) {
+        console.error("Failed to refresh manifest:", e);
+    }
+    return null;
+}
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
     const btn = document.getElementById('simulate-panic-btn');
@@ -908,6 +921,7 @@ window.inSetu.sys = window.inSetu.sys || {};
 window.inSetu.ui = window.inSetu.ui || {};
 window.inSetu.sys.fullRefresh = fullRefresh;
 window.inSetu.sys.performSoftRefresh = performSoftRefresh;
+window.inSetu.sys.refreshManifest = refreshManifest;
 window.inSetu.sys.simulatePanic = simulatePanic;
 window.inSetu.sys.executeSystemCompile = executeSystemCompile;
 window.inSetu.sys.executeWorkspaceMutation = executeWorkspaceMutation;

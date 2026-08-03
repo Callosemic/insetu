@@ -43,26 +43,32 @@ INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, sta
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, interval_ms, jitter_ms, now, args_json))
     conn.commit()
-
-def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None):
+def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None, coalesce=False):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
     if _shutdown_event.is_set():
         return False
 
     workspace_id, conn, now, args_json = _prepare_job_payload(args_json, workspace_id)
+
+    if coalesce:
+        existing = conn.execute(
+            "SELECT id FROM immediate_jobs WHERE ext_name=? AND callback_name=? AND status IN ('pending', 'processing')",
+            (ext_name, callback_name)
+        ).fetchone()
+        if existing:
+            return existing['id']
     conn.execute("""
         INSERT OR REPLACE INTO immediate_jobs (id, ext_name, callback_name, status, status_message, artifact_json, created_at, updated_at, args_json)
         VALUES (?, ?, ?, 'processing', 'Initializing...', '{}', ?, ?, ?)
     """, (job_id, ext_name, callback_name, now, now, args_json))
     conn.commit()
-
     if not _shutdown_event.is_set():
         try:
             _executor.submit(_execute_immediate_job, job_id, ext_name, callback_name, args_json, workspace_id)
         except RuntimeError as e:
             if "shutdown" not in str(e).lower():
                 raise
-    return True
+    return job_id
 def update_immediate_job_meta(job_id, meta_dict, workspace_id="default"):
     """Helper for workers to safely update discrete metrics without altering stream status."""
     import json
