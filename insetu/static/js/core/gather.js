@@ -17,23 +17,11 @@ export const GatherStore = createExtensionStore('Gather', {
     activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
     setSearchQuery: (q) => GatherStore.setState({ searchQuery: q }),
-    pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
+    // Proxy legacy API calls to the App Shell to prevent extension breakage
     setPinnedRepos: (repos) => {
-        const ws = window.inSetu.stores.App?.getState()?.activeWorkspace || 'default';
-        localStorage.setItem(`insetu_pinned_repos_${ws}`, JSON.stringify(Array.from(repos)));
-        GatherStore.setState({ pinnedRepos: repos });
-    }
-});
-
-// Reactively synchronize topology from AppStore to GatherStore
-AppStore.subscribe(state => state.targetConfigs, (targets) => {
-    if (targets && targets.length > 0) {
-        GatherStore.setState({ targetConfigs: targets });
-    }
-});
-AppStore.subscribe(state => state.allRepos, (repos) => {
-    if (repos && repos.length > 0) {
-        GatherStore.setState({ allRepos: repos });
+        if (window.inSetu.stores.App) {
+            window.inSetu.stores.App.getState().setPinnedRepos(repos);
+        }
     }
 });
 
@@ -109,7 +97,7 @@ const packSelectionPayload = async (items) => {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
                 try {
-                    const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+                    const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
                     if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
                 } catch(e) {}
                 resolve(statusData.artifact);
@@ -153,8 +141,6 @@ export class InSetuExtGather extends InSetuElement {
         this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         this.manifestFiles = [];
         this.searchQuery = '';
-        this.pinnedRepos = new Set(['ALL']);
-        this.allRepos = [];
         this._expandedCats = {};
     }
     onWorkspaceChanged(newWorkspaceId) {
@@ -166,14 +152,10 @@ export class InSetuExtGather extends InSetuElement {
             this.loading = state.loading;
             this.loadingMessage = state.loadingMessage;
             this.searchQuery = state.searchQuery;
+            this.requestUpdate();
         });
         this.subscribe(AppStore, state => {
             this.manifestFiles = Object.keys(state.manifest || {});
-            this.requestUpdate();
-        });
-        this.subscribe(GatherStore, state => {
-            this.allRepos = state.allRepos || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
 
@@ -183,8 +165,6 @@ export class InSetuExtGather extends InSetuElement {
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest || {});
         const gState = GatherStore.getState();
-        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = gState.allRepos || [];
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
@@ -260,9 +240,9 @@ export class InSetuExtGather extends InSetuElement {
         }
         const repoFilteredFiles = enrichedFiles.filter(f => {
             if (f.finalCat === 'Quickpacks') return true;
-            if (this.pinnedRepos.has('ALL')) return true;
-            if (f.repoDir && this.pinnedRepos.has(f.repoDir)) return true;
-            return Array.from(this.pinnedRepos).some(repo => f.filename.startsWith(repo + '_') || f.filename.includes('_' + repo + '_') || (f.finalTitle && f.finalTitle.toLowerCase().includes(repo.toLowerCase())));
+            if (this.ecosystem.pinnedRepos.has('ALL')) return true;
+            if (f.repoDir && this.ecosystem.pinnedRepos.has(f.repoDir)) return true;
+            return Array.from(this.ecosystem.pinnedRepos).some(repo => f.filename.startsWith(repo + '_') || f.filename.includes('_' + repo + '_') || (f.finalTitle && f.finalTitle.toLowerCase().includes(repo.toLowerCase())));
         });
 
         // 2. Apply Fuzzy Search
@@ -275,13 +255,13 @@ export class InSetuExtGather extends InSetuElement {
                 .searchQuery=${this.searchQuery}
                 @search-changed=${(e) => GatherStore.getState().setSearchQuery(e.detail.value)}
                 .enableFilterDropdown=${true}
-                .activeFilters=${Array.from(this.pinnedRepos)}>
+                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
                 <insetu-repo-filter
                     slot="filters"
                     label="📌 Repos:"
-                    .repos=${this.allRepos}
-                    .activeRepos=${Array.from(this.pinnedRepos)}
-                    @repo-filter-changed=${(e) => GatherStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    .repos=${this.ecosystem.allRepos}
+                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div class="gather-body">
@@ -334,7 +314,7 @@ export class InSetuExtGather extends InSetuElement {
                                                 if (res.ok) {
                                                     const data = await res.json();
                                                     if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                                    const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+                                                    const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
                                                     if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
                                                 }
                                             } catch(e) {

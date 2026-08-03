@@ -53,7 +53,7 @@ export function insertLinkToEditor(path, name) {
     let finalPath = path;
     const currentModalFile = FsStore.getState().fileModal.filename;
     if (currentModalFile) {
-        const targetConfigs = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState().targetConfigs : [];
+        const targetConfigs = AppStore.getState().targetConfigs || [];
         const getRepo = (p) => {
             const match = targetConfigs.find(c => p.startsWith(c.repo_dir + '/'));
             return match ? match.repo_dir : p.split('/')[0];

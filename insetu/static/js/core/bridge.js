@@ -82,8 +82,6 @@ export class InSetuExtBridge extends InSetuElement {
         cells: { type: Array },
         consoleOutput: { type: String },
         viewMode: { type: String },
-        allRepos: { type: Array },
-        pinnedRepos: { type: Object },
         _fileVerificationCache: { type: Object },
         _editCellId: { type: String },
         _editContent: { type: String },
@@ -100,8 +98,6 @@ export class InSetuExtBridge extends InSetuElement {
         this.cells = [];
         this.consoleOutput = 'Ready...';
         this.viewMode = 'input';
-        this.allRepos = [];
-        this.pinnedRepos = new Set(['ALL']);
         this._fileVerificationCache = {};
         this._globalBypassSandwich = false;
         this._editCellId = null;
@@ -125,10 +121,6 @@ export class InSetuExtBridge extends InSetuElement {
             this.viewMode = state.viewMode;
             window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
         });
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.allRepos = state.allRepos || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-        });
         this.subscribe(window.inSetu.stores.Fs, (state) => {
             this._fileVerificationCache = state.fileVerificationCache || {};
         });
@@ -141,14 +133,12 @@ export class InSetuExtBridge extends InSetuElement {
             }
         });
         this.registerGlobalListener('bridge-cell-swap', window, (e) => this._handleSwap(e.detail.id));
+
         // Initial sync
         const bState = BridgeStore.getState();
         this.cells = bState.cells || [];
         this.consoleOutput = bState.consoleOutput;
         this.viewMode = bState.viewMode;
-        const gState = window.inSetu.stores.Gather.getState();
-        this.allRepos = gState.allRepos || [];
-        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
         const fsState = window.inSetu.stores.Fs.getState();
         this._fileVerificationCache = fsState.fileVerificationCache || {};
 
@@ -254,36 +244,20 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
         this._editCellId = null;
     }
-    async _sync(dryRunActive, bypassSandwich = false) {
-        if (bypassSandwich) this._globalBypassSandwich = true;
-        this._lastDryRun = dryRunActive;
-        const textVal = BridgeStore.getState().getCompiledPayload();
-        BridgeStore.setState({ viewMode: 'console' });
+    _getSyncAction(dryRunActive, bypassSandwich = false) {
+        return async (e) => {
+            if (bypassSandwich) this._globalBypassSandwich = true;
+            this._lastDryRun = dryRunActive;
+            const textVal = BridgeStore.getState().getCompiledPayload();
+            BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge..." });
+            const activeFiles = BridgeStore.getState().getActiveFiles();
 
-        const activeFiles = BridgeStore.getState().getActiveFiles();
-        BridgeStore.setState({ consoleOutput: "Dispatching transaction to the Bridge..." });
-
-        try {
-            const res = await this.api.post('sync', {
+            const action = this.api.bindJobAction('sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                pinned_repos: Array.from(window.inSetu.stores.Gather.getState().pinnedRepos)
-            });
-
-            if (!res.ok) {
-                let errText = `HTTP ${res.status} Error`;
-                try { 
-                    if (!res.bodyUsed) errText = await res.text(); 
-                } catch(e) {}
-                let err = {};
-                try { err = JSON.parse(errText); } catch(e) {}
-                throw new Error(err.error || errText);
-            }
-            const data = await res.json();
-            BridgeStore.setState({ activeBridgeJobId: data.job_id, consoleOutput: "Transaction accepted. Processing matrix off-thread..." });
-
-            this.api.pollJob(data.job_id, {
+                pinned_repos: Array.from(this.ecosystem.pinnedRepos)
+            }, {
                 interval: 250,
                 onProgress: (msg) => BridgeStore.setState({ consoleOutput: msg }),
                 onComplete: (statusData) => {
@@ -341,10 +315,8 @@ export class InSetuExtBridge extends InSetuElement {
                     BridgeStore.setState({ activeBridgeJobId: null, consoleOutput: `<span style="color: var(--intent-danger); font-weight: bold;">[!] ${err.message}</span>` });
                 }
             });
-
-        } catch (err) {
-            BridgeStore.setState({ consoleOutput: `<span style="color: red;">Error connecting to Bridge Backend: ${err.message}</span>` });
-        }
+            await action(e);
+        };
     }
 
     _handleConsoleClick(e) {
@@ -358,7 +330,7 @@ export class InSetuExtBridge extends InSetuElement {
             const cells = BridgeStore.getState().cells;
             const target = cells.find(c => c.file === oldPath);
             if (target) BridgeStore.getState().updateCellFile(target.id, newPath);
-            this._sync(this._lastDryRun || false, this._globalBypassSandwich);
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             if (this.vfs && this.vfs.openVirtualFile) this.vfs.openVirtualFile('Diff_Analysis.diff', decodedDiff);
@@ -371,14 +343,10 @@ export class InSetuExtBridge extends InSetuElement {
             this.vfs.fetchAndDownloadState(btn.dataset.file);
         } else if (action === 'force-sync') {
             const isDryRun = btn.dataset.dryrun === 'true';
-            this._sync(isDryRun, true);
+            this._getSyncAction(isDryRun, true)();
         }
     }
     render() {
-        const activeFilters = [];
-        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
-
         const groupedCells = this.cells.reduce((acc, cell) => {
             if (!acc[cell.file]) acc[cell.file] = [];
             acc[cell.file].push(cell);
@@ -448,42 +416,42 @@ export class InSetuExtBridge extends InSetuElement {
                             return html`
                             <sutram-collapsible titleText=${headerTitle} intent="neutral" .open=${true} ?flush=${true} style="background: var(--bg);">
                                 <div style="padding: 15px 20px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border);">
-                                    <!-- Target File Card -->
-                                    <insetu-card
-                                        .titleText=${"Target File:"}
-                                        .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
-                                        .detailText=${`${selectedCount} of ${totalCount} patches selected`}
-                                        icon="📄"
-                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
-                                        entityType="file"
-                                        .entityData=${{ filepath: file, isFS: true, suppress: ['file-edit', 'file-browse'] }}
-                                        selectionStoreKey="none"
-                                        ?selected=${selectedCount > 0}
-                                        @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
-                                        style="margin-bottom: 10px; display: block;">
+                                    <sutram-card-group ?stacked=${true}>
+                                        <!-- Target File Card (Top of Stack) -->
+                                        <insetu-card
+                                            .titleText=${"Target File:"}
+                                            .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
+                                            .detailText=${`${selectedCount} of ${totalCount} patches selected`}
+                                            icon="📄"
+                                            intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
+                                            entityType="file"
+                                            .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
+                                            selectionStoreKey="none"
+                                            ?selected=${selectedCount > 0}
+                                            @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
+                                            style="display: block;">
 
-                                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
-                                            <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
-                                                BridgeStore.getState().updateGroupFile(file, e.detail.value);
-                                                window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
-                                            }}></sutram-input>
-                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
-                                                if (this.ui && this.ui.openWorkspaceBrowser) {
-                                                    this.ui.openWorkspaceBrowser({
-                                                        mode: 'file',
-                                                        title: 'Select File for Patch',
-                                                        callback: (filepath) => {
-                                                            BridgeStore.getState().updateGroupFile(file, filepath);
-                                                            window.inSetu.stores.Fs.getState().verifyFiles([filepath], true);
-                                                        }
-                                                    });
-                                                }
-                                            }}>📁 Remap</button>
-                                        </div>
-                                    </insetu-card>
+                                            <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                                                <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
+                                                    BridgeStore.getState().updateGroupFile(file, e.detail.value);
+                                                    window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
+                                                }}></sutram-input>
+                                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
+                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
+                                                        this.ui.openWorkspaceBrowser({
+                                                            mode: 'file',
+                                                            title: 'Select File for Patch',
+                                                            callback: (filepath) => {
+                                                                BridgeStore.getState().updateGroupFile(file, filepath);
+                                                                window.inSetu.stores.Fs.getState().verifyFiles([filepath], true);
+                                                            }
+                                                        });
+                                                    }
+                                                }}>📁 Remap</button>
+                                            </div>
+                                        </insetu-card>
 
-                                    <!-- Patches -->
-                                    <sutram-card-group style="gap: 10px;">
+                                        <!-- Patches (Subsequent Stacked Chunks) -->
                                         ${groupCells.map((c, i) => {
                                             const isGenesis = !!c.content.match(/<<<<<<< SEARCH\s*=======/);
                                             const typeStr = isGenesis ? "Type: Create File" : "Type: Search & Replace";
@@ -532,8 +500,8 @@ export class InSetuExtBridge extends InSetuElement {
                         }} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-primary); color: white;">📋 Paste from Clipboard</button>
                     ` : this.viewMode === 'input' ? html`
                         <button @click=${() => BridgeStore.getState().clearPayload()} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-danger); color: white;">🗑️ Clear</button>
-                        <button @click=${() => this._sync(true)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-warning); color: #000;">🧪 Test</button>
-                        <button @click=${() => this._sync(false)} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-success); color: white;">⚡ Patch</button>
+                        <sutram-async-btn label="🧪 Test" intent="warning" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: #000;" .onClick=${this._getSyncAction(true)}></sutram-async-btn>
+                        <sutram-async-btn label="⚡ Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                     ` : html`
                         <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
                     `}
@@ -545,48 +513,8 @@ export class InSetuExtBridge extends InSetuElement {
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
 export class InSetuExtBridgeActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
-
-    static properties = {
-        allRepos: { type: Array },
-        pinnedRepos: { type: Object }
-    };
-
     static styles = [sharedStyles];
-
-    constructor() {
-        super();
-        this.allRepos = [];
-        this.pinnedRepos = new Set(['ALL']);
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.allRepos = state.allRepos || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
-            this.requestUpdate();
-        });
-        const gState = window.inSetu.stores.Gather.getState();
-        this.allRepos = gState.allRepos || [];
-        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
-    }
-
-    render() {
-        const activeFilters = [];
-        this.pinnedRepos.forEach(r => { if (r !== 'ALL') activeFilters.push(r); });
-        const filterBtnText = activeFilters.length > 0 ? `Filters: ${activeFilters.slice(0, 2).join(', ')}${activeFilters.length > 2 ? '...' : ''}` : 'Filters';
-
-        return html`
-            <sutram-filter-dropdown filterText=${filterBtnText} .hasFilters=${activeFilters.length > 0}>
-                <insetu-repo-filter
-                    label="📌 Repos:"
-                    .repos=${this.allRepos}
-                    .activeRepos=${Array.from(this.pinnedRepos)}
-                    @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
-                </insetu-repo-filter>
-            </sutram-filter-dropdown>
-        `;
-    }
+    render() { return html``; }
 }
 customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
 window.ExtensionRegistry.registerExtension('bridge', {

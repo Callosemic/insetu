@@ -1,7 +1,7 @@
 // insetu/insetu/static/js/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
 import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../../vendor/sutram/js/sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce } from '../../vendor/sutram/js/utils.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, formatDate, timeAgo } from '../../vendor/sutram/js/utils.js';
 
 export { bindStoreInput };
 export function createExtensionStore(name, initialState, persistKeys = []) {
@@ -21,12 +21,14 @@ export function createIsolatedSlice(store, sliceKey) {
 }
 export class InSetuElement extends SutramElement {
     static properties = {
-        workspaceId: { type: String }
+        workspaceId: { type: String },
+        ecosystem: { type: Object }
     };
 
     constructor() {
         super();
         this.workspaceId = window.inSetu?.utils?.getActiveWorkspace() || 'default';
+        this.ecosystem = { allRepos: [], pinnedRepos: new Set(['ALL']), targetConfigs: [] };
     }
 
     get extName() {
@@ -70,7 +72,6 @@ export class InSetuElement extends SutramElement {
         }
         return Promise.resolve();
     }
-
     get utils() {
         return {
             fuzzyFilterObjects: window.inSetu.utils.fuzzyFilterObjects,
@@ -78,13 +79,39 @@ export class InSetuElement extends SutramElement {
             pollJob: window.inSetu.utils.pollJob,
             slugify: window.inSetu.utils.slugify,
             copyToClipboard: window.inSetu.utils.copyToClipboard,
-            copyRawText: window.inSetu.utils.copyRawText
+            copyRawText: window.inSetu.utils.copyRawText,
+            formatDate: window.inSetu.utils.formatDate,
+            timeAgo: window.inSetu.utils.timeAgo
         };
     }
-
     get api() {
         return {
             pollJob: (jobId, options = {}) => window.inSetu.utils.pollJob(jobId, options),
+            bindJobAction: (path, payloadGenerator, pollOptions = {}) => {
+                return async (e) => {
+                    const payload = typeof payloadGenerator === 'function' ? await payloadGenerator(e) : payloadGenerator;
+                    const res = await this.api.post(path, payload);
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || "Request failed.");
+                    }
+                    const data = await res.json();
+
+                    return new Promise((resolve, reject) => {
+                        this.api.pollJob(data.job_id, {
+                            ...pollOptions,
+                            onComplete: (statusData) => {
+                                if (pollOptions.onComplete) pollOptions.onComplete(statusData);
+                                resolve(statusData);
+                            },
+                            onError: (err) => {
+                                if (pollOptions.onError) pollOptions.onError(err);
+                                reject(err);
+                            }
+                        });
+                    });
+                };
+            },
             get: (path, options = {}) => {
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'GET' });
@@ -101,6 +128,21 @@ export class InSetuElement extends SutramElement {
             delete: (path, options = {}) => {
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'DELETE' });
+            },
+            getJson: async (path, options = {}) => {
+                const res = await this.api.get(path, options);
+                if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+                return res.json();
+            },
+            postJson: async (path, payload, options = {}) => {
+                const res = await this.api.post(path, payload, options);
+                if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+                return res.json();
+            },
+            deleteJson: async (path, options = {}) => {
+                const res = await this.api.delete(path, options);
+                if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error || `HTTP ${res.status}`);
+                return res.json();
             }
         };
     }
@@ -111,7 +153,6 @@ export class InSetuElement extends SutramElement {
             super.dispatch(eventName, detail);
         }
     }
-
     connectedCallback() {
         super.connectedCallback();
         const appStore = window.inSetu?.stores?.App;
@@ -122,6 +163,23 @@ export class InSetuElement extends SutramElement {
                     this.onWorkspaceChanged(ws);
                 }
             });
+        }
+        // Auto-hydrate the ecosystem topology for all extensions natively
+        if (appStore) {
+            this.subscribe(appStore, state => {
+                this.ecosystem = {
+                    allRepos: state.allRepos || [],
+                    pinnedRepos: state.pinnedRepos || new Set(['ALL']),
+                    targetConfigs: state.targetConfigs || []
+                };
+                this.requestUpdate();
+            });
+            const as = appStore.getState ? appStore.getState() : {};
+            this.ecosystem = {
+                allRepos: as.allRepos || [],
+                pinnedRepos: as.pinnedRepos || new Set(['ALL']),
+                targetConfigs: as.targetConfigs || []
+            };
         }
     }
 
@@ -249,11 +307,12 @@ window.ExtensionRegistry.registerExtension = function(extName, config) {
         });
     }
 };
-
 // Attach util wrappers mapping to the Sutram imports
 window.inSetu.utils.slugify = slugify;
 window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
+window.inSetu.utils.formatDate = formatDate;
+window.inSetu.utils.timeAgo = timeAgo;
 
 // Preserve clipboard API bindings
 window.inSetu.utils.copyToClipboard = async function(text) {

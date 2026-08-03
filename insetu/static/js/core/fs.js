@@ -255,22 +255,56 @@ function updateManifestState(oldPath, newPath = null) {
     const normOldPath = cleanPath(oldPath);
     const normNewPath = cleanPath(newPath);
 
-    Object.keys(newManifest).forEach(key => {
-        const obj = newManifest[key];
-        if (obj.files) {
-            const index = obj.files.findIndex(f => cleanPath(f) === normOldPath);
-            if (index > -1) {
-                changed = true;
-                const newFiles = [...obj.files];
-                newFiles.splice(index, 1);
-                if (normNewPath && !newFiles.includes(normNewPath)) {
-                    newFiles.push(normNewPath);
-                }
+    if (normOldPath) {
+        Object.keys(newManifest).forEach(key => {
+            const obj = newManifest[key];
+            if (obj.files) {
+                const index = obj.files.findIndex(f => cleanPath(f) === normOldPath);
+                if (index > -1) {
+                    changed = true;
+                    const newFiles = [...obj.files];
+                    newFiles.splice(index, 1);
+                    if (normNewPath && !newFiles.includes(normNewPath)) {
+                        newFiles.push(normNewPath);
+                    }
 
-                newManifest[key] = { ...obj, files: newFiles };
+                    newManifest[key] = { ...obj, files: newFiles };
+                }
+            }
+        });
+    }
+
+    if (normNewPath) {
+        const alreadyInManifest = Object.values(newManifest).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normNewPath));
+
+        if (!alreadyInManifest) {
+            const repoDir = normNewPath.split('/')[0];
+            let added = false;
+
+            for (const key of Object.keys(newManifest)) {
+                const obj = newManifest[key];
+                if (obj.meta?.repo === repoDir || key.startsWith(repoDir + '_')) {
+                    newManifest[key] = {
+                        ...obj,
+                        files: [...(obj.files || []), normNewPath]
+                    };
+                    changed = true;
+                    added = true;
+                    break;
+                }
+            }
+
+            if (!added && Object.keys(newManifest).length > 0) {
+                const firstKey = Object.keys(newManifest)[0];
+                newManifest[firstKey] = {
+                    ...newManifest[firstKey],
+                    files: [...(newManifest[firstKey].files || []), normNewPath]
+                };
+                changed = true;
             }
         }
-    });
+    }
+
     if (changed) {
         AppStore.setState({ manifest: newManifest });
     }
@@ -299,9 +333,10 @@ async function saveModalFile(autoSave = false) {
         silent: autoSave,
         onSuccess: () => {
             FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
-            if (autoSave) {
-                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
-            }
+
+            updateManifestState(null, state.filename);
+
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
 
             // File modifications can drastically alter chunk boundaries; force a resync
             if (window.inSetu.sys.executeSystemCompile) {
@@ -364,8 +399,7 @@ async function archiveModalFile() {
     const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to archive this file?\nIt will be moved to an 'archived/' subdirectory.")) return;
     await window.inSetu.sys.executeWorkspaceMutation('fs/archive', { filepath: filename }, {
-        onSuccess: async (res) => {
-            const data = await res.json();
+        onSuccess: (data) => {
             closeFileModal(true);
             refreshActiveFileViews(filename, data.new_path);
         }
@@ -486,26 +520,25 @@ export function createFileCard(fileInfo, container) {
 }
 export const getGlobalManifest = () => {
     const state = AppStore.getState();
-    const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
-    const validPrefixes = (gatherState.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+    const targetConfigs = state.targetConfigs || [];
+    const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
     const allFiles = Array.from(new Set(Object.values(state.manifest || {}).flatMap(obj => obj.files || [])));
 
-    // Inject active prompts directly into the tree to guarantee navigation in Modals (Move, etc)
-    const rawPrompts = gatherState.gatherOptions?.prompts || [];
-    if (rawPrompts.length === 0) {
-        // Guarantee the prompts folder exists even if completely empty
-        allFiles.push('.insetu/prompts/.gitkeep');
-    } else {
-        rawPrompts.forEach(p => {
-            const pPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`;
-            allFiles.push(pPath);
-        });
-    }
+    // Let extensions inject their own system artifacts (e.g. Prompts)
+    const extensionFiles = window.inSetu.events.emitHook('zone:global-manifest-files') || [];
+    extensionFiles.forEach(extFiles => {
+        if (Array.isArray(extFiles)) {
+            extFiles.forEach(f => allFiles.push(f));
+        }
+    });
 
-    // Explicitly whitelist prompts to avoid opening the entire OS control plane
+    const whitelists = window.inSetu.events.emitHook('zone:global-manifest-whitelist') || [];
+    const allowedPrefixes = [].concat(...whitelists.filter(w => Array.isArray(w)));
+
+    // Explicitly whitelist extensions via hook to avoid opening the entire OS control plane
     const isAllowed = (f) => {
-        if (f.startsWith('.insetu/prompts/')) return true;
+        if (allowedPrefixes.some(p => f.startsWith(p))) return true;
         if (validPrefixes.length === 0) return true;
         return validPrefixes.some(prefix => f.startsWith(prefix));
     };
@@ -531,10 +564,10 @@ export class InSetuVFSExplorer extends InSetuElement {
         }
         _updateState(state) {
                 const allFiles = new Set();
-                const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
+                const targetConfigs = state.targetConfigs || [];
                 // UDF Guardrail: Only show files that belong to explicitly tracked repository targets
                 // This prevents OS artifact directories (contexts/, diffs/) from leaking into the visual root
-                const validPrefixes = (gatherState.targetConfigs || []).map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
+                const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
                 Object.values(state.manifest || {}).forEach(obj => {
                         if (obj.files) {
@@ -545,8 +578,8 @@ export class InSetuVFSExplorer extends InSetuElement {
                             });
                         }
                 });
-                if (gatherState.targetConfigs) {
-                        gatherState.targetConfigs.forEach(cfg => {
+                if (targetConfigs) {
+                        targetConfigs.forEach(cfg => {
                                 if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
                                         allFiles.add(cfg.repo_dir + '/.gitkeep');
                                 }
@@ -634,8 +667,7 @@ export class InSetuVFSExplorerActions extends InSetuElement {
                 items.push({ label: 'Delete Folder', icon: '🗑️', onClick: () => deleteEmptyFolder(currentPath) });
             }
         }
-
-        window.inSetu.events.emitHook('zone:fs-dropdown-menu', { currentPath, isPrompts: false, menuItems: items });
+        window.inSetu.events.emitHook('zone:fs-dropdown-menu', { currentPath, menuItems: items });
         return items;
     }
     render() {
@@ -802,8 +834,7 @@ export function checkFileExtension(filename) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     if (gbPath.length > 0) {
         const repoDir = gbPath[0];
-        const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
-        const targetConfigs = gatherState.targetConfigs || [];
+        const targetConfigs = AppStore.getState().targetConfigs || [];
         const repoCfg = targetConfigs.find(c => c.repo_dir === repoDir);
 
         if (repoCfg && repoCfg.exts) {
@@ -853,6 +884,8 @@ async function saveNewFile() {
         loadingText: 'Saving...',
         onSuccess: async () => {
             FsStore.getState().setModal('newFile', { open: false });
+
+            updateManifestState(null, filepath);
 
             window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
 
@@ -918,7 +951,7 @@ async function saveNewFolder() {
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
-                const rRes = await window.inSetu.api.workspace('gather/repos?t=' + Date.now());
+                const rRes = await window.inSetu.api.system('topology?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
@@ -935,8 +968,8 @@ async function saveNewFolder() {
         }
     });
 }
-export async function viewSourceFile(filepath, isFS = false) {
-    if (window.inSetu.events.emitHook('zone:file-edit-override', filepath)) return;
+export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
+    if (!bypassHook && window.inSetu.events.emitHook('zone:file-edit-override', filepath)) return;
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
 
