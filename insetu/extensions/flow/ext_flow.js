@@ -98,7 +98,12 @@ export class InSetuExtFlow extends InSetuElement {
             if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
         });
         this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
-        this.registerGlobalListener('git-diffs-refreshed', window, () => FlowStore.getState().fetchBatches());
+        this.registerGlobalListener('git-diffs-refreshed', window, async () => {
+            if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                await window.inSetu.sys.refreshManifest();
+            }
+            FlowStore.getState().fetchBatches();
+        });
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
@@ -714,6 +719,7 @@ window.ExtensionRegistry.registerExtension('flow', {
     uiHooks: {
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'context' && data.subId === 'flow') {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
                 if (data.forceRefresh) FlowStore.getState().fetchBatches();
             }
         },
@@ -722,6 +728,17 @@ window.ExtensionRegistry.registerExtension('flow', {
             const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
             if (promptTouched) {
                 window.dispatchEvent(new CustomEvent('insetu:flow:refresh-prompt'));
+            }
+            const contextOrDiffTouched = payload.mutations.some(m => m.filepath && (
+                m.filepath.includes('diffs/') || 
+                m.filepath.includes('contexts/') || 
+                m.filepath.includes('workflows/') ||
+                m.filepath.endsWith('_diffs.txt') ||
+                m.filepath.endsWith('_context.txt')
+            ));
+            if (contextOrDiffTouched) {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
+                FlowStore.getState().fetchBatches();
             }
             return false;
         }

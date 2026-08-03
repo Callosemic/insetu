@@ -81,11 +81,9 @@ export async function generateDiffs(force = false) {
                     });
                 window.inSetu.events.emit('git-diffs-refreshed');
                 // Hydrate the global manifest explicitly so downstream extensions (like Flow) reflect the new batch chunks
-                window.inSetu.api.workspace('gather/manifest?t=' + Date.now())
-                    .then(mRes => mRes.ok ? mRes.json() : null)
-                    .then(newManifest => {
-                        if (newManifest && window.inSetu?.stores?.App) window.inSetu.stores.App.setState({ manifest: newManifest });
-                    });
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                    window.inSetu.sys.refreshManifest();
+                }
             },
             onError: (err) => {
                 gitStoreObj.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
