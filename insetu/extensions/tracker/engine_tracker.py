@@ -84,72 +84,61 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
     from insetu.core.sdk import ExtensionContext
+    from insetu.core.utils_core import parse_frontmatter
     ctx = ExtensionContext('tracker', workspace_id)
     try:
         content = ctx.vfs.read(abs_path)
         if content is None:
             return
-        yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+
+        yaml_data, body, _ = parse_frontmatter(content)
 
         filename = Path(rel_path).name
-        title = filename
-        t_id = "UNKNOWN"
-        created_at = "0000-00-00T00:00:00"
-        closed_at = None
-        sub_bucket = "None"
-        tags = "[]"
-        delivery_date = None
-        if yaml_match:
-            for line in yaml_match.group(1).split('\n'):
-                line = line.strip()
-                if line.startswith('title:'): title = line.split('title:', 1)[1].strip().strip('\'"')
-                elif line.startswith('id:'): t_id = line.split('id:', 1)[1].strip().strip('\'"')
-                elif line.startswith('created_at:'): created_at = line.split('created_at:', 1)[1].strip().strip('\'"')
-                elif line.startswith('closed_at:'):  
-                    val = line.split('closed_at:', 1)[1].strip()
-                    if val.lower() != 'null': closed_at = val.strip('\'"')
-                elif line.startswith('delivery_date:'):
-                    val = line.split('delivery_date:', 1)[1].strip()
-                    if val.lower() != 'null': delivery_date = val.strip('\'"')
-                elif line.startswith('sub_bucket:'): sub_bucket = line.split('sub_bucket:', 1)[1].strip().strip('\'"')
-                elif line.startswith('tags:'):
-                    tags_raw = line.split('tags:', 1)[1].strip()
-                    if tags_raw.startswith('['):
-                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.strip('[]').split(',') if t.strip()])
-                    else:
-                        tags = json.dumps([t.strip().strip('\'"') for t in tags_raw.split(',') if t.strip()])
+        title = yaml_data.get('title', filename)
+        t_id = yaml_data.get('id', "UNKNOWN")
+        created_at = yaml_data.get('created_at', "0000-00-00T00:00:00")
 
-        desc = content
-        if yaml_match:
-            desc = content.replace(yaml_match.group(0), '').strip()
-            if desc.startswith('## Description'):
-                desc = re.sub(r'^## Description\n+', '', desc).strip()
+        closed_at = yaml_data.get('closed_at')
+        if str(closed_at).lower() == 'null': closed_at = None
 
-        ticket_type = "bug" if "/bugs/" in rel_path else "queue" if "/queue/" in rel_path else "todo"
-        status = "unknown"
-        if "/open/" in rel_path: status = "open"
-        elif "/active/" in rel_path: status = "active"
-        elif "/closed/" in rel_path: status = "closed"
-        elif "/archived/" in rel_path: status = "archived"
-        elif "/log/" in rel_path: status = "logged"
+        delivery_date = yaml_data.get('delivery_date')
+        if str(delivery_date).lower() == 'null': delivery_date = None
 
-        repo = rel_path.split('/')[0] if '/' in rel_path else "unknown"
-        if yaml_match:
-            for line in yaml_match.group(1).split('\n'):
-                line = line.strip()
-                if line.startswith('repo:'): repo = line.split('repo:', 1)[1].strip().strip('\'"')
-                elif line.startswith('type:'):
-                    raw_t = line.split('type:', 1)[1].strip().strip('\'"').lower()
-                    if "bug" in raw_t: ticket_type = "bug"
-                    elif "queue" in raw_t: ticket_type = "queue"
-                    else: ticket_type = "todo"
-                elif line.startswith('status:'):
-                    raw_s = line.split('status:', 1)[1].strip().strip('\'"').lower()
-                    if "active" in raw_s: status = "active"
-                    elif "clos" in raw_s: status = "closed"
-                    elif "archiv" in raw_s: status = "archived"
-                    elif "log" in raw_s: status = "logged"
-                    else: status = "open"
+        sub_bucket = yaml_data.get('sub_bucket', "None")
+
+        tags_raw = yaml_data.get('tags', '[]')
+        if isinstance(tags_raw, str) and tags_raw.startswith('['):
+            tags = tags_raw
+        else:
+            tags = json.dumps([t.strip() for t in str(tags_raw).split(',') if t.strip()])
+
+        desc = body
+        if desc.startswith('## Description'):
+            desc = re.sub(r'^## Description\n+', '', desc).strip()
+
+        ticket_type = yaml_data.get('type', "bug" if "/bugs/" in rel_path else "queue" if "/queue/" in rel_path else "todo").lower()
+        if "bug" in ticket_type: ticket_type = "bug"
+        elif "queue" in ticket_type: ticket_type = "queue"
+        else: ticket_type = "todo"
+
+        status = yaml_data.get('status')
+        if not status:
+            if "/open/" in rel_path: status = "open"
+            elif "/active/" in rel_path: status = "active"
+            elif "/closed/" in rel_path: status = "closed"
+            elif "/archived/" in rel_path: status = "archived"
+            elif "/log/" in rel_path: status = "logged"
+            else: status = "unknown"
+        else:
+            status = status.lower()
+            if "active" in status: status = "active"
+            elif "clos" in status: status = "closed"
+            elif "archiv" in status: status = "archived"
+            elif "log" in status: status = "logged"
+            else: status = "open"
+
+        repo = yaml_data.get('repo', rel_path.split('/')[0] if '/' in rel_path else "unknown")
+
         conn = ctx.db
         conn.execute("""
             INSERT OR REPLACE INTO tracker_tickets 
@@ -209,10 +198,9 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
             repo_cfg["sub_buckets"] = []
         if "repo_ignore_dirs" not in repo_cfg:
             repo_cfg["repo_ignore_dirs"] = []
-
         safe_r_dir = get_safe_repo_id(repo_cfg.get("repo_dir", ""))
 
-        domain = "Active bugs, tasks, and planned units of work"
+        domain = "Tracker Issues"
         if strat == "repo":
             domain = repo_cfg.get("domain", "Workspaces")
         elif strat == "custom" and custom_val:

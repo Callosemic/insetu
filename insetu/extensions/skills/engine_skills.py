@@ -51,9 +51,9 @@ skills_bp = InSetuExtension('skills', __name__, title="Skills Tracker", descript
 __depends__ = []
 def _get_user_skills_dir(workspace_id=None):
     """Resolves and commands the localized workspace skills directory structure."""
-    from insetu.kernel.utils import get_workspace_physics
-    cfg_path, _, _ = get_workspace_physics(workspace_id)
-    base_dir = Path(cfg_path).parent.joinpath("data", "skills").as_posix()
+    from insetu.core.sdk import ExtensionContext
+    ctx = ExtensionContext('skills', workspace_id)
+    base_dir = Path(ctx.paths["artifacts_base"]).joinpath("skills").as_posix()
     os.makedirs(base_dir, exist_ok=True)
     return base_dir
 def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):

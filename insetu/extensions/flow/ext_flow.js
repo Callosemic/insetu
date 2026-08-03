@@ -93,6 +93,9 @@ export class InSetuExtFlow extends InSetuElement {
             this.searchQuery = state.searchQuery;
         });
         this.registerGlobalListener('insetu:flow:edit-batch', window, (e) => this.openEditBatchModal(e.detail));
+        this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
+            if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
+        });
         // Opportunistic UI Routing: Wait for Git's checkpoint if Git is installed, otherwise react to raw manifest updates
         const isGitActive = window.ExtensionRegistry?.hasExtension?.('git') && 
                             (!window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.includes('git'));
@@ -102,20 +105,15 @@ export class InSetuExtFlow extends InSetuElement {
         } else {
             this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
         }
-
-        this.subscribe(AppStore, state => {
+        this.subscribe(window.inSetu.stores.Gather, state => {
+            this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
-        this.subscribe('Gather', state => {
-            this.allRepos = state.allRepos || [];
-            this.requestUpdate();
-        });
-        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
-        const aState = appStore?.getState ? appStore.getState() : {};
-        this.pinnedRepos = aState?.pinnedRepos || new Set(['ALL']);
         const gatherStore = window.inSetu?.stores?.Gather;
-        this.allRepos = gatherStore?.getState ? (gatherStore.getState()?.allRepos || []) : [];
+        const gs = gatherStore?.getState ? gatherStore.getState() : {};
+        this.pinnedRepos = gs.pinnedRepos || new Set(['ALL']);
+        this.allRepos = gs.allRepos || [];
 
         FlowStore.getState().fetchBatches();
     }
@@ -315,7 +313,7 @@ export class InSetuExtFlow extends InSetuElement {
                             label="📌 Repos:"
                             .repos=${this.allRepos}
                             .activeRepos=${Array.from(this.pinnedRepos)}
-                            @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                            @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                         </insetu-repo-filter>
                         <div style="padding: 10px 15px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border);">
                             <input type="checkbox" id="vis-toggle" .checked=${this._applyVisibilityFilter} style="transform: scale(1.1); cursor: pointer;"
@@ -353,12 +351,12 @@ export class InSetuExtFlow extends InSetuElement {
                                         .detailText=${sizeStr ? `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename} | ${sizeStr}` : `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename}`}
                                         icon=""
                                         intentColor="var(--intent-primary)"
-                                        entityType="file:workflow_batch"
-                                        .entityData=${{ 
+                                        .entityType=${'file:workflow_batch'}
+                                        .entityData=${{  
                                             ...b, 
                                             filepath: `workflow_${b.id}_context.txt`, 
-                                            suppress: ['browse'], 
-                                            chunks: manifestObj.chunks || [`workflow_${b.id}_context.txt`] 
+                                            suppress: ['file-browse', 'file-edit'], 
+                                            chunks: manifestObj.chunks || [`workflow_${b.id}_context.txt`]  
                                         }}
                                         @card-clicked=${() => this.openBatchModal(b)}>
                                 </insetu-card>
@@ -418,7 +416,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             </div>
                                                         `})}
                                             </div>
-                                            <div style="display: flex; gap: 10px;">
+                                            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
                                                 <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 8px 14px;" @click=${() => { this._selectingFor = 'includes'; this._tempContexts = [...this._editForm.includes]; this._showSelectContexts = true; }}>📦 Select Contexts</button>
                                                 <button class="btn-sm" style="background: var(--intent-neutral); margin: 0; padding: 8px 14px;" @click=${() => {
                                                     if (this.ui && this.ui.openWorkspaceBrowser) {
@@ -607,22 +605,22 @@ export class InSetuExtFlow extends InSetuElement {
                                     ${this._viewingBatch ? html`
                                             <div>
                                                     <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>
-                                                    <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 4px; border: 1px solid var(--border); margin-bottom: 10px;">
+                                                    <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 4px; border: 1px solid var(--border); margin-bottom: 10px; max-height: 250px; overflow-y: auto;">
                                                             <ul style="margin: 0; font-family: monospace; font-size: 0.85rem; color: var(--text); opacity: 0.8; padding-left: 20px;">
                                                                     ${this._viewingBatch.includes.length > 0 ? this._viewingBatch.includes.map(inc => html`<li style="padding: 2px 0; word-break: break-all;">${inc}</li>`) : html`<li style="color: var(--intent-danger); list-style: none; margin-left: -20px;">No files mapped to this batch.</li>`}
                                                             </ul>
                                                     </div>
-                                                    <div style="display: flex; gap: 10px;">
+                                                    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
                                                                 const manifestObj = AppStore.getState().manifest[baseFile] || {};
                                                                 return html`
                                                                     <sutram-entity-actions 
-                                                                        entityType="file" 
+                                                                        .entityType=${'file'} 
                                                                         .entityData=${{ 
                                                                             filepath: baseFile, 
                                                                             chunks: manifestObj.chunks || [baseFile],
-                                                                            showOnly: ['copy', 'download', 'parts', 'share']
+                                                                            showOnly: ['file-copy', 'file-download', 'file-share']
                                                                         }}>
                                                                     </sutram-entity-actions>
                                                                 `;
@@ -634,10 +632,26 @@ export class InSetuExtFlow extends InSetuElement {
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
                                                             <textarea style="width: 100%; box-sizing: border-box; padding: 10px; height: 150px; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem;" readonly>${this._viewingBatchPromptText}</textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                                                                    <sutram-async-btn label="📋 Copy Prompt" intent="success" .onClick=${() => this.utils.copyRawText(this._viewingBatchPromptText)}></sutram-async-btn>
+                                                                    ${(() => {
+                                                                        let promptPath = this._viewingBatch.include_prompt;
+                                                                        const prompts = gatherOptions.prompts || [];
+                                                                        if (!prompts.includes(promptPath)) {
+                                                                            promptPath = prompts.find(p => p.endsWith(promptPath)) || promptPath;
+                                                                        }
+                                                                        return html`
+                                                                            <sutram-entity-actions 
+                                                                                .entityType=${'file'} 
+                                                                                .entityData=${{ 
+                                                                                    filepath: promptPath, 
+                                                                                    isFS: false,
+                                                                                    showOnly: ['file-copy', 'file-download', 'file-edit']
+                                                                                }}>
+                                                                            </sutram-entity-actions>
+                                                                        `;
+                                                                    })()}
                                                             </div>
                                                     </div>
-                                            ` : 
+                                            ` :  
 ''}
                                             ${this._viewingBatch.response_path ? html`
                                                     <div>
@@ -709,6 +723,14 @@ window.ExtensionRegistry.registerExtension('flow', {
             if (data.parentId === 'context' && data.subId === 'flow') {
                 if (data.forceRefresh) FlowStore.getState().fetchBatches();
             }
+        },
+        'zone:vfs-mutated': (payload) => {
+            if (!payload || !payload.mutations) return false;
+            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
+            if (promptTouched) {
+                window.dispatchEvent(new CustomEvent('insetu:flow:refresh-prompt'));
+            }
+            return false;
         }
     }
 });

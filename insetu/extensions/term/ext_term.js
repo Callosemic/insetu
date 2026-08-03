@@ -29,6 +29,7 @@ export class InSetuExtTerm extends InSetuElement {
         // Decouple from static uiHooks DOM sniffing
         this.registerGlobalListener('insetu:term:resize', window, () => {
             setTimeout(() => {
+                if (this._initTimer) return; // Prevent racing the teardown timer
                 if (!this._term) {
                     this._initTerminal();
                 } else if (this._handleResize) {
@@ -106,7 +107,13 @@ export class InSetuExtTerm extends InSetuElement {
         }
         // Defer complete terminal recreation to avoid race conditions during DOM teardown
         this._initTimer = setTimeout(() => {
+            this._initTimer = null;
             if (this.isConnected) {
+                // Failsafe: Ensure ghost instances are fully destroyed if the 50ms resize somehow slipped through
+                if (this._term) {
+                    try { this._term.dispose(); } catch (e) {}
+                    this._term = null;
+                }
                 const container = this.shadowRoot.getElementById('terminal-container');
                 if (container) container.innerHTML = '';
                 this._initTerminal();

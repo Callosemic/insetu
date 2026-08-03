@@ -16,8 +16,9 @@ def get_headless_git_env():
     return env
 def get_git_settings_schema(workspace_id):
     """Dynamically generates distinct setting configuration slots for every tracked repository."""
-    from insetu.kernel.utils import load_config
-    cfg = load_config(workspace_id)
+    from insetu.core.sdk import ExtensionContext
+    ctx = ExtensionContext('git', workspace_id)
+    cfg = ctx.config
     schema = []
     for repo in cfg.get("target_repos", []):
         repo_dir = repo.get("repo_dir")
@@ -50,11 +51,12 @@ def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
         else:
             target_repos = None if is_full_sweep else kwargs.get('target_repos')
             touched_buckets = None if is_full_sweep else kwargs.get('touched_buckets')
-
         generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
 
         # Guaranteed Checkpoint: Emit event when Git has finished evaluating/generating diffs
-        hooks.emit('git_evaluation_complete', manifest=manifest, workspace_id=workspace_id, is_full_sweep=is_full_sweep, target_repos=target_repos, touched_buckets=touched_buckets)
+        from insetu.core.sdk import ExtensionContext
+        ctx = ExtensionContext('git', workspace_id)
+        ctx.emit('git_evaluation_complete', manifest=manifest, is_full_sweep=is_full_sweep, target_repos=target_repos, touched_buckets=touched_buckets)
     except Exception as e:
         print(f"Warning: Background Git auto-diff generation failed: {e}")
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
@@ -620,12 +622,7 @@ def _background_git_init(ctx, repo, branch):
     import os
 
     ctx.jobs.update_progress(f"Initializing Git repository for {repo}...")
-
-    repo_path = ctx.resolve_path(repo)
-    for c in ctx.config.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
 
     try:
         subprocess.run(['git', 'init', '-b', branch], cwd=repo_path, check=True, capture_output=True, text=True)
@@ -648,11 +645,7 @@ def _background_git_fetch_preview(ctx, repo):
     import os
 
     ctx.jobs.update_progress(f"Fetching remote for {repo}...")
-    repo_path = ctx.resolve_path(repo)
-    for c in ctx.config.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
     try:
         # Pre-flight check: intercept active rebase indicators
         from pathlib import Path
@@ -724,11 +717,7 @@ def _background_git_pull(ctx, repo, strategy=None):
     import os
 
     ctx.jobs.update_progress(f"Pulling {repo}...")
-    repo_path = ctx.resolve_path(repo)
-    for c in ctx.config.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
 
     # Query the repository-namespaced setting from the dynamic schema
     configured_strategy = ctx.settings.get(f"strategy_{repo}", "rebase")
@@ -791,11 +780,7 @@ def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
     import os
 
     ctx.jobs.update_progress(f"Adding remote origin for {repo}...")
-    repo_path = ctx.resolve_path(repo)
-    for c in ctx.config.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
     try:
         # Ensure HEAD exists by creating an empty initial commit if the repo is completely empty
         head_check = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo_path, capture_output=True)
@@ -853,12 +838,7 @@ def _background_git_checkout(ctx, repo, branch, create_new):
     import os
 
     ctx.jobs.update_progress(f"Checking out {branch} in {repo}...")
-
-    repo_path = ctx.resolve_path(repo)
-    for c in ctx.config.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
 
     cmd = ['git', 'checkout', '-b', branch] if create_new else ['git', 'checkout', branch]
     try:

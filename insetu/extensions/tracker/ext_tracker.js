@@ -142,21 +142,15 @@ constructor() {
         super.connectedCallback();
         const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
         this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
-
-        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
-        if (appStore) {
-            this.subscribe(appStore, (state) => {
-                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
-            });
-            this.pinnedRepos = appStore.getState ? (appStore.getState()?.pinnedRepos || new Set(['ALL'])) : new Set(['ALL']);
-        }
-
         const gatherStore = window.inSetu?.stores?.Gather;
         if (gatherStore) {
             this.subscribe(gatherStore, (state) => {
+                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
                 this.allRepos = state?.allRepos || [];
             });
-            this.allRepos = gatherStore.getState ? (gatherStore.getState()?.allRepos || []) : [];
+            const gs = gatherStore.getState ? gatherStore.getState() : {};
+            this.pinnedRepos = gs.pinnedRepos || new Set(['ALL']);
+            this.allRepos = gs.allRepos || [];
         }
 
         if (typeof KanbanStore !== 'undefined' && KanbanStore) {
@@ -182,17 +176,6 @@ constructor() {
             KanbanStore.getState().fetchTasks();
         }
     }
-
-    _getBucketsForRepo(repoDir) {
-        const getFn = window.inSetu?.utils?.getFlattenedBuckets || this.sys?.getFlattenedBuckets;
-        if (!getFn) return [];
-        const gatherState = window.inSetu?.stores?.Gather?.getState ? window.inSetu.stores.Gather.getState() : {};
-        const targetConfigs = gatherState.targetConfigs || [];
-        const repoConfig = targetConfigs.find(r => r && r.repo_dir === repoDir);
-        if (!repoConfig) return [];
-        return getFn([repoConfig]);
-    }
-
     onWorkspaceChanged(newWorkspaceId) {
         KanbanStore.getState().fetchTasks();
     }
@@ -357,7 +340,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                             .repos=${this._reposExpanded ? this.allRepos : Array.from(this.pinnedRepos).filter(r => r !== 'ALL')}
                             .activeRepos=${Array.from(this.pinnedRepos)}
                             @repo-filter-changed=${(e) => {
-                                AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos));
+                                window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos));
                                 KanbanStore.setState({ pinnedBuckets: new Set(['ALL']) });
                             }}>
                         </insetu-repo-filter>
@@ -365,7 +348,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                         ${!this.pinnedRepos.has('ALL') ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
                                 ${Array.from(this.pinnedRepos).map(repo => {
-                                    const buckets = this._getBucketsForRepo(repo);
+                                    const buckets = this.sys.getFlattenedBuckets(repo);
                                     if (buckets.length === 0) return '';
 
                                     const repoBucketsActive = buckets.some(b => this.pinnedBuckets.has(repo + '::' + b.id));
@@ -382,7 +365,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                             <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._bucketsExpanded = !this._bucketsExpanded}>
                                                 🗂️ ${repo} ${this._bucketsExpanded ? '▼' : '▶'}
                                             </span>
-                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @yenvui-pill-toggled=${(e) => {
+                                            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @sutram-pill-toggled=${(e) => {
                                                 e.stopPropagation();
                                                 const { id, active } = e.detail;
                                                 let newSet = new Set(this.pinnedBuckets);
@@ -418,7 +401,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                                     .allowAll=${true}
                                     .items=${(this._tagsExpanded ? tagsArray : Array.from(this.pinnedTags).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
                                     .activeItems=${Array.from(this.pinnedTags)}
-                                    @yenvui-filter-changed=${(e) => {
+                                    @sutram-filter-changed=${(e) => {
                                         KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
                                     }}>
                                 </sutram-filter-group>
@@ -567,22 +550,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
     connectedCallback() {
         super.connectedCallback();
-
-        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
-        if (appStore) {
-            this.subscribe(appStore, (state) => {
-                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
-            });
-            this.pinnedRepos = appStore.getState ? (appStore.getState()?.pinnedRepos || new Set(['ALL'])) : new Set(['ALL']);
-        }
-
         const gatherStore = window.inSetu?.stores?.Gather;
         if (gatherStore) {
             this.subscribe(gatherStore, (state) => {
+                this.pinnedRepos = state?.pinnedRepos || new Set(['ALL']);
                 this.allRepos = state?.allRepos || [];
                 this.requestUpdate();
             });
-            this.allRepos = gatherStore.getState ? (gatherStore.getState()?.allRepos || []) : [];
+            const gs = gatherStore.getState ? gatherStore.getState() : {};
+            this.pinnedRepos = gs.pinnedRepos || new Set(['ALL']);
+            this.allRepos = gs.allRepos || [];
         }
 
         if (typeof KanbanStore !== 'undefined' && KanbanStore) {
@@ -751,28 +728,18 @@ export class InSetuExtTrackerModals extends InSetuElement {
             e.preventDefault();
         }
     }
-
     async _deleteTask() {
         const { filepath } = KanbanStore.getState().editTaskForm;
         if (!filepath) return;
         if (!confirm("Are you sure you want to permanently delete this ticket? This cannot be undone.")) return;
 
-        try {
-            const res = await window.inSetu.api.workspace('fs/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filepath })
-            });
-            if (res.ok) {
+        await this.sys.executeWorkspaceMutation('fs/delete', { filepath }, {
+            onSuccess: () => {
                 KanbanStore.getState().setModal('edit', false);
                 this._originalTaskSnapshot = null;
                 KanbanStore.getState().fetchTasks();
-            } else {
-                alert("Failed to delete ticket.");
             }
-        } catch (e) {
-            alert("Network error.");
-        }
+        });
     }
 
     async _saveEditTask() {
@@ -793,33 +760,27 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const folderType = type === 'queue' ? 'queue' : `${type}s`;
         const intendedRelPath = `${repo}/.tracker/${folderType}/${status}/${filename}`;
 
-        const res = await window.inSetu.api.workspace('fs/save', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                filepath: intendedRelPath,  
-                content: newContent,
-                delete_source: filepath !== intendedRelPath ? filepath : null
-            })
+        await this.sys.executeWorkspaceMutation('fs/save', { 
+            filepath: intendedRelPath,  
+            content: newContent,
+            delete_source: filepath !== intendedRelPath ? filepath : null
+        }, {
+            loadingText: 'Saving Ticket...',
+            onSuccess: () => {
+                KanbanStore.getState().setModal('edit', false);
+                this._originalTaskSnapshot = null;
+                KanbanStore.getState().fetchTasks();
+            }
         });
-
-        if (res.ok) {
-            KanbanStore.getState().setModal('edit', false);
-            this._originalTaskSnapshot = null;
-            KanbanStore.getState().fetchTasks();
-        } else {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.error || "Failed to save changes.");
-        }
     }
     render() {
         const { newTaskForm } = (KanbanStore?.getState ? KanbanStore.getState() : { newTaskForm: {} }) || { newTaskForm: {} };
         const selectedRepoNew = newTaskForm?.repo || (this.allRepos && this.allRepos[0]) || '';
-        const bucketsNew = selectedRepoNew ? this._getBucketsForRepo(selectedRepoNew) : [];
+        const bucketsNew = selectedRepoNew ? this.sys.getFlattenedBuckets(selectedRepoNew) : [];
 
         const { editTaskForm } = (KanbanStore?.getState ? KanbanStore.getState() : { editTaskForm: {} }) || { editTaskForm: {} };
         const activeRepoEdit = editTaskForm?.repo || '';
-        const bucketsEdit = activeRepoEdit ? this._getBucketsForRepo(activeRepoEdit) : [];
+        const bucketsEdit = activeRepoEdit ? this.sys.getFlattenedBuckets(activeRepoEdit) : [];
 
         return html`
             <!-- New Task Modal -->

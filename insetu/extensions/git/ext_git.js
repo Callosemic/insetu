@@ -151,7 +151,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(AppStore, (state) => {
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
@@ -199,7 +199,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.categoryOrder = gatherState.categoryOrder || [];
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
         this.allRepos = gatherState.allRepos || [];
-        this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+        this.pinnedRepos = gatherState.pinnedRepos || new Set(['ALL']);
 
         this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
@@ -216,7 +216,6 @@ disconnectedCallback() {
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
     }
-
     async _handleOpenPush(e) {
         const { diffFile, repo } = e.detail;
         this.currentPushDiffFile = diffFile;
@@ -225,7 +224,7 @@ disconnectedCallback() {
         this.pushChangelogs = [];
         this.pushModalOpen = true;
         try {
-            const res = await window.inSetu.api.workspace(`git/changelogs?repo=${encodeURIComponent(repo || '')}&t=${Date.now()}`);
+            const res = await this.api.get(`changelogs?repo=${encodeURIComponent(repo || '')}&t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.changelogs && data.changelogs.length > 0) {
@@ -267,7 +266,7 @@ disconnectedCallback() {
                     alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                     this.pushModalOpen = false;
                     try {
-                        if(this.sys && this.sys.executeSystemCompile) await this.sys.executeSystemCompile();
+                        await this.compileSystem();
                     } catch (refreshErr) {
                         console.warn("Background refresh failed:", refreshErr);
                     } finally {
@@ -350,11 +349,7 @@ disconnectedCallback() {
                     GitStore.setState({ dirtyDiffRepos: newDirty });
 
                     alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
-                    if (this.sys && this.sys.executeSystemCompile) {
-                        this.sys.executeSystemCompile().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
-                    } else {
-                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
-                    }
+                    this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
                 },
                 onError: (err) => {
                     alert(`❌ Global Sweep failed:\n\n${err.message}`);
@@ -392,11 +387,7 @@ disconnectedCallback() {
                     GitStore.setState({ dirtyDiffRepos: newDirty });
 
                     alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
-                    if (this.sys && this.sys.executeSystemCompile) {
-                        this.sys.executeSystemCompile().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
-                    } else {
-                        window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
-                    }
+                    this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
                 },
                 onError: (err) => {
                     alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`);
@@ -471,7 +462,7 @@ disconnectedCallback() {
                     label="📌 Repos:"
                     .repos=${this.allRepos}
                     .activeRepos=${Array.from(this.pinnedRepos)}
-                    @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div class="git-body">

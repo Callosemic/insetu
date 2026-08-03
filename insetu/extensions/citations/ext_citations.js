@@ -1,10 +1,8 @@
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
-
 export const CitationStore = createExtensionStore('Citations', {
     localLibrary: [],
-    pinnedRepos: new Set(['ALL']),
             cachedPublications: [],
             cachedAuthors: [],
             activeAttachCitation: null,
@@ -88,7 +86,6 @@ export class InSetuExtCitations extends InSetuElement {
         super.connectedCallback();
         this.subscribe(CitationStore, state => {
             this.localLibrary = state.localLibrary || [];
-            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.cachedPublications = state.cachedPublications || [];
             this.cachedAuthors = state.cachedAuthors || [];
             this.activeAttachCitation = state.activeAttachCitation;
@@ -100,17 +97,19 @@ export class InSetuExtCitations extends InSetuElement {
         });
         this.subscribe(window.inSetu.stores.Gather, state => {
             this.allRepos = state.allRepos || [];
+            this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.requestUpdate();
         });
 
         this.registerGlobalListener('insetu:citations:notes', window, (e) => this._openCitationNotes(e.detail.id));
         this.registerGlobalListener('insetu:citations:edit', window, (e) => this._openEditModal(e.detail.data));
         this.registerGlobalListener('insetu:citations:pin', window, (e) => this._openAttachModal(e.detail.data));
         this.registerGlobalListener('insetu:citations:import', window, (e) => this._importExploreCitation(e.detail.data));
-
         const cState = CitationStore.getState();
         this.localLibrary = cState.localLibrary || [];
-        this.pinnedRepos = cState.pinnedRepos || new Set(['ALL']);
-        this.allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
+        const gState = window.inSetu.stores.Gather.getState();
+        this.pinnedRepos = gState.pinnedRepos || new Set(['ALL']);
+        this.allRepos = gState.allRepos || [];
         this.loadMainLibrary();
     }
 
@@ -411,7 +410,7 @@ export class InSetuExtCitations extends InSetuElement {
                         .repos=${this.allRepos}
                         .activeRepos=${Array.from(this.pinnedRepos)}
                         .extraRepos=${[{id: "ORPHANS", label: "👻 Orphans"}]}
-                        @repo-filter-changed=${(e) => CitationStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
+                        @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                     </insetu-repo-filter>
                 </div>
             </sutram-toolbar>
@@ -530,7 +529,7 @@ export class InSetuExtCitations extends InSetuElement {
                         `)}
                     </div>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
             <!-- Edit Modal -->
             <sutram-modal ?open=${!!this.activeEditCitation} ?fullscreen=${true} titleText="Edit: [@${this.activeEditCitation?.id}]" @sutram-modal-closed=${() => CitationStore.setState({ activeEditCitation: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
@@ -591,7 +590,7 @@ export class InSetuExtCitations extends InSetuElement {
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteDynamicCitation}>🗑️ Delete</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._saveDynamicCitation}>💾 Save Changes</button>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
     render() {
@@ -656,7 +655,7 @@ export class InSetuExtCitationsModals extends InSetuElement {
                         })}
                     </div>
                 </div>
-            </yenvui-modal>
+            </sutram-modal>
         `;
     }
     _insertCitationToEditor(citation) {

@@ -1,8 +1,9 @@
 import time
 from flask import jsonify
-from insetu.kernel.extension import InSetuExtension
+from insetu.kernel.extension import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
-from insetu.kernel.db import get_connection
+
+__depends__ = []
 
 # 1. Define the Extension and Telemetry Schema
 dev_bp = InSetuExtension(
@@ -34,7 +35,8 @@ dev_bp = InSetuExtension(
 def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
     if not mutations: return
     try:
-        conn = get_connection("dev", workspace_id=workspace_id)
+        ctx = ExtensionContext('dev', workspace_id)
+        conn = ctx.db
         now = time.time()
         for m in mutations:
             conn.execute(
@@ -49,7 +51,8 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
 def log_bridge_error(filepath=None, error_type=None, details=None, file_content=None, patch_payload=None, workspace_id="default", **kwargs):
     if not filepath: return
     try:
-        conn = get_connection("dev", workspace_id=workspace_id)
+        ctx = ExtensionContext('dev', workspace_id)
+        conn = ctx.db
         conn.execute(
             "INSERT INTO bridge_errors (filepath, error_type, details, file_content, patch_payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
             (filepath, error_type, details, file_content, patch_payload, time.time())
@@ -130,7 +133,8 @@ def init_dev_workers():
     from insetu.kernel.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
         try:
-            conn = get_connection("workers", workspace_id=ws_id)
+            w_ctx = ExtensionContext('workers', ws_id)
+            conn = w_ctx.db
             conn.execute("""
                 INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, next_run_at, status, args_json)
                 VALUES ('dev_telemetry_sweeper', 'dev', 'sweep_telemetry', 60000, 0, 'pending', '{}')

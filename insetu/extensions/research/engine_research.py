@@ -556,12 +556,11 @@ def _background_export_context(ctx, research_job_id):
 
     if not chunks:
         raise ValueError("No fully scraped pending links available to pack.")
-
     artifacts = []
     for i, chunk in enumerate(chunks):
         filename = f"context_{research_job_id[:8]}_part_{i+1}.txt"
         out_path = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
-        Path(out_path).write_text(chunk, encoding='utf-8')
+        ctx.vfs.save(out_path, chunk, data={"is_absolute_artifact": True})
         register_ephemeral_artifact(out_path, "research", 3600, workspace_id=ctx.workspace_id)
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
