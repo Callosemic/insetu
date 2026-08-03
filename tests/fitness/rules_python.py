@@ -176,7 +176,6 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
-
         if 'system_boot' in hook_events:
             for child in ast.walk(node):
                 if isinstance(child, ast.Call):
@@ -184,7 +183,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     if func_name in ('generate_context_file', 'walk'):
                         report_violation("BOOT_HOOK_NONBLOCKING_MANDATE", self.filepath, child.lineno, f"Synchronous execution '{func_name}' detected in system_boot hook. Offload heavy operations to background workers via submit_immediate_job.")
 
+        if 'request_paths' in hook_events:
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call) and getattr(child.func, 'id', '') == 'ExtensionContext':
+                    report_violation("STATELESS_EVENT_ISOLATION", self.filepath, child.lineno, "ExtensionContext instantiated inside request_paths hook. This triggers an infinite recursion loop.")
+                elif isinstance(child, ast.Attribute) and child.attr == 'paths':
+                    report_violation("STATELESS_EVENT_ISOLATION", self.filepath, child.lineno, "Accessing .paths inside request_paths hook triggers an infinite recursion loop.")
+
         if is_ext:
+            if 'system_boot' in hook_events:
+                report_violation("SYSTEM_BOOT_EXTENSION_BAN", self.filepath, node.lineno, "Extensions are banned from subscribing to 'system_boot'. Subscribe to tenant-scoped 'workspace_boot' instead.")
+
             is_worker = any(
                 isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'worker'
                 for dec in node.decorator_list

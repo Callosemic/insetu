@@ -29,11 +29,11 @@ class HookPayload_VFSMutated(TypedDict, total=False):
 
 class HookPayload_WorkspaceScoped(TypedDict, total=False):
     workspace_id: Optional[str]
-
+_event_thread_local = threading.local()
 
 class HookRegistry:
     """The central Event Bus for the inSetu Micro-Kernel."""
-    
+
     def __init__(self):
         self._hooks = {}
         self._lock = threading.Lock()
@@ -49,11 +49,17 @@ class HookRegistry:
         return decorator
     def _is_authorized(self, cb, event_name, workspace_id):
         """Boundary filter: checks if the callback's module is enabled in the active tenant scope."""
+        mod = cb.__module__ or ""
+
+        # Extensions are strictly banned from system_boot
+        if event_name == 'system_boot' and mod.startswith('insetu.extensions.'):
+            print(f"⚠️ [Event Bus] Banned hook: Extension '{mod}' attempted to subscribe to 'system_boot'. Use 'workspace_boot' instead.")
+            return False
+
         # System lifecycle events always bypass tenant authorization
         if event_name in ['system_boot', 'system_shutdown', 'mutate_workspace_config']:
             return True
 
-        mod = cb.__module__
         if not mod: return True
 
         # Core system modules (Tier 1 & Tier 2) are always authorized
@@ -71,18 +77,36 @@ class HookRegistry:
         return True
     def emit(self, event_name, *args, **kwargs):
         """Core OS trigger to broadcast payloads to all subscribed extensions."""
-        workspace_id = kwargs.get('workspace_id')
-        with self._lock:
-            callbacks = [cb for _, cb in self._hooks.get(event_name, [])]
-        results = []
-        for cb in callbacks:
-            if not self._is_authorized(cb, event_name, workspace_id):
-                continue
-            try:
-                results.append(cb(*args, **kwargs))
-            except Exception as e:
-                print(f"⚠️ [Event Bus] Error in '{event_name}' callback {cb.__name__}: {e}")
-        return results
+        import time
+
+        # Re-entrancy Guard: Prevent infinite recursion loops on the same thread
+        if not hasattr(_event_thread_local, 'active_events'):
+            _event_thread_local.active_events = set()
+        if event_name in _event_thread_local.active_events:
+            print(f"🛡️ [Event Bus Guardrail] Blocked recursive loop on event: '{event_name}'")
+            return []
+
+        _event_thread_local.active_events.add(event_name)
+
+        try:
+            workspace_id = kwargs.get('workspace_id')
+            with self._lock:
+                callbacks = [cb for _, cb in self._hooks.get(event_name, [])]
+            results = []
+            for cb in callbacks:
+                if not self._is_authorized(cb, event_name, workspace_id):
+                    continue
+                try:
+                    t0 = time.time()
+                    results.append(cb(*args, **kwargs))
+                    t1 = time.time()
+                    if t1 - t0 > 1.0:
+                        print(f"🐌 [Event Bus Telemetry] Hook '{event_name}' -> {cb.__module__}.{cb.__name__} took {t1 - t0:.2f}s")
+                except Exception as e:
+                    print(f"⚠️ [Event Bus] Error in '{event_name}' callback {cb.__name__}: {e}")
+            return results
+        finally:
+            _event_thread_local.active_events.remove(event_name)
 
     def emit_background(self, event_name, *args, **kwargs):
         """Dispatches long-running hooks to a background thread to prevent blocking."""

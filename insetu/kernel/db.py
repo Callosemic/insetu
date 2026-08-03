@@ -41,14 +41,14 @@ register_schema('workers', {
         'timestamp': 'REAL'
     }
 })
-
 @hooks.on('system_boot')
 def init_declarative_schemas():
-    """Automatically provisions and migrates SQLite schemas for all tenants on boot."""
+    """Automatically provisions schemas and boots workspaces across all tenants."""
     from insetu.kernel.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
             apply_declarative_schema(ext_name, schema, ws_id)
+        hooks.emit('workspace_boot', workspace_id=ws_id)
 def get_connection(db_name, workspace_id=None):
     """
     Returns a thread-local SQLite connection.

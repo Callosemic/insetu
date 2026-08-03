@@ -45,6 +45,9 @@ def check_javascript_files():
     banned_yenvui_tag_pattern = re.compile(r'\byenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')
+    inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
+    raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
+    gather_repo_sub_pattern = re.compile(r'stores\.Gather\.getState\(\)\.(?:allRepos|pinnedRepos|targetConfigs)')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -216,3 +219,11 @@ def check_javascript_files():
                         report_violation("VENDOR_SUTRAM_JS_SUBDIR_MANDATE", filepath, line_num, "Sutram vendor imports must explicitly target the 'vendor/sutram/js/' subfolder.")
                     if raw_dialog_pattern.search(line) and '@cancel' not in line:
                         report_violation("RAW_DIALOG_OVERLAY_BAN", filepath, line_num, "Unwrapped <dialog> element detected without an explicit @cancel handler. Wrap in <sutram-modal> or supply an @cancel listener to prevent unhandled backdrop escape loops.")
+
+                    if is_extension and inline_date_formatting_pattern.search(line):
+                        report_violation("DATE_FORMATTING_MANDATE", filepath, line_num, "Inline new Date().toLocaleString() detected in extension. Consume this.utils.formatDate() instead to ensure theme and locale consistency.")
+                    if is_extension and raw_poll_job_pattern.search(line):
+                        report_violation("BIND_JOB_ACTION_PREFERENCE", filepath, line_num, "Imperative this.api.pollJob detected in extension. Prefer declarative this.api.bindJobAction or <sutram-async-btn> instead.")
+
+                    if is_extension and gather_repo_sub_pattern.search(line):
+                        report_violation("ECOSYSTEM_ACCESSOR_MANDATE", filepath, line_num, "Direct GatherStore repository topology subscription detected in extension. Consume 'this.ecosystem' on InSetuElement instead.")

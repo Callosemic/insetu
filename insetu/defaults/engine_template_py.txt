@@ -1,0 +1,28 @@
+from flask import jsonify
+from insetu.core.sdk import InSetuExtension
+
+SCHEMA = {
+    "{{ext_name}}_items": {
+        "id": "TEXT PRIMARY KEY",
+        "name": "TEXT NOT NULL"
+    }
+}
+
+SETTINGS = [
+    {"id": "example_setting", "label": "Example Setting", "type": "text", "default": ""}
+]
+
+{{ext_name}}_bp = InSetuExtension(
+    '{{ext_name}}', 
+    __name__,
+    title="{{cap_name}}",
+    description="A newly scaffolded extension.",
+    schema=SCHEMA,
+    settings_schema=SETTINGS
+)
+__depends__ = []
+
+@{{ext_name}}_bp.route('list', methods=['GET'])
+def api_list(ctx):
+    items = ctx.db.get_all("{{ext_name}}_items")
+    return jsonify({"items": items})

@@ -1,0 +1,90 @@
+import { html, css } from 'lit';
+import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+
+export const {{cap_name}}Store = createExtensionStore('{{cap_name}}', {
+    items: [],
+    loading: false,
+    fetchData: async () => {
+        {{cap_name}}Store.setState({ loading: true });
+        try {
+            const res = await window.inSetu.api.workspace('{{ext_name}}/list');
+            if (res.ok) {
+                const data = await res.json();
+                {{cap_name}}Store.setState({ items: data.items || [] });
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            {{cap_name}}Store.setState({ loading: false });
+        }
+    }
+});
+window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+window.inSetu.stores.{{cap_name}} = {{cap_name}}Store;
+
+export class InSetuExt{{cap_name}} extends InSetuElement {
+    static get extensionName() { return '{{ext_name}}'; }
+    static properties = {
+        items: { type: Array },
+        loading: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; padding: 20px; box-sizing: border-box; background: var(--bg); overflow-y: auto; }
+    `];
+
+    constructor() {
+        super();
+        this.items = [];
+        this.loading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe({{cap_name}}Store, state => {
+            this.items = state.items || [];
+            this.loading = state.loading;
+        });
+        {{cap_name}}Store.getState().fetchData();
+    }
+
+    onWorkspaceChanged(newWorkspaceId) {
+        {{cap_name}}Store.getState().fetchData();
+    }
+
+    render() {
+        if (this.loading) return html`<div class="spinner" style="display:block;">Loading...</div>`;
+        return html`
+            <sutram-category-section titleText="{{cap_name}} Extension">
+                <sutram-card-group>
+                    ${this.items.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No items yet.</p>` : ''}
+                    ${this.items.map(item => html`
+                        <insetu-card .titleText=${item.name} intentColor="var(--intent-primary)"></insetu-card>
+                    `)}
+                </sutram-card-group>
+            </sutram-category-section>
+        `;
+    }
+}
+customElements.define('insetu-ext-{{ext_name}}', InSetuExt{{cap_name}});
+
+window.ExtensionRegistry.registerExtension('{{ext_name}}', {
+    name: "{{cap_name}}",
+    version: "1.0.0",
+    layoutSlots: [
+        {
+            slot: "slots:primary-navigation",
+            id: "{{ext_name}}",
+            label: "{{cap_name}}",
+            order: 95
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "{{ext_name}}",
+            id: "main",
+            label: "Main",
+            order: 1,
+            component: "insetu-ext-{{ext_name}}"
+        }
+    ]
+});

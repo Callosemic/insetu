@@ -335,16 +335,10 @@ def start_workers():
                         pass
         for ws_id in workspace_ids:
                 _init_worker_schema(ws_id)
-                # Clean up ghost jobs strictly once during the OS boot sequence (sparing boot heuristics)
+                # Clean up ghost jobs strictly once during the OS boot sequence
                 conn = get_connection("workers", workspace_id=ws_id)
-                conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing') AND callback_name != 'compile_contexts'")
+                conn.execute("UPDATE immediate_jobs SET status='failed', status_message='Interrupted by system reboot.' WHERE status IN ('pending', 'processing')")
                 conn.commit()
-
-        # Flush the immediate_jobs queue natively for the boot heuristics
-        for ws_id in workspace_ids:
-            conn = get_connection("workers", workspace_id=ws_id)
-            for row in conn.execute("SELECT id, args_json FROM immediate_jobs WHERE callback_name='compile_contexts' AND status='processing'").fetchall():
-                _executor.submit(_execute_immediate_job, row['id'], "gather", "compile_contexts", row['args_json'], ws_id)
         _shutdown_event.clear()
         _metronome_thread = threading.Thread(target=_metronome_loop, daemon=True)
         _metronome_thread.start()

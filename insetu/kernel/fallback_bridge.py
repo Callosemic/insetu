@@ -339,6 +339,7 @@ def api_emergency_dump():
             "insetu/core",
             "insetu/static/js/core",
             "insetu/static/vendor/sutram",
+            "insetu/static/vendor/yenvui",
             "insetu/templates"
         ]
         target_files = [
@@ -418,6 +419,12 @@ def api_emergency_dump():
                 try:
                     with open(filepath, 'r', encoding='utf-8') as inf:
                         content = inf.read()
+                    
+                    # Strip massive inline base64 source maps from vendor JS files to preserve LLM token context
+                    if filepath.endswith('.js'):
+                        import re
+                        content = re.sub(r'//#\s*sourceMappingURL=data:application/json;base64,[A-Za-z0-9+/=]+', '', content)
+                        
                     out.write(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
                 except Exception:
                     pass

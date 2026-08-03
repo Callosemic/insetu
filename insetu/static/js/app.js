@@ -323,20 +323,20 @@ async function executeBootSequence() {
         window.ExtensionRegistry.setTabOrder(initialTabOrder);
     }
     // Sync pinned repos to the agnostic Sutram Status Bar
-        const statusBar = document.querySelector('sutram-status-bar');
-        if (statusBar) {
-            window.inSetu.stores.Gather.subscribe(state => state.pinnedRepos, (repos) => {
-                if (repos && repos.size > 0 && !repos.has('ALL')) {
-                    statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
-                } else {
-                    statusBar.statusString = '';
-                }
-            });
-            const repos = window.inSetu.stores.Gather.getState().pinnedRepos;
+    const statusBar = document.querySelector('sutram-status-bar');
+    if (statusBar) {
+        AppStore.subscribe(state => state.pinnedRepos, (repos) => {
             if (repos && repos.size > 0 && !repos.has('ALL')) {
                 statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
+            } else {
+                statusBar.statusString = '';
             }
+        });
+        const repos = AppStore.getState().pinnedRepos;
+        if (repos && repos.size > 0 && !repos.has('ALL')) {
+            statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
         }
+    }
 
     // Initialize Zero-Bundler SPA Router (Native Hash Routing)
     const handleHashChange = () => {
@@ -529,15 +529,9 @@ async function loadWorkspaces() {
 }
 
 let lastRefreshed = null;
-
 function updateRefreshText() {
     if (!lastRefreshed) return;
-    const now = new Date();
-    const diff = Math.floor((now - lastRefreshed) / 1000);
-    let text = "";
-    if (diff < 60) text = `${diff} second${diff !== 1 ? 's' : ''} ago`;
-    else if (diff < 3600) text = `${Math.floor(diff/60)} minute${Math.floor(diff/60) !== 1 ? 's' : ''} ago`;
-    else text = `${Math.floor(diff/3600)} hour${Math.floor(diff/3600) !== 1 ? 's' : ''} ago`;
+    const text = window.inSetu.utils.timeAgo(lastRefreshed);
     const el = document.getElementById('refresh-time');
     if (el) el.innerText = `Refreshed ${text}`;
 }
@@ -609,10 +603,8 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
 
-    // Check both GatherStore and AppStore for targetConfigs to handle early boot timing
-    const gatherTargets = window.inSetu.stores.Gather?.getState()?.targetConfigs;
-    const appTargets = AppStore.getState().targetConfigs;
-    const targetConfigs = (gatherTargets && gatherTargets.length > 0) ? gatherTargets : appTargets;
+    // Extract targetConfigs natively from the App Shell store
+    const targetConfigs = AppStore.getState().targetConfigs || [];
 
     if (!targetConfigs || targetConfigs.length === 0) {
         return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
@@ -679,7 +671,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
             }
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+                const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
             } else {
@@ -735,7 +727,7 @@ async function performSoftRefresh() {
     window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await window.inSetu.api.workspace('gather/repos?t=' + Date.now());
+        const rRes = await window.inSetu.api.system('topology?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
             const tabOrder = d.tab_order || [];
@@ -820,8 +812,7 @@ async function performSoftRefresh() {
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: {} });
-
-        let mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
@@ -867,7 +858,7 @@ async function fullRefresh() {
 async function initializeWorkspaceTopology() {
     // 1. Fetch Repository Configurations
     try {
-        const rRes = await window.inSetu.api.workspace('gather/repos');
+        const rRes = await window.inSetu.api.system('topology');
         if (rRes.ok) {
             const d = await rRes.json();
             const tabOrder = d.tab_order || [];
@@ -893,7 +884,7 @@ async function initializeWorkspaceTopology() {
 } catch(e) { console.error("Topology fetch failed:", e); }
     // 2. Auto-Hydrate Manifest
     try {
-        let mRes = await window.inSetu.api.workspace('gather/manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : {};
         if (Object.keys(manifestData).length === 0) {
             await executeSystemCompile();

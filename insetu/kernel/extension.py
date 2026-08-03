@@ -240,21 +240,13 @@ class ExtensionContext:
         cfg_path, ws_root, wf_path = get_workspace_physics(self.workspace_id)
         workspace_dir = Path(cfg_path).parent.as_posix()
         artifacts_base = Path(workspace_dir).joinpath("data").as_posix()
-
         base_paths = {
             "config_path": cfg_path,
             "control_dir": workspace_dir,
             "workspace_root": ws_root,
             "workflows_path": wf_path,
-            "artifacts_base": artifacts_base,
-            "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix(),
-            "diffs_dir": Path(artifacts_base).joinpath("diffs").as_posix(),
-            "gather_dir": Path(artifacts_base).joinpath("workflows").as_posix()
+            "artifacts_base": artifacts_base
         }
-
-        os.makedirs(base_paths["contexts_dir"], exist_ok=True)
-        os.makedirs(base_paths["diffs_dir"], exist_ok=True)
-        os.makedirs(base_paths["gather_dir"], exist_ok=True)
 
         # Agnostically merge domain-specific paths injected by Tier 2 engines
         path_extensions = hooks.emit('request_paths', workspace_id=self.workspace_id)
@@ -310,12 +302,13 @@ class ExtensionContext:
             for item in items:
                 if 'filepath' in item:
                     filepath = item['filepath']
-                    if filepath.startswith("system://contexts/"):
-                        base_filename = filepath.replace("system://contexts/", "")
+                    if filepath.startswith("system://"):
+                        base_filename = filepath.split('/')[-1]
+                        bucket_prefix = filepath.rsplit('/', 1)[0]
                         chunks = self.get_manifest_files(target_key=base_filename)
                         if chunks and len(chunks) > 0:
                             for chunk in chunks:
-                                files.append(f"system://contexts/{chunk}")
+                                files.append(f"{bucket_prefix}/{chunk}")
                         else:
                             files.append(filepath)
                     else:
@@ -335,11 +328,14 @@ class ExtensionContext:
         """Writes updates to the centralized context manifest."""
         from insetu.kernel.hooks import hooks
         hooks.emit('save_manifest', manifest_data=manifest_data, is_full_compile=is_full_compile, workspace_id=self.workspace_id)
-
     def sync_vfs_barrier(self):
         """Halts the current thread until all pending VFS writes are physically flushed to disk."""
-        from insetu.kernel.vfs import _VFS_WRITE_QUEUE
-        _VFS_WRITE_QUEUE.join()
+        from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
+        import time
+        while _VFS_WRITE_QUEUE.unfinished_tasks > 0:
+            if _VFS_SHUTDOWN_SIGNAL.is_set():
+                raise RuntimeError("Transaction aborted mid-flight due to system shutdown or workspace context swap.")
+            time.sleep(0.1)
 
     def emit(self, event_name, *args, **kwargs):
         """Emits a synchronous event, automatically injecting the tenant's workspace ID."""

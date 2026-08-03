@@ -46,7 +46,12 @@ WantedBy=default.target
         subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
         subprocess.run(["systemctl", "--user", "start", service_name], check=True)
 
-        print(f"✅ inSetu daemon installed and anchored to: {cwd}")
+        from insetu.kernel.utils import load_config
+        cfg = load_config()
+        port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
+
+        print(f"✅ inSetu daemon installed and anchored to: {cwd} (Port {port})")
+        print(f"👉 Local Access URL: http://127.0.0.1:{port}")
         print("👉 You can now close this terminal. Check status anytime with: insetu service status")
 
     elif action == "uninstall":
@@ -60,10 +65,68 @@ WantedBy=default.target
         else:
             print("⚠️  No inSetu service found to uninstall.")
 
-    elif action in ["start", "stop", "restart", "status"]:
+    elif action == "status":
+        from insetu.kernel.utils import load_config
+        cfg = load_config()
+        port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
+        print(f"⚙️  inSetu Service Telemetry:")
+        print(f"   ├─ Anchored Directory: {cwd}")
+        print(f"   ├─ Configured Port: {port}")
+        print(f"   └─ Access URL: http://127.0.0.1:{port}\n")
+        subprocess.run(["systemctl", "--user", "status", service_name])
+
+    elif action in ["start", "stop", "restart"]:
         subprocess.run(["systemctl", "--user", action, service_name])
     else:
         print(f"❌ Unknown service action: {action}. Use install|uninstall|start|stop|restart|status.")
+def scaffold_extension(ext_name):
+    import re
+    if not re.match(r'^[a-z0-9_]+$', ext_name):
+        print("❌ Error: Extension name must be lowercase, alphanumeric, and underscores only.")
+        return
+
+    script_dir = Path(__file__).resolve().parent
+    ext_dir = script_dir / "extensions" / ext_name
+
+    if ext_dir.exists():
+        print(f"❌ Error: Extension '{ext_name}' already exists.")
+        return
+
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    
+    # __init__.py
+    (ext_dir / "__init__.py").write_text("")
+    
+    # vendor.json
+    (ext_dir / "vendor.json").write_text('{\n    "imports": {},\n    "python": {}\n}\n')
+
+    cap_name = "".join(word.capitalize() for word in ext_name.split('_'))
+
+    defaults_dir = script_dir / "defaults"
+    
+    # Read and interpolate engine_template_py.txt
+    engine_tpl = defaults_dir / "engine_template_py.txt"
+    if engine_tpl.exists():
+        engine_code = engine_tpl.read_text(encoding="utf-8")
+        engine_code = engine_code.replace("{{ext_name}}", ext_name).replace("{{cap_name}}", cap_name)
+        (ext_dir / f"engine_{ext_name}.py").write_text(engine_code, encoding="utf-8")
+    else:
+        print("⚠️ Warning: engine_template_py.txt not found in defaults.")
+
+    # Read and interpolate ext_template_js.txt
+    js_tpl = defaults_dir / "ext_template_js.txt"
+    if js_tpl.exists():
+        js_code = js_tpl.read_text(encoding="utf-8")
+        js_code = js_code.replace("{{ext_name}}", ext_name).replace("{{cap_name}}", cap_name)
+        (ext_dir / f"ext_{ext_name}.js").write_text(js_code, encoding="utf-8")
+    else:
+        print("⚠️ Warning: ext_template_js.txt not found in defaults.")
+    
+    print(f"✅ Successfully scaffolded '{ext_name}' at {ext_dir.as_posix()}")
+    print("👉 Next Steps:")
+    print(f"1. Enable '{ext_name}' in your workspace config.json")
+    print(f"2. Restart the daemon to mount the new routes.")
+
 def scaffold_profiles(cwd):
     base_dir = Path(cwd).joinpath(".insetu").as_posix()
     is_new_hub = not os.path.exists(base_dir)
@@ -103,12 +166,19 @@ def scaffold_profiles(cwd):
         print(f"[*] Initialized local inSetu environment at {base_dir}")
 def main():
     if len(sys.argv) < 2:
-        print("Usage: insetu [serve | service]")
+        print("Usage: insetu [serve | service | create-extension]")
         sys.exit(1)
 
     command = sys.argv[1]
     cwd = os.getcwd()
-    if command == "serve":
+    
+    if command == "create-extension":
+        if len(sys.argv) < 3:
+            print("Usage: insetu create-extension <extension_name>")
+            sys.exit(1)
+        scaffold_extension(sys.argv[2])
+        
+    elif command == "serve":
         scaffold_profiles(cwd)
         # The Immutable Recovery Bootloader
         try:
