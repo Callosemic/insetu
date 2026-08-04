@@ -2,6 +2,18 @@ import re
 import difflib
 import base64
 from insetu.kernel.utils import _get_base_step_and_diffs
+def clean_chevron_meltdown(text):
+    """Phase B: Explicit Chevron Healing Loop. Trims conversational garbage trailing the final patch."""
+    import re
+    # Find the last valid REPLACE block
+    match = list(re.finditer(r'>>>>>>> REPLACE', text))
+    if match:
+        last_idx = match[-1].end()
+        # Trim any trailing text that lacks alphanumeric characters (conversational/markdown decay)
+        trailing = text[last_idx:]
+        if not re.search(r'[a-zA-Z0-9]', trailing.replace('```', '')):
+            return text[:last_idx]
+    return text
 
 def expand_macros(text):
     # Semantic Multiplier Macro: e.g., ``` or =======
@@ -32,7 +44,6 @@ def is_effectively_identical(lines_a, lines_b):
     for a, b in zip(a_clean, b_clean):
         if a.strip() != b.strip():
             return False
-
     # Pass 2: Relative Indentation check
     a_base = len(a_clean[0]) - len(a_clean[0].lstrip()) if a_clean else 0
     b_base = len(b_clean[0]) - len(b_clean[0].lstrip()) if b_clean else 0
@@ -44,6 +55,81 @@ def is_effectively_identical(lines_a, lines_b):
             return False
 
     return True
+
+
+def find_block_anchor(file_lines, block_lines):
+    """
+    Abstracted 100% contiguous block search engine.
+    Searches file_lines for a 100% contiguous match of block_lines.
+    Allows whitespace trimming and symmetric line-stitching, but requires
+    every non-empty line in block_lines to match sequentially.
+    """
+    non_empty_indices = [idx for idx, l in enumerate(block_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"]
+    if not non_empty_indices:
+        return None
+
+    baseline_s_idx = non_empty_indices[0]
+    last_content_s_idx = non_empty_indices[-1]
+
+    for i in range(len(file_lines)):
+        match_meta = {"last_content_f_idx": -1}
+        def match_from(f_idx, s_idx):
+            local_baseline_f_idx = -1
+            while s_idx < len(block_lines):
+                if block_lines[s_idx].strip().upper() == "{{UNTIL}}":
+                    s_idx += 1
+                    if s_idx >= len(block_lines): return True, len(file_lines) - i, local_baseline_f_idx
+                    while f_idx < len(file_lines):
+                        ok, span, b_f_idx = match_from(f_idx, s_idx)
+                        if ok: return True, span, (local_baseline_f_idx if local_baseline_f_idx != -1 else b_f_idx)
+                        f_idx += 1
+                    return False, 0, -1
+                else:
+                    if f_idx >= len(file_lines): return False, 0, -1
+                    f_stripped, s_stripped = file_lines[f_idx].strip(), block_lines[s_idx].strip()
+
+                    if not s_stripped and f_stripped: s_idx += 1; continue
+                    if not f_stripped and s_stripped: f_idx += 1; continue
+
+                    if s_idx == last_content_s_idx:
+                        match_meta["last_content_f_idx"] = f_idx
+                        if not f_stripped.startswith(s_stripped): return False, 0, -1
+                    else:
+                        is_first_line = (s_idx == baseline_s_idx)
+                        if is_first_line and f_stripped.endswith(s_stripped): pass
+                        elif f_stripped != s_stripped:
+                            next_f = file_lines[f_idx + 1].strip() if f_idx + 1 < len(file_lines) else None
+                            next_s = block_lines[s_idx + 1].strip() if s_idx + 1 < len(block_lines) else None
+
+                            def stitch_match(f1, f2, s1, s2):
+                                f_opts = [f1 + " " + f2, f1 + f2] if f2 is not None else [f1]
+                                s_opts = [s1 + " " + s2, s1 + s2] if s2 is not None else [s1]
+                                return any(f == s for f in f_opts for s in s_opts)
+
+                            if next_f is not None and stitch_match(f_stripped, next_f, s_stripped, None):
+                                f_idx += 1
+                            elif next_s is not None and stitch_match(f_stripped, None, s_stripped, next_s):
+                                s_idx += 1
+                            elif next_f is not None and next_s is not None and stitch_match(f_stripped, next_f, s_stripped, next_s):
+                                f_idx += 1; s_idx += 1
+                            else:
+                                return False, 0, -1
+
+                    if s_idx == baseline_s_idx: local_baseline_f_idx = f_idx
+                    f_idx += 1; s_idx += 1
+            return True, f_idx - i, local_baseline_f_idx
+
+        ok, span, b_f_idx = match_from(i, 0)
+        if ok:
+            return {
+                "match_idx": i,
+                "actual_span": span,
+                "matched_baseline_f_idx": b_f_idx,
+                "matched_last_content_f_idx": match_meta["last_content_f_idx"],
+                "baseline_s_idx": baseline_s_idx,
+                "last_content_s_idx": last_content_s_idx
+            }
+    return None
 
 
 def apply_block_in_memory(content, block, silent=False):
@@ -65,104 +151,16 @@ def apply_block_in_memory(content, block, silent=False):
             if not silent: print(f"  └─ 🚨 TRANSACTION ERROR: LLM hallucinated {{{{UNTIL}}}} in the REPLACE block. Aborting chunk.")
             return False, content, "error"
 
-    baseline_s_idx = next((idx for idx, l in enumerate(search_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"), -1)
-    last_content_s_idx = next((idx for idx in reversed(range(len(search_lines))) if search_lines[idx].strip() and search_lines[idx].strip().upper() != "{{UNTIL}}"), -1)
+    # Abstracted Anchor Search on SEARCH Block
+    search_match = find_block_anchor(file_lines, search_lines)
 
-    match_idx, actual_span, matched_baseline_f_idx, matched_last_content_f_idx = -1, 0, -1, -1
-
-    for i in range(len(file_lines)):
-        match_meta = {"last_content_f_idx": -1}
-        def match_from(f_idx, s_idx):
-            local_baseline_f_idx = -1
-            while s_idx < len(search_lines):
-                if search_lines[s_idx].strip().upper() == "{{UNTIL}}":
-                    s_idx += 1
-                    if s_idx >= len(search_lines): return True, len(file_lines) - i, local_baseline_f_idx
-                    while f_idx < len(file_lines):
-                        ok, span, b_f_idx = match_from(f_idx, s_idx)
-                        if ok: return True, span, (local_baseline_f_idx if local_baseline_f_idx != -1 else b_f_idx)
-                        f_idx += 1
-                    return False, 0, -1
-                else:
-                    if f_idx >= len(file_lines): return False, 0, -1
-                    f_stripped, s_stripped = file_lines[f_idx].strip(), search_lines[s_idx].strip()
-
-                    if not s_stripped and f_stripped: s_idx += 1; continue
-                    if not f_stripped and s_stripped: f_idx += 1; continue
-
-                    if s_idx == last_content_s_idx:
-                        match_meta["last_content_f_idx"] = f_idx
-                        if not f_stripped.startswith(s_stripped): return False, 0, -1
-                    else:
-                        is_first_line = (s_idx == baseline_s_idx)
-                        if is_first_line and f_stripped.endswith(s_stripped): pass
-                        elif f_stripped != s_stripped:
-                            # Symmetric Line Stitching: Survive token-wrapping regardless of which side wrapped.
-                            next_f = file_lines[f_idx + 1].strip() if f_idx + 1 < len(file_lines) else None
-                            next_s = search_lines[s_idx + 1].strip() if s_idx + 1 < len(search_lines) else None
-
-                            # Helper to check combinations with and without a space
-                            def stitch_match(f1, f2, s1, s2):
-                                f_opts = [f1 + " " + f2, f1 + f2] if f2 is not None else [f1]
-                                s_opts = [s1 + " " + s2, s1 + s2] if s2 is not None else [s1]
-                                return any(f == s for f in f_opts for s in s_opts)
-
-                            if next_f is not None and stitch_match(f_stripped, next_f, s_stripped, None):
-                                f_idx += 1
-                            elif next_s is not None and stitch_match(f_stripped, None, s_stripped, next_s):
-                                s_idx += 1
-                            elif next_f is not None and next_s is not None and stitch_match(f_stripped, next_f, s_stripped, next_s):
-                                f_idx += 1; s_idx += 1
-                            else: 
-                                return False, 0, -1
-
-                    if s_idx == baseline_s_idx: local_baseline_f_idx = f_idx
-                    f_idx += 1; s_idx += 1
-            return True, f_idx - i, local_baseline_f_idx
-
-        ok, span, b_f_idx = match_from(i, 0)
-        if ok:
-            s_non_empty = [l.strip() for l in search_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
-            r_non_empty = [l.strip() for l in replace_lines if l.strip() and l.strip().upper() != '{{UNTIL}}']
-            is_already_patched = False
-            if len(r_non_empty) >= len(s_non_empty) and len(r_non_empty) > 0:
-                f_subset_raw = [file_lines[f_idx] for f_idx in range(i, len(file_lines)) if file_lines[f_idx].strip()][:len(r_non_empty)]
-                if is_effectively_identical(f_subset_raw, replace_lines):
-                    is_already_patched = True
-
-            if is_already_patched: continue
-
-            match_idx, actual_span, matched_baseline_f_idx, matched_last_content_f_idx = i, span, b_f_idx, match_meta["last_content_f_idx"]
-            break
-    if match_idx == -1:
-        r_stripped = [l.strip() for l in replace_lines if l.strip()]
-        s_stripped = [l.strip() for l in search_lines if l.strip()]
-        f_stripped = [l.strip() for l in file_lines if l.strip()]
-
-        f_raw_non_empty = [l for l in file_lines if l.strip()]
-        r_raw_non_empty = [l for l in replace_lines if l.strip()]
-
-        added_lines = [l for l in r_stripped if l not in s_stripped]
-        deleted_lines = [l for l in s_stripped if l not in r_stripped]
-
-        is_pure_deletion = len(deleted_lines) > 0 and len(added_lines) == 0
-        is_pure_addition = len(added_lines) > 0 and len(deleted_lines) == 0
-
-        is_idempotent = False
-
-        if is_pure_deletion:
-            if not any(dl in f_stripped for dl in deleted_lines):
-                is_idempotent = True
-        elif is_pure_addition:
-            if any(is_effectively_identical(f_raw_non_empty[i:i+len(r_raw_non_empty)], r_raw_non_empty) for i in range(len(f_raw_non_empty) - len(r_raw_non_empty) + 1)):
-                is_idempotent = True
-        else:
-            if r_raw_non_empty and any(is_effectively_identical(f_raw_non_empty[i:i+len(r_raw_non_empty)], r_raw_non_empty) for i in range(len(f_raw_non_empty) - len(r_raw_non_empty) + 1)):
-                if not any(dl in f_stripped for dl in deleted_lines):
-                    is_idempotent = True
-        if is_idempotent:
-            if not silent: print("  └─ [ℹ️] Idempotency: Patch state already matches target. Skipping chunk.")
-            return True, content, "idempotent"
+    if not search_match:
+        # Check if REPLACE block matches 100% contiguously in file (Idempotency Check)
+        if replace_lines and any(l.strip() for l in replace_lines if l.strip().upper() != '{{UNTIL}}'):
+            replace_match = find_block_anchor(file_lines, replace_lines)
+            if replace_match:
+                if not silent: print("  └─ [ℹ️] Idempotency: Target file 100% matches REPLACE block. Skipping chunk.")
+                return True, content, "idempotent"
 
         # Fallback: Regex extraction for edge-case grid desyncs
         if "{{UNTIL}}" in search_str:
@@ -200,6 +198,13 @@ def apply_block_in_memory(content, block, silent=False):
             print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64} ]")
 
         return False, content, "error"
+
+    match_idx = search_match["match_idx"]
+    actual_span = search_match["actual_span"]
+    matched_baseline_f_idx = search_match["matched_baseline_f_idx"]
+    matched_last_content_f_idx = search_match["matched_last_content_f_idx"]
+    baseline_s_idx = search_match["baseline_s_idx"]
+    last_content_s_idx = search_match["last_content_s_idx"]
 
     # --- ATOMIC S/R HEALER (Duplication Prevention) ---
     # Look ahead in the file to see if the REPLACE block contains trailing context

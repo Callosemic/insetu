@@ -591,15 +591,16 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 for chunk in ctx.get_manifest_files(target_key=k):
                     chunk_path = Path(paths["contexts_dir"]).joinpath(chunk).as_posix()
                     restored_ephemerals.add(chunk_path)
-
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]) and f_path not in restored_ephemerals:
             f_name = Path(f_path).name
             size_bytes = os.path.getsize(f_path) if os.path.exists(f_path) else 0
-            # Ensure it aligns with the new schema
+            is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
+            domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
+            title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
             manifest[f_name] = {
                 "files": [f"data/contexts/{f_name}"],
-                "meta": {"type": "gather", "title": f"📦 {f_name.replace('.txt','')}", "domain": "Exported Contexts", "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
+                "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
             }
 
     # Save complete merged manifest to disk

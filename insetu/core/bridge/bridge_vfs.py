@@ -6,233 +6,432 @@ import ast
 import json
 import subprocess
 import base64
+import hashlib
+import zlib
+import time
+import uuid
 from pathlib import Path
-from contextlib import redirect_stdout
 from insetu.kernel.utils import get_workspace_physics, parse_blocks
 from insetu.core.utils_core import get_sister_repos, get_omniscient_workspace_files
 from insetu.kernel.vfs import VFSTransaction
-from .bridge_fuzzy import apply_block_in_memory
+from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
+
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
-    """Core transaction loop extracted to reduce cyclomatic complexity and deep nesting."""
     from insetu.kernel.extension import ExtensionContext
     ctx = ExtensionContext('bridge', workspace_id)
-    raw_text = data.get("text", "")
+    raw_text = clean_chevron_meltdown(data.get("text", ""))
     active_files = data.get("active_files", [])
     dry_run = data.get("dry_run", False)
     pinned_repos_raw = data.get("pinned_repos", ["ALL"])
     allowed_repos = sister_repos if "ALL" in pinned_repos_raw else [r for r in sister_repos if r in pinned_repos_raw]
 
     parsed_structure = parse_blocks(raw_text)
-    pid = f"{random.getrandbits(16):04x}".upper()
-    print(f"\n=== SYNC TRANSACTION PULSE [{datetime.datetime.now().strftime('%H:%M:%S')}] ID: {pid} ===")
+    pid = f"tx_{random.getrandbits(32):08x}".lower()
+    
+    telemetry = {
+        "transaction_id": pid,
+        "mode": "dry_run" if dry_run else "live",
+        "status": "action_required",
+        "can_commit": True,
+        "summary": {"total_patches": 0, "resolved": 0, "auto_skipped": 0, "action_required": 0, "failed": 0},
+        "patches": []
+    }
+    memory_buffers = {}
+    original_buffers = {}
+    disk_hashes = {}
     omniscient_cache = None
+    original_file_keys = {}
 
+    def get_file_content(filepath):
+        if filepath in memory_buffers: return memory_buffers[filepath]
+        content = vfs.read(filepath)
+        if content is not None:
+            disk_hashes[filepath] = hashlib.sha256(content.encode('utf-8')).hexdigest()
+            original_buffers[filepath] = content
+            memory_buffers[filepath] = content
+        return content
+
+    patch_index = 0
     for target_file, blocks in parsed_structure.items():
         if target_file not in active_files or not blocks: continue
-        # Hardware Lock: Protect Bootloader and Lifeboat
+
         norm_target = target_file
         if norm_target.endswith('insetu/cli.py') or norm_target.endswith('fallback_bridge.py'):
-            print(f"  [!] TRANSACTION ABORTED: '{target_file}' is hardware-locked.\nThe bootloader and lifeboat must be edited manually.")
-            print("." * 30)
+            telemetry["can_commit"] = False
             continue
 
         # Execution Lock Containment Check
         explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
         if explicit_repo in sister_repos and explicit_repo not in allowed_repos:
-            print(f"  [!] TRANSACTION ABORTED: Target repository '{explicit_repo}' is not pinned. Skipping {target_file}.")
-            print("." * 30)
+            telemetry["can_commit"] = False
             continue
-        resolved_path = ctx.resolve_path(target_file)
-        is_genesis = all(not b["search"].strip() for b in blocks)
-        if is_genesis and explicit_repo not in sister_repos:
-            all_known = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
-            if explicit_repo in all_known:
-                pass
-            elif explicit_repo and os.path.isdir(Path(ws_root).joinpath(explicit_repo).as_posix()):
-                print(f"  [⚡] Auto-Resolved: '{explicit_repo}' exists physically.\nAllowing genesis patch.")
-            elif len(allowed_repos) == 1:
-                target_file = f"{allowed_repos[0]}/{norm_target}"
-                norm_target = target_file
-                explicit_repo = allowed_repos[0]
-                resolved_path = ctx.resolve_path(target_file)
-                print(f"  [⚡] Auto-Resolved: Genesis patch missing repo anchor. Defaulting to '{explicit_repo}'.")
-            else:
-                bad_anchor = explicit_repo or target_file
-                print(f"  [!] TRANSACTION ERROR: Genesis patch missing valid repository anchor.")
-                print(f"  [!] TRANSACTION ABORTED: '{bad_anchor}' is not a recognized repository.\nPlease prepend the repository name (e.g., repo-name/path/to/file).")
-                print("." * 30)
+
+        for b in blocks:
+            patch_tel = {
+                "patch_index": patch_index,
+                "original_file": target_file,
+                "resolved_file": None,
+                "disk_hash": None,
+                "status": "pending",
+                "resolution_type": None,
+                "flags": [],
+                "candidates": [],
+                "syntax_error": None,
+                "error_message": None,
+                "available_actions": []
+            }
+            patch_index += 1
+            telemetry["summary"]["total_patches"] += 1
+            
+            search_str = expand_macros(b["search"])
+            replace_str = expand_macros(b["replace"])
+            is_genesis = not search_str.strip()
+            # Step a.1: No-Op & Idempotency Filter
+            if is_effectively_identical(search_str.split('\n'), replace_str.split('\n')):
+                patch_tel["status"] = "auto_skipped"
+                patch_tel["error_message"] = "No-Op: The SEARCH and REPLACE blocks are perfectly identical."
+                telemetry["summary"]["auto_skipped"] += 1
+                telemetry["patches"].append(patch_tel)
                 continue
-        # Smart Resolution Engine
-        if not is_genesis:
-            basename = Path(target_file).name
-            if omniscient_cache is None:
-                omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
-            candidates = [cand_rel for f, cand_rel in omniscient_cache if f == basename]
-            target_norm = target_file
 
-            def grade_candidate(c):
-                if c == target_norm or c.endswith("/" + target_norm):
-                    return (0, len(c))
-                return (1, len(c))
-            candidates.sort(key=grade_candidate)
-            exact_match_passed = False
-            verified_alts = []
-            failed_diff_cands = []
-            for cand in candidates:
-                try:
-                    temp_content = vfs.read(cand)
-                    if temp_content is None: continue
-                    cand_success = True
-                    for b in blocks:
-                        success, _, _ = apply_block_in_memory(temp_content, b, silent=True)
-                        if not success:
-                            cand_success = False
-                            break
-                    if cand_success:
-                        verified_alts.append(cand)
-                        cand_abs = Path(ws_root).joinpath(cand).as_posix()
-                        if os.path.abspath(resolved_path) == os.path.abspath(cand_abs):
-                            exact_match_passed = True
-                            break
-                    else:
-                        failed_diff_cands.append(cand)
-                except Exception:
-                    pass
-
-            if not exact_match_passed:
-                if verified_alts:
-                    best_alt = verified_alts[0]
-                    if len(allowed_repos) == 1:
-                        print(f"  [⚡] Auto-Resolved: Only 1 repo pinned.\nSeamlessly routing '{target_file}' to '{best_alt}'.")
-                        target_file = best_alt
-                        resolved_path = ctx.resolve_path(target_file)
-                    else:
-                        print(f"  [?] Smart Resolution: Anchors failed or file missing for '{target_file}'.")
-                        print(f"  [✓] Confirmed Match: Found '{best_alt}' which perfectly matches your SEARCH anchors.")
-                        if len(verified_alts) > 1:
-                            print(f"  [i] (Note: Also verified {len(verified_alts)-1} other valid matches).")
-                        print(f"  [ACTION_REQUIRED: UPDATE_PATH | {target_file} | {best_alt} ]")
-                        print("  [!] Halting execution for this file.")
-                        print("." * 30)
-                        continue
+            resolved_path = None
+            resolution_type = None
+            content = get_file_content(target_file)
+            # Step a.0: Genesis Patch Check
+            if is_genesis:
+                explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
+                if explicit_repo in allowed_repos:
+                    resolved_path = target_file
+                    resolution_type = "genesis"
+                elif len(allowed_repos) == 1:
+                    cand_path = f"{allowed_repos[0]}/{norm_target}"
+                    patch_tel["status"] = "needs_confirmation"
+                    patch_tel["resolution_type"] = "genesis_pinned_shortcut"
+                    patch_tel["candidates"] = [{"filepath": cand_path, "score": 1.0, "match_type": "genesis_pinned"}]
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
                 else:
-                    if not os.path.exists(resolved_path):
-                        if failed_diff_cands:
-                            print(f"  [!] TRANSACTION ERROR: Found {len(failed_diff_cands)} matching path candidate(s), but your SEARCH block failed the diff test.")
-                            for fc in failed_diff_cands:
-                                print(f"      - {fc}")
-                            print("  [!] TRANSACTION ABORTED: Check your SEARCH block for hallucinated padding or mismatched context.")
-                        else:
-                            print(f"  [!] TRANSACTION ERROR: Target file not found at path: {resolved_path}")
-                        print(f"  [!] TRANSACTION ABORTED: Check your directory context or cross-repo prefix.")
-                        print("." * 30)
+                    patch_tel["status"] = "failed"
+                    patch_tel["error_message"] = "Genesis patch missing valid repository anchor."
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["can_commit"] = False
+                    telemetry["patches"].append(patch_tel)
+                    continue
+
+                if get_file_content(resolved_path) is not None:
+                    patch_tel["status"] = "needs_confirmation"
+                    patch_tel["flags"].append("confirm-to-overwrite")
+                    patch_tel["available_actions"].append("confirm_candidate")
+                    telemetry["can_commit"] = False
+            # Step b: Direct Path Match
+            elif content is not None:
+                ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
+                if ok_search and s_status == "idempotent":
+                    patch_tel["status"] = "auto_skipped"
+                    patch_tel["flags"].append("already_applied")
+                    patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
+                    telemetry["summary"]["auto_skipped"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                elif ok_search:
+                    resolved_path = target_file
+                    resolution_type = "direct_match"
+            # Step c: Single Pinned Repo Shortcut
+            if not resolved_path and len(allowed_repos) == 1:
+                cand = f"{allowed_repos[0]}/{norm_target}"
+                cand_content = get_file_content(cand)
+                if cand_content is not None:
+                    ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
+                    if ok_search and s_status == "idempotent":
+                        patch_tel["status"] = "auto_skipped"
+                        patch_tel["flags"].append("already_applied")
+                        patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
+                        telemetry["summary"]["auto_skipped"] += 1
+                        telemetry["patches"].append(patch_tel)
                         continue
-        abs_target = os.path.abspath(resolved_path)
-        display_path = os.path.relpath(abs_target, ws_root)
-        print(f"Targeting: {display_path} ({len(blocks)} chunks mapped)")
+                    elif ok_search:
+                        resolved_path = cand
+                        resolution_type = "pinned_shortcut"
 
-        working_content = vfs.read(target_file)
-        if working_content is None:
-            if blocks and blocks[0]["search"].strip():
-                print(f"  [!] TRANSACTION ERROR: Target file not found at path: {resolved_path}")
-                print(f"  [!] TRANSACTION ABORTED: Check your directory context or cross-repo prefix.")
-                print("." * 30)
+            # Step d & e: Multi-Match Path Scoring
+            if not resolved_path and not is_genesis:
+                if omniscient_cache is None:
+                    omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+
+                basename = Path(target_file).name
+                candidates = [cand_rel for f, cand_rel in omniscient_cache if f == basename]
+
+                best_search_cand = None
+                best_replace_cand = None
+                cand_list = []
+                for cand in candidates:
+                    cand_content = get_file_content(cand)
+                    if cand_content is None: continue
+                    ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
+                    if ok_search and s_status == "idempotent":
+                        best_replace_cand = cand
+                        cand_list.append({"filepath": cand, "score": 1.0, "match_type": "replace_block"})
+                    elif ok_search:
+                        best_search_cand = cand
+                        cand_list.append({"filepath": cand, "score": 1.0, "match_type": "search_block"})
+                            
+                if best_search_cand:
+                    patch_tel["status"] = "needs_confirmation"
+                    patch_tel["resolution_type"] = "scored_path"
+                    patch_tel["candidates"] = cand_list
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                elif best_replace_cand:
+                    patch_tel["status"] = "needs_confirmation"
+                    patch_tel["resolution_type"] = "scored_path"
+                    patch_tel["flags"].append("already_applied")
+                    patch_tel["candidates"] = cand_list
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+            # Step f: User-Authorized Deep Search
+            if not resolved_path and not is_genesis:
+                allow_deep_search = data.get("allow_deep_search", False)
+                if not allow_deep_search:
+                    patch_tel["status"] = "offer_deep_search"
+                    patch_tel["available_actions"].extend(["offer_deep_search", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    continue
+                else:
+                    # Execute the Deep Search Algorithm
+                    s_lines = [l for l in search_str.split('\n') if len(l.strip()) > 5 and not l.strip().startswith(('import ', 'from ', '{', '}', 'return'))]
+                    if s_lines:
+                        longest_line = max(s_lines, key=len).strip()
+                        if omniscient_cache is None:
+                            omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+
+                        cand_list = []
+                        for cand_basename, cand_rel in omniscient_cache:
+                            cand_content = get_file_content(cand_rel)
+                            if cand_content and longest_line in cand_content:
+                                ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
+                                if ok_search and s_status != "idempotent":
+                                    cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
+
+                        if cand_list:
+                            patch_tel["status"] = "needs_confirmation"
+                            patch_tel["resolution_type"] = "deep_search"
+                            patch_tel["candidates"] = cand_list
+                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                            telemetry["can_commit"] = False
+                            telemetry["summary"]["action_required"] += 1
+                            telemetry["patches"].append(patch_tel)
+                            continue
+            
+            if not resolved_path:
+                patch_tel["status"] = "failed"
+                patch_tel["error_message"] = "Resolution failed."
+                telemetry["summary"]["failed"] += 1
+                telemetry["can_commit"] = False
+                telemetry["patches"].append(patch_tel)
                 continue
-            working_content = ""
-        original_content = working_content
-        file_success = True
-        for idx, b in enumerate(blocks):
-            success, updated_content, chunk_status = apply_block_in_memory(working_content, b)
-            if success: 
-                working_content = updated_content
-                if chunk_status in ("success", "genesis"):
-                    print(f"  [✓] Chunk {idx + 1}/{len(blocks)} integrated successfully.")
-            else:
-                if not dry_run:
-                    print(f"  [!] TRANSACTION ERROR: Chunk {idx + 1}/{len(blocks)} failed.")
-                    print(f"  [ACTION_REQUIRED: COPY_STATE |\n{target_file} ]")
-                from insetu.kernel.hooks import hooks
-                hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='patch_failed', details=f"Chunk {idx + 1}/{len(blocks)} failed to anchor.", file_content=working_content, patch_payload=json.dumps(b))
-                file_success = False
-                if idx + 1 < len(blocks):
-                    print(f"  [⏭️] Skipped chunks {idx + 2} through {len(blocks)} due to error.")
-                break
-        # --- PRE-FLIGHT SYNTAX VALIDATION ---
-        if file_success:
-            ext = os.path.splitext(target_file)[1].lower()
-            try:
-                if ext == '.py':
-                    ast.parse(working_content)
-                elif ext == '.json':
-                    json.loads(working_content)
-                elif ext == '.js':
-                    try:
-                        res = subprocess.run(
-                            ['node', '--input-type=module', '-c'], 
-                            input=working_content, 
-                            capture_output=True, 
-                            text=True,
-                            encoding='utf-8'
-                        )
-                        if res.returncode != 0:
-                            err_str = res.stderr.strip()
-                            err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                            print(f"  [!] SYNTAX ERROR: Patch introduces invalid JavaScript in {target_file}.")
-                            print(f"      {err_str}")
-                            print(f"  [ACTION_REQUIRED: COPY_ERROR |\n{err_b64} ]")
-                            print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                            from insetu.kernel.hooks import hooks
-                            hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_js', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
-                            file_success = False
-                    except FileNotFoundError:
-                        print(f"  [~] Warning: Node.js not found in PATH. Skipping JS syntax validation for {target_file}.")
-            except SyntaxError as e:
-                err_str = f"Line {e.lineno}: {e.msg}"
-                err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                print(f"  [!] SYNTAX ERROR: Patch introduces invalid Python syntax in {target_file}.")
-                print(f"      {err_str}")
-                print(f"  [ACTION_REQUIRED: COPY_ERROR | {err_b64}\n]")
-                print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                from insetu.kernel.hooks import hooks
-                hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_python', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
-                file_success = False
-            except ValueError as e:
-                err_str = str(e)
-                err_b64 = base64.b64encode(err_str.encode('utf-8')).decode('utf-8')
-                print(f"  [!] SYNTAX ERROR: Patch introduces invalid JSON syntax in {target_file}.")
-                print(f"      Details: {err_str}")
-                print(f"  [ACTION_REQUIRED: COPY_ERROR |\n{err_b64} ]")
-                print(f"  [ACTION_REQUIRED: COPY_STATE | {target_file} ]")
-                from insetu.kernel.hooks import hooks
-                hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=target_file, error_type='syntax_error_json', details=err_str, file_content=working_content, patch_payload=json.dumps(blocks))
-                file_success = False
-            except Exception as e:
-                print(f"  [!] SYNTAX ERROR: Validation failed for {target_file}. Details: {str(e)}")
-                file_success = False
-        if file_success and working_content != original_content and not dry_run:
-            vfs.save(target_file, working_content)
-            print(f"  [✓] In-memory composition successful for {target_file}. Staged in transaction buffer.")
-        elif file_success and dry_run:
-            print(f"  [✓] [DRY RUN] Verified perfectly for {target_file}.")
-        elif not file_success and not dry_run:
-            # Halt the execution loop instantly. The rollback clears the buffer.
-            raise RuntimeError(f"Syntax or patching validation failed on {target_file}. Rolling back entire transaction.")
-        print("." * 30)
 
-    if not dry_run:
-        print(f"  [🚀] ALL FILES VALIDATED. Atomic VFS commit executed.")
-    print(f"=== PULSE {pid} COMPLETE ===\n")
+            patch_tel["resolved_file"] = resolved_path
+            patch_tel["resolution_type"] = resolution_type
+            patch_tel["disk_hash"] = disk_hashes.get(resolved_path)
+            
+            content = get_file_content(resolved_path) or ""
+            
+            # Step h: Phase 2 - Patch Safety & Recursion
+            if search_str and search_str in replace_str:
+                if replace_str in content:
+                    patch_tel["status"] = "needs_confirmation"
+                    patch_tel["flags"].append("expansion_risk")
+                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                    telemetry["can_commit"] = False
+            elif replace_str and replace_str in search_str:
+                patch_tel["flags"].append("code_removal")
+                
+            if patch_tel["status"] == "needs_confirmation":
+                telemetry["summary"]["action_required"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
+            # Apply patch to memory buffer
+            ok, new_content, _ = apply_block_in_memory(content, b, silent=True)
+            if not ok:
+                patch_tel["status"] = "failed"
+                patch_tel["error_message"] = "Failed to anchor patch block in memory."
+                telemetry["can_commit"] = False
+                telemetry["summary"]["failed"] += 1
+                telemetry["patches"].append(patch_tel)
+                from insetu.kernel.hooks import hooks
+                hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
+                continue
+
+            # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
+            ext = os.path.splitext(resolved_path)[1].lower()
+            syntax_error = False
+            err_str = ""
+            is_last_block = (b == blocks[-1])
+            if is_last_block and not data.get("ignore_syntax"):
+                try:
+                    if ext == '.py':
+                        ast.parse(new_content)
+                    elif ext == '.json':
+                        json.loads(new_content)
+                    elif ext in ['.js', '.ts']:
+                        try:
+                            res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8')
+                            if res.returncode != 0:
+                                syntax_error = True
+                                err_str = res.stderr.strip()
+                        except FileNotFoundError:
+                            pass
+                except SyntaxError as e:
+                    syntax_error = True
+                    err_str = f"Line {e.lineno}: {e.msg}"
+                except ValueError as e:
+                    syntax_error = True
+                    err_str = str(e)
+                except Exception as e:
+                    syntax_error = True
+                    err_str = str(e)
+
+                if syntax_error:
+                    patch_tel["status"] = "syntax_error"
+                    patch_tel["error_message"] = err_str
+
+                    # Generate a clean unified diff of the failed AST block for the UI modal
+                    import difflib
+                    diff = list(difflib.unified_diff(content.splitlines(), new_content.splitlines(), lineterm=""))
+                    diff_str = "\n".join(diff)
+                    err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
+
+                    patch_tel["syntax_error"] = err_b64
+                    patch_tel["available_actions"].extend(["ignore_syntax_error", "deselect_patch"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    telemetry["patches"].append(patch_tel)
+                    from insetu.kernel.hooks import hooks
+                    hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
+                    continue
+
+            # Update memory buffer
+            memory_buffers[resolved_path] = new_content
+            original_file_keys[resolved_path] = target_file
+            patch_tel["status"] = "resolved"
+            telemetry["summary"]["resolved"] += 1
+            telemetry["patches"].append(patch_tel)
+    # Zero-Patch Validation
+    if telemetry["summary"]["total_patches"] == 0:
+        telemetry["can_commit"] = False
+        telemetry["status"] = "failed"
+        telemetry["message"] = "No valid or active patches detected in transaction payload."
+
+    # Phase 4 Concurrency Lock: Re-verify physical disk hashes before commit
+    if not dry_run and telemetry["can_commit"]:
+        for filepath in memory_buffers.keys():
+            if original_buffers.get(filepath, "") == memory_buffers.get(filepath, ""):
+                continue
+            current_on_disk = vfs.read(filepath)
+            if current_on_disk is not None:
+                current_hash = hashlib.sha256(current_on_disk.encode('utf-8')).hexdigest()
+                eval_hash = disk_hashes.get(filepath, "")
+                if current_hash != eval_hash:
+                    telemetry["can_commit"] = False
+                    telemetry["status"] = "failed"
+                    telemetry["message"] = f"Concurrency Guard Triggered: '{filepath}' was modified on disk during transaction evaluation."
+                    break
+
+    # Phase 4 & 5: Settlement and Ledger Staging
+    if not dry_run and telemetry["can_commit"]:
+        db_conn = ctx.db
+        now_ts = time.time()
+        ttl_48h = now_ts + 172800.0  # 48-hour TTL for metronome housekeeping
+
+        for filepath, final_content in memory_buffers.items():
+            orig_content = original_buffers.get(filepath, "")
+            if final_content == orig_content:
+                continue
+
+            disk_hash = disk_hashes.get(filepath, "")
+            post_patch_hash = hashlib.sha256(final_content.encode('utf-8')).hexdigest()
+            last_record = db_conn.execute("SELECT post_patch_hash FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 1", (filepath,)).fetchone()
+            last_known_hash = last_record['post_patch_hash'] if last_record else ""
+
+            # Reliably retrieve original LLM blocks using the resolution mapping
+            original_key = original_file_keys.get(filepath)
+            file_blocks = parsed_structure.get(original_key, [])
+            s_block = "\n".join([b["search"] for b in file_blocks])
+            r_block = "\n".join([b["replace"] for b in file_blocks])
+
+            is_snapshot = False
+            compressed_state = None
+
+            # 1. The Human Intercept Rule (Manual edits detected)
+            if disk_hash != last_known_hash:
+                is_snapshot = True
+
+            # 2. Genesis Overwrite Guardrail
+            is_genesis = any(not b["search"].strip() for b in file_blocks)
+            if is_genesis and orig_content.strip():
+                is_snapshot = True
+
+            # 3. The 5-Turn Keyframe Routine
+            if not is_snapshot:
+                recent_records = db_conn.execute("SELECT is_snapshot FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 4", (filepath,)).fetchall()
+                if len(recent_records) == 4 and not any(r['is_snapshot'] for r in recent_records):
+                    is_snapshot = True
+
+            if is_snapshot:
+                compressed_state = zlib.compress(orig_content.encode('utf-8'))
+            current_repo = filepath.split('/')[0] if '/' in filepath else ""
+            patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
+            patch_count = len(file_blocks)
+            chunks_json = json.dumps([{"search": b["search"], "replace": b["replace"]} for b in file_blocks])
+            db_conn.execute('''
+                INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (patch_id, pid, current_repo, filepath, s_block, r_block, post_patch_hash, 1 if is_snapshot else 0, compressed_state, now_ts, ttl_48h, patch_count, chunks_json))
+
+            # Phase 4: Restore target file EOL format (CRLF drift prevention)
+            if '\r\n' in orig_content and '\r\n' not in final_content:
+                final_content = final_content.replace('\n', '\r\n')
+
+            vfs.save(filepath, final_content)
+
+        db_conn.commit()
+        telemetry["status"] = "committed"
+
+    elif dry_run:
+        telemetry["status"] = "dry_run_evaluated"
+
+    if not telemetry["can_commit"]:
+        telemetry["status"] = "action_required" if telemetry["summary"]["action_required"] > 0 else "failed"
+
+    return telemetry
 
 def execute_bridge_sync(workspace_id, data):
-    out = io.StringIO()
+    import json
     sister_repos = get_sister_repos(workspace_id)
     _, ws_root, _ = get_workspace_physics(workspace_id)
 
-    with redirect_stdout(out):
-        try:
-            with VFSTransaction(workspace_id) as vfs:
-                _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root)
-        except Exception as e: 
-            print(f"  [!] System processing fault: {str(e)}")
-
-    return out.getvalue()
+    try:
+        with VFSTransaction(workspace_id) as vfs:
+            telemetry = _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root)
+            return json.dumps(telemetry)
+    except Exception as e:
+        return json.dumps({
+            "transaction_id": "tx_aborted",
+            "mode": "live",
+            "status": "failed",
+            "can_commit": False,
+            "message": f"System processing fault: {str(e)}",
+            "summary": {"total_patches": 0, "resolved": 0, "auto_skipped": 0, "action_required": 0, "failed": 1},
+            "patches": []
+        })
