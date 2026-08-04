@@ -699,11 +699,11 @@ export class InSetuExtBridgeActions extends InSetuElement {
         _pinnedRepos: { type: Object }
     };
     static styles = [sharedStyles];
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(window.inSetu.stores.App, (state) => {
             this._pinnedRepos = state.pinnedRepos;
+            this.requestUpdate();
         });
     }
 

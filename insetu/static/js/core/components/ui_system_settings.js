@@ -130,7 +130,7 @@ export class InSetuSystemSettings extends InSetuElement {
                             </button>
                         `)}
                     `)}
-                    <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end; margin-top: auto; gap: 8px;">
+                    <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end; margin-top: auto; gap: 8px; flex-wrap: wrap;">
                         <button class="btn-sm" style="background: var(--intent-primary); margin: 0; font-weight: bold; color: white;" 
                             @click=${async (e) => {
                                 const btn = e.target;
@@ -141,6 +141,24 @@ export class InSetuSystemSettings extends InSetuElement {
                                 } catch(err) {}
                                 btn.innerText = orig;
                             }}>⚙️ Full Context Recompile</button>
+                        <button class="btn-sm" style="background: var(--intent-success); margin: 0; font-weight: bold; color: white;" 
+                            @click=${async () => {
+                                if (!confirm("Reboot the inSetu OS daemon?")) return;
+                                this.modalOpen = false;
+                                AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
+                                try {
+                                    await window.inSetu.api.system('reboot', { method: 'POST' });
+                                    setInterval(async () => {
+                                        try {
+                                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
+                                            if (ping.ok) window.location.reload();
+                                        } catch(err) {}
+                                    }, 1000);
+                                } catch (e) {
+                                    alert("Reboot failed: " + e.message);
+                                    AppStore.setState({ isRebooting: false });
+                                }
+                            }}>🔄 Reboot System</button>
                         <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic(); }}>⚠️ Test Recovery</button>
                     </div>
                 </div>
@@ -357,6 +375,39 @@ if (!document.getElementById('insetu-workspace-editor-root')) {
     document.body.appendChild(wsRoot);
 }
 // OS-Managed Generic Settings Form Engine (Migrated to sutram/js/primitives.js)
+window.addEventListener('sutram-settings-action', async (e) => {
+    const { extName, field, resolve, reject } = e.detail;
+    const rawEndpoint = field.endpoint || `${extName}/action`;
+    const cleanEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint.substring(1) : rawEndpoint;
+
+    try {
+        const res = await window.inSetu.api.workspace(cleanEndpoint, { method: 'POST' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || "Action request failed.");
+        }
+        const data = await res.json();
+        if (res.status === 202 && data.job_id) {
+            window.inSetu.utils.pollJob(data.job_id, {
+                onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
+                onComplete: (statusData) => {
+                    if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(statusData.message || "✅ Action Completed!", 2000);
+                    resolve(statusData);
+                },
+                onError: (err) => {
+                    if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ ${err.message}`, 3000, true);
+                    reject(err);
+                }
+            });
+        } else {
+            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message || "✅ Action Completed!", 2000);
+            resolve(data);
+        }
+    } catch (err) {
+        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ ${err.message}`, 3000, true);
+        reject(err);
+    }
+});
 
 window.addEventListener('sutram-settings-save', async (e) => {
     const { extName, formData, btn, origText } = e.detail;
