@@ -313,7 +313,7 @@ export class InSetuExtNotes extends InSetuElement {
                             .filename=${n.filepath}
                             .titleText=${n.title}
                             .descriptionText=${`Repo: ${n.repo}${n.sub_bucket !== 'None' ? ` | Bucket: ${n.sub_bucket}` : ''}`}
-                            .detailText=${new Date(n.updated_at).toLocaleString()}
+                            .detailText=${this.utils.formatDate(n.updated_at)}
                             icon="📝"
                             intentColor="var(--intent-highlight)"
                             entityType="file:note"
