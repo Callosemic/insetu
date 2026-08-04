@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "queue"
-status: "logged"
+status: "archived"
 id: INSETU-QUEUE-20260702_2345_UNGUARDED_SYNC_WRITES
 title: "Audit and Refactor Unguarded Synchronous File Writes"
 created_at: 2026-07-02T23:45:00

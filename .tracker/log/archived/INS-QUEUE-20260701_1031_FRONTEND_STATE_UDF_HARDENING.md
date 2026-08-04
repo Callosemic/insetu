@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260701_1031_FRONTEND_STATE_UDF_HARDENING
 title: "Enforce DOM Read Ban and Migrate Extensions to Zustand Store"
 created_at: 2026-07-01T10:31:00

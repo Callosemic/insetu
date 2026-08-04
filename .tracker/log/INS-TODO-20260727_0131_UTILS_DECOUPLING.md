@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-TODO-20260727_0131_UTILS_DECOUPLING
 title: "Decouple utils_core.py into Tier 1 (utils.py) and Tier 2 (core/utils_core.py)"
 created_at: 2026-07-27T01:31:29

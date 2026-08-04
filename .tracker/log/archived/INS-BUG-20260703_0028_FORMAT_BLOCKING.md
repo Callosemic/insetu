@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "logged"
+status: "archived"
 id: INS-BUG-20260703_0028_FORMAT_BLOCKING
 title: "I/O Block Ban Violation: Async Pandoc Document Compilation"
 created_at: 2026-07-03T00:28:00
