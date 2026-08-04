@@ -143,6 +143,21 @@ def save_system_config(workspace_id, payload):
     from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
+@system_bp.route('/api/system/reboot', methods=['POST'])
+@system_bp.route('/api/<workspace_id>/system/reboot', methods=['POST'])
+def api_system_reboot(workspace_id=None):
+    """Clean in-place process replacement to restart the OS daemon."""
+    import os, sys, threading, time
+    def restart():
+        from insetu.kernel.hooks import hooks
+        try: hooks.emit('system_shutdown')
+        except Exception: pass
+        time.sleep(0.5)
+        python_exe = sys.executable
+        os.execv(python_exe, [python_exe] + sys.argv)
+
+    threading.Thread(target=restart, daemon=True).start()
+    return jsonify({"status": "success", "message": "Rebooting inSetu OS..."})
 
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])
 @system_bp.route('/api/<workspace_id>/system/config', methods=['GET', 'POST'])
@@ -306,7 +321,7 @@ def api_job_status(job_id):
         conn = get_connection("workers", workspace_id=workspace_id)
         job = conn.execute("SELECT status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
-            return jsonify({"error": "Job not found"}), 404
+            return jsonify({"error": "Job not found in active workspace context."}), 404
 
         return jsonify({
             "id": job_id,

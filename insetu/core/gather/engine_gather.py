@@ -2,12 +2,26 @@ from pathlib import Path
 import os
 import json
 import datetime
+import time
 import subprocess
 from flask import jsonify
 from insetu.kernel.utils import get_workspace_physics, generate_ascii_tree
 from insetu.core.utils_core import get_valid_workspace_files, evaluate_circuit_breaker
 from insetu.kernel.extension import InSetuExtension
 from insetu.kernel.hooks import hooks
+from insetu.kernel.db import register_schema, get_connection
+
+register_schema('vfs_index', {
+    'manifest_ledger': {
+        'filepath': 'TEXT PRIMARY KEY',
+        'entry_json': 'TEXT',
+        'timestamp': 'REAL'
+    },
+    'sync_metadata': {
+        'key': 'TEXT PRIMARY KEY',
+        'value': 'TEXT'
+    }
+})
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 
 GATHER_SETTINGS_SCHEMA = [
@@ -316,8 +330,7 @@ def init_gather_workers():
     for ws_id in get_all_workspace_ids():
         from insetu.kernel.extension import ExtensionContext
         import uuid, json
-        from pathlib import Path
-        from insetu.kernel.utils import load_json_file
+        from insetu.kernel.db import get_connection
 
         w_ctx = ExtensionContext('workers', ws_id)
         conn = w_ctx.db
@@ -327,19 +340,19 @@ def init_gather_workers():
         """)
         conn.commit()
 
-        # Boot-Time Heuristic: Offline Mutation Guard (Tier 2 Physics)
-        ctx = ExtensionContext('gather', ws_id)
-        contexts_dir = ctx.paths.get("contexts_dir")
-        if contexts_dir:
-            cache_path = Path(contexts_dir).joinpath("manifest_cache.json").as_posix()
-            cache_data = load_json_file(cache_path, {})
-            last_compile = cache_data.get("last_full_compile_time", 0)
+        # Boot-Time Heuristic: Offline Mutation Guard (CQRS Index)
+        try:
+            vfs_conn = get_connection("vfs_index", workspace_id=ws_id)
+            row = vfs_conn.execute("SELECT value FROM sync_metadata WHERE key = 'last_full_compile_time'").fetchone()
+            last_compile = float(row['value']) if row and row['value'] else 0.0
             if SYSTEM_BOOT_TIME > last_compile:
                 job_id = f"cmp_{uuid.uuid4().hex[:8]}"
                 args_json = json.dumps({"force_full": True})
                 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status
                 submit_immediate_job(job_id, "gather", "compile_contexts", args_json, workspace_id=ws_id)
                 update_immediate_job_status(job_id, 'processing', 'Healing offline mutations...', workspace_id=ws_id)
+        except Exception as e:
+            print(f"Warning: Offline mutation check failed: {e}")
 @hooks.on('gather_settings_updated')
 def on_gather_settings_updated(workspace_id=None, **kwargs):
     from insetu.kernel.workers import submit_immediate_job
@@ -380,8 +393,8 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_contexts.add(f"contexts/{module}_context.txt")
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest_data = load_json_file(manifest_path, {})
+    manifests = hooks.emit('request_manifest', workspace_id=workspace_id)
+    manifest_data = next((m for m in manifests if m), {})
 
     for k, v in manifest_data.items():
         if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
@@ -404,17 +417,11 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
     from insetu.kernel.extension import ExtensionContext
     from insetu.core.utils_core import extract_manifest_files, resolve_logical_path
     ctx = ExtensionContext('gather', workspace_id)
-    manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
     md_files = set()
-    if os.path.exists(manifest_path):
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            try:
-                manifest = json.load(f)
-                for filepath in extract_manifest_files(manifest):
-                    if filepath.lower().endswith('.md'):
-                        md_files.add(filepath)
-            except Exception:
-                pass
+    manifest = ctx.manifest
+    for filepath in extract_manifest_files(manifest):
+        if filepath.lower().endswith('.md'):
+            md_files.add(filepath)
     results = []
     for filepath in md_files:
         abs_path = resolve_logical_path(filepath, workspace_id)
@@ -457,13 +464,13 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         paths = ctx.paths
         manifest = ctx.manifest
         cfg = ctx.config
-
         affected_repos = set()
         for f in files:
             parts = f.split('/', 1)
             if len(parts) > 0: affected_repos.add(parts[0])
         dirty = False
         all_touched_buckets = set()
+        touched_manifest = {}
         # --- Bucket Ratio Circuit Breaker ---
         total_known_buckets = len(get_available_contexts(workspace_id, exclusion_flags=["exclude_from_context"]))
         total_touched_count = 0
@@ -506,14 +513,14 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                 return
 
             # Compile ONLY the touched buckets for this repo using the DRY helper
-            if _compile_repo_buckets(repo_cfg, paths, workspace_id, manifest, touched_buckets):
+            if _compile_repo_buckets(repo_cfg, paths, workspace_id, touched_manifest, touched_buckets):
                 dirty = True
         if dirty:
             # Note: Ledger wipe is handled in Phase 3 once Gather fully owns the event loop.
             ctx.sync_vfs_barrier()
 
-            hooks.emit('compile_contexts', manifest=manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
-            ctx.save_manifest(manifest)
+            hooks.emit('compile_contexts', manifest=touched_manifest, workspace_id=workspace_id, target_repos=list(affected_repos), touched_buckets=list(all_touched_buckets), is_full_sweep=False)
+            ctx.save_manifest(touched_manifest, is_full_compile=False)
 def generate_context_file(workspace_id=None, target_repos=None):
     from insetu.kernel.extension import ExtensionContext
     import concurrent.futures
@@ -698,7 +705,7 @@ def api_clear_quickpacks(ctx):
     keys_to_delete = [k for k in manifest_data.keys() if k.startswith('quickpack_') or k.startswith('selection_')]
     if not keys_to_delete:
         return jsonify({"status": "success", "message": "No quickpacks to clear."})
-
+    tombstones = {}
     for k in keys_to_delete:
         chunks = ctx.get_manifest_files(target_key=k)
         if not chunks:
@@ -709,9 +716,9 @@ def api_clear_quickpacks(ctx):
                 os.remove(chunk_path)
             except Exception:
                 pass
-        del manifest_data[k]
+        tombstones[k] = None
 
-    ctx.save_manifest(manifest_data)
+    ctx.save_manifest(tombstones, is_full_compile=False)
 
     # Clean up the garbage collector ledger synchronously
     from insetu.kernel.db import get_connection
@@ -890,52 +897,83 @@ def hook_request_paths(workspace_id=None, **kwargs):
         os.makedirs(paths["gather_dir"], exist_ok=True)
         return paths
     except Exception: return {}
-
 @hooks.on('request_manifest')
 def hook_request_manifest(workspace_id=None, **kwargs):
     try:
-        from insetu.kernel.utils import load_json_file
-        from insetu.kernel.extension import ExtensionContext
-        import os
-        from pathlib import Path
-        ctx = ExtensionContext('gather', workspace_id)
-        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        if os.path.exists(manifest_path): return load_json_file(manifest_path, {})
+        from insetu.kernel.db import get_connection
+        conn = get_connection("vfs_index", workspace_id=workspace_id)
+        rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger").fetchall()
+        manifest = {}
+        for r in rows:
+            if r['entry_json']:
+                manifest[r['filepath']] = json.loads(r['entry_json'])
+        return manifest
     except Exception: pass
     return {}
 
 @hooks.on('request_manifest_chunks')
 def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
     try:
-        from insetu.kernel.utils import load_json_file
-        from insetu.kernel.extension import ExtensionContext
         from insetu.core.utils_core import extract_manifest_files
-        import os
-        from pathlib import Path
-        ctx = ExtensionContext('gather', workspace_id)
-        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-        manifest = load_json_file(manifest_path, {}) if os.path.exists(manifest_path) else {}
+        manifest = hook_request_manifest(workspace_id=workspace_id)
         return extract_manifest_files(manifest, target_key)
     except Exception: return []
+
 @hooks.on('save_manifest')
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
     try:
-        from insetu.kernel.utils import save_json_file, load_json_file
-        from insetu.kernel.extension import ExtensionContext
-        import time, os
-        from pathlib import Path
-        ctx = ExtensionContext('gather', workspace_id)
-        manifest_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest.json").as_posix()
+        import time, json
+        from insetu.kernel.db import get_connection
+        conn = get_connection("vfs_index", workspace_id=workspace_id)
+        now_ts = time.time()
 
-        if is_full_compile or not os.path.exists(manifest_path):
-            current_on_disk = manifest_data or {}
-        else:
-            current_on_disk = load_json_file(manifest_path, {})
+        if is_full_compile:
+            conn.execute("DELETE FROM manifest_ledger")
             if manifest_data:
-                current_on_disk.update(manifest_data)
+                for fp, entry in manifest_data.items():
+                    conn.execute(
+                        "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
+                        (fp, json.dumps(entry), now_ts)
+                    )
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_metadata (key, value) VALUES ('last_full_compile_time', ?)",
+                (str(now_ts),)
+            )
+        else:
+            if manifest_data:
+                for fp, entry in manifest_data.items():
+                    if entry is None:
+                        conn.execute("DELETE FROM manifest_ledger WHERE filepath = ?", (fp,))
+                    else:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
+                            (fp, json.dumps(entry), now_ts)
+                        )
+        conn.commit()
+    except Exception as e:
+        print(f"Warning: hook_save_manifest failed: {e}")
+@gather_bp.route('manifest/version', methods=['GET'])
+def api_manifest_version(ctx):
+    try:
+        from insetu.kernel.db import get_connection
+        conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
+        row = conn.execute("SELECT MAX(timestamp) as max_ts FROM manifest_ledger").fetchone()
+        max_ts = row['max_ts'] if row and row['max_ts'] else 0.0
+        return jsonify({"version": max_ts})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-        save_json_file(manifest_path, current_on_disk, workspace_id)
-        cache_path = Path(ctx.paths["contexts_dir"]).joinpath("manifest_cache.json").as_posix()
-        cache_data = {"manifest": current_on_disk, "last_full_compile_time": time.time() if is_full_compile else load_json_file(cache_path, {}).get("last_full_compile_time", 0)}
-        save_json_file(cache_path, cache_data, workspace_id)
-    except Exception: pass
+@gather_bp.route('manifest/deltas', methods=['GET'])
+def api_manifest_deltas(ctx):
+    try:
+        import time
+        from insetu.kernel.db import get_connection
+        since = float(ctx.req.args.get('since', 0.0))
+        conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
+        rows = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger WHERE timestamp > ?", (since,)).fetchall()
+        deltas = {}
+        for r in rows:
+            deltas[r['filepath']] = json.loads(r['entry_json']) if r['entry_json'] else None
+        return jsonify({"deltas": deltas, "timestamp": time.time()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

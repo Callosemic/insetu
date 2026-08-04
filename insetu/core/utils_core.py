@@ -258,8 +258,8 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
                         for module in os.listdir(dyn_dir):
                             if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
                                 expected_contexts.add(f"contexts/{module}_context.txt")
-    manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    manifest_data = load_json_file(manifest_path, {})
+    manifests = hooks.emit('request_manifest', workspace_id=workspace_id)
+    manifest_data = next((m for m in manifests if m), {})
 
     for k, v in manifest_data.items():
         if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
