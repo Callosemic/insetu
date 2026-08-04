@@ -197,8 +197,7 @@ export class InSetuExtGather extends InSetuElement {
                 const manifestObj = manifest[file] || {};
                 const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
                 if (meta.type && meta.type !== 'gather') return null;
-
-                let finalCat = meta.domain;
+                let finalCat = (file.startsWith && file.startsWith('quickpack_')) || file.includes('quickpack_') || file.includes('selection_') ? 'Quickpacks' : meta.domain;
                 let finalDesc = meta.desc;
                 let finalTitle = meta.title;
                 let sizeStr = "";
@@ -342,13 +341,7 @@ export class InSetuExtGather extends InSetuElement {
                                                 }}
                                                 @card-clicked=${() => {
                                                     if (f.isSkeleton) return;
-                                                    const manifest = AppStore.getState().manifest || {};
-                                                    const chunks = window.inSetu?.utils?.extractManifestFiles 
-                                                        ? window.inSetu.utils.extractManifestFiles(manifest, f.filename) 
-                                                        : [];
-                                                    if (Array.isArray(chunks) && chunks.length > 1) {
-                                                        window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: f.filename } }));
-                                                    } else if (window.inSetu?.vfs?.viewAndCopy) {
+                                                    if (window.inSetu?.vfs?.viewAndCopy) {
                                                         window.inSetu.vfs.viewAndCopy(f.filename);
                                                     } else if (typeof viewAndCopy === 'function') {
                                                         viewAndCopy(f.filename);

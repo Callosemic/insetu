@@ -10,29 +10,86 @@ export const BridgeStore = createExtensionStore('Bridge', {
     activeBridgeJobId: null,
     viewMode: 'input',
     consoleOutput: 'Ready...',
+    telemetry: null,
+    historyRecords: [],
+    historyViewMode: 'transaction',
     parseAndAppendCells: (text) => {
-        let val = text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
-        // Heal strictly anchored spaced angle-bracket REPLACE tags and trailing decay ladders
-        val = val.replace(/^[ \t\u00A0]*(?:>[ \t\u00A0]*)+REPLACE[ \t\u00A0]*(?:\n[ \t\u00A0]*(?:>[ \t\u00A0]*)+$)*/gm, '>>>>>>> REPLACE');
-        const fileParts = val.split(/^<<<<<<< FILE:\s*(.+)$/m);
+        const val = text.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+        const lines = val.split('\n');
         const newCells = [];
         let cellIdx = 0;
-        for (let i = 1; i < fileParts.length; i += 2) {
-            const file = fileParts[i].trim();
-            const rawContent = (fileParts[i + 1] || '').trim();
-            if (file) {
-                // Break apart multiple patches under the same FILE header
-                const chunkMatches = Array.from(rawContent.matchAll(/^<<<<<<< SEARCH[\s\S]*?^>>>>>>> REPLACE\s*$/gm));
-                if (chunkMatches.length > 0) {
-                    chunkMatches.forEach(match => {
-                        newCells.push({ id: `cell_${Date.now()}_${cellIdx++}`, file, content: match[0].trim(), active: true });
-                    });
-                } else if (rawContent) {
-                    // Fallback: If tags are malformed, pass the whole block through for manual fixing
-                    newCells.push({ id: `cell_${Date.now()}_${cellIdx++}`, file, content: rawContent, active: true });
+
+        let currentFile = null;
+        let isInsideChunk = false;
+        let chunkLines = [];
+        let fileRawLines = [];
+        let foundChunksInFile = false;
+
+        const flushFileFallback = () => {
+            if (currentFile && !foundChunksInFile && fileRawLines.length > 0) {
+                const content = fileRawLines.join('\n').trim();
+                if (content) {
+                    newCells.push({ id: `cell_${Date.now()}_${cellIdx++}`, file: currentFile, content, active: true });
+                }
+            }
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            if (line.startsWith('<<<<<<< FILE:')) {
+                flushFileFallback();
+                currentFile = line.substring(13).trim();
+                isInsideChunk = false;
+                chunkLines = [];
+                fileRawLines = [];
+                foundChunksInFile = false;
+                continue;
+            }
+
+            if (currentFile && !isInsideChunk) {
+                fileRawLines.push(line);
+            }
+
+            if (trimmed === '<<<<<<< SEARCH') {
+                isInsideChunk = true;
+                chunkLines = ['<<<<<<< SEARCH'];
+                continue;
+            }
+
+            if (isInsideChunk) {
+                let isReplace = false;
+                if (trimmed === '>>>>>>> REPLACE') {
+                    isReplace = true;
+                } else if (trimmed.endsWith('REPLACE')) {
+                    const prefix = trimmed.slice(0, -7).trim();
+                    if (prefix.length > 0 && prefix.split('').every(c => c === '>')) {
+                        isReplace = true;
+                    }
+                }
+
+                if (isReplace) {
+                    chunkLines.push('>>>>>>> REPLACE');
+                    if (currentFile) {
+                        newCells.push({
+                            id: `cell_${Date.now()}_${cellIdx++}`,
+                            file: currentFile,
+                            content: chunkLines.join('\n'),
+                            active: true
+                        });
+                        foundChunksInFile = true;
+                    }
+                    isInsideChunk = false;
+                    chunkLines = [];
+                } else {
+                    chunkLines.push(line);
                 }
             }
         }
+
+        flushFileFallback();
+
         if (newCells.length > 0) {
             BridgeStore.setState(state => ({ cells: [...state.cells, ...newCells] }));
         }
@@ -62,10 +119,24 @@ export const BridgeStore = createExtensionStore('Bridge', {
         cells: [], 
         activeBridgeJobId: null,
         viewMode: 'input',
-        consoleOutput: 'Ready...'
+        consoleOutput: 'Ready...',
+        telemetry: null
     }),
     setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
     setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out }),
+    setTelemetry: (tel) => BridgeStore.setState({ telemetry: tel }),
+    
+    fetchHistory: async () => {
+        try {
+            const res = await window.inSetu.api.workspace('bridge/history');
+            if (res.ok) {
+                const data = await res.json();
+                BridgeStore.setState({ historyRecords: data.history || [] });
+            }
+        } catch (e) {
+            console.warn("Failed to fetch bridge history", e);
+        }
+    },
 
     getCompiledPayload: () => {
         const state = BridgeStore.getState();
@@ -82,6 +153,7 @@ export class InSetuExtBridge extends InSetuElement {
         cells: { type: Array },
         consoleOutput: { type: String },
         viewMode: { type: String },
+        telemetry: { type: Object },
         _fileVerificationCache: { type: Object },
         _editCellId: { type: String },
         _editContent: { type: String },
@@ -119,6 +191,7 @@ export class InSetuExtBridge extends InSetuElement {
             this.cells = state.cells || [];
             this.consoleOutput = state.consoleOutput;
             this.viewMode = state.viewMode;
+            this.telemetry = state.telemetry;
             window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
         });
         this.subscribe(window.inSetu.stores.Fs, (state) => {
@@ -139,6 +212,7 @@ export class InSetuExtBridge extends InSetuElement {
         this.cells = bState.cells || [];
         this.consoleOutput = bState.consoleOutput;
         this.viewMode = bState.viewMode;
+        this.telemetry = bState.telemetry;
         const fsState = window.inSetu.stores.Fs.getState();
         this._fileVerificationCache = fsState.fileVerificationCache || {};
 
@@ -147,22 +221,27 @@ export class InSetuExtBridge extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-
     _handleSwap(id) {
         const textToSwap = this._editCellId === id ? this._editContent : this.cells.find(c => c.id === id)?.content;
         if (!textToSwap) return;
 
-        const chunkMatch = textToSwap.match(/<<<<<<< SEARCH([\s\S]*?)^=======\s*([\s\S]*?)^>>>>>>> REPLACE/m);
-        if (chunkMatch) {
-            const searchBlock = chunkMatch[1].replace(/^\n/, '').replace(/\n$/, '');
-            const replaceBlock = chunkMatch[2].replace(/^\n/, '').replace(/\n$/, '');
-            const swappedChunk = `<<<<<<< SEARCH\n${replaceBlock}\n=======\n${searchBlock}\n>>>>>>> REPLACE`;
+        const sIdx = textToSwap.indexOf('<<<<<<< SEARCH');
+        const mIdx = textToSwap.indexOf('=======', sIdx);
+        const eIdx = textToSwap.indexOf('>>>>>>> REPLACE', mIdx);
+
+        if (sIdx !== -1 && mIdx !== -1 && eIdx !== -1) {
+            const before = textToSwap.substring(0, sIdx);
+            const searchBlock = textToSwap.substring(sIdx + 14, mIdx).replace(/^\n/, '').replace(/\n$/, '');
+            const replaceBlock = textToSwap.substring(mIdx + 7, eIdx).replace(/^\n/, '').replace(/\n$/, '');
+            const after = textToSwap.substring(eIdx + 15);
+
+            const swappedChunk = `${before}<<<<<<< SEARCH\n${replaceBlock}\n=======\n${searchBlock}\n>>>>>>> REPLACE${after}`;
 
             if (this._editCellId === id) {
-                this._editContent = this._editContent.replace(chunkMatch[0], swappedChunk);
+                this._editContent = swappedChunk;
                 this.requestUpdate();
             } else {
-                BridgeStore.getState().updateCellContent(id, swappedChunk);
+                BridgeStore.getState().updateCellContent(id, swappedChunk.trim());
             }
         } else {
             alert("Could not cleanly parse SEARCH/REPLACE blocks to swap.");
@@ -244,71 +323,44 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.getState().updateCellContent(this._editCellId, rawContent);
         this._editCellId = null;
     }
-    _getSyncAction(dryRunActive, bypassSandwich = false) {
+    _getSyncAction(dryRunActive, bypassSandwich = false, overridePayload = {}) {
         return async (e) => {
             if (bypassSandwich) this._globalBypassSandwich = true;
             this._lastDryRun = dryRunActive;
             const textVal = BridgeStore.getState().getCompiledPayload();
-            BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge..." });
+            BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
             const activeFiles = BridgeStore.getState().getActiveFiles();
 
             const action = this.api.bindJobAction('sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
-                pinned_repos: Array.from(this.ecosystem.pinnedRepos)
+                pinned_repos: Array.from(this.ecosystem.pinnedRepos),
+                ...overridePayload
             }, {
                 interval: 250,
                 onProgress: (msg) => BridgeStore.setState({ consoleOutput: msg }),
                 onComplete: (statusData) => {
                     BridgeStore.setState({ activeBridgeJobId: null });
-                    const rawData = statusData.message || "";
-                    let safeData = rawData.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                    // Format raw log text into elegant inSetu cards
-                    safeData = safeData.replace(/^=== SYNC TRANSACTION PULSE ([^\r\n]+) ===[ \t]*\r?\n?/gm, '<div style="font-weight: bold; font-size: 1.1rem; color: var(--text-muted); margin-bottom: 10px;">Transaction $1</div>');
-                    safeData = safeData.replace(/^Targeting: ([^\r\n]+)[ \t]*\r?\n?/gm, '<sutram-card titletext="🎯 $1" intentcolor="var(--intent-primary)" style="margin-bottom: 15px; display: block;"><div style="font-size: 0.9rem; color: var(--text); line-height: 1.6; font-family: var(--font-mono); margin-top: -5px; padding-bottom: 10px;">');
-                    safeData = safeData.replace(/^\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.\.[ \t]*\r?\n?/gm, '</div></sutram-card>');
-                    safeData = safeData.replace(/^=== PULSE ([^\r\n]+) COMPLETE ===[ \t]*\r?\n?/gm, '');
-                    // Embellish semantic tags
-                    safeData = safeData.replace(/\[✓\]/g, '<span style="color: var(--intent-success); font-weight: bold;">[✓]</span>');
-                    safeData = safeData.replace(/\[!\]/g, '<span style="color: var(--intent-danger); font-weight: bold;">[!]</span>');
-                    safeData = safeData.replace(/\[🚀\]/g, '<span style="color: var(--intent-highlight); font-weight: bold;">[🚀]</span>');
-                    safeData = safeData.replace(/\[⏭️\]/g, '<span style="color: var(--intent-warning); font-weight: bold;">[⏭️]</span>');
-                    safeData = safeData.replace(/\[ℹ️\]/g, '<span style="color: var(--text-muted); font-weight: bold;">[ℹ️]</span>');
+                    if (statusData.artifact && statusData.artifact.transaction_id) {
+                        // Phase C: JSON Telemetry Handling
+                        const tel = statusData.artifact;
+                        BridgeStore.setState({ telemetry: tel, consoleOutput: '' });
+                        if (tel.can_commit && tel.mode === 'live') {
+                            const savedFiles = BridgeStore.getState().getActiveFiles();
+                            BridgeStore.setState({ cells: [] });
+                            const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
+                            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
 
-                    safeData = safeData.replace(/\[ACTION_REQUIRED: UPDATE_PATH \|\s*([\s\S]*?)\s*\|\s*([\s\S]*?)\s*\]/g, (match, p1, p2) => {
-                        const safeP1 = p1.trim().replace(/\\/g, '\\\\');
-                        const safeP2 = p2.trim().replace(/\\/g, '\\\\');
-                        if (safeP1 === safeP2) return `<br><span style="color: var(--intent-danger); font-weight: bold;">[!] Path collision detected. Please manually remove the folder prefix in your FILE target.</span>`;
-                        return `<br><button type="button" data-action="update-path" data-old="${safeP1}" data-new="${safeP2}" class="btn-sm" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px; font-size: 0.8rem; font-weight: bold;">[YES] Update Path & Retry</button>`;
-                    });
+                            // Reactivity: Auto-refresh the ledger UI after a commit
+                            BridgeStore.getState().fetchHistory();
 
-                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_ERROR \|\s*([\s\S]*?)\s*\]/g, (match, b64err) => {
-                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                            <button type="button" data-action="view-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-danger); margin: 0;">👁️ View Diff</button>
-                            <button type="button" data-action="copy-diff" data-b64="${b64err.trim()}" class="btn-sm" style="background: var(--intent-neutral); margin: 0;">📋 Copy Diff</button>
-                        </div>`;
-                    });
-
-                    safeData = safeData.replace(/\[ACTION_REQUIRED: COPY_STATE \|\s*([\s\S]*?)\s*\]/g, (match, p1) => {
-                        const safeP1 = p1.trim().replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                        return `<br><div style="display: flex; gap: 10px; margin-top: 5px;">
-                        <button type="button" data-action="copy-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-success); margin: 0;">📋 Copy State</button>
-                        <button type="button" data-action="download-state" data-file="${safeP1}" class="btn-sm" style="background: var(--intent-primary); margin: 0;">⬇️ Download State</button>
-                    </div>`;
-                    });
-                    BridgeStore.setState({ consoleOutput: safeData });
-                    if (!rawData.includes('[!]') && !rawData.includes('ACTION_REQUIRED') && !rawData.includes('[DRY RUN]')) {
-                        const savedFiles = BridgeStore.getState().getActiveFiles();
-                        BridgeStore.setState({ cells: [] });
-                        // Alert listening extensions (like the Tracker) that files have been modified
-                        const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
-                        window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
-
-                        // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
-                        if (window.inSetu.sys.executeSystemCompile) {
-                            window.inSetu.sys.executeSystemCompile();
+                            if (window.inSetu.sys.executeSystemCompile) {
+                                window.inSetu.sys.executeSystemCompile();
+                            }
                         }
+                    } else {
+                        BridgeStore.setState({ consoleOutput: statusData.message || "Unknown error" });
                     }
                 },
                 onError: (err) => {
@@ -324,12 +376,12 @@ export class InSetuExtBridge extends InSetuElement {
         if (!btn) return;
 
         const action = btn.dataset.action;
-        if (action === 'update-path') {
+        if (action === 'update-path' || action === 'confirm-candidate') {
             const oldPath = btn.dataset.old;
             const newPath = btn.dataset.new;
             const cells = BridgeStore.getState().cells;
             const target = cells.find(c => c.file === oldPath);
-            if (target) BridgeStore.getState().updateCellFile(target.id, newPath);
+            if (target) BridgeStore.getState().updateGroupFile(oldPath, newPath);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
@@ -341,10 +393,115 @@ export class InSetuExtBridge extends InSetuElement {
             this.vfs.fetchAndCopy(btn.dataset.file);
         } else if (action === 'download-state') {
             this.vfs.fetchAndDownloadState(btn.dataset.file);
-        } else if (action === 'force-sync') {
+        } else if (action === 'force-sync' || action === 'ignore-syntax') {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._getSyncAction(isDryRun, true)();
+        } else if (action === 'deselect-patch') {
+            const oldPath = btn.dataset.old;
+            this._handleParentToggle(oldPath);
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+        } else if (action === 'deep-search') {
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
         }
+    }
+    _renderTelemetry() {
+        const t = this.telemetry;
+        if (!t) return html`<div id="status-box" style="width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);" .innerHTML=${this.consoleOutput}></div>`;
+
+        return html`
+            <div style="width: 100%; display: flex; flex-direction: column;">
+                <h3 style="color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;">
+                    ${t.can_commit ? (t.mode === 'live' ? '✅ Transaction Committed' : '✅ Dry Run Verified') : '⚠️ Action Required'}
+                </h3>
+                <p style="color: var(--text-muted); font-size: 0.9rem;">
+                    Total: ${t.summary?.total_patches || 0} | Resolved: ${t.summary?.resolved || 0} | Skipped: ${t.summary?.auto_skipped || 0} | Failed: ${t.summary?.failed || 0}
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
+                    ${(() => {
+                        const safePatches = t.patches || [];
+                        if (safePatches.length === 0) {
+                            return html`<div style="padding: 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-style: italic;">No patch data available for this transaction.</div>`;
+                        }
+
+                        const groupedPatches = safePatches.reduce((acc, p) => {
+                            const file = p.original_file || 'Unknown File';
+                            if (!acc[file]) acc[file] = [];
+                            acc[file].push(p);
+                            return acc;
+                        }, {});
+
+                        return Object.entries(groupedPatches).map(([file, filePatches]) => {
+                            const hasError = filePatches.some(p => p.status === 'failed' || p.status === 'syntax_error');
+                            const hasWarning = filePatches.some(p => p.status === 'needs_confirmation' || p.status === 'offer_deep_search');
+                            const isSkipped = filePatches.every(p => p.status === 'auto_skipped');
+
+                            let intentColor = 'var(--intent-success)';
+                            let icon = '✅';
+                            if (hasError) { intentColor = 'var(--intent-danger)'; icon = '❌'; }
+                            else if (hasWarning) { intentColor = 'var(--intent-warning)'; icon = '⚠️'; }
+                            else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = '⏭️'; }
+
+                            const targetEntityFile = filePatches[0]?.resolved_file || file;
+
+                            return html`
+                                <insetu-card 
+                                    titleText="${icon} ${file}" 
+                                    detailText="${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}" 
+                                    intentColor="${intentColor}"
+                                    entityType="file"
+                                    .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}
+                                    has-actions>
+
+                                    <div style="padding: 2px 0; font-size: 0.9rem; color: var(--text);">
+                                        ${filePatches.map((p, idx) => html`
+                                            <div style="border-bottom: ${idx < filePatches.length - 1 ? '1px solid var(--border)' : 'none'}; padding-bottom: ${idx < filePatches.length - 1 ? '12px' : '0'}; margin-bottom: ${idx < filePatches.length - 1 ? '12px' : '0'};">
+                                                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                                    <p style="margin: 0; font-weight: bold; color: var(--text-muted);">Patch #${(p.patch_index || 0) + 1}: <span style="color: var(--text);">${(p.status || 'unknown').replace('_', ' ')}</span></p>
+                                                    ${p.flags && p.flags.length > 0 ? html`
+                                                        <span style="font-size: 0.75rem; color: var(--intent-highlight); border: 1px solid var(--intent-highlight); padding: 2px 6px; border-radius: 4px;">${p.flags.join(', ')}</span>
+                                                    ` : ''}
+                                                </div>
+
+                                                ${p.error_message ? html`<p style="color: ${p.status === 'auto_skipped' ? 'var(--intent-warning)' : 'var(--intent-danger)'}; margin: 6px 0 0 0;">${p.error_message}</p>` : ''}
+
+                                                ${p.syntax_error ? html`
+                                                    <div style="display: flex; gap: 10px; margin-top: 8px;">
+                                                        <button data-action="view-diff" data-b64="${p.syntax_error}" class="btn-sm" style="background: var(--intent-danger);">👁️ View Syntax Error Diff</button>
+                                                    </div>
+                                                ` : ''}
+
+                                                ${p.candidates && p.candidates.length > 0 ? html`
+                                                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
+                                                        ${p.candidates.map(c => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
+                                                                <span style="font-family: monospace;">${c.filepath} (Score: ${c.score})</span>
+                                                                <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" class="btn-sm" style="background: var(--intent-primary);">Confirm Match</button>
+                                                            </div>
+                                                        `)}
+                                                    </div>
+                                                ` : ''}
+
+                                                <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                                                    ${p.available_actions?.includes('offer_deep_search') ? html`
+                                                        <button data-action="deep-search" class="btn-sm" style="background: var(--intent-highlight);">🔍 Run Deep Search</button>
+                                                    ` : ''}
+                                                    ${p.available_actions?.includes('ignore_syntax_error') ? html`
+                                                        <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
+                                                    ` : ''}
+                                                    ${p.available_actions?.includes('deselect_patch') ? html`
+                                                        <button data-action="deselect-patch" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                        `)}
+                                    </div>
+                                </insetu-card>
+                            `;
+                        });
+                    })()}
+                </div>
+            </div>
+        `;
     }
     render() {
         const groupedCells = this.cells.reduce((acc, cell) => {
@@ -412,76 +569,71 @@ export class InSetuExtBridge extends InSetuElement {
                         ${Object.entries(groupedCells).map(([file, groupCells]) => {
                             const selectedCount = groupCells.filter(c => c.active).length;
                             const totalCount = groupCells.length;
-                            const headerTitle = `${file.split('/').pop()} (${totalCount} patch${totalCount === 1 ? '' : 'es'})`;
                             return html`
-                            <sutram-collapsible titleText=${headerTitle} intent="neutral" .open=${true} ?flush=${true} style="background: var(--bg);">
-                                <div style="padding: 15px 20px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border);">
-                                    <sutram-card-group ?stacked=${true}>
-                                        <!-- Target File Card (Top of Stack) -->
+                            <div style="padding: 20px; display: flex; flex-direction: column; border-bottom: 1px solid var(--border);">
+                                <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                                    <!-- Target File Card (Top of Stack) -->
+                                    <insetu-card
+                                        .titleText=${"Target File:"}
+                                        .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
+                                        .detailText=${`${selectedCount} of ${totalCount} patches selected`}
+                                        icon="📄"
+                                        intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
+                                        entityType="file"
+                                        .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
+                                        selectionStoreKey="none"
+                                        ?selected=${selectedCount > 0}
+                                        @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
+                                        style="display: block;">
+
+                                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                                            <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
+                                                BridgeStore.getState().updateGroupFile(file, e.detail.value);
+                                                window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
+                                            }}></sutram-input>
+                                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
+                                                if (this.ui && this.ui.openWorkspaceBrowser) {
+                                                    this.ui.openWorkspaceBrowser({
+                                                        mode: 'file',
+                                                        title: 'Select File for Patch',
+                                                        callback: (filepath) => {
+                                                            BridgeStore.getState().updateGroupFile(file, filepath);
+                                                            window.inSetu.stores.Fs.getState().verifyFiles([filepath], true);
+                                                        }
+                                                    });
+                                                }
+                                            }}>📁 Remap</button>
+                                        </div>
+                                    </insetu-card>
+                                    <!-- Patches (Subsequent Stacked Chunks) -->
+                                    ${groupCells.map((c, i) => {
+                                        const isGenesis = !!c.content.match(/<<<<<<< SEARCH\s*=======/);
+                                        const typeStr = isGenesis ? "Type: Create File" : "Type: Search & Replace";
+                                        return html`
                                         <insetu-card
-                                            .titleText=${"Target File:"}
-                                            .descriptionText=${this._fileVerificationCache[file] === false ? "⚠️ Target file not found in workspace." : ""}
-                                            .detailText=${`${selectedCount} of ${totalCount} patches selected`}
-                                            icon="📄"
-                                            intentColor=${this._fileVerificationCache[file] === false ? 'var(--intent-danger)' : 'var(--intent-primary)'}
-                                            entityType="file"
-                                            .entityData=${{ filepath: file, isFS: true, suppress: ['file-browse'] }}
+                                            .titleText=${typeStr}
+                                            .detailText=${`Patch ${i + 1} of ${groupCells.length}`}
+                                            icon="🧩"
+                                            ?selected=${c.active}
+                                            intentColor=${c.active ? "var(--intent-success)" : "var(--intent-neutral)"}
                                             selectionStoreKey="none"
-                                            ?selected=${selectedCount > 0}
-                                            @sutram-card-select-toggled=${(e) => { e.stopPropagation(); this._handleParentToggle(file); }}
-                                            style="display: block;">
-
-                                            <div style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
-                                                <sutram-input inline .value=${file} style="flex: 1; margin: 0; --bg-input: var(--bg);" @sutram-input-changed=${(e) => {
-                                                    BridgeStore.getState().updateGroupFile(file, e.detail.value);
-                                                    window.inSetu.stores.Fs.getState().verifyFiles([e.detail.value], true);
-                                                }}></sutram-input>
-                                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; flex-shrink: 0;" @click=${() => {
-                                                    if (this.ui && this.ui.openWorkspaceBrowser) {
-                                                        this.ui.openWorkspaceBrowser({
-                                                            mode: 'file',
-                                                            title: 'Select File for Patch',
-                                                            callback: (filepath) => {
-                                                                BridgeStore.getState().updateGroupFile(file, filepath);
-                                                                window.inSetu.stores.Fs.getState().verifyFiles([filepath], true);
-                                                            }
-                                                        });
-                                                    }
-                                                }}>📁 Remap</button>
-                                            </div>
+                                            entityType="yomama"
+                                            .entityData=${{...c, suppress: ['yomama-swap']}}
+                                            @sutram-card-select-toggled=${(e) => BridgeStore.getState().toggleCellActive(c.id)}
+                                            @card-clicked=${() => this._openEditorModal(c)}>
                                         </insetu-card>
-
-                                        <!-- Patches (Subsequent Stacked Chunks) -->
-                                        ${groupCells.map((c, i) => {
-                                            const isGenesis = !!c.content.match(/<<<<<<< SEARCH\s*=======/);
-                                            const typeStr = isGenesis ? "Type: Create File" : "Type: Search & Replace";
-                                            return html`
-                                            <insetu-card
-                                                .titleText=${`Patch Chunk ${i + 1}`}
-                                                .descriptionText=${typeStr}
-                                                icon="🧩"
-                                                ?selected=${c.active}
-                                                intentColor=${c.active ? "var(--intent-success)" : "var(--intent-neutral)"}
-                                                selectionStoreKey="none"
-                                                entityType="yomama"
-                                                .entityData=${{...c, suppress: ['yomama-swap']}}
-                                                @sutram-card-select-toggled=${(e) => BridgeStore.getState().toggleCellActive(c.id)}
-                                                @card-clicked=${() => this._openEditorModal(c)}>
-                                            </insetu-card>
-                                        `})}
-                                    </sutram-card-group>
-                                </div>
-                            </sutram-collapsible>
+                                    `})}
+                                </sutram-card-group>
+                            </div>
                         `;})}
                     `}
                 </div>
 
                 <!-- CONSOLE VIEW -->
                 <div style="display: ${this.viewMode === 'console' ? 'flex' : 'none'}; flex: 1; flex-direction: column; min-height: 0; padding: 20px; overflow-y: auto; background: var(--bg);">
-                    <div id="status-box" 
-                        @click=${this._handleConsoleClick}
-                        style="width: 100%; max-width: 800px; margin: 0 auto; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);"
-                        .innerHTML=${this.consoleOutput}></div>
+                    <div @click=${this._handleConsoleClick} style="display: contents;">
+                        ${this._renderTelemetry()}
+                    </div>
                 </div>
                 <!-- FOOTER -->
                 <div style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
@@ -511,16 +663,284 @@ export class InSetuExtBridge extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-bridge', InSetuExtBridge);
+export class InSetuExtBridgeHistoryActions extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
+    static properties = { _viewMode: { type: String } };
+    static styles = [sharedStyles];
+
+    constructor() {
+        super();
+        this._viewMode = 'transaction';
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(BridgeStore, state => {
+            this._viewMode = state.historyViewMode || 'transaction';
+        });
+    }
+    render() {
+        const isTx = this._viewMode === 'transaction';
+        return html`
+            <button 
+                class="system-action-btn"
+                @click=${() => BridgeStore.setState({ historyViewMode: isTx ? 'file' : 'transaction' })}
+                title="${isTx ? 'Switch to By File view' : 'Switch to By Turn view'}">
+                ${isTx ? '🗂️' : '📄'}
+            </button>
+        `;
+    }
+}
+customElements.define('insetu-ext-bridge-history-actions', InSetuExtBridgeHistoryActions);
+
 export class InSetuExtBridgeActions extends InSetuElement {
     static get extensionName() { return 'bridge'; }
+    static properties = {
+        _pinnedRepos: { type: Object }
+    };
     static styles = [sharedStyles];
-    render() { return html``; }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.App, (state) => {
+            this._pinnedRepos = state.pinnedRepos;
+        });
+    }
+
+    render() {
+        const currentPins = this._pinnedRepos || this.ecosystem.pinnedRepos;
+        const active = Array.from(currentPins).filter(r => r !== 'ALL');
+        let btnText = 'Filters';
+        let hasF = false;
+        if (active.length > 0) {
+            btnText = `Filters: ${active.slice(0, 2).join(', ')}${active.length > 2 ? '...' : ''}`;
+            hasF = true;
+        }
+
+        return html`
+            <sutram-filter-dropdown .filterText=${btnText} .hasFilters=${hasF}>
+                <div style="min-width: 200px;">
+                    <insetu-repo-filter
+                        .repos=${this.ecosystem.allRepos}
+                        .activeRepos=${Array.from(currentPins)}
+                        @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                    </insetu-repo-filter>
+                </div>
+            </sutram-filter-dropdown>
+        `;
+    }
 }
 customElements.define('insetu-ext-bridge-actions', InSetuExtBridgeActions);
+export class InSetuExtBridgeHistory extends InSetuElement {
+    static get extensionName() { return 'bridge'; }
+    static properties = {
+        historyRecords: { type: Array },
+        searchQuery: { type: String },
+        _viewMode: { type: String }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); box-sizing: border-box; }
+        .history-body { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px; width: 100%; box-sizing: border-box; }
+    `];
+
+    constructor() {
+        super();
+        this.historyRecords = [];
+        this.searchQuery = '';
+        this._viewMode = 'transaction';
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(BridgeStore, state => {
+            this.historyRecords = state.historyRecords || [];
+            this._viewMode = state.historyViewMode || 'transaction';
+        });
+        BridgeStore.getState().fetchHistory();
+    }
+
+    render() {
+        const filteredRecords = this.searchQuery
+            ? this.utils.fuzzyFilterObjects(this.historyRecords, this.searchQuery, r => `${r.filepath} ${r.transaction_id} ${r.post_patch_hash}`)
+            : this.historyRecords;
+
+        const activeRepos = this.ecosystem.pinnedRepos;
+        const repoFilteredRecords = filteredRecords.filter(r => {
+            if (activeRepos.has('ALL')) return true;
+            return activeRepos.has(r.repo) || activeRepos.has(r.filepath?.split('/')[0]);
+        });
+
+        // 1. Transaction-Centric Grouping
+        const groupedTxs = repoFilteredRecords.reduce((acc, r) => {
+            const txKey = r.transaction_id || "legacy_" + r.patch_id;
+            if (!acc[txKey]) acc[txKey] = { timestamp: r.timestamp, records: [] };
+            acc[txKey].records.push(r);
+            return acc;
+        }, {});
+        const sortedTxs = Object.entries(groupedTxs).sort((a, b) => b[1].timestamp - a[1].timestamp);
+
+        // 2. File-Centric Grouping
+        const groupedFiles = repoFilteredRecords.reduce((acc, r) => {
+            if (!acc[r.filepath]) acc[r.filepath] = { latest_ts: 0, records: [] };
+            acc[r.filepath].records.push(r);
+            if (r.timestamp > acc[r.filepath].latest_ts) acc[r.filepath].latest_ts = r.timestamp;
+            return acc;
+        }, {});
+        const sortedFiles = Object.entries(groupedFiles).sort((a, b) => b[1].latest_ts - a[1].latest_ts);
+
+        return html`
+            <sutram-toolbar
+                searchPlaceholder="🔍 Fuzzy search receipts..."
+                .searchQuery=${this.searchQuery}
+                @search-changed=${(e) => this.searchQuery = e.detail.value}
+                .enableFilterDropdown=${true}
+                .activeFilters=${Array.from(this.ecosystem.pinnedRepos)}>
+                <insetu-repo-filter
+                    slot="filters"
+                    label="📌 Repos:"
+                    .repos=${this.ecosystem.allRepos}
+                    .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                    @repo-filter-changed=${(e) => window.inSetu.stores.App.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
+                </insetu-repo-filter>
+            </sutram-toolbar>
+
+            <div class="history-body">
+                ${this.historyRecords.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No ledger receipts available.</p>` : ''}
+                ${repoFilteredRecords.length === 0 && this.historyRecords.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No ledger receipts match criteria.</p>` : ''}
+                ${this._viewMode === 'transaction' ? sortedTxs.map(([txId, txData]) => {
+                    const repos = Array.from(new Set(txData.records.map(r => r.repo || r.filepath?.split('/')[0]).filter(Boolean)));
+                    const repoStr = repos.length > 0 ? ' in ' + repos.join(', ') : '';
+                    const countStr = txData.records.length + (txData.records.length !== 1 ? ' files' : ' file') + ' modified' + repoStr;
+                    return html`
+                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                        <insetu-card
+                            .titleText=${"Tx: " + (txId || 'Unknown')}
+                            .descriptionText=${countStr}
+                            .detailText=${this.utils.timeAgo(txData.timestamp * 1000)}
+                            icon="🗂️"
+                            intentColor="var(--intent-primary)"
+                            entityType="yomama-turn"
+                            .entityData=${{ transaction_id: txId, records: txData.records }}
+                            has-actions
+                            style="display: block;">
+                        </insetu-card>
+                        ${txData.records.map((record, idx) => {
+                            let chunks = record.chunks || record.patches;
+                            if (!chunks && record.chunks_json) {
+                                try { chunks = JSON.parse(record.chunks_json); } catch(e){}
+                            }
+                            const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
+                            const patchStr = count + (count !== 1 ? ' patches' : ' patch');
+                            const descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                            return html`
+                            <insetu-card
+                                .titleText=${record.filepath.split('/').pop()}
+                                .descriptionText=${descStr}
+                                .detailText=${record.filepath}
+                                icon=${record.is_snapshot ? '💾' : '📄'}
+                                intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
+                                entityType="patch-receipt"
+                                .entityData=${record}
+                                has-actions
+                                style="display: block;">
+                            </insetu-card>
+                            `;
+                        })}
+                    </sutram-card-group>
+                    `;
+                }) : sortedFiles.map(([filepath, fileData]) => {
+                    const filename = filepath.split('/').pop();
+                    const repo = fileData.records[0]?.repo || '';
+                    return html`
+                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                        <insetu-card
+                            .titleText=${filename}
+                            .descriptionText=${repo ? "Repo: " + repo : ""}
+                            .detailText=${filepath}
+                            icon="📄"
+                            intentColor="var(--intent-primary)"
+                            entityType="file"
+                            .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
+                            has-actions
+                            style="display: block;">
+                        </insetu-card>
+                        ${fileData.records.map((record, idx) => {
+                            let chunks = record.chunks || record.patches;
+                            if (!chunks && record.chunks_json) {
+                                try { chunks = JSON.parse(record.chunks_json); } catch(e){}
+                            }
+                            const count = record.patch_count || (Array.isArray(chunks) && chunks.length > 0 ? chunks.length : 1);
+                            const patchStr = count + (count !== 1 ? ' patches' : ' patch');
+                            const descStr = patchStr + (record.is_snapshot ? ' • 💾 Snapshot' : '');
+                            return html`
+                            <insetu-card
+                                .titleText=${"Tx: " + (record.transaction_id || 'Unknown')}
+                                .descriptionText=${descStr}
+                                .detailText=${`Turn ${idx + 1} of ${fileData.records.length} • ${this.utils.timeAgo(record.timestamp * 1000)}`}
+                                icon=${record.is_snapshot ? '💾' : '🧩'}
+                                intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
+                                entityType="patch-receipt"
+                                .entityData=${record}
+                                has-actions
+                                style="display: block;">
+                            </insetu-card>
+                            `;
+                        })}
+                    </sutram-card-group>
+                `;})}
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-ext-bridge-history', InSetuExtBridgeHistory);
 window.ExtensionRegistry.registerExtension('bridge', {
     name: "Yomama Sync Bridge",
     version: "2.0.0",
     entityActions: [
+        {
+            targetEntity: 'yomama-turn',
+            id: 'yomama-turn-undo',
+            label: 'Undo Turn (Pre-Tx)',
+            icon: '⏪',
+            intent: 'danger',
+            order: 10,
+            asyncAction: async (data) => {
+                if (!confirm(`Undo this entire turn? All ${data.records.length} files will be restored to their pre-turn state.`)) return;
+                const res = await window.inSetu.api.workspace('bridge/revert', {
+                    method: 'POST',
+                    body: JSON.stringify({ transaction_id: data.transaction_id, target_state: 'initial' })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(()=>({}));
+                    throw new Error(err.error || "Undo turn failed.");
+                }
+                const resData = await res.json();
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(resData.message, 3000);
+                window.inSetu.stores.Bridge.getState().fetchHistory();
+            }
+        },
+        {
+            targetEntity: 'yomama-turn',
+            id: 'yomama-turn-restore',
+            label: 'Restore Turn (Post-Tx)',
+            icon: '🎯',
+            intent: 'warning',
+            order: 20,
+            asyncAction: async (data) => {
+                if (!confirm(`Restore all ${data.records.length} files to their end state at the completion of this turn?`)) return;
+                const res = await window.inSetu.api.workspace('bridge/revert', {
+                    method: 'POST',
+                    body: JSON.stringify({ transaction_id: data.transaction_id, target_state: 'final' })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(()=>({}));
+                    throw new Error(err.error || "Turn restore failed.");
+                }
+                const resData = await res.json();
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(resData.message, 3000);
+                window.inSetu.stores.Bridge.getState().fetchHistory();
+            }
+        },
         {
             targetEntity: 'yomama',
             id: 'yomama-copy',
@@ -559,6 +979,79 @@ window.ExtensionRegistry.registerExtension('bridge', {
             onClick: (data) => {
                 window.dispatchEvent(new CustomEvent('bridge-cell-swap', { detail: { id: data.id } }));
             }
+        },
+        {
+            targetEntity: 'patch-receipt',
+            id: 'patch-receipt-undo',
+            label: 'Revert Pre-Patch',
+            icon: '⏪',
+            intent: 'danger',
+            order: 10,
+            asyncAction: async (data) => {
+                if (!confirm(`Revert ${data.filepath} to its state BEFORE this patch?`)) return;
+                const res = await window.inSetu.api.workspace('bridge/revert', {
+                    method: 'POST',
+                    body: JSON.stringify({ patch_id: data.patch_id, target_state: 'initial' })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(()=>({}));
+                    throw new Error(err.error || "Revert failed.");
+                }
+                const resData = await res.json();
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(resData.message, 3000);
+                window.inSetu.stores.Bridge.getState().fetchHistory();
+            }
+        },
+        {
+            targetEntity: 'patch-receipt',
+            id: 'patch-receipt-restore',
+            label: 'Revert Post-Patch',
+            icon: '🎯',
+            intent: 'warning',
+            order: 15,
+            asyncAction: async (data) => {
+                if (!confirm(`Revert ${data.filepath} to its state AFTER this patch?`)) return;
+                const res = await window.inSetu.api.workspace('bridge/revert', {
+                    method: 'POST',
+                    body: JSON.stringify({ patch_id: data.patch_id, target_state: 'final' })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(()=>({}));
+                    throw new Error(err.error || "Revert failed.");
+                }
+                const resData = await res.json();
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(resData.message, 3000);
+                window.inSetu.stores.Bridge.getState().fetchHistory();
+            }
+        },
+        {
+            targetEntity: 'patch-receipt',
+            id: 'patch-receipt-copy',
+            label: 'Copy Sandwich',
+            icon: '📋',
+            intent: 'neutral',
+            order: 20,
+            asyncAction: async (data) => {
+                let sandwich = "<<<<<<< FILE: " + data.filepath + "\n";
+                let chunks = data.chunks || data.patches;
+                if (!chunks && data.chunks_json) {
+                    try { chunks = JSON.parse(data.chunks_json); } catch(e) {}
+                }
+
+                if (Array.isArray(chunks) && chunks.length > 0) {
+                    sandwich += chunks.map(c => {
+                        const s = c.search !== undefined ? c.search : (c.search_block || '');
+                        const r = c.replace !== undefined ? c.replace : (c.replace_block || '');
+                        return `<<<<<<< SEARCH\n${s}\n=======\n${r}\n>>>>>>> REPLACE`;
+                    }).join('\n\n');
+                } else {
+                    sandwich += "<<<<<<< SEARCH\n" + (data.search_block || '') + "\n=======\n" + (data.replace_block || '') + "\n>>>>>>> REPLACE";
+                }
+
+                if (window.inSetu && window.inSetu.utils && window.inSetu.utils.copyRawText) {
+                    await window.inSetu.utils.copyRawText(sandwich);
+                }
+            }
         }
     ],
     layoutSlots: [
@@ -571,10 +1064,25 @@ window.ExtensionRegistry.registerExtension('bridge', {
             component: "insetu-ext-bridge"
         },
         {
+            slot: "slots:sub-navigation",
+            targetParent: "edit",
+            id: "history",
+            label: "Receipts",
+            order: 2,
+            component: "insetu-ext-bridge-history"
+        },
+        {
             slot: "slots:sub-navigation-actions",
             targetParent: "edit",
             targetSub: "bridge",
             component: "insetu-ext-bridge-actions",
+            order: 1
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "edit",
+            targetSub: "history",
+            component: "insetu-ext-bridge-history-actions",
             order: 1
         }
     ]
