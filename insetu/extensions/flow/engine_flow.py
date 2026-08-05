@@ -146,15 +146,26 @@ def _background_compile_workflows(ctx, **kwargs):
             filename, entry = future.result()
             if entry:
                 manifest_deltas[filename] = entry
-    if manifest_deltas:
-        current_manifest.update(manifest_deltas)
-        ctx.save_manifest(current_manifest, is_full_compile=False)
-        ctx.sync_vfs_barrier()
-
-    # Flow Vacuum
+    # Flow Vacuum & Manifest Cleanup
     expected_flow_artifacts = set()
-    for entry in manifest_deltas.values():
-        expected_flow_artifacts.update(entry.get("chunks", []))
+    active_workflow_keys = set()
+    for filename, entry in manifest_deltas.items():
+        active_workflow_keys.add(filename)
+        expected_flow_artifacts.update(entry.get("chunks", [filename]))
+
+    for k, v in list(current_manifest.items()):
+        if k.startswith('workflow_') and k.endswith('_context.txt'):
+            if k not in active_workflow_keys:
+                manifest_deltas[k] = None
+
+    if manifest_deltas:
+        for k, v in manifest_deltas.items():
+            if v is None:
+                current_manifest.pop(k, None)
+            else:
+                current_manifest[k] = v
+        ctx.save_manifest(manifest_deltas, is_full_compile=False)
+        ctx.sync_vfs_barrier()
 
     from insetu.kernel.vfs import VFSTransaction, execute_vfs_delete
     vfs = VFSTransaction(ctx.workspace_id)
