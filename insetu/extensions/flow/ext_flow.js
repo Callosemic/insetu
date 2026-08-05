@@ -282,7 +282,7 @@ export class InSetuExtFlow extends InSetuElement {
             const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
             const appState = appStore?.getState ? appStore.getState() : {};
             const categoryOrder = appState?.categoryOrder || [];
-            const manifest = appState?.manifest || {};
+            const manifest = appState?.manifest?.ctx || {};
             const gatherStore = window.inSetu?.stores?.Gather;
             const gatherState = gatherStore?.getState ? gatherStore.getState() : {};
             const gatherOptions = gatherState?.gatherOptions || {};
@@ -360,7 +360,7 @@ export class InSetuExtFlow extends InSetuElement {
                             .categoryOrder=${categoryOrder}
                             .renderItem=${(b) => {
                                 const filename = b._filename;
-                                const manifestObj = AppStore.getState().manifest[filename] || {};
+                                const manifestObj = AppStore.getState().manifest?.ctx?.[filename] || {};
                                 const meta = manifestObj.meta || {};
                                 let sizeStr = "";
                                 if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
@@ -418,9 +418,9 @@ export class InSetuExtFlow extends InSetuElement {
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${this._editForm?.includes?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No files selected.</div>` : 
                                                         this._editForm?.includes?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('system://');
+                                                            const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
                                                             let icon = "📄";
@@ -481,9 +481,9 @@ export class InSetuExtFlow extends InSetuElement {
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
                                                         this._editForm?.showIfExists?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('system://');
+                                                            const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
                                                             let icon = "📄";
@@ -511,9 +511,9 @@ export class InSetuExtFlow extends InSetuElement {
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
                                                         this._editForm?.showIfMissing?.map((inc, idx) => {
-                                                            const isSystem = inc.startsWith('system://');
+                                                            const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('system://', '') : inc;
+                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
                                                             let icon = "📄";
@@ -575,7 +575,7 @@ export class InSetuExtFlow extends InSetuElement {
                                     <input type="text" placeholder="🔍 Fuzzy search contexts..." style="padding: 8px; margin-bottom: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this._contextSearchQuery} @input=${(e) => { this._contextSearchQuery = e.target.value; }}>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
                                             ${(this._contextSearchQuery ? window.inSetu.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => {
-                                                const systemUri = `system://${file}`;
+                                                const systemUri = `ctx://${file}`;
                                                 const isChecked = this._tempContexts.includes(systemUri) || this._tempContexts.includes(file); // Handle legacy untyped files
 
                                                 const isDiff = file.includes('diffs/');
@@ -640,8 +640,8 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
-                                                                const manifest = AppStore.getState().manifest || {};
-                                                                const manifestObj = manifest[baseFile] || {};
+                                                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
+                                                                const manifestObj = manifestCtx[baseFile] || {};
                                                                 return html`
                                                                     <sutram-entity-actions 
                                                                         .entityType=${'file'} 

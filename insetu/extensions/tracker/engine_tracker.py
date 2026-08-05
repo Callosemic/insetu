@@ -332,9 +332,9 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
     from insetu.core.utils_core import update_frontmatter, parse_frontmatter
 
-    abs_current = ctx.resolve_path(current_rel_path)
-    if not os.path.exists(abs_current):
-        raise FileNotFoundError(f"Ticket not found: {abs_current}")
+    content = ctx.vfs.read(current_rel_path)
+    if content is None:
+        raise FileNotFoundError(f"Ticket not found: {current_rel_path}")
     ticket_type = "bug" if "/bugs/" in current_rel_path else "queue" if "/queue/" in current_rel_path else "todo"
     if new_type: ticket_type = new_type
 

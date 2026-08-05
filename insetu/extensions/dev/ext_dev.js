@@ -150,7 +150,7 @@ export class InSetuExtDevDash extends InSetuElement {
                                             <sutram-collapsible titleText="🔍 View Full Context" intent="neutral" style="--title-size: 0.8rem;">
                                                 <div style="display: flex; flex-direction: column; gap: 8px;">
                                                     <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted);">Patch Payload:</div>
-                                                    <textarea readonly style="width: 100%; height: 100px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;">${err.patch_payload ? (typeof err.patch_payload === 'string' && err.patch_payload.startsWith('[{') ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}</textarea>
+                                                    <textarea readonly style="width: 100%; height: 100px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;">${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}</textarea>
                                                     <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Target File Content:</div>
                                                     <textarea readonly style="width: 100%; height: 150px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;">${err.file_content || 'N/A'}</textarea>
                                                 </div>
@@ -200,6 +200,18 @@ window.ExtensionRegistry.registerExtension('dev', {
         },
         'zone:soft-refresh': () => {
             DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
+            return false;
+        },
+        'zone:vfs-mutated': (payload) => {
+            if (!payload || !payload.mutations) return false;
+            const activeTab = window.inSetu.stores.App.getState().activeTab;
+            if (activeTab === 'dev') {
+                if (window.ExtensionRegistry.utils.debounce) {
+                    window.ExtensionRegistry.utils.debounce('dev_dash_refresh', () => {
+                        DevStore.setState({ forceRefreshTick: Date.now() });
+                    }, 2000);
+                }
+            }
             return false;
         }
     }

@@ -160,14 +160,16 @@ export class InSetuExtFavorites extends InSetuElement {
     }
     _navigateToFavorite(item) {
         if (item.type === 'file') {
-            const isContext = item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
+            const isContext = item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
+            const cleanPath = item.path.replace(/^vfs:\/\//, '');
+
             if (!isContext && this.vfs && this.vfs.viewSourceFile) {
-                this.vfs.viewSourceFile(item.path, true);
+                this.vfs.viewSourceFile(cleanPath, true);
             } else if (isContext && this.vfs && this.vfs.viewAndCopy) {
                 this.vfs.viewAndCopy(item.path);
             }
         } else if (item.type === 'folder') {
-            const parts = item.path.split('/').filter(p => p);
+            const parts = item.path.replace(/^vfs:\/\//, '').split('/').filter(p => p);
             AppStore.getState().setActiveRoute('edit', 'files', parts);
         }
     }
@@ -178,17 +180,18 @@ export class InSetuExtFavorites extends InSetuElement {
         return html`
             <div class="favorites-body" style="display: flex; flex-direction: column; gap: 8px;">
                 ${this.items.map(item => {
-                    const isContext = item.type === 'file' && (item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
+                    const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
                     const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
+                    const displayPath = item.path.replace(/^vfs:\/\//, '');
                     return html`
                     <insetu-card
-                        .filename=${item.path}
+                        .filename=${displayPath}
                         .titleText=${item.name}
                         .descriptionText=${item.path}
                         icon=${item.type === 'folder' ? '📁' : (isContext ? '📦' : '📄')}
                         intentColor="var(--intent-highlight)"
                         entityType=${eType}
-                        .entityData=${{ filepath: item.path, repoDir: item.path.split('/')[0], isFS: !isContext }}
+                        .entityData=${{ filepath: item.path, repoDir: displayPath.split('/')[0], isFS: !isContext }}
                         @card-clicked=${() => this._navigateToFavorite(item)}>
                     </insetu-card>
                     `;

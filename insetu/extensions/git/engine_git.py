@@ -55,10 +55,9 @@ def hook_git_request_paths(workspace_id=None, **kwargs):
         return paths
     except Exception: 
         return {}
-
 @hooks.on('vfs_resolve_file')
 def resolve_git_artifacts(filename=None, workspace_id=None, **kwargs):
-    """Resolves system://diffs URIs and fallback searches for git diffs."""
+    """Resolves ctx://diffs URIs and fallback searches for git diffs."""
     if not filename: return None
     from insetu.core.sdk import ExtensionContext
     from pathlib import Path
@@ -92,7 +91,8 @@ def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs
     return {"message": "Git diffs evaluated successfully."}
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.sdk import ExtensionContext
-    from insetu.core.utils_core import get_safe_repo_id, resolve_file_bucket
+    from insetu.core.utils_core import get_safe_repo_id
+    from insetu.core.topology.engine_topology import resolve_file_bucket
     import concurrent.futures
 
     ctx = ExtensionContext('git', workspace_id)
@@ -266,8 +266,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     existing_content = ""
                     try:
                         # Reconstruct full existing content from all chunks to prevent false positive diffs
-                        responses = ctx.emit('resolve_payload_chunks', uri=f"system://diffs/{out_filename}")
-                        chunks = next((r for r in responses if r), [f"system://diffs/{out_filename}"])
+                        responses = ctx.emit('resolve_payload_chunks', uri=f"ctx://diffs/{out_filename}")
+                        chunks = next((r for r in responses if r), [f"ctx://diffs/{out_filename}"])
                         for c in chunks:
                             chunk_text = ctx.vfs.read(c, is_absolute_artifact=True)
                             if chunk_text:
@@ -363,15 +363,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
     from insetu.kernel.utils import get_workspace_physics
+    from insetu.core.sdk import ExtensionContext
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
-    from insetu.core.gather.engine_gather import resolve_file_bucket
 
-    managed_dirs_global = cfg.get("managed_dirs", [])
-    ignore_dirs_global = cfg.get("ignore_dirs", [])
-    ignore_patterns_global = cfg.get("ignore_patterns", [])
+    top_ctx = ExtensionContext('topology', ctx.workspace_id)
 
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
@@ -379,14 +377,25 @@ def _background_sweep_status(ctx):
         if c.get("physical_path"):
             repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
         if not os.path.exists(repo_path): continue
+
         try:
             res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
             lines = res.stdout.splitlines()
             files = []
+
+            # SSOT Elimination of manual OS walking: Fetch tracked paths from Topology Ledger
+            top_rows = top_ctx.db.execute("SELECT filepath, bucket_id FROM topology_ledger WHERE repo = ?", (repo,)).fetchall()
+            tracked_info = {r['filepath']: r['bucket_id'] for r in top_rows}
+
+            excluded_buckets = set()
+            for b in c.get("sub_buckets", []):
+                if b.get("exclude_from_diffs"):
+                    # Record dynamic modules inside excluded buckets or root bucket IDs
+                    excluded_buckets.add(b.get("id"))
+                    if b.get("meta_map"):
+                        excluded_buckets.update(b["meta_map"].keys())
+
             repo_excluded = c.get("exclude_from_diffs", False)
-            sub_buckets = c.get("sub_buckets", [])
-            ignore_dirs = set(ignore_dirs_global + c.get("repo_ignore_dirs", []))
-            ignore_patterns = ignore_patterns_global + c.get("repo_ignore_patterns", [])
 
             for line in lines:
                 if len(line) < 3: continue
@@ -394,18 +403,12 @@ def _background_sweep_status(ctx):
                 filepath = line[3:]
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip()
 
-                is_excluded = repo_excluded
-                if not is_excluded:
-                    if any(pattern in filepath for pattern in ignore_patterns):
-                        is_excluded = True
-                    elif set(p.lower() for p in filepath.split('/')).intersection(ignore_dirs):
-                        is_excluded = True
-                    elif sub_buckets:
-                        b, _ = resolve_file_bucket(filepath, sub_buckets)
-                        if b and b.get("exclude_from_diffs"):
-                            is_excluded = True
+                full_rel_path = f"{repo}/{filepath}"
 
-                # Sweepable State should ONLY catch files explicitly excluded from normal Diffs
+                # A file qualifies for the "Sweepable State" tray if it exists in Git but is NOT 
+                # in the active topology ledger (i.e. ignored) OR if it is explicitly excluded from diffs
+                is_excluded = repo_excluded or (full_rel_path not in tracked_info) or (tracked_info.get(full_rel_path) in excluded_buckets)
+
                 if is_excluded:
                     files.append({"path": filepath, "status": status.strip()})
 
@@ -507,7 +510,7 @@ def _background_git_push(ctx, repo, message, diff_file):
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
     files_to_stage = set()
-    from insetu.core.gather.engine_gather import resolve_file_bucket
+    from insetu.core.topology.engine_topology import resolve_file_bucket
     from insetu.core.utils_core import get_safe_repo_id
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []

@@ -90,10 +90,11 @@ def _background_compile_workflows(ctx, **kwargs):
         header_str = f"========== BATCH: {batch.get('title', batch.get('id'))} ==========\n\n"
         text_blocks = []
         resolved_files = []
-
         expanded_includes = []
         for inc in includes:
-            if inc.startswith("system://"):
+            if inc.startswith("ctx://") or inc.startswith("system://"):
+                if inc.startswith("system://"):
+                    inc = inc.replace("system://", "ctx://", 1)
                 expanded_includes.append(inc)
             else:
                 inc_path = ctx.resolve_path(inc)
@@ -102,9 +103,8 @@ def _background_compile_workflows(ctx, **kwargs):
                         expanded_includes.append(f)
                 else:
                     expanded_includes.append(inc)
-
         for inc in expanded_includes:
-            is_system_uri = inc.startswith("system://")
+            is_system_uri = inc.startswith("ctx://")
 
             # DATABASE READ IS NOW ACCURATE DUE TO SEQUENTIAL EXECUTION
             responses = ctx.emit('resolve_payload_chunks', uri=inc)
@@ -166,15 +166,14 @@ def _background_compile_workflows(ctx, **kwargs):
                 current_manifest[k] = v
         ctx.save_manifest(manifest_deltas, is_full_compile=False)
         ctx.sync_vfs_barrier()
-
-    from insetu.kernel.vfs import VFSTransaction, execute_vfs_delete
+    from insetu.kernel.vfs import VFSTransaction
     vfs = VFSTransaction(ctx.workspace_id)
     if os.path.exists(ctx.paths["gather_dir"]):
         for ws_rel_path in vfs.walk(ctx.paths["gather_dir"], exts=['.txt']):
             f_basename = Path(ctx.resolve_path(ws_rel_path)).name
             if f_basename not in expected_flow_artifacts:
                 try:
-                    execute_vfs_delete(ctx.workspace_id, ws_rel_path)
+                    vfs.save(ws_rel_path, "", data={"action": "delete"})
                 except Exception:
                     pass
 

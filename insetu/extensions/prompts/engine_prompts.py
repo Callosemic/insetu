@@ -26,10 +26,9 @@ def hook_prompts_request_paths(workspace_id=None, **kwargs):
         return {"prompts_dir": prompts_dir}
     except Exception:
         return {}
-
 @hooks.on('vfs_resolve_file')
 def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
-    """Resolves system://prompts URIs and prompt fallback searches."""
+    """Resolves ctx://prompts URIs and prompt fallback searches."""
     if not filename: return None
     from insetu.core.sdk import ExtensionContext
     from pathlib import Path
@@ -38,7 +37,7 @@ def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
     safe_basename = Path(filename).name
     cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
 
-    if filename.startswith("system://prompts/") or os.path.exists(cand):
+    if filename.startswith("ctx://prompts/") or filename.startswith("system://prompts/") or os.path.exists(cand):
         if os.path.exists(cand): 
             return cand, True
     return None

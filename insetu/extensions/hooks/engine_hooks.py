@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
-from insetu.core.gather.engine_gather import resolve_file_bucket
+from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
     "hooks_rules": {
@@ -65,18 +65,18 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
             raise RuntimeError(f"Command failed:\n{err_summary}")
     except Exception as e:
         raise RuntimeError(f"Execution Error: {str(e)}")
-@hooks.on('vfs_mutated', priority=100)
-def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
-    """Event Bus Hook: Evaluates active automation rules whenever VFS commits settle."""
-    if not mutations:
+@hooks.on('topology_resolved', priority=100)
+def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None, events=None, **kwargs):
+    """Event Bus Hook: Evaluates active automation rules based on resolved topology boundaries."""
+    if not events:
         return
 
     # Security/Noise Guardrail: Do not trigger automations for system-level ledger-ignored writes
     # (e.g. CODE_INDEX.md cartography, or contexts/ payload generation)
-    files = [m["filepath"] for m in mutations if not m.get("ignore_ledger")]
-
-    if not files:
+    has_valid_event = any(not e.get("ignore_ledger") for e in events)
+    if not has_valid_event:
         return
+
     from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('hooks', workspace_id)
 
@@ -90,30 +90,9 @@ def process_vfs_triggers(mutations=None, workspace_id=None, **kwargs):
 
     if not active_rules:
         return
-    from insetu.core.utils_core import resolve_file_bucket
-    target_repos = ctx.config.get("target_repos", [])
 
-    # Analyze mutated files
-    touched_repos = set()
-    touched_buckets = set() # Format: 'repo::bucket_id'
-    for filepath in files:
-        clean_path = str(filepath).lstrip('/')
-        if '/' not in clean_path:
-            continue
-
-        repo_dir = clean_path.split('/')[0]
-        touched_repos.add(repo_dir)
-
-        repo_cfg = next((r for r in target_repos if r.get("repo_dir") == repo_dir), None)
-        if repo_cfg:
-            sub_buckets = repo_cfg.get("sub_buckets", [])
-            if sub_buckets:
-                rel_path = clean_path[len(repo_dir) + 1:]
-                bucket, module = resolve_file_bucket(rel_path, sub_buckets)
-                if bucket:
-                    b_id = module if (bucket.get("dynamic_split_prefix") and module) else bucket.get("id")
-                    if b_id:
-                        touched_buckets.add(f"{repo_dir}::{b_id}")
+    touched_repos = set(dirty_repos or [])
+    touched_buckets = set(dirty_buckets or [])
 
     # Evaluate rules against touched targets
     for rule in active_rules:

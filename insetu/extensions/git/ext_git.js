@@ -112,11 +112,11 @@ export class InSetuExtGitDiffs extends InSetuElement {
         super.connectedCallback();
         this.subscribe(GitStore, (state) => {
             let cached = state.cachedDiffFiles;
-            const manifest = AppStore.getState().manifest || {};
-            if (!cached && manifest) {
-                cached = Object.keys(manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+            const manifestCtx = AppStore.getState().manifest?.ctx || {};
+            if (!cached && manifestCtx) {
+                cached = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
                     filename: k,
-                    repo: manifest[k].meta?.repo
+                    repo: manifestCtx[k].meta?.repo
                 }));
             }
             this.cachedDiffFiles = cached || [];
@@ -137,12 +137,12 @@ export class InSetuExtGitDiffs extends InSetuElement {
         const state = AppStore.getState();
         const gitState = GitStore.getState();
         const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};
-
         let cached = gitState.cachedDiffFiles;
-        if (!cached && state.manifest) {
-            cached = Object.keys(state.manifest).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+        const manifestCtx = state.manifest?.ctx || {};
+        if (!cached && manifestCtx) {
+            cached = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
                 filename: k,
-                repo: state.manifest[k]?.meta?.repo
+                repo: manifestCtx[k]?.meta?.repo
             }));
         }
         this.cachedDiffFiles = cached || [];
@@ -302,15 +302,15 @@ disconnectedCallback() {
         });
         const sq = this.searchQuery;
         const filteredFiles = sq ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredFiles, sq, f => (typeof f === 'string' ? f : `${f.repo || ''} ${f.filename}`)) : repoFilteredFiles;
-
         filteredFiles.forEach(fileObj => {
             const file = typeof fileObj === 'string' ? fileObj : fileObj.filename;
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
             if (this.hiddenOutputs && this.hiddenOutputs.includes(file)) return;
             const safeFile = file.split('/').pop();
             const baseFile = safeFile.replace('_diffs.txt', '_context.txt');
-            const contextManifestObj = AppStore.getState().manifest[baseFile] || {};
-            const diffManifestObj = AppStore.getState().manifest[safeFile] || {};
+            const ctxManifest = AppStore.getState().manifest?.ctx || {};
+            const contextManifestObj = ctxManifest[baseFile] || {};
+            const diffManifestObj = ctxManifest[safeFile] || {};
 
             const diffMeta = diffManifestObj.meta || {};
             const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: diffMeta.domain || "Workspaces", desc: "Pending diff payload." };
@@ -377,10 +377,10 @@ disconnectedCallback() {
                                 intentColor="var(--intent-highlight)"
                                 entityType="file:diff"
                                 .entityData=${{ 
-                                    filepath: `system://diffs/${f.filename}`, 
+                                    filepath: `ctx://diffs/${f.filename}`, 
                                     repoDir: f.repoDir, 
                                     isFS: f.isFS,
-                                    chunks: AppStore.getState().manifest[f.filename]?.chunks || [f.filename]
+                                    chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
                                 }}
                                 @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
                             </insetu-card>

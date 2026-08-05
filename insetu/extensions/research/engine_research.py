@@ -297,7 +297,8 @@ def gather_next_page(job_id, workspace_id=None):
         from insetu.kernel.utils import is_extension_enabled
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
-            cit_conn = get_connection("citations", workspace_id=workspace_id)
+            cit_ctx = ExtensionContext("citations", workspace_id)
+            cit_conn = cit_ctx.db
             # Utilize SQLite JSON1 extension to natively query the CSL-JSON matrix
             prior_cit = cit_conn.execute("SELECT id FROM citations WHERE json_extract(raw_json, '$.URL') = ?", (link['url'],)).fetchone()
           except Exception as e:

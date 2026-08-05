@@ -1,6 +1,6 @@
 import time
 from flask import jsonify
-from insetu.kernel.extension import InSetuExtension, ExtensionContext
+from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 
 __depends__ = []
@@ -128,7 +128,7 @@ def sweep_telemetry_worker(ctx, **kwargs):
     ctx.db.commit()
     return "Telemetry swept."
 @hooks.on('workspace_boot')
-def init_dev_workers(workspace_id=None):
+def init_dev_workers(workspace_id=None, **kwargs):
     try:
         w_ctx = ExtensionContext('workers', workspace_id)
         conn = w_ctx.db

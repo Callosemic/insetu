@@ -40,10 +40,9 @@ def compile_document_payload(workspace_id, filepath, target_format):
     # Resolve chunks statelessly via Event Bus if the target is a system payload
     responses = ctx.emit('resolve_payload_chunks', uri=filepath)
     chunks = next((r for r in responses if r), [filepath])
-
     content = ""
     for c in chunks:
-        is_sys = c.startswith("system://")
+        is_sys = c.startswith("ctx://") or c.startswith("system://")
         c_text = ctx.vfs.read(c, is_absolute_artifact=is_sys)
         if c_text:
             content += c_text + "\n\n"
