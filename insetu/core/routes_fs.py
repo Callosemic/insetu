@@ -9,11 +9,16 @@ from insetu.kernel.workers import submit_immediate_job, update_immediate_job_sta
 
 fs_bp = Blueprint('fs', __name__)
 def resolve_vfs_file(workspace_id, filename):
-    """Universal path resolver for workspace files, system URIs, and artifact contexts."""
+    """Universal path resolver for workspace files, ctx URIs, and artifact contexts."""
     if not filename:
         return None, False
-
     filename = filename.strip()
+    if filename.startswith("system://"):
+        filename = filename.replace("system://", "ctx://", 1)
+
+    # Strip vfs:// explicitly to process as a standard physical path
+    if filename.startswith("vfs://"):
+        filename = filename.replace("vfs://", "", 1)
 
     from insetu.kernel.hooks import hooks
     overrides = hooks.emit('vfs_resolve_file', filename=filename, workspace_id=workspace_id)

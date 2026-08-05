@@ -220,7 +220,6 @@ def api_system_topology(workspace_id=None):
         "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
         "config_missing": not os.path.exists(cfg_path)
     })
-
 @system_bp.route('/api/system/manifest', methods=['GET'])
 @system_bp.route('/api/<workspace_id>/system/manifest', methods=['GET'])
 def api_system_manifest(workspace_id=None):
@@ -230,9 +229,10 @@ def api_system_manifest(workspace_id=None):
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
     }
-    manifests = hooks.emit('request_manifest', workspace_id=workspace_id)
-    manifest_data = next((m for m in manifests if m), {})
-    return jsonify(manifest_data), 200, headers
+    ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=workspace_id) if m), {})
+    vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=workspace_id) if m), {})
+
+    return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
 
 @system_bp.route('/api/system/workspaces/create', methods=['POST'])
 def api_create_workspace():

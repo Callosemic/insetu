@@ -8,9 +8,9 @@ import threading
 import uuid
 import concurrent.futures
 from flask import jsonify
-
 from insetu.kernel.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import get_valid_workspace_files, evaluate_circuit_breaker, resolve_file_bucket, get_default_repo_template, extract_manifest_files, resolve_logical_path
+from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, extract_manifest_files, resolve_logical_path
+from insetu.core.topology.engine_topology import resolve_file_bucket
 from insetu.kernel.extension import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 from insetu.kernel.db import register_schema, get_connection
@@ -43,7 +43,7 @@ gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHE
 __depends__ = []
 @hooks.on('vfs_resolve_file')
 def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
-    """Resolves system://contexts URIs and fallback searches."""
+    """Resolves ctx://contexts URIs and fallback searches."""
     if not filename: return None
     ctx = ExtensionContext('gather', workspace_id)
 
@@ -132,30 +132,49 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     manifest_entry["meta"]["filepath"] = base_filename
     manifest_entry["meta"]["out_file"] = base_filename
     return manifest_entry
+SYSTEM_BOOT_TIME = time.time()
 
-def _process_vfs_ledger(workspace_id="default"):
-    db_conn = get_connection("workers", workspace_id=workspace_id)
-
-    cursor = db_conn.execute("SELECT MAX(timestamp) as last_mut FROM vfs_event_log")
-    row = cursor.fetchone()
-    if not row or not row['last_mut']:
-        return
-    last_mut = row['last_mut']
-    now = time.time()
-    # Macro Slew Limiter: 15.0-second silence window to balance batching with UI responsiveness
-    if now - last_mut < 15.0:
-        return
-
-    events = db_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
+@hooks.on('topology_resolved')
+def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=None, events=None, **kwargs):
+    """Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation."""
     if not events: return
 
-    # Clear processed events
-    db_conn.execute("DELETE FROM vfs_event_log WHERE timestamp <= ?", (last_mut,))
-    db_conn.commit()
+    from insetu.kernel.extension import ExtensionContext
+    w_ctx = ExtensionContext('workers', workspace_id)
+    conn = w_ctx.db
+    # The delayed compilation job ID. We use a static ID per workspace to coalesce updates.
+    job_id = f"cmp_del_{workspace_id}"
+
+    # Prevent event starvation by coalescing new events with any pending unexecuted job payload
+    existing = conn.execute("SELECT args_json FROM jobs WHERE id=? AND status='pending'", (job_id,)).fetchone()
+    if existing and existing['args_json']:
+        try:
+            old_args = json.loads(existing['args_json'])
+            old_events = old_args.get('ledger_events', [])
+            seen_paths = {e['filepath'] for e in events}
+            for oe in old_events:
+                if oe['filepath'] not in seen_paths:
+                    events.append(oe)
+        except Exception:
+            pass
+
+    # Write a standard delayed job scheduled 15 seconds in the future
+    run_at = time.time() + 15.0
+    args_json = json.dumps({
+        "force_full": False,
+        "ledger_events": events
+    })
+
+    conn.execute("""
+        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+        VALUES (?, 'gather', 'execute_delayed_compile', 0, 0, ?, 'pending', ?)
+    """, (job_id, run_at, args_json))
+    conn.commit()
+
+def _execute_delayed_compile(ctx, force_full=False, ledger_events=None, **kwargs):
+    workspace_id = ctx.workspace_id
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
-    from insetu.kernel.extension import ExtensionContext
-    ctx = ExtensionContext('gather', workspace_id)
     steps = []
     for res in ctx.emit('register_compilation_steps'):
         if res: steps.extend(res)
@@ -174,8 +193,8 @@ def _process_vfs_ledger(workspace_id="default"):
     if ordered_steps:
         first_step = ordered_steps[0]
         args_json = json.dumps({
-            "force_full": False, 
-            "ledger_events": [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events],
+            "force_full": force_full, 
+            "ledger_events": ledger_events,
             "_chain": {
                 "steps": ordered_steps[1:],
                 "on_complete_hook": "compilation_sequence_complete"
@@ -183,58 +202,44 @@ def _process_vfs_ledger(workspace_id="default"):
         })
         submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id)
 
-register_callback("gather", "process_vfs_ledger", _process_vfs_ledger)
+register_callback("gather", "execute_delayed_compile", _execute_delayed_compile)
+@hooks.on('workspace_boot', priority=90)
+def init_gather_workers(workspace_id=None, **kwargs):
+    ws_id = workspace_id
+    # Boot-Time Mandate: Always perform a full topology scan and compile on reboot
+    try:
+        job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
-SYSTEM_BOOT_TIME = time.time()
-@hooks.on('system_boot', priority=90)
-def init_gather_workers():
-    from insetu.kernel.utils import get_all_workspace_ids
-    for ws_id in get_all_workspace_ids():
-        w_ctx = ExtensionContext('workers', ws_id)
-        conn = w_ctx.db
-        conn.execute("""
-            INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-            VALUES ('sys_vfs_ledger_daemon', 'gather', 'process_vfs_ledger', 1000, 0, 0, 'pending', '{}')
-        """)
-        conn.commit()
-        # Boot-Time Heuristic: Offline Mutation Guard (CQRS Index)
-        try:
-            vfs_conn = get_connection("vfs_index", workspace_id=ws_id)
-            row = vfs_conn.execute("SELECT value FROM sync_metadata WHERE key = 'last_full_compile_time'").fetchone()
-            last_compile = float(row['value']) if row and row['value'] else 0.0
-            if SYSTEM_BOOT_TIME > last_compile:
-                job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+        from insetu.kernel.extension import ExtensionContext
+        ctx = ExtensionContext('gather', ws_id)
+        steps = []
+        for res in ctx.emit('register_compilation_steps'):
+            if res: steps.extend(res)
 
-                from insetu.kernel.extension import ExtensionContext
-                ctx = ExtensionContext('gather', ws_id)
-                steps = []
-                for res in ctx.emit('register_compilation_steps'):
-                    if res: steps.extend(res)
+        ordered_steps = []
+        visited = set()
+        def visit(step_id):
+            if step_id in visited: return
+            step = next((s for s in steps if s['id'] == step_id), None)
+            if step:
+                for dep in step.get('depends_on', []): visit(dep)
+                visited.add(step_id)
+                ordered_steps.append(step)
 
-                ordered_steps = []
-                visited = set()
-                def visit(step_id):
-                    if step_id in visited: return
-                    step = next((s for s in steps if s['id'] == step_id), None)
-                    if step:
-                        for dep in step.get('depends_on', []): visit(dep)
-                        visited.add(step_id)
-                        ordered_steps.append(step)
-
-                for s in steps: visit(s['id'])
-                if ordered_steps:
-                    first_step = ordered_steps[0]
-                    args_json = json.dumps({
-                        "force_full": True,
-                        "_chain": {
-                            "steps": ordered_steps[1:],
-                            "on_complete_hook": "compilation_sequence_complete"
-                        }
-                    })
-                    submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id)
-                    update_immediate_job_status(job_id, 'processing', 'Healing offline mutations...', workspace_id=ws_id)
-        except Exception as e:
-            print(f"Warning: Offline mutation check failed: {e}")
+        for s in steps: visit(s['id'])
+        if ordered_steps:
+            first_step = ordered_steps[0]
+            args_json = json.dumps({
+                "force_full": True,
+                "_chain": {
+                    "steps": ordered_steps[1:],
+                    "on_complete_hook": "compilation_sequence_complete"
+                }
+            })
+            submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id)
+            update_immediate_job_status(job_id, 'processing', 'Executing full boot scan...', workspace_id=ws_id)
+    except Exception as e:
+        print(f"Warning: Boot scan failed: {e}")
 
 @hooks.on('gather_settings_updated')
 def on_gather_settings_updated(workspace_id=None, **kwargs):
@@ -295,8 +300,9 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     # DEBUG LOGGING INIT
     debug_log_path = Path(ctx.paths.get("artifacts_base", ".insetu/data")).joinpath("manifest_debug.log").as_posix()
     debug_log_lines = [f"=== GATHER TOPOLOGY RUN {time.time()} ==="]
-
     target_configs = [c for c in cfg.get("target_repos", []) if not c.get("exclude_from_context") and (not target_repos or c.get("repo_dir") in target_repos)]
+
+    top_ctx = ExtensionContext('topology', workspace_id)
 
     for config in target_configs:
         repo_dir = config.get("repo_dir")
@@ -308,11 +314,20 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
 
-        # This list is dynamically generated fresh on every event emission
-        final_list = get_valid_workspace_files(repo_path, config, workspace_id) or []
+        # Pull strictly from the SSOT Topology Ledger, avoiding disk I/O
+        rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
+
+        # Strip the repo prefix to match the expected relative formatting
+        final_list = []
+        for r in rows:
+            fp = r['filepath']
+            if fp.startswith(f"{repo_dir}/"):
+                final_list.append(fp[len(repo_dir)+1:])
+            else:
+                final_list.append(fp)
 
         debug_log_lines.append(f"\n[REPO] {repo_dir} (Path: {repo_path})")
-        debug_log_lines.append(f"  - Total files found by Git/os.walk: {len(final_list)}")
+        debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")
         if final_list:
             debug_log_lines.append(f"  - Sample raw files: {final_list[:5]}")
 
@@ -321,15 +336,15 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             vault_name = f"{repo_dir}_vault.json"
             r_title = config.get("title", repo_dir.replace('-', ' ').title())
 
-            def make_vault_gen(files):
+            def make_vault_gen(files, current_repo_dir):
                 def _gen():
-                    return {"header": "", "blocks": [], "files": [f"{repo_dir}/{f}" for f in files]}
+                    return {"header": "", "blocks": [], "files": [f"{current_repo_dir}/{f}" for f in files]}
                 return _gen
-            def make_vault_recall(files):
+            def make_vault_recall(files, current_repo_dir):
                 def _recall(events):
-                    repo_prefix = (repo_dir + '/').lower()
+                    repo_prefix = (current_repo_dir + '/').lower()
                     if any(e['filepath'].lower().startswith(repo_prefix) for e in events):
-                        return make_vault_gen(files)()
+                        return make_vault_gen(files, current_repo_dir)()
                     return None
                 return _recall
 
@@ -337,8 +352,8 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 declarations.append({
                     "filename": vault_name,
                     "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets."), "type": "gather", "repo": repo_dir},
-                    "generator_callback": make_vault_gen(final_list),
-                    "recall_callback": make_vault_recall(final_list)
+                    "generator_callback": make_vault_gen(final_list, repo_dir),
+                    "recall_callback": make_vault_recall(final_list, repo_dir)
                 })
             continue
 
@@ -381,7 +396,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     "domain": config.get("domain", "Workspaces"), "out_file": out_filename
                 }
             }
-        def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path):
+        def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path, current_repo_dir):
             def _gen():
                 if not data["files"]: return None
                 vfs = VFSTransaction(workspace_id)
@@ -390,7 +405,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 text_blocks = []
                 for f in filepaths:
                     try:
-                        content = vfs.read(f"{repo_dir}/{f}")
+                        content = vfs.read(f"{current_repo_dir}/{f}")
                         if content is None:
                             # Indestructible Physical Fallback: Bypass logical routing for nested structures
                             fallback_path = os.path.join(physical_repo_path, f)
@@ -398,17 +413,17 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                                 with open(fallback_path, 'r', encoding='utf-8') as f_in:
                                     content = f_in.read()
                         if content is not None:
-                            text_blocks.append(f"\n\n{'='*60}\n>>>NEW FILE :: {repo_dir}/{f} | {b_domain}\n{'='*60}\n\n{content}")
+                            text_blocks.append(f"\n\n{'='*60}\n>>>NEW FILE :: {current_repo_dir}/{f} | {b_domain}\n{'='*60}\n\n{content}")
                     except Exception: pass
-                return {"header": header_str, "blocks": text_blocks, "files": [f"{repo_dir}/{f}" for f in filepaths]}
+                return {"header": header_str, "blocks": text_blocks, "files": [f"{current_repo_dir}/{f}" for f in filepaths]}
             def _recall(events):
                 is_dirty = False
-                repo_prefix = (repo_dir + '/').lower()
+                repo_prefix = (current_repo_dir + '/').lower()
                 for e in events:
                     if e['filepath'].lower().startswith(repo_prefix):
-                        rel = e['filepath'][len(repo_dir)+1:]
+                        rel = e['filepath'][len(current_repo_dir)+1:]
                         if sub_buckets:
-                            tb, tm = resolve_file_bucket(rel, sub_buckets, repo_dir=repo_dir)
+                            tb, tm = resolve_file_bucket(rel, sub_buckets, repo_dir=current_repo_dir)
                             if tb and tm and tm == b_id: is_dirty = True; break
                             elif tb and tb.get('id') == b_id: is_dirty = True; break
                             elif not tb and b_id == "default_catch_all": is_dirty = True; break
@@ -425,7 +440,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
             b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
             b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
-            gen_cb, rec_cb = make_callbacks(b_id, data, b_title, b_domain, b_desc, safe_out, repo_path)
+            gen_cb, rec_cb = make_callbacks(b_id, data, b_title, b_domain, b_desc, safe_out, repo_path, repo_dir)
             declarations.append({
                 "filename": safe_out,
                 "meta": {"title": b_title, "domain": b_domain, "desc": b_desc, "type": "gather", "repo": repo_dir},
@@ -440,7 +455,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             title = meta.get("title", module.replace('_', ' ').title())
             domain = meta.get("domain", c.get("domain", "Dynamic Modules"))
             desc = meta.get("description", c.get("description", f"Dynamically mapped logic and templates for {title}."))
-            gen_cb, rec_cb = make_callbacks(module, data, title, domain, desc, out_name, repo_path)
+            gen_cb, rec_cb = make_callbacks(module, data, title, domain, desc, out_name, repo_path, repo_dir)
             declarations.append({
                 "filename": out_name,
                 "meta": {"title": title, "domain": domain, "desc": desc, "type": "gather", "repo": repo_dir},
@@ -625,7 +640,6 @@ def generate_context_file(workspace_id=None, target_repos=None):
 
     ctx.save_manifest(manifest, is_full_compile=(target_repos is None))
     ctx.sync_vfs_barrier()
-
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items, job_id=None):
     ctx.jobs.update_progress("Compiling selected files into context payload...")
@@ -641,15 +655,16 @@ def _pack_selection_worker(ctx, items, job_id=None):
     with VFSTransaction(ctx.workspace_id) as vfs:
         for filepath in files:
             try:
-                is_artifact = filepath.startswith("system://") or filepath.startswith(".insetu/") or filepath.startswith("data/")
-                content = vfs.read(filepath, is_absolute_artifact=is_artifact)
+                clean_path = filepath.replace("vfs://", "", 1) if filepath.startswith("vfs://") else filepath
+                is_artifact = clean_path.startswith("ctx://") or clean_path.startswith(".insetu/") or clean_path.startswith("data/")
+                content = vfs.read(clean_path, is_absolute_artifact=is_artifact)
 
                 # Fallback for standard files
                 if content is None and not is_artifact:
-                    content = vfs.read(filepath, is_absolute_artifact=True)
+                    content = vfs.read(clean_path, is_absolute_artifact=True)
 
                 if content is not None:
-                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n{content}\n\n")
+                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {clean_path} | Selection\n{'='*60}\n\n{content}\n\n")
                 else:
                     text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: Not found]\n\n")
             except Exception as e:
@@ -750,31 +765,16 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             ctx.sync_vfs_barrier()
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
-
         if not needs_full_compile and not forced_repos:
             try:
-                # Proactive Ledger Flush: If manual UI refresh, grab any pending VFS mutations instantly
+                # Proactive Ledger Flush: If manual UI refresh, request Topology to resolve its pending buffer
                 if ledger_events is None:
-                    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
                     try:
-                        events = w_conn.execute("SELECT filepath, mutation_type FROM vfs_event_log").fetchall()
+                        from insetu.core.topology.engine_topology import resolve_topology_buffer
+                        ledger_events = resolve_topology_buffer(ctx.workspace_id)
                     except Exception:
-                        events = []
+                        pass
 
-                    if events:
-                        ledger_events = [{"filepath": e["filepath"], "mutation_type": e["mutation_type"]} for e in events]
-                        w_conn.execute("DELETE FROM vfs_event_log")
-                        try:
-                            w_conn._conn.commit()
-                        except AttributeError:
-                            w_conn.commit()
-                        
-                        # Decouple Cartographer: Dispatch asynchronously so it doesn't block Gather
-                        touched_repos = list(set(e["filepath"].split('/')[0] for e in ledger_events if '/' in e["filepath"]))
-                        if touched_repos:
-                            cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
-                            submit_immediate_job(cart_job_id, "cartographer", "map_task", json.dumps({"target_repos": touched_repos}), workspace_id=ctx.workspace_id)
-                
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing
                     changed_files = [e["filepath"] for e in ledger_events]
@@ -789,6 +789,10 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                 needs_full_compile = True
         if needs_full_compile or forced_repos:
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
+
+            ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
+            ctx.emit('force_topology_scan', target_repos=None if needs_full_compile else forced_repos)
+
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
             generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
 
@@ -969,7 +973,6 @@ def api_manifest_version(ctx):
         return jsonify({"version": max_ts})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @gather_bp.route('manifest/deltas', methods=['GET'])
 def api_manifest_deltas(ctx):
     try:
@@ -979,6 +982,9 @@ def api_manifest_deltas(ctx):
         deltas = {}
         for r in rows:
             deltas[r['filepath']] = json.loads(r['entry_json']) if r['entry_json'] else None
-        return jsonify({"deltas": deltas, "timestamp": time.time()})
+
+        # The UI now expects the root manifest to contain 'vfs' and 'ctx'.
+        # These deltas strictly apply to the 'ctx' artifact payloads.
+        return jsonify({"deltas": {"ctx": deltas}, "timestamp": time.time()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

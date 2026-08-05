@@ -12,7 +12,8 @@ import time
 import uuid
 from pathlib import Path
 from insetu.kernel.utils import get_workspace_physics, parse_blocks
-from insetu.core.utils_core import get_sister_repos, get_omniscient_workspace_files
+from insetu.core.utils_core import get_sister_repos
+from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from insetu.kernel.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
 
@@ -177,8 +178,19 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     elif ok_search:
                         best_search_cand = cand
                         cand_list.append({"filepath": cand, "score": 1.0, "match_type": "search_block"})
-                            
-                if best_search_cand:
+
+                if len(cand_list) == 1:
+                    resolved_path = cand_list[0]["filepath"]
+                    resolution_type = "scored_path_auto"
+
+                    if cand_list[0]["match_type"] == "replace_block":
+                        patch_tel["status"] = "auto_skipped"
+                        patch_tel["flags"].append("already_applied")
+                        patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state (Fuzzy Resolved)."
+                        telemetry["summary"]["auto_skipped"] += 1
+                        telemetry["patches"].append(patch_tel)
+                        continue
+                elif best_search_cand:
                     patch_tel["status"] = "needs_confirmation"
                     patch_tel["resolution_type"] = "scored_path"
                     patch_tel["candidates"] = cand_list
@@ -197,6 +209,30 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["summary"]["action_required"] += 1
                     telemetry["patches"].append(patch_tel)
                     continue
+            # Step e.5: Anchor Failure Diff Generation
+            if not resolved_path and not is_genesis and content is not None:
+                import difflib
+                search_lines = expand_macros(b["search"]).replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
+                match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
+                start_idx = max(0, match.a - match.b)
+                end_idx = min(len(file_lines), start_idx + len(search_lines))
+                actual_lines = file_lines[start_idx:end_idx]
+                diff = list(difflib.ndiff(actual_lines, search_lines))
+                diff_str = "\n".join(diff)
+                err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
+
+                patch_tel["status"] = "needs_confirmation"
+                patch_tel["resolution_type"] = "anchor_failed"
+                patch_tel["error_message"] = "Search anchor failed to match existing file exactly."
+                patch_tel["syntax_error"] = err_b64
+                patch_tel["available_actions"].extend(["deselect_patch", "offer_deep_search"])
+                telemetry["can_commit"] = False
+                telemetry["summary"]["action_required"] += 1
+                telemetry["patches"].append(patch_tel)
+                continue
+
             # Step f: User-Authorized Deep Search
             if not resolved_path and not is_genesis:
                 allow_deep_search = data.get("allow_deep_search", False)

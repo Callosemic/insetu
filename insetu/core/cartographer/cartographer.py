@@ -2,7 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 from insetu.kernel.utils import get_workspace_physics, load_config, build_tree_dict
-from insetu.core.utils_core import get_valid_workspace_files
+from insetu.core.topology.engine_topology import get_valid_workspace_files
 from insetu.kernel.hooks import hooks
 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
@@ -122,8 +122,19 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
         # Pass 1: Preserve (checking disk and Git history)
         comments = extract_existing_comments(index_path, repo_path)
-        # Pass 2: Discover & Filter (SSOT)
-        valid_files = get_valid_workspace_files(repo_path, config)
+
+        # Pass 2: SSOT Read (Strictly query the Topology Ledger)
+        from insetu.kernel.extension import ExtensionContext
+        top_ctx = ExtensionContext('topology', workspace_id)
+        rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
+
+        valid_files = []
+        for r in rows:
+            fp = r['filepath']
+            if fp.startswith(f"{repo_dir}/"):
+                valid_files.append(fp[len(repo_dir)+1:])
+            else:
+                valid_files.append(fp)
 
         if not valid_files:
             continue

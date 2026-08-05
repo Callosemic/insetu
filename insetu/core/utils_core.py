@@ -8,7 +8,10 @@ from insetu.kernel.hooks import hooks
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
     if filepath:
-        if filepath.startswith("system://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/"):
+        if filepath.startswith("vfs://"):
+            filepath = filepath.replace("vfs://", "", 1)
+
+        if filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/"):
             from insetu.kernel.hooks import hooks
             overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
             for res in overrides:
@@ -19,81 +22,6 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
     return load_json_file(wf_path, {"context_batches": []})
-
-def get_valid_workspace_files(repo_path, config, workspace_id=None):
-    live_cfg = load_config(workspace_id)
-    global_ignore_dirs = set(live_cfg.get("ignore_dirs", []))
-    global_ignore_files = set(live_cfg.get("ignore_files", []))
-    global_ignore_patterns = live_cfg.get("ignore_patterns", [])
-
-    ignore_dirs = global_ignore_dirs.union(config.get("repo_ignore_dirs", []))
-    ignore_files = global_ignore_files.union(config.get("repo_ignore_files", []))
-    ignore_patterns = global_ignore_patterns + config.get("repo_ignore_patterns", [])
-    archive_type = config.get("archive_type", "repo")
-
-    if archive_type == "repo":
-        if os.path.exists(repo_path):
-            try:
-                check_tree = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], 
-                                            capture_output=True, text=True, cwd=repo_path)
-                if check_tree.returncode != 0 or 'true' not in check_tree.stdout.lower():
-                    subprocess.run(['git', 'init'], capture_output=True, cwd=repo_path)
-                    if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
-                        with open(Path(repo_path).joinpath('.gitkeep').as_posix(), 'w') as f: pass
-            except Exception:
-                pass
-        try:
-            result = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], 
-                                            capture_output=True, text=True, check=True, cwd=repo_path)
-            git_files = set(result.stdout.splitlines())
-        except Exception:
-            git_files = set()
-            for p in Path(repo_path).rglob('*'):
-                if p.is_file():
-                    try: git_files.add(p.relative_to(repo_path).as_posix())
-                    except ValueError: pass
-    else:
-        git_files = set()
-        for p in Path(repo_path).rglob('*'):
-            if p.is_file():
-                try: git_files.add(p.relative_to(repo_path).as_posix())
-                except ValueError: pass
-
-    valid_files = set()
-    repo_p = Path(repo_path)
-
-    for file in git_files:
-        norm_path = file
-        if norm_path.startswith("./"): norm_path = norm_path[2:]
-        if config.get("prefix") and not norm_path.startswith(config.get("prefix")): continue
-
-        target_f = repo_p / norm_path
-        if not target_f.is_file(): continue
-        if target_f.name.lower() in ignore_files: continue
-        if config.get("apply_ignore"):
-            if any(norm_path.startswith(exc) for exc in config.get("ignore_exceptions", [])):
-                pass
-            else:
-                if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
-                if any(pattern in norm_path for pattern in ignore_patterns): continue
-
-        if repo_p.name == '.insetu' and (norm_path.startswith('data/') or '/data/' in norm_path):
-            continue
-
-        if target_f.name.lower() in (".gitkeep", ".keep"):
-            valid_files.add(norm_path)
-            continue
-
-        ext = target_f.suffix.lower()
-        allowed_exts = set(live_cfg.get("include_extensions", []) + config.get("exts", []))
-        if ext in allowed_exts: valid_files.add(norm_path)
-
-    for forced_file in config.get("force_include", []):
-        if (repo_p / forced_file).exists(): 
-            valid_files.add(forced_file)
-
-    return sorted(list(valid_files))
-
 def parse_frontmatter(content):
     import re
     yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
@@ -174,33 +102,6 @@ def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
-
-def get_omniscient_workspace_files(workspace_id, allowed_repos):
-    from pathlib import Path
-    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
-    ws_root_path = Path(ws_root).resolve()
-    live_cfg = load_config(workspace_id)
-    ignore_dirs = tuple(live_cfg.get("ignore_dirs", ['node_modules', '__pycache__', 'venv', '.venv', '.insetu', '.git']))
-
-    search_roots = [Path(cfg_path).parent.resolve()]
-    for repo in allowed_repos:
-        repo_path = ws_root_path / repo
-        if repo_path.exists():
-            search_roots.append(repo_path)
-    search_roots = list(set(search_roots))
-    candidates = []
-    for s_root in search_roots:
-        for root, dirs, files in os.walk(str(s_root)):
-            dirs[:] = [d for d in dirs if d not in ignore_dirs]
-            for f in files:
-                cand_abs = Path(root) / f
-                try:
-                    cand_rel = cand_abs.relative_to(ws_root_path).as_posix()
-                except ValueError:
-                    cand_rel = cand_abs.as_posix()
-                candidates.append((f, cand_rel))
-    return candidates
-
 def get_flattened_buckets(workspace_id=None, target_configs=None):
     """Backend SSOT helper for resolving flattened sub-buckets with defensive null-safety."""
     if target_configs is None:
@@ -260,41 +161,6 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
         expected_contexts.add(f"{out_dir}/{decl['filename']}")
 
     return expected_contexts
-def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
-    """DRY Helper to map a filepath to its configured sub-bucket."""
-    import re
-    clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
-
-    if ' -> ' in clean_filepath:
-        clean_filepath = clean_filepath.split(' -> ')[-1].strip()
-
-    clean_filepath_lower = clean_filepath.lower()
-    safe_repo_prefix = (repo_dir.lower() + "/") if repo_dir else ""
-
-    for b in sub_buckets:
-        prefix = b.get("dynamic_split_prefix")
-        if prefix:
-            prefix_lower = prefix.lower()
-            if prefix_lower == "." or clean_filepath_lower.startswith(prefix_lower):
-                parts = clean_filepath.split("/")
-                module_idx = len([p for p in prefix.split('/') if p and p != '.'])
-                if len(parts) > module_idx + 1:
-                    return b, parts[module_idx]
-                continue
-        elif b.get("match_prefixes"):
-            for p in b["match_prefixes"]:
-                p_lower = p.lower()
-                if clean_filepath_lower.startswith(p_lower):
-                    return b, None
-                # Topology-Aware Fallback: Handle flattened structures where the repo root IS the package
-                if safe_repo_prefix and p_lower.startswith(safe_repo_prefix):
-                    stripped_p = p_lower[len(safe_repo_prefix):]
-                    if stripped_p and clean_filepath_lower.startswith(stripped_p):
-                        return b, None
-
-    catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
-    return catch_all, None
-
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
