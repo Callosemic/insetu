@@ -133,7 +133,6 @@ def _run_term_stream(ws, workspace_id):
 
     t = threading.Thread(target=read_from_pty, daemon=True)
     t.start()
-
     try:
         while True:
             data = ws.receive()
@@ -151,7 +150,10 @@ def _run_term_stream(ws, workspace_id):
                 # Pipe raw input directly to the kernel
                 os.write(master_fd, data if isinstance(data, bytes) else data.encode('utf-8'))
     except Exception as e:
-        safe_send(f"\r\n\x1b[31m[WS Receive Error] {str(e)}\x1b[0m\r\n")
+        # Prevent sending errors back if the client already killed the connection, 
+        # as writing to a dead WS socket corrupts the Werkzeug HTTP stream for the next request.
+        if type(e).__name__ not in ('ConnectionClosed', 'ConnectionError', 'BrokenPipeError'):
+            safe_send(f"\r\n\x1b[31m[WS Receive Error] {str(e)}\x1b[0m\r\n")
     finally:
         is_closing = True
         try:

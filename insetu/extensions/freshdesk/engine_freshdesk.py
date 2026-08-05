@@ -269,12 +269,11 @@ def get_ignored_tickets(ctx):
 def ignore_freshdesk_ticket(ctx, ticket_id):
     ctx.db.insert_or_replace("freshdesk_ignored", {"ticket_id": ticket_id})
     return jsonify({"status": "success"})
-
 @freshdesk_bp.route('tickets/fetch', methods=['POST'])
 def get_freshdesk_tickets(ctx):
     """
     Secure proxy endpoint using the asynchronous jobs ledger to prevent event loop starvation.
     """
     data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("fetch_tickets_task", filters=data)
+    job_id = ctx.jobs.submit("fetch_tickets_task", coalesce=True, filters=data)
     return jsonify({"status": "accepted", "job_id": job_id}), 202

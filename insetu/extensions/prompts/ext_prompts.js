@@ -10,6 +10,7 @@ export const PromptsStore = createExtensionStore('Prompts', {
     loading: false,
     searchQuery: '',
     fetchPrompts: async () => {
+        if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
         PromptsStore.setState({ loading: true });
         try {
             await syncPromptsState();
@@ -174,10 +175,32 @@ function isPromptPath(filepath) {
     const str = String(typeof filepath === 'object' ? (filepath.src || filepath.filepath || filepath.oldPath || '') : filepath).replace(/\\/g, '/');
     return str.includes('prompts') || str.includes('.insetu');
 }
-
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'prompt',
+            id: 'copy-prompt',
+            label: 'Copy Text',
+            icon: '📋',
+            intent: 'primary',
+            order: 85,
+            asyncAction: async (data, e) => {
+                if (data.resolvedText) {
+                    await window.inSetu.utils.copyRawText(data.resolvedText);
+                    return;
+                }
+                const res = await window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(data.filepath)}`);
+                if (res.ok) {
+                    const text = await res.text();
+                    await window.inSetu.utils.copyRawText(text);
+                } else {
+                    throw new Error("Failed to resolve prompt.");
+                }
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
@@ -207,10 +230,13 @@ window.ExtensionRegistry.registerExtension('prompts', {
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'context' && data.subId === 'prompts') {
                 syncPromptsState();
-                if (data.forceRefresh) {
-                    PromptsStore.getState().fetchPrompts();
-                }
             }
+        },
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'prompts') {
+                PromptsStore.getState().fetchPrompts();
+            }
+            return false;
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'context') {
@@ -252,6 +278,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
     }
 });
 async function syncPromptsState() {
+    if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
     try {
         const res = await window.inSetu.api.workspace('prompts/list?t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {

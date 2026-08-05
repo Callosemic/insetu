@@ -16,9 +16,9 @@ export const SkillsStore = createExtensionStore('Skills', {
             formScore: 4,
             formStatus: '',
             formMetrics: {},
-
-            clearPayload: () => set({ playlist: [], allSkills: [], groupsList: [] }),
+            clearPayload: () => SkillsStore.setState({ playlist: [], allSkills: [], groupsList: [] }),
             fetchPlaylist: async (silent = false) => {
+                if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 if (!silent) SkillsStore.setState({ loading: true });
                 try {
                     const res = await window.inSetu.api.workspace('skills/playlist');
@@ -33,6 +33,7 @@ export const SkillsStore = createExtensionStore('Skills', {
                 }
             },
             fetchAllSkills: async () => {
+                if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 try {
                     const res = await window.inSetu.api.workspace('skills/list');
                     if (res.ok) {
@@ -46,6 +47,7 @@ export const SkillsStore = createExtensionStore('Skills', {
                 }
             },
             fetchDomainConfig: async () => {
+                if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 try {
                     const res = await window.inSetu.api.workspace('skills/settings');
                     if (res.ok) {
@@ -710,17 +712,12 @@ window.ExtensionRegistry.registerExtension('skills', {
         }
     ],
     uiHooks: {
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'skills') {
-                SkillsStore.getState().fetchPlaylist(true);
-                SkillsStore.getState().fetchAllSkills();
-            }
-        },
-        'zone:subtab-changed': (data) => {
+        'zone:force-refresh': (data) => {
             if (data.parentId === 'skills') {
                 SkillsStore.getState().fetchPlaylist(true);
                 SkillsStore.getState().fetchAllSkills();
             }
+            return false;
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

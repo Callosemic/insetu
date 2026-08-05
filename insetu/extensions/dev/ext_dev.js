@@ -39,17 +39,13 @@ export class InSetuExtDevDash extends InSetuElement {
         this.subscribe(DevStore, state => state.forceRefreshTick, (tick) => {
             if (tick) {
                 this.fetchMetrics();
-                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                    window.inSetu.ui.setGlobalStatus("🔄 Dashboard refreshed", 1500);
-                }
             }
         });
 
-        // Poll telemetry every 3 seconds while the dashboard is mounted
-        this.registerInterval(() => this.fetchMetrics(), 3000);
         this.fetchMetrics();
     }
     async fetchMetrics() {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('dev')) return;
         try {
             const res = await this.api.get('metrics');
             if (res.ok) {
@@ -192,12 +188,19 @@ window.ExtensionRegistry.registerExtension('dev', {
         }
     ],
     uiHooks: {
+        'zone:tab-changed': (tabId) => {
+            if (tabId === 'dev') {
+                DevStore.setState({ forceRefreshTick: Date.now() });
+            }
+        },
         'zone:subtab-changed': (data) => {
             if ((data.parentId === 'dev' && data.subId === 'dash') || data.subId === 'dash') {
-                if (data.forceRefresh) {
-                    DevStore.setState({ forceRefreshTick: Date.now() });
-                }
+                DevStore.setState({ forceRefreshTick: Date.now() });
             }
+        },
+        'zone:soft-refresh': () => {
+            DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
+            return false;
         }
     }
 });

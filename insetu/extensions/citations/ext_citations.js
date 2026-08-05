@@ -284,9 +284,11 @@ export class InSetuExtCitations extends InSetuElement {
             if (res.ok) {
                 CitationStore.setState({ activeAttachCitation: { ...this.activeAttachCitation, _attachments: newAtts } });
                 this.loadMainLibrary();
+            } else {
+                throw new Error('Failed to save attachment.');
             }
         } catch(e) {
-            alert('Error saving attachment.');
+            throw new Error('Error saving attachment.');
         }
     }
 
@@ -310,17 +312,17 @@ export class InSetuExtCitations extends InSetuElement {
     }
     async _deleteDynamicCitation() {
         if (!this.activeEditCitation) return;
-        if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return;
+        if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return Promise.resolve();
         try {
             const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`);
             if (res.ok) {
                 CitationStore.setState({ activeEditCitation: null });
                 this.loadMainLibrary();
             } else {
-                alert("Failed to delete citation.");
+                throw new Error("Failed to delete citation.");
             }
         } catch (e) {
-            alert('Network error deleting citation.');
+            throw new Error('Network error deleting citation.');
         }
     }
 
@@ -330,7 +332,7 @@ export class InSetuExtCitations extends InSetuElement {
             try { return JSON.parse(this.editForm.jsonStr || '{}'); } catch (e) { return null; }
         })();
 
-        if (!payload) return alert("Invalid JSON format in the 'Other Metadata' box.");
+        if (!payload) throw new Error("Invalid JSON format in the 'Other Metadata' box.");
 
         payload.type = this.editForm.type || 'document';
         payload.title = (this.editForm.title || '').trim();
@@ -353,10 +355,10 @@ export class InSetuExtCitations extends InSetuElement {
                 CitationStore.setState({ activeEditCitation: null });
                 this.loadMainLibrary();
             } else {
-                alert("Failed to save citation.");
+                throw new Error("Failed to save citation.");
             }
         } catch(e) {
-            alert('Network error saving citation.');
+            throw new Error('Network error saving citation.');
         }
     }
     _renderCard(c, isExplore) {
@@ -513,7 +515,7 @@ export class InSetuExtCitations extends InSetuElement {
                             <option value="None">No Bucket</option>
                             ${this.attachForm.repo ? this.sys.getFlattenedBuckets(this.attachForm.repo).map(b => html`<option value="${b.id}">${b.title}</option>`) : ''}
                         </select>
-                        <button class="btn-sm" style="background:var(--intent-success); margin: 0;" @click=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}>📌 Pin</button>
+                        <sutram-async-btn class="btn-sm" label="📌 Pin" intent="success" style="margin: 0;" .onClick=${() => this._saveAttachmentList([...(this.activeAttachCitation?._attachments || []), { repo: this.attachForm.repo, bucket: this.attachForm.bucket }])}></sutram-async-btn>
                     </div>
                     <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Currently Pinned Repositories:</label>
                     <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; overflow-y: auto; flex: 1;">
@@ -588,8 +590,8 @@ export class InSetuExtCitations extends InSetuElement {
                     <label style="font-weight:bold; font-size:0.85rem; color:var(--text-muted); display:block; margin-bottom:5px;">Other Metadata (CSL-JSON):</label>
                     <textarea style="flex: 1; min-height: 200px; margin-bottom: 15px; font-family: monospace; font-size: 13px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; resize: vertical;" .value=${this.editForm.jsonStr} @input=${e => CitationStore.setState(s => ({ editForm: { ...s.editForm, jsonStr: e.target.value } }))}></textarea>
                 </div>
-                <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteDynamicCitation}>🗑️ Delete</button>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._saveDynamicCitation}>💾 Save Changes</button>
+                <sutram-async-btn slot="footer" label="🗑️ Delete" intent="danger" .onClick=${this._deleteDynamicCitation.bind(this)}></sutram-async-btn>
+                <sutram-async-btn slot="footer" label="💾 Save Changes" intent="primary" .onClick=${this._saveDynamicCitation.bind(this)}></sutram-async-btn>
             </sutram-modal>
         `;
     }

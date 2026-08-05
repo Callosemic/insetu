@@ -87,6 +87,7 @@ export class InSetuExtResearch extends InSetuElement {
         if (this._pollTimer) clearTimeout(this._pollTimer);
     }
     async fetchState() {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('research')) return;
         try {
             const [jRes, iRes] = await Promise.all([
                 this.api.get('jobs'),
@@ -541,22 +542,18 @@ window.ExtensionRegistry.registerExtension('research', {
         }
     ],
     uiHooks: {
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'research') {
-                window.inSetu.events.emit('insetu:research:fetch');
-            }
-        },
         'zone:subtab-changed': (data) => {
-            if (data.parentId === 'edit' && data.subId === 'research') {
+            if (data.subId === 'research') {
                 ResearchStore.setState({ isTabActive: true });
-                window.inSetu.events.emit('insetu:research:fetch');
             } else {
                 ResearchStore.setState({ isTabActive: false });
             }
         },
-        'zone:soft-refresh': (ws) => {
-            ResearchStore.setState({ jobs: [], inbox: [] });
-            window.inSetu.events.emit('insetu:research:fetch');
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'research') {
+                ResearchStore.setState({ jobs: [], inbox: [] });
+                window.inSetu.events.emit('insetu:research:fetch');
+            }
             return false;
         }
     }

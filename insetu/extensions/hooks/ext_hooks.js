@@ -12,7 +12,7 @@ export const HooksStore = createExtensionStore('Hooks', {
     editingRule: null,
     ruleForm: { name: '', trigger_type: 'repo_update', trigger_target: 'ALL', command: '', enabled: true },
     fetchRules: async () => {
-        if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
         HooksStore.setState({ loading: true });
         try {
             const res = await window.inSetu.api.workspace('hooks/list');
@@ -27,7 +27,7 @@ export const HooksStore = createExtensionStore('Hooks', {
         }
     },
     fetchLogs: async () => {
-        if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
         try {
             const res = await window.inSetu.api.workspace('hooks/logs');
             if (res.ok) {

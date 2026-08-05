@@ -14,8 +14,8 @@ export const NotesStore = createExtensionStore('Notes', {
     editNoteFilepath: null,
     noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' },
     pinnedRepos: new Set(['ALL']),
-
     fetchNotes: async () => {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('notes')) return;
         NotesStore.setState({ loading: true });
         try {
             const res = await window.inSetu.api.workspace('notes/list');
@@ -377,10 +377,11 @@ window.ExtensionRegistry.registerExtension('notes', {
         }
     ],
     uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'edit' && data.subId === 'notes') {
-                if (data.forceRefresh) NotesStore.getState().fetchNotes();
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'notes') {
+                NotesStore.getState().fetchNotes();
             }
+            return false;
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

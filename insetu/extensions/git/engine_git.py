@@ -70,24 +70,26 @@ def resolve_git_artifacts(filename=None, workspace_id=None, **kwargs):
     if os.path.exists(cand):
         return cand, True
     return None
-@hooks.on('compile_contexts')
-def on_compile_contexts_generate_diffs(manifest, workspace_id=None, **kwargs):
-    try:
-        is_full_sweep = kwargs.get('is_full_sweep', True)
-        if isinstance(is_full_sweep, list):
-            target_repos = is_full_sweep
-            touched_buckets = kwargs.get('touched_buckets')
-        else:
-            target_repos = None if is_full_sweep else kwargs.get('target_repos')
-            touched_buckets = None if is_full_sweep else kwargs.get('touched_buckets')
-        generate_diff_context(workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
+@hooks.on('register_compilation_steps')
+def _register_git_compilation_step(workspace_id=None, **kwargs):
+    return [{
+        "id": "git_diffs",
+        "depends_on": ["gather_base"],
+        "ext_name": "git",
+        "worker_name": "compile_diffs_task"
+    }]
 
-        # Guaranteed Checkpoint: Emit event when Git has finished evaluating/generating diffs
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('git', workspace_id)
-        ctx.emit('git_evaluation_complete', manifest=manifest, is_full_sweep=is_full_sweep, target_repos=target_repos, touched_buckets=touched_buckets)
-    except Exception as e:
-        print(f"Warning: Background Git auto-diff generation failed: {e}")
+@git_bp.worker("compile_diffs_task")
+def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs):
+    ctx.jobs.update_progress("Evaluating Git diffs...")
+    manifest = ctx.manifest
+
+    if isinstance(force_full, list):
+        target_repos = force_full
+
+    generate_diff_context(ctx.workspace_id, target_repos=target_repos, manifest_ref=manifest)
+
+    return {"message": "Git diffs evaluated successfully."}
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_safe_repo_id, resolve_file_bucket
@@ -152,9 +154,9 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     changed_files.append((rel_to_repo, status, filepath))
 
             if not changed_files: return None
-
             sub_buckets = config.get("sub_buckets", [])
             bucketed_files = {}
+            bucket_meta = {}
             ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
             ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
 
@@ -168,12 +170,20 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
                     if b and module:
                         b_id = f"{module}_diffs.txt"
+                        b_title = b.get("meta_map", {}).get(module, {}).get("title", module.replace('_', ' ').title())
+                        b_domain = b.get("meta_map", {}).get(module, {}).get("domain", b.get("domain", config.get("domain", "Workspaces")))
                     elif b:
                         b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
+                        b_title = b.get("title", b.get("id", "bucket").replace('_', ' ').title())
+                        b_domain = b.get("domain", config.get("domain", "Workspaces"))
                     else:
                         b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+                        b_title = config.get("title", safe_r_dir.replace('_', ' ').title())
+                        b_domain = config.get("domain", "Workspaces")
 
-                    if b_id not in bucketed_files: bucketed_files[b_id] = []
+                    if b_id not in bucketed_files: 
+                        bucketed_files[b_id] = []
+                        bucket_meta[b_id] = {"title": b_title, "domain": b_domain}
                     bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
                 out_filename = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
@@ -184,6 +194,10 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     filtered_files.append((rel_to_repo, status, orig_filepath))
                 if filtered_files:
                     bucketed_files[out_filename] = filtered_files
+                    bucket_meta[out_filename] = {
+                        "title": config.get("title", safe_r_dir.replace('_', ' ').title()),
+                        "domain": config.get("domain", "Workspaces")
+                    }
 
             for out_filename, files_in_bucket in bucketed_files.items():
                 if touched_diff_buckets is not None and out_filename not in touched_diff_buckets:
@@ -245,15 +259,19 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         block_lines.append("\n\n")
 
                     text_blocks.append("\n".join(block_lines))
-
                 if text_blocks:
                     from insetu.core.gather.engine_gather import compile_context_payload
 
                     new_content_full = header_str + "".join(text_blocks)
-                    existing_content = None
+                    existing_content = ""
                     try:
-                        out_path_abs = diffs_dir_path.joinpath(out_filename).as_posix()
-                        existing_content = ctx.vfs.read(out_path_abs, is_absolute_artifact=True)
+                        # Reconstruct full existing content from all chunks to prevent false positive diffs
+                        responses = ctx.emit('resolve_payload_chunks', uri=f"system://diffs/{out_filename}")
+                        chunks = next((r for r in responses if r), [f"system://diffs/{out_filename}"])
+                        for c in chunks:
+                            chunk_text = ctx.vfs.read(c, is_absolute_artifact=True)
+                            if chunk_text:
+                                existing_content += chunk_text
                     except Exception:
                         pass
 
@@ -261,11 +279,11 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
                         local_active_diffs.add(out_filename)
                         continue
-
+                    b_meta = bucket_meta.get(out_filename, {})
                     meta = {
                         "type": "diff",
-                        "title": out_filename.replace('_diffs.txt', '').replace('_', ' ').title(),
-                        "domain": "Git Diffs",
+                        "title": b_meta.get("title", out_filename.replace('_diffs.txt', '').replace('_', ' ').title()),
+                        "domain": b_meta.get("domain", "Git Diffs"),
                         "desc": "Just-In-Time generated diff payload.",
                         "repo": config['repo_dir']
                     }
@@ -297,46 +315,17 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 manifest_deltas.update(lm_delta)
                 working_manifest.update(lm_delta)
                 active_generated_diffs.update(l_active)
-    # Prune stale diff entries that are no longer active
-    stale_keys = [
-        k for k in working_manifest.keys() 
-        if k.endswith('_diffs.txt') and k not in active_generated_diffs 
-        and (not target_repos or any(k == f"{st}_diffs.txt" or k.startswith(f"{st}_") for st in safe_targets))
-        and (touched_diff_buckets is None or k in touched_diff_buckets)
-    ]
-    for k in stale_keys:
-        chunks = working_manifest[k].get("chunks", [k])
-        for chunk in chunks:
-            try:
-                ctx.vfs.save(diffs_dir_path.joinpath(chunk).as_posix(), "", data={"action": "delete", "is_absolute_artifact": True})
-            except Exception:
-                pass
-        del working_manifest[k]
-        manifest_deltas[k] = None
+    # Always save manifest deltas to ensure downstream consumers (like Flow) read accurate chunks from the DB
+    if manifest_deltas:
+        working_manifest.update(manifest_deltas)
+        ctx.save_manifest(working_manifest, is_full_compile=False)
+    elif is_standalone:
+        ctx.save_manifest(working_manifest, is_full_compile=False)
 
-    if is_standalone:
-        ctx.save_manifest(working_manifest)
     # VFS BARRIER: Block until the asynchronous write queue physically flushes diffs to the SSD
     ctx.sync_vfs_barrier()
 
     return diff_manifest, manifest_deltas
-@git_bp.worker("diffs_task")
-def _background_generate_diffs(ctx, target_repos=None):
-    msg = f"Analyzing Git trees for {', '.join(target_repos)}..." if target_repos else "Analyzing Git trees across sister repositories..."
-    ctx.jobs.update_progress(msg)
-    files, manifest_deltas = generate_diff_context(ctx.workspace_id, target_repos)
-    # Notify the ecosystem (e.g., Flow) that diffs have updated so dependent batches can recompile
-    if files:
-        diff_filenames = [f['filename'] for f in files]
-        ctx.emit('git_evaluation_complete', manifest=ctx.manifest, is_full_sweep=False, touched_buckets=diff_filenames)
-
-    return {"message": "Diff generation complete.", "artifact": {"files": files, "target_repos": target_repos, "manifest_deltas": manifest_deltas}}
-
-@git_bp.route('diffs/generate', methods=['POST'])
-def api_generate_diffs(ctx):
-    data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("diffs_task", target_repos=data.get("target_repos"))
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
     from insetu.kernel.utils import get_workspace_physics

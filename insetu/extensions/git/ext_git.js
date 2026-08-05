@@ -15,6 +15,7 @@ export const GitStore = createExtensionStore('Git', {
     dirtyDiffRepos: new Set(["ALL"]),
     cachedDiffFiles: null,
     fetchStatus: async () => {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         try {
             const res = await window.inSetu.api.workspace('git/status');
             if (res.ok) {
@@ -38,59 +39,24 @@ export async function generateDiffs(force = false) {
     if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
         return;
     }
-    try {
-        const res = await window.inSetu.api.workspace(`git/diffs/generate?_t=${Date.now()}`, { 
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_repos: targetRepos })
-        });
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || "Diff generation request failed.");
+    gitStoreObj.setState({ activeDiffJobId: 'starting', diffJobError: null });
+
+    if (window.inSetu?.sys?.executeSystemCompile) {
+        try {
+            await window.inSetu.sys.executeSystemCompile((msg) => {
+                gitStoreObj.setState({ diffJobMessage: msg });
+            }, false, 'git_diffs', targetRepos);
+
+            gitStoreObj.setState({  
+                activeDiffJobId: null, 
+                dirtyDiffRepos: new Set(),
+                diffJobMessage: null,
+                diffJobError: null
+            });
+            window.inSetu.events.emit('git-diffs-refreshed');
+        } catch (error) {
+            gitStoreObj.setState({ activeDiffJobId: null, diffJobError: error.message });
         }
-        const data = await res.json();
-        gitStoreObj.setState({ activeDiffJobId: data.job_id, diffJobError: null });
-
-        window.inSetu.utils.pollJob(data.job_id, {
-            onProgress: (msg) => gitStoreObj.setState({ diffJobMessage: msg }),
-            onComplete: (statusData) => {
-                const newFiles = statusData.artifact.files || [];
-                const targetReposRes = statusData.artifact.target_repos;
-                const prevCachedFiles = gitStoreObj.getState().cachedDiffFiles || [];
-                const updatedDirtyRepos = new Set(gitStoreObj.getState().dirtyDiffRepos);
-
-                const updatedCachedFiles = (() => {
-                        if (!targetReposRes) {
-                                updatedDirtyRepos.clear();
-                                return newFiles;
-                        } else {
-                                targetReposRes.forEach(r => updatedDirtyRepos.delete(r));
-                                const filtered = prevCachedFiles.filter(f => {
-                                        const repo = typeof f === 'object' ? f.repo : null;
-                                        return !repo || !targetReposRes.includes(repo);
-                                });
-                                return filtered.concat(newFiles);
-                        }
-                })();
-                gitStoreObj.setState({  
-                        activeDiffJobId: null, 
-                        cachedDiffFiles: updatedCachedFiles,
-                        dirtyDiffRepos: updatedDirtyRepos,
-                        diffJobMessage: null,
-                        diffJobError: null
-                    });
-                window.inSetu.events.emit('git-diffs-refreshed');
-                // Hydrate the global manifest explicitly so downstream extensions (like Flow) reflect the new batch chunks
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                    window.inSetu.sys.refreshManifest();
-                }
-            },
-            onError: (err) => {
-                gitStoreObj.setState({ activeDiffJobId: null, diffJobError: err.message, diffJobMessage: null });
-            }
-        });
-    } catch (error) {
-        gitStoreObj.setState({ diffJobError: error.message });
     }
 }
 
@@ -244,6 +210,7 @@ disconnectedCallback() {
         });
     }
     async _fetchSweepStatusSilent() {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         this.sweepLoading = true;
         try {
             const res = await this.api.post('sweep/status', {});
@@ -345,12 +312,12 @@ disconnectedCallback() {
             const contextManifestObj = AppStore.getState().manifest[baseFile] || {};
             const diffManifestObj = AppStore.getState().manifest[safeFile] || {};
 
-            const contextMeta = contextManifestObj.meta || { title: safeFile, domain: "Workspaces", desc: "Pending diff payload." };
             const diffMeta = diffManifestObj.meta || {};
+            const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: diffMeta.domain || "Workspaces", desc: "Pending diff payload." };
             const extMeta = window.inSetu.events.emitHook('zone:context-metadata', baseFile);
             const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
             const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
-            const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + " (Diffs)";
+            const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + (contextMeta.title.includes('(Diffs)') ? '' : " (Diffs)");
 
             let sizeStr = "";
             if (diffMeta.chunk_sizes && diffMeta.chunk_sizes.length > 1) {
@@ -917,17 +884,9 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
             GitStore.setState({ dirtyDiffRepos: newDirty });
         }
     });
-
-    window.inSetu.extensions.Registry.registerUIHook('zone:subtab-changed', (data) => {
-        if (data.parentId === 'context' && data.subId === 'diffs') {
-            generateDiffs(data.forceRefresh);
-        }
-        return false;
-    });
-    window.inSetu.extensions.Registry.registerUIHook('zone:tab-changed', (tabId) => {
-        const { activeSubTabs } = AppStore.getState();
-        if (tabId === 'context' && activeSubTabs['context'] === 'diffs') {
-            generateDiffs();
+    window.inSetu.extensions.Registry.registerUIHook('zone:force-refresh', (data) => {
+        if (data.subId === 'diffs') {
+            generateDiffs(true);
         }
         return false;
     });

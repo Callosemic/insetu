@@ -94,11 +94,11 @@ export class InSetuExtFreshdesk extends InSetuElement {
             this.contiguousCount = state.contiguousCount || 0;
             this.lastFetchedPage = state.lastFetchedPage || 0;
         });
-        this.loadIgnored().then(() => this.fetchTickets());
+        this.loadIgnored();
     }
 
     onWorkspaceChanged(newWorkspaceId) {
-        this.loadIgnored().then(() => this.fetchTickets());
+        this.loadIgnored();
     }
     _ticketMatchesFilters(t, filterStatus, filterAssignee, myAgentId) {
         let sMatch = true;
@@ -503,17 +503,11 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
     ],
     // React to global OS events without direct DOM coupling
     uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'edit' && data.subId === 'freshdesk') {
-                if (data.forceRefresh) {
-                    FreshdeskStore.setState({ tickets: [] });
-                    window.inSetu.events.emit('insetu:freshdesk:fetch');
-                }
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'freshdesk') {
+                FreshdeskStore.setState({ tickets: [] });
+                window.inSetu.events.emit('insetu:freshdesk:fetch');
             }
-        },
-        'zone:soft-refresh': (ws) => {
-            FreshdeskStore.setState({ tickets: [] });
-            window.inSetu.events.emit('insetu:freshdesk:fetch');
             return false;
         }
     }

@@ -47,7 +47,8 @@ export class InSetuExtTerm extends InSetuElement {
             this._visibilityObserver = new IntersectionObserver((entries) => {
                 if (entries[0].isIntersecting) {
                     // Yield to browser layout engine to prevent 0x0 geometry crashes
-                    setTimeout(() => {
+                    if (this._visTimer) clearTimeout(this._visTimer);
+                    this._visTimer = setTimeout(() => {
                         if (!this._term) {
                             this._initTerminal();
                         } else {
@@ -70,17 +71,17 @@ export class InSetuExtTerm extends InSetuElement {
         clearTimeout(this._initTimer);
         clearTimeout(this._wsTimer);
         clearTimeout(this._resizeTimer);
+        clearTimeout(this._visTimer);
         window.removeEventListener('resize', this._handleResize);
         if (this._themeObserver) this._themeObserver.disconnect();
         if (this._resizeObserver) this._resizeObserver.disconnect();
         if (this._visibilityObserver) this._visibilityObserver.disconnect();
         if (this._ws) {
+            this._ws.onopen = null;
+            this._ws.onmessage = null;
+            this._ws.onerror = null;
             this._ws.onclose = null;
-            if (this._ws.readyState === WebSocket.CONNECTING) {
-                this._ws.onopen = function() { this.close(); };
-            } else {
-                this._ws.close();
-            }
+            this._ws.close();
             this._ws = null;
         }
         if (this._term) {
@@ -91,24 +92,36 @@ export class InSetuExtTerm extends InSetuElement {
     onWorkspaceChanged(newWorkspaceId) {
         clearTimeout(this._initTimer);
         clearTimeout(this._wsTimer);
+        clearTimeout(this._visTimer);
 
         if (this._ws) {
+            this._ws.onopen = null;
+            this._ws.onmessage = null;
+            this._ws.onerror = null;
             this._ws.onclose = null;
-            if (this._ws.readyState === WebSocket.CONNECTING) {
-                this._ws.onopen = function() { this.close(); };
-            } else {
-                this._ws.close();
-            }
+            this._ws.close();
             this._ws = null;
         }
         if (this._term) {
             try { this._term.dispose(); } catch (e) {}
             this._term = null;
         }
+        // Only queue a rebuild if the extension is actually authorized for the new workspace
+        if (!this.isExtensionActive()) return;
         // Defer complete terminal recreation to avoid race conditions during DOM teardown
         this._initTimer = setTimeout(() => {
             this._initTimer = null;
             if (this.isConnected) {
+                // Hard reset the WebSocket again just in case the IntersectionObserver spawned a ghost
+                clearTimeout(this._wsTimer);
+                if (this._ws) {
+                    this._ws.onopen = null;
+                    this._ws.onmessage = null;
+                    this._ws.onerror = null;
+                    this._ws.onclose = null;
+                    this._ws.close();
+                    this._ws = null;
+                }
                 // Failsafe: Ensure ghost instances are fully destroyed if the 50ms resize somehow slipped through
                 if (this._term) {
                     try { this._term.dispose(); } catch (e) {}
@@ -135,7 +148,7 @@ export class InSetuExtTerm extends InSetuElement {
         }
     };
     _initTerminal() {
-        if (!this.isConnected) return;
+        if (!this.isConnected || !this.isExtensionActive()) return;
         if (this._term) return; // Prevent double-initialization on load
 
         const container = this.shadowRoot.getElementById('terminal-container');
@@ -170,7 +183,7 @@ export class InSetuExtTerm extends InSetuElement {
         });
     }
     _connectWebSocket() {
-        if (!this.isConnected) return;
+        if (!this.isConnected || !this.isExtensionActive()) return;
         if (this._ws && (this._ws.readyState === WebSocket.CONNECTING || this._ws.readyState === WebSocket.OPEN)) return;
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -293,9 +306,9 @@ window.ExtensionRegistry.registerExtension('term', {
         }
     ],
     uiHooks: {
-        'zone:force-refresh': (tabId) => {
-            if (tabId === 'ctrl') {
-                window.inSetu.events.emit('insetu:term:restart');
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'term') {
+                window.dispatchEvent(new CustomEvent('insetu:term:restart'));
             }
         },
         'zone:tab-changed': (tabId) => {
@@ -305,9 +318,6 @@ window.ExtensionRegistry.registerExtension('term', {
         },
         'zone:subtab-changed': (data) => {
             if (data.parentId === 'ctrl' && data.subId === 'term') {
-                if (data.forceRefresh) {
-                    window.dispatchEvent(new CustomEvent('insetu:term:restart'));
-                }
                 window.dispatchEvent(new CustomEvent('insetu:term:resize'));
             }
         }

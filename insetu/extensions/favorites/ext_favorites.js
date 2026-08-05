@@ -168,9 +168,7 @@ export class InSetuExtFavorites extends InSetuElement {
             }
         } else if (item.type === 'folder') {
             const parts = item.path.split('/').filter(p => p);
-            AppStore.setState({ globalBrowsePath: parts });
-            if (this.sys && this.sys.switchTab) this.sys.switchTab('edit');
-            if (this.sys && this.sys.switchSubTab) this.sys.switchSubTab('files');
+            AppStore.getState().setActiveRoute('edit', 'files', parts);
         }
     }
     render() {

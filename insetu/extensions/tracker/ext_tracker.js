@@ -1014,7 +1014,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
         'zone:file-edit-override': (filepath) => {
             if (filepath.includes('.tracker/')) {
                 window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
-                if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'tasks');
+                AppStore.getState().setActiveRoute('tasks', 'todos');
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
                 return true;
             }
@@ -1025,14 +1025,11 @@ window.ExtensionRegistry.registerExtension('tracker', {
                 KanbanStore.getState().fetchTasks();
             }
         },
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'tasks' && data.forceRefresh) {
+        'zone:force-refresh': (data) => {
+            if (data.parentId === 'tasks') {
+                KanbanStore.setState({ tasks: [] });
                 KanbanStore.getState().fetchTasks();
             }
-        },
-        'zone:soft-refresh': (ws) => {
-            KanbanStore.setState({ tasks: [] });
-            KanbanStore.getState().fetchTasks();
             return false;
         }
     }

@@ -9,6 +9,7 @@ export const FlowStore = createExtensionStore('Flow', {
     loading: false,
     searchQuery: '',
     fetchBatches: async () => {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
         FlowStore.setState({ loading: true });
         try {
             const res = await window.inSetu.api.workspace('flow/batches');
@@ -22,8 +23,8 @@ export const FlowStore = createExtensionStore('Flow', {
                             contexts: data.available_contexts || [],
                             diffs: data.available_diffs || [],
                             prompts: data.available_prompts || [],
-                            artifactsDir: data.artifacts_dir || ".insetu/profiles/default/data",
-                            profileDir: data.profile_dir || ".insetu/profiles/default"
+                            artifactsDir: data.artifacts_dir || ".insetu/data",
+                            profileDir: data.profile_dir || ".insetu"
                         }
                     }));
                 }
@@ -180,19 +181,31 @@ export class InSetuExtFlow extends InSetuElement {
                 if (responseData.manifest) {
                     AppStore.setState({ manifest: responseData.manifest });
                 }
+
+                if (this.compileSystem) {
+                    this.compileSystem(null, false, 'flow_workflows');
+                }
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
         }
     }
-
     async saveEditBatch() {
-        const id = (this._editForm.id || '').trim();
+        const originalId = (this._editForm.id || '').trim();
         const title = (this._editForm.title || '').trim();
         const domain = (this._editForm.domain || '').trim() || "Workflows";
 
-        if (!id || !title) return alert("Batch ID and Title are required.");
-        const payload = { id, title, domain, includes: this._editForm.includes };
+        if (!title) return alert("Title is required.");
+
+        let newId = this.utils.slugify(title);
+        let counter = 1;
+        const currentBatches = FlowStore.getState().batches;
+        while (currentBatches.some(b => b.id === newId && b.id !== originalId)) {
+            newId = `${this.utils.slugify(title)}_${counter}`;
+            counter++;
+        }
+
+        const payload = { id: newId, original_id: originalId, title, domain, includes: this._editForm.includes };
 
         if (this._editForm.showIfExists && this._editForm.showIfExists.length > 0) payload.show_if_exists = this._editForm.showIfExists;
         if (this._editForm.showIfMissing && this._editForm.showIfMissing.length > 0) payload.show_if_missing = this._editForm.showIfMissing;
@@ -221,6 +234,10 @@ export class InSetuExtFlow extends InSetuElement {
                 if (responseData.manifest) {
                     AppStore.setState({ manifest: responseData.manifest });
                 }
+
+                if (this.compileSystem) {
+                    this.compileSystem(null, false, 'flow_workflows');
+                }
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -229,9 +246,8 @@ export class InSetuExtFlow extends InSetuElement {
     async saveBatchResponse() {
         const content = this._responseContent || '';
         if (!content.trim()) return alert('Please paste a response.');
-
         const { gatherOptions } = window.inSetu.stores.Gather.getState();
-        const artifactsDir = gatherOptions.artifactsDir || ".insetu/profiles/default/data";
+        const artifactsDir = gatherOptions.artifactsDir || ".insetu/data";
 
         const now = new Date();
         const tzOffset = now.getTimezoneOffset() * 60000;
@@ -267,22 +283,36 @@ export class InSetuExtFlow extends InSetuElement {
             const appState = appStore?.getState ? appStore.getState() : {};
             const categoryOrder = appState?.categoryOrder || [];
             const manifest = appState?.manifest || {};
-
             const gatherStore = window.inSetu?.stores?.Gather;
             const gatherState = gatherStore?.getState ? gatherStore.getState() : {};
             const gatherOptions = gatherState?.gatherOptions || {};
+            // allFiles represents valid configuration targets for the UI builder (potentials + actuals)
+            const allFiles = [
+                ...(gatherOptions?.diffs || []), 
+                ...(gatherOptions?.contexts || []),
+                ...(gatherOptions?.prompts || [])
+            ];
             const repoFilteredBatches = this.batches.map(b => {
-                const filename = `workflow_${b.id}_context.txt`;
-                const manifestObj = manifest[filename] || {};
+                const actualFilename = `workflow_${b.id}_context.txt`;
+                const manifestObj = manifest[actualFilename] || {};
                 const repos = manifestObj.meta?.repos || [];
-                return { ...b, _repos: repos };
+                return { ...b, _repos: repos, _filename: actualFilename };
             }).filter(b => {
                 if (this._applyVisibilityFilter) {
+                    // Literal existence check: Must be physically present in the active manifest or prompt list
+                    const checkLiteralExists = (f) => {
+                        const filename = f.split('/').pop();
+                        if (manifest[filename]) return true;
+
+                        const checkName = f.startsWith('system://') ? f.replace('system://', '') : f;
+                        return (gatherOptions?.prompts || []).includes(checkName);
+                    };
+
                     if (b.show_if_exists && b.show_if_exists.length > 0) {
-                        if (!b.show_if_exists.every(f => !!manifest[f.split('/').pop()])) return false;
+                        if (!b.show_if_exists.every(checkLiteralExists)) return false;
                     }
                     if (b.show_if_missing && b.show_if_missing.length > 0) {
-                        if (b.show_if_missing.some(f => !!manifest[f.split('/').pop()])) return false;
+                        if (b.show_if_missing.some(checkLiteralExists)) return false;
                     }
                 }
 
@@ -297,7 +327,6 @@ export class InSetuExtFlow extends InSetuElement {
             const filteredBatches = this.searchQuery 
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
                 : repoFilteredBatches;
-            const allFiles = [...(gatherOptions?.diffs || []), ...(gatherOptions?.contexts || [])];
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
             return html`
                 <sutram-toolbar
@@ -315,7 +344,7 @@ export class InSetuExtFlow extends InSetuElement {
                         </insetu-repo-filter>
                         <div style="padding: 10px 15px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border);">
                             <input type="checkbox" id="vis-toggle" .checked=${this._applyVisibilityFilter} style="transform: scale(1.1); cursor: pointer;"
-                                @change=${(e) => { this._applyVisibilityFilter = e.target.checked; }}>
+                                @change=${(e) => { this._applyVisibilityFilter = e.target.checked; this.requestUpdate(); }}>
                             <label for="vis-toggle" style="font-size: 0.9rem; color: var(--text); cursor: pointer;">Apply Visibility Requirements</label>
                         </div>
                     </div>
@@ -330,7 +359,7 @@ export class InSetuExtFlow extends InSetuElement {
                             categoryKey="_domain"
                             .categoryOrder=${categoryOrder}
                             .renderItem=${(b) => {
-                                const filename = `workflow_${b.id}_context.txt`;
+                                const filename = b._filename;
                                 const manifestObj = AppStore.getState().manifest[filename] || {};
                                 const meta = manifestObj.meta || {};
                                 let sizeStr = "";
@@ -352,9 +381,9 @@ export class InSetuExtFlow extends InSetuElement {
                                         .entityType=${'file:workflow_batch'}
                                         .entityData=${{  
                                             ...b, 
-                                            filepath: `workflow_${b.id}_context.txt`, 
+                                            filepath: filename, 
                                             suppress: ['file-browse', 'file-edit'], 
-                                            chunks: manifestObj.chunks || [`workflow_${b.id}_context.txt`]  
+                                            chunks: manifestObj.chunks || [filename]  
                                         }}
                                         @card-clicked=${() => this.openBatchModal(b)}>
                                 </insetu-card>
@@ -611,7 +640,8 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
                                                             ${(() => {
                                                                 const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
-                                                                const manifestObj = AppStore.getState().manifest[baseFile] || {};
+                                                                const manifest = AppStore.getState().manifest || {};
+                                                                const manifestObj = manifest[baseFile] || {};
                                                                 return html`
                                                                     <sutram-entity-actions 
                                                                         .entityType=${'file'} 
@@ -638,11 +668,12 @@ export class InSetuExtFlow extends InSetuElement {
                                                                         }
                                                                         return html`
                                                                             <sutram-entity-actions 
-                                                                                .entityType=${'file'} 
+                                                                                .entityType=${'file:prompt'} 
                                                                                 .entityData=${{ 
                                                                                     filepath: promptPath, 
                                                                                     isFS: false,
-                                                                                    showOnly: ['file-copy', 'file-download', 'file-edit']
+                                                                                    resolvedText: this._viewingBatchPromptText,
+                                                                                    showOnly: ['copy-prompt', 'file-edit']
                                                                                 }}>
                                                                             </sutram-entity-actions>
                                                                         `;
@@ -717,11 +748,21 @@ window.ExtensionRegistry.registerExtension('flow', {
         }
     ],
     uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'context' && data.subId === 'flow') {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
-                if (data.forceRefresh) FlowStore.getState().fetchBatches();
+        'zone:tab-changed': (tabId) => {
+            if (tabId === 'context') {
+                const activeSub = AppStore.getState().activeSubTabs['context'];
+                if (activeSub === 'flow') {
+                    FlowStore.getState().fetchBatches();
+                }
             }
+        },
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'flow') {
+                FlowStore.setState({ batches: [] });
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
+                FlowStore.getState().fetchBatches();
+            }
+            return false;
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

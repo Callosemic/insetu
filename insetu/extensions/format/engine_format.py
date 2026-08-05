@@ -35,13 +35,24 @@ def api_format_compile_document(ctx):
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, shutil, io
     from insetu.core.sdk import ExtensionContext
-
     ctx = ExtensionContext('format', workspace_id)
-    resolved_path = ctx.resolve_path(filepath)
-    if not os.path.exists(resolved_path): 
-        raise FileNotFoundError("File not found")
 
-    content = ctx.vfs.read(filepath) or ""
+    # Resolve chunks statelessly via Event Bus if the target is a system payload
+    responses = ctx.emit('resolve_payload_chunks', uri=filepath)
+    chunks = next((r for r in responses if r), [filepath])
+
+    content = ""
+    for c in chunks:
+        is_sys = c.startswith("system://")
+        c_text = ctx.vfs.read(c, is_absolute_artifact=is_sys)
+        if c_text:
+            content += c_text + "\n\n"
+
+    if not content.strip():
+        raise FileNotFoundError("File not found or empty.")
+
+    # We still need a physical resolved path for Pandoc's working directory reference
+    resolved_path = ctx.resolve_path(chunks[0] if chunks else filepath)
 
     paths = ctx.paths
     backmatter_match = re.search(r'\n+---\n+citations:\n([\s\S]*?)\n---$', content)
