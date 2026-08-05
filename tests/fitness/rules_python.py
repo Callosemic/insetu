@@ -243,6 +243,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 report_violation("SDK_CONTEXT_MANDATE", self.filepath, node.lineno, f"Banned SDK imports detected: {violations}. Use ctx.config, ctx.resolve_path(), ctx.paths, ctx.db, ctx.vfs, or ctx.jobs instead.")
 
         self.generic_visit(node)
+    def visit_Constant(self, node):
+        if isinstance(node.value, str) and "system://" in node.value:
+            if self.filename not in ("routes_fs.py", "fallback_bridge.py"):
+                report_violation(
+                    "LEGACY_SYSTEM_URI_BAN",
+                    self.filepath,
+                    node.lineno,
+                    "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme."
+                )
+        self.generic_visit(node)
 
     def _check_sqlite_import(self, node):
         if self.filename not in SQLITE_WHITELIST:
@@ -293,8 +303,7 @@ def check_python_files():
                             )
                             if not has_vfs_hook:
                                 report_violation("VFS_HOOK_MANDATE", filepath, 1, "Tier 2 core/utils_core.py is missing the mandatory @hooks.on('vfs_resolve_path') hook.")
-
-                            banned_utils = {"get_gather_paths", "search_workspace_files"}
+                            banned_utils = {"get_gather_paths", "search_workspace_files", "get_valid_workspace_files", "get_omniscient_workspace_files", "resolve_file_bucket"}
                             found_banned = [
                                 n.name for n in ast.walk(tree)
                                 if isinstance(n, ast.FunctionDef) and n.name in banned_utils

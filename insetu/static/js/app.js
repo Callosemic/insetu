@@ -190,14 +190,20 @@ async function checkManifestVersion() {
                 if (deltaRes.ok) {
                     const deltaData = await deltaRes.json();
                     if (deltaData.deltas && Object.keys(deltaData.deltas).length > 0) {
-                        const currentManifest = { ...(AppStore.getState().manifest || {}) };
-                        Object.entries(deltaData.deltas).forEach(([fp, entry]) => {
-                            if (entry === null) {
-                                delete currentManifest[fp];
-                            } else {
-                                currentManifest[fp] = entry;
-                            }
-                        });
+                        const stateManifest = AppStore.getState().manifest || {};
+                        const currentManifest = { 
+                            vfs: { ...(stateManifest.vfs || {}) }, 
+                            ctx: { ...(stateManifest.ctx || {}) } 
+                        };
+                        if (deltaData.deltas && deltaData.deltas.ctx) {
+                            Object.entries(deltaData.deltas.ctx).forEach(([fp, entry]) => {
+                                if (entry === null) {
+                                    delete currentManifest.ctx[fp];
+                                } else {
+                                    currentManifest.ctx[fp] = entry;
+                                }
+                            });
+                        }
                         AppStore.setState({ manifest: currentManifest });
                     }
                     lastManifestSyncTs = currentVersion;
@@ -887,10 +893,11 @@ async function performSoftRefresh() {
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: {} });
         let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
-        let manifestData = mRes.ok ? await mRes.json() : {};
+        let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
-        if (Object.keys(manifestData).length === 0 && hasActiveRepos) {
+        const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
+        if (isEmptyManifest && hasActiveRepos) {
             // Force a blocking build only if no cached topology exists and there are active repos to map
             await executeSystemCompile();
         } else {
@@ -965,8 +972,9 @@ async function initializeWorkspaceTopology() {
     // 2. Auto-Hydrate Manifest
     try {
         let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
-        let manifestData = mRes.ok ? await mRes.json() : {};
-        if (Object.keys(manifestData).length === 0) {
+        let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
+        const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
+        if (isEmptyManifest) {
             await executeSystemCompile();
             manifestData = AppStore.getState().manifest;
         }

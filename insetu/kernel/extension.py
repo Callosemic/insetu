@@ -311,7 +311,9 @@ class ExtensionContext:
             for item in items:
                 if 'filepath' in item:
                     filepath = item['filepath']
-                    if filepath.startswith("system://"):
+                    if filepath.startswith("ctx://") or filepath.startswith("system://"):
+                        if filepath.startswith("system://"):
+                            filepath = filepath.replace("system://", "ctx://", 1)
                         from insetu.kernel.hooks import hooks
                         responses = hooks.emit('resolve_payload_chunks', uri=filepath, workspace_id=self.workspace_id)
                         chunks = next((r for r in responses if r), [filepath])

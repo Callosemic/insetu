@@ -49,6 +49,7 @@ def check_javascript_files():
     raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
     gather_repo_sub_pattern = re.compile(r'stores\.Gather\.getState\(\)\.(?:allRepos|pinnedRepos|targetConfigs)')
     sutram_settings_event_pattern = re.compile(r'addEventListener\s*\(\s*[\'"]sutram-settings-(?:action|save)[\'"]')
+    legacy_system_uri_pattern = re.compile(r'system://')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -228,5 +229,10 @@ def check_javascript_files():
                     if is_extension and gather_repo_sub_pattern.search(line):
                         report_violation("ECOSYSTEM_ACCESSOR_MANDATE", filepath, line_num, "Direct GatherStore repository topology subscription detected in extension. Consume 'this.ecosystem' on InSetuElement instead.")
 
+                    if "AppStore" in line and "manifest:" in line and not ("vfs:" in line or "ctx:" in line or "{}" in line):
+                        report_violation("DUAL_ROOT_MANIFEST_MANDATE", filepath, line_num, "Monolithic or unpartitioned manifest initialization detected. Manifest must be initialized as { vfs: {}, ctx: {} } (ADR 0037).")
                     if sutram_settings_event_pattern.search(line) and ("fetch(" in line or "window.fetch(" in line):
                         report_violation("SETTINGS_ACTION_EXPLICIT_API_MANDATE", filepath, line_num, "Event handler for sutram-settings-action/save uses raw fetch(). Route through window.inSetu.api.workspace instead.")
+
+                    if legacy_system_uri_pattern.search(line):
+                        report_violation("LEGACY_SYSTEM_URI_BAN", filepath, line_num, "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme.")

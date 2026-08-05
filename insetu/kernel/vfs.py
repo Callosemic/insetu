@@ -222,9 +222,14 @@ class VFSTransaction:
         from pathlib import Path
         from insetu.kernel.utils import resolve_system_artifact_path, resolve_sandbox_path
 
-        if (is_absolute_artifact and Path(filepath).is_absolute()) or (filepath and filepath.startswith("system://")):
+        if filepath and filepath.startswith("vfs://"):
+            filepath = filepath.replace("vfs://", "", 1)
+
+        if (is_absolute_artifact and Path(filepath).is_absolute()) or (filepath and (filepath.startswith("ctx://") or filepath.startswith("system://"))):
             from insetu.core.routes_fs import resolve_vfs_file
-            if filepath.startswith("system://"):
+            if filepath.startswith("ctx://") or filepath.startswith("system://"):
+                if filepath.startswith("system://"):
+                    filepath = filepath.replace("system://", "ctx://", 1)
                 resolved, _ = resolve_vfs_file(self.workspace_id, filepath)
             else:
                 resolved = resolve_system_artifact_path(filepath, self.workspace_id)
