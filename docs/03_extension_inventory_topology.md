@@ -9,7 +9,7 @@
 The core OS is strictly domain-agnostic. It does not know what a "citation" or a "kanban board" is. Its sole responsibility is orchestration, routing, and physical I/O operations.
 * **`insetu/static/vendor/sutram/` (Sutram Presentation Kernel):** Tier 0 micro-kernel managing UI app shell layout (`sutram-app-shell`), Zustand store factories (`createSutramStore`), background job polling (`createJobPoller`), hierarchical shortcut routing (`initShortcutRouter`), and shared styles.
 * **`insetu/core/gather/engine_gather.py` (The RAG Compiler):** Blindly compiles virtual contexts and physical directories based on the configuration matrix, hosting background compilation workers and submission endpoints.
-* **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine.
+* **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
 * **`insetu.kernel.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps. It incorporates an integrated native filesystem watcher (`watchdog`) to automatically record unmanaged non-Git directory mutations into an SQLite fixture ledger for differential context compilation.
@@ -108,7 +108,6 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('bridge_error')`.
     * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`).
-
 ### M. Notes Library (`engine_notes.py` & `ext_notes.js`)
 * **Status:** Active Extension (SDK V2).
 * **Role:** Workspace-level markdown notes management with frontmatter indexing.
@@ -117,6 +116,15 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`.
     * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `zone:file-edit-override` for `.insetu/notes/` pathing.
+
+### N. Tailscale Network Manager (`engine_tailscale.py` & `ext_tailscale.js`)
+* **Status:** Active Extension (SDK V2 / Declarative).
+* **Role:** Automated HTTPS port binding over Tailscale Serve on workspace boot.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Ephemeral.
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('workspace_boot')` triggering non-blocking background worker tasks.
+    * Settings Schema: Declarative port mode selector and manual bind action trigger.
 
 ---
 
@@ -148,6 +156,7 @@ These are domain-specific features currently hardcoded into the Micro-Kernel tha
 | `hooks` | `gather` | None (Currently) |
 | `dev` | `<Micro-Kernel>` | None (Currently) |
 | `flow` | `prompts`, `gather` | None (Currently) |
+| `tailscale` | `<Micro-Kernel>` | None (Currently) |
 > **Architectural Note: Hard vs. Soft Horizontal Relationships**
 > The table above represents **Hard Dependencies** (where an extension will fail to boot if its upstream requirement is missing). 
 > For **Soft Dependencies** (opportunistic cross-talk, such as the `git` extension asking the `tracker` extension for recent tickets to populate a UI), extensions MUST use the Event Bus. This ensures that if the target extension is disabled by the user, the requesting extension gracefully degrades rather than crashing.
@@ -174,6 +183,9 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `vfs_resolve_path` | `<Micro-Kernel>` | `utils_core` | Intercepts VFS path resolution to resolve logical repo boundaries (`repo::path`) and `system://` URIs before physical I/O operations. |
 | `vfs_resolve_file` | `<Micro-Kernel>` | `engine_gather` | Intercepts physical and virtual URI (`system://`) file resolution before I/O execution. |
 | `vfs_search` | `<Micro-Kernel>` | `engine_gather` | Dispatches workspace deep text search queries to active index handlers. |
+| `gather_declare_topology` | `engine_gather` | All Extensions | Emitted during context sweeps to collect declarative topology schemas (`generator_callback`, `recall_callback`). |
+| `register_compilation_steps` | `engine_gather` | All Extensions | Emitted to build topologically sorted background compilation pipelines. |
+| `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
 
 ### 2. Frontend UI Zones (`ExtensionRegistry`)
 | Zone ID | Context / Trigger | Primary Use Case |

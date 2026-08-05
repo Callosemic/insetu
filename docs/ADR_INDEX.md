@@ -3,19 +3,19 @@
 This index serves as the centralized mapping for all active architectural decisions governing the inSetu Developer OS Micro-Kernel and Extension Ecosystem.
 ## Core Architecture & Multi-Tenancy
 * **[ADR 0001: inSetu Genesis and Extension Architecture](adrs/archived/0001-insetu-genesis-and-extension-architecture.md)** - Extracted the Developer OS into the independent `inSetu` package and introduced the dynamic Extension Architecture.
-* **[ADR 0002: Spatial Physics & Extension Architecture](adrs/0002-workspace-physics-and-extensions.md)** - Anchored execution to `.insetu/config.json` via a global switchboard, formalizing domain-specific capabilities as extensions.
+* **[ADR 0002: Spatial Physics & Extension Architecture](adrs/archived/0002-workspace-physics-and-extensions.md)** - Anchored execution to `.insetu/config.json` via a global switchboard, formalizing domain-specific capabilities as extensions.
 * **[ADR 0003: Stateless Request-Scoped Multi-Tenant REST Routing](adrs/archived/0003-stateless-multi-tenant-routing.md)** - Replaced heavy `os.execv` reboots with stateless API routing using the `X-Workspace-ID` header.
 * **[ADR 0014: Event Bus Tenant Authorization](adrs/0014-event-bus-tenant-authorization.md)** - Implemented strict `_is_authorized` boundary filters in the Event Bus to prevent disabled extensions from hijacking tenant lifecycles.
 * **[ADR 0029: Core Kernel Extraction and Three-Tier Architecture](adrs/0029-core-kernel-extraction-and-three-tier-architecture.md)** - Enforced physical separation into Tier 1 (Kernel), Tier 2 (Core OS Engines), and Tier 3 (Extensions).
 * **[ADR 0030: Kernel Utility Bisect and Domain Helper Relocation](adrs/0030-kernel-utility-bisect-and-domain-relocation.md)** - Split `utils_core.py` into Tier 1 (`utils.py`) and Tier 2 (`core/utils_core.py`), and relocated `getFlattenedBuckets` to `gather.js`.
 * **[ADR 0031: Sutram Micro-Kernel Vendorization and Unified VFS Save Transactions](adrs/0031-sutram-micro-kernel-vendorization-and-vfs-ledger-unification.md)** - Vendorized Tier 0 presentation kernel (`sutram/*`), completed Tier 2 Gather engine extraction, and unified `save_json_file` via `VFSTransaction`.
-
 ## Virtual File System (VFS) & I/O Pipelines
-* **[ADR 0004: Asynchronous VFS Commit Pipeline](adrs/0004-asynchronous-vfs-commit-pipeline.md)** - Delegated physical file mutations to an off-thread `_VFS_WRITE_QUEUE` to eliminate HTTP event loop starvation.
+* **[ADR 0004: Asynchronous VFS Commit Pipeline](adrs/archived/0004-asynchronous-vfs-commit-pipeline.md)** - Delegated physical file mutations to an off-thread `_VFS_WRITE_QUEUE` to eliminate HTTP event loop starvation.
 * **[ADR 0010: VFS Boundary Exemptions](adrs/0010-vfs-boundary-exemptions.md)** - Enforced Event Filtering at the listener level to short-circuit infinite recursive file saves for generated artifacts.
 * **[ADR 0011: VFS Barrier Synchronization](adrs/0011-vfs-barrier-synchronization.md)** - Enforced `_VFS_WRITE_QUEUE.join()` during background tasks to prevent read-after-write disk race conditions during compilations.
 * **[ADR 0013: POSIX-Compliant Pathlib Migration](adrs/0013-posix-compliant-pathlib-migration.md)** - Migrated spatial resolution algorithms to Python's native `pathlib.Path` to eliminate string-based OS pathing hacks.
 * **[ADR 0018: Event-Sourced VFS Ledger and High-Performance Context Compilation](adrs/0018-event-sourced-vfs-ledger.md)** - Transitioned the core gather mechanism to a database-backed state machine, establishing a 5-second macro slew limiter and boot-time heuristics.
+* **[ADR 0036: VFS Manifest SQLite CQRS Ledger and Delta Payload Synchronization](adrs/0036-vfs-manifest-sqlite-cqrs-and-delta-sync.md)** - Deprecated monolithic `manifest.json` files in favor of an embedded SQLite ledger (`vfs_index.db`) and delta REST endpoints.
 ## Frontend & State Management
 * **[ADR 0007: Stateless UI Factory and Component Decoupling](adrs/archived/0007-stateless-ui-factory-and-component-decoupling.md)** - Centralized generic UI primitives (Modals, Dropdowns) into a `UIFactory` to eradicate imperative DOM generation.
 * **[ADR 0015: CodeMirror 6 Migration & Native ES Modules](adrs/0015-codemirror6-migration.md)** - Replaced EasyMDE with CodeMirror 6 imported natively via `esm.sh` to advance the zero-bundler architecture.
@@ -32,6 +32,7 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0033: Kernel Package Encapsulation and Root Wrapper Cleanup](adrs/0033-kernel-package-encapsulation-and-root-wrapper-cleanup.md)** - Extracted Tier 1 framework modules into `insetu/kernel/` and purged legacy root wrappers for complete Three-Tier isolation.
 * **[ADR 0034: Declarative Async Job Action Binding and Gather Loop Decoupling](adrs/0034-async-job-action-binding-and-gather-decoupling.md)** - Standardized frontend job action binding via `this.api.bindJobAction` and offloaded extension compilations to background workers.
 * **[ADR 0035: VFS File Resolution Event Bus Hooks, Search Decoupling, and System Topology Gateway](adrs/0035-vfs-file-resolution-hooks-and-topology-gateway.md)** - Decoupled artifact file resolution and search logic to event bus hooks (`vfs_resolve_file`, `vfs_search`), declared `bridge_ledger` schema, and exposed system topology endpoints.
+* **[ADR 0037: Gather Inversion of Control (IoC) Context Compilation and Step Chaining](adrs/0037-gather-inversion-of-control-topology.md)** - Transitioned RAG context compilation to an IoC topology contract (`gather_declare_topology`), step chaining, and post-compilation cartography mapping.
 
 ## Background Processing & Capabilities
 * **[ADR 0006: Tenant-Isolated Compilation Locks](adrs/0006-tenant-isolated-compilation-locks.md)** - Replaced global compilation locks with a dynamic dictionary of `_COMPILER_LOCKS` to allow parallel concurrent compilations across separate tenants.
