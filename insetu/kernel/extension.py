@@ -298,7 +298,6 @@ class ExtensionContext:
         from insetu.kernel.hooks import hooks
         chunks = hooks.emit('request_manifest_chunks', target_key=target_key, workspace_id=self.workspace_id)
         return next((c for c in chunks if c), [])
-
     def expand_selection(self, items):
         """
         SSOT: Expands polymorphic frontend selection items into a flat, 
@@ -313,14 +312,10 @@ class ExtensionContext:
                 if 'filepath' in item:
                     filepath = item['filepath']
                     if filepath.startswith("system://"):
-                        base_filename = filepath.split('/')[-1]
-                        bucket_prefix = filepath.rsplit('/', 1)[0]
-                        chunks = self.get_manifest_files(target_key=base_filename)
-                        if chunks and len(chunks) > 0:
-                            for chunk in chunks:
-                                files.append(f"{bucket_prefix}/{chunk}")
-                        else:
-                            files.append(filepath)
+                        from insetu.kernel.hooks import hooks
+                        responses = hooks.emit('resolve_payload_chunks', uri=filepath, workspace_id=self.workspace_id)
+                        chunks = next((r for r in responses if r), [filepath])
+                        files.extend(chunks)
                     else:
                         files.append(filepath)
                 elif 'folderpath' in item:
@@ -442,6 +437,7 @@ class InSetuExtension:
                 update_immediate_job_status(job_id, 'processing', "Initializing task...", workspace_id=workspace_id)
                 try:
                     # Execute the domain logic
+                    _chain = kwargs.pop('_chain', None)
                     if 'job_id' in inspect.signature(f).parameters:
                         kwargs['job_id'] = job_id
                     result = f(ctx, **kwargs)
@@ -454,6 +450,27 @@ class InSetuExtension:
                     elif isinstance(result, dict):
                         msg = result.get('message', msg)
                         artifact = result.get('artifact', {})
+                    # --- AUTOPILOT BATON PASS (Agnostic Job Chain) ---
+                    if _chain:
+                        steps = _chain.get('steps', [])
+                        if steps:
+                            next_step = steps.pop(0)
+                            _chain['steps'] = steps
+                            import json
+                            import uuid
+                            from insetu.kernel.workers import submit_immediate_job
+                            clean_kwargs = {k: v for k, v in kwargs.items() if k not in ['job_id', 'workspace_id']}
+                            clean_kwargs['_chain'] = _chain
+
+                            # Fork the chain into a new background job so the current step can complete and unlock its UI
+                            next_job_id = f"chn_{uuid.uuid4().hex[:8]}"
+                            submit_immediate_job(next_job_id, next_step["ext_name"], next_step["worker_name"], json.dumps(clean_kwargs), workspace_id=workspace_id, coalesce=False)
+                            # Deliberately fall through to mark the current job_id as 'completed'
+                        else:
+                            on_complete = _chain.get('on_complete_hook')
+                            if on_complete:
+                                from insetu.kernel.hooks import hooks
+                                hooks.emit_background(on_complete, workspace_id=workspace_id)
 
                     update_immediate_job_status(job_id, 'completed', msg, artifact=artifact, workspace_id=workspace_id)
                 except Exception as e:

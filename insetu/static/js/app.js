@@ -176,8 +176,37 @@ async function bootExtensions() {
     // Automatically map schemas to the System Settings menu
     autoWireSettingsSchemas();
 }
-
-// --- THE CENTRALIZED FRONTEND METRONOME ---
+// --- THE CENTRALIZED FRONTEND METRONOME & CQRS SYNC ---
+let lastManifestSyncTs = 0;
+async function checkManifestVersion() {
+    if (!window.BOOT_COMPLETE) return;
+    try {
+        const res = await window.inSetu.api.workspace('gather/manifest/version');
+        if (res.ok) {
+            const data = await res.json();
+            if (data.version && data.version > lastManifestSyncTs) {
+                const currentVersion = data.version;
+                const deltaRes = await window.inSetu.api.workspace(`gather/manifest/deltas?since=${lastManifestSyncTs}`);
+                if (deltaRes.ok) {
+                    const deltaData = await deltaRes.json();
+                    if (deltaData.deltas && Object.keys(deltaData.deltas).length > 0) {
+                        const currentManifest = { ...(AppStore.getState().manifest || {}) };
+                        Object.entries(deltaData.deltas).forEach(([fp, entry]) => {
+                            if (entry === null) {
+                                delete currentManifest[fp];
+                            } else {
+                                currentManifest[fp] = entry;
+                            }
+                        });
+                        AppStore.setState({ manifest: currentManifest });
+                    }
+                    lastManifestSyncTs = currentVersion;
+                }
+            }
+        }
+    } catch (e) {}
+}
+window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
 
 // Delegate execution to the Tier 1 agnostic metronome
@@ -260,7 +289,13 @@ async function executeBootSequence() {
         document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
-    // Fetch tenant-specific configuration to override the server's stateless HTML injection
+
+    // 1. Establish tenant workspace context FIRST so API calls route to the true active workspace
+    console.log("[BOOT] Loading Workspaces...");
+    updateBootProgress("Loading Workspaces...");
+    await loadWorkspaces();
+
+    // 2. Fetch tenant configuration for the true active workspace
     try {
         console.log("[BOOT] Fetching system configuration...");
         updateBootProgress("Fetching system config...");
@@ -284,9 +319,6 @@ async function executeBootSequence() {
     } catch (e) {
         console.warn("Failed to fetch tenant configuration on boot.", e);
     }
-    console.log("[BOOT] Loading Workspaces...");
-    updateBootProgress("Loading Workspaces...");
-    await loadWorkspaces();
     console.log("[BOOT] Workspaces loaded.");
     console.log("[BOOT] Initializing Workspace Topology...");
     updateBootProgress("Initializing Topology...");
@@ -337,35 +369,47 @@ async function executeBootSequence() {
             statusBar.statusString = `[${Array.from(repos).join(', ')}]`;
         }
     }
-
     // Initialize Zero-Bundler SPA Router (Native Hash Routing)
+    let lastRouteHash = window.location.hash;
     const handleHashChange = () => {
         const hash = window.location.hash.replace(/^#\/?/, '');
         const parts = hash.split('/').map(decodeURIComponent);
 
-        const ws = parts[0] || 'default';
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        const ws = parts[0] || activeWs;
         const tab = parts[1] || 'context';
         const sub = parts[2] || '';
         const deepPath = parts.slice(3);
-
-        if (ws !== window.inSetu.utils.getActiveWorkspace()) {
-            if (window.inSetu.sys.executeWorkspaceSwap && ws) {
+        if (ws && ws !== activeWs) {
+            if (window.inSetu.sys.executeWorkspaceSwap) {
                 window.inSetu.sys.executeWorkspaceSwap(ws);
             }
         }
 
+        const state = AppStore.getState();
+        const prevTab = state.activeTab;
+        const prevSub = state.activeSubTabs[tab];
+
         AppStore.getState().setActiveRoute(tab, sub, deepPath.length > 0 ? deepPath : null);
+
+        // Emit standard non-refresh events upon actual navigation
+        if (tab !== prevTab) {
+            window.inSetu.events.emitHook('zone:tab-changed', tab);
+        }
+        if (sub && sub !== prevSub) {
+            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tab, subId: sub, forceRefresh: false });
+        }
+        lastRouteHash = window.location.hash;
     };
 
     window.addEventListener('hashchange', handleHashChange);
-
     // Bootstrap initial route from URL or set default
+    const currentWs = window.inSetu.utils.getActiveWorkspace();
     if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
-        const ws = window.inSetu.utils.getActiveWorkspace();
-        window.location.hash = `#/${encodeURIComponent(ws)}/context/`;
-    } else {
-        handleHashChange();
+        window.location.hash = `#/${encodeURIComponent(currentWs)}/context/`;
     }
+    // Always trigger handleHashChange on startup to populate activeTab in AppStore
+    handleHashChange();
 
     // UDF Subscription: State -> URL mapping
     AppStore.subscribe(
@@ -389,20 +433,29 @@ async function executeBootSequence() {
     window.addEventListener('shell-tab-changed', (e) => {
         const { tabId, isAlreadyActive } = e.detail;
         const state = AppStore.getState();
-        AppStore.getState().setActiveRoute(tabId, null);
 
         if (isAlreadyActive) {
             const activeSub = state.activeSubTabs[tabId];
-            if (activeSub) window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId: activeSub, forceRefresh: true });
+            window.inSetu.events.emitHook('zone:force-refresh', { parentId: tabId, subId: activeSub });
         } else {
+            AppStore.getState().setActiveRoute(tabId, state.activeSubTabs[tabId] || null);
             window.inSetu.events.emitHook('zone:tab-changed', tabId);
+            const activeSub = state.activeSubTabs[tabId];
+            if (activeSub) {
+                window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId: activeSub });
+            }
         }
     });
 
     window.addEventListener('shell-subtab-changed', (e) => {
         const { tabId, subId, isAlreadyActive } = e.detail;
-        AppStore.getState().setActiveRoute(tabId, subId);
-        window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId, forceRefresh: isAlreadyActive });
+
+        if (isAlreadyActive) {
+            window.inSetu.events.emitHook('zone:force-refresh', { parentId: tabId, subId });
+        } else {
+            AppStore.getState().setActiveRoute(tabId, subId);
+            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId });
+        }
     });
     try {
         // Hydrate the declarative shell with the initial route state
@@ -486,26 +539,29 @@ async function executeWorkspaceSwap(key, title) {
             await Promise.all(keys.map(k => caches.delete(k)));
         } catch(e) {}
     }
+    // 1. Persist local storage first so all network requests inherit the new tenant context
+    sessionStorage.setItem('insetu_workspace', key);
+    localStorage.setItem('insetu_workspace', key);
+
+    // 2. Temporarily clear active extensions during context transition to prevent 403 race conditions
+    window.ACTIVE_EXTENSIONS = [];
+    // 3. Set AppStore root state as the Single Source of Truth
+    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
+    AppStore.setState({ activeWorkspace: key, pinnedRepos: newPinned });
+
+    // Explicitly update location hash to keep router and location bar synchronized
+    const currentTab = AppStore.getState().activeTab || 'context';
+    const currentSub = AppStore.getState().activeSubTabs[currentTab] || '';
+    window.location.hash = `#/${encodeURIComponent(key)}/${encodeURIComponent(currentTab)}/${encodeURIComponent(currentSub)}`;
+
+    // 4. Notify backend of the swap
     await window.inSetu.api.system('workspaces', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active_workspace: key })
     });
-    sessionStorage.setItem('insetu_workspace', key);
-    localStorage.setItem('insetu_workspace', key);
-    window.ACTIVE_EXTENSIONS = [];
 
-    Object.values(window.inSetu.stores).forEach(store => {
-        if (store && typeof store.getState === 'function') {
-            const state = store.getState();
-            if (state) {
-                if (typeof state.clearPayload === 'function') state.clearPayload();
-                if (typeof state.resetState === 'function') state.resetState();
-            }
-        }
-    });
-    const newPinned = new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${key}`)) || ["ALL"]);
-    AppStore.setState({ activeWorkspace: key, pinnedRepos: newPinned });
+    // 4. Perform top-down AppStore outward cascade
     await performSoftRefresh();
     loadWorkspaces();
 }
@@ -514,10 +570,10 @@ async function loadWorkspaces() {
         const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
-        if (data.workspaces && Object.keys(data.workspaces).length > 0) {
+        if (data.workspaces) {
             let activeWs = window.inSetu.utils.getActiveWorkspace();
-            if (!activeWs || !data.workspaces[activeWs] || activeWs === 'default') {
-                activeWs = data.active_workspace || Object.keys(data.workspaces)[0] || 'default';
+            if (!activeWs || (!data.workspaces[activeWs] && activeWs !== 'default')) {
+                activeWs = Object.keys(data.workspaces)[0] || 'default';
                 sessionStorage.setItem('insetu_workspace', activeWs);
                 localStorage.setItem('insetu_workspace', activeWs);
             }
@@ -536,6 +592,7 @@ function updateRefreshText() {
     if (el) el.innerText = `Refreshed ${text}`;
 }
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
+    window.dispatchEvent(new CustomEvent('sutram-status-update', { detail: { msg, timeout, isError } }));
     window.dispatchEvent(new CustomEvent('insetu-status-update', { detail: { msg, timeout, isError } }));
 }
 export function setSyncStatus(state) {
@@ -599,7 +656,7 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
 }
 let compilePromise = null;
 let compilePromiseWs = null;
-export const executeSystemCompile = (onProgress = null, forceFull = false) => {
+export const executeSystemCompile = (onProgress = null, forceFull = false, startStep = null, targetRepos = null) => {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
 
@@ -613,10 +670,14 @@ export const executeSystemCompile = (onProgress = null, forceFull = false) => {
     compilePromise = (async () => {
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
         try {
+            const payload = { force_full: forceFull };
+            if (startStep) payload.start_step = startStep;
+            if (targetRepos) payload.target_repos = targetRepos;
+
             const response = await window.inSetu.api.workspace('gather/submit', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ force_full: forceFull })
+                body: JSON.stringify(payload)
             });
 
             const data = await response.json();
@@ -724,10 +785,12 @@ async function simulatePanic() {
     }
 }
 async function performSoftRefresh() {
-    const currentWs = window.inSetu.utils.getActiveWorkspace();
+    // 1. Read the active tenant directly from AppStore
+    const currentWs = AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
 
-    // Dynamically iterate over all mounted global stores to trigger resets
-    Object.values(window.inSetu.stores).forEach(store => {
+    // 2. Flush feature domain stores from AppStore outwards (exempting infrastructure)
+    Object.entries(window.inSetu.stores).forEach(([storeName, store]) => {
+        if (['App', 'Status', 'Toast', 'Selection'].includes(storeName)) return;
         if (store && typeof store.getState === 'function') {
             const state = store.getState();
             if (state) {
@@ -736,8 +799,6 @@ async function performSoftRefresh() {
             }
         }
     });
-
-    window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
     try {
         // 1. Update routing topology for the new tenant
         const rRes = await window.inSetu.api.system('topology?t=' + Date.now());
@@ -839,8 +900,14 @@ async function performSoftRefresh() {
             // no need to thrash the compiler heavily on every UI tab swap.
         }
         // 4. Hydrate active DOM views using native routing
-        const { activeTab } = AppStore.getState();
-        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, activeTab || 'context');
+        window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
+        const state = AppStore.getState();
+        const activeTab = state.activeTab || 'context';
+        const activeSub = state.activeSubTabs[activeTab];
+        window.inSetu.events.emitHook('zone:tab-changed', activeTab);
+        if (activeSub) {
+            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: activeTab, subId: activeSub, forceRefresh: true });
+        }
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);
     } catch (e) {

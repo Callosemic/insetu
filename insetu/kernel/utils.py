@@ -32,16 +32,7 @@ def get_workspace_physics(workspace_id=None):
     if env_config:
         resolved_cfg = os.path.abspath(os.path.expanduser(env_config))
         return resolved_cfg, _cwd, Path(resolved_cfg).parent.joinpath("workflows.json").as_posix()
-    target_ws = workspace_id
-    if not target_ws:
-        if os.path.exists(index_path):
-            try:
-                w_data = load_json_file(index_path, {})
-                target_ws = w_data.get("active_workspace", "default")
-            except Exception:
-                target_ws = "default"
-        else:
-            target_ws = "default"
+    target_ws = workspace_id or "default"
 
     resolved_cfg = default_config
     cfg_path = None
@@ -90,15 +81,14 @@ def is_extension_enabled(ext_name, workspace_id=None):
         return True
     cfg = load_config(workspace_id)
     return ext_name in cfg.get("extensions", [])
-
 def extension_auth(ext_name):
     def decorator(f):
         import functools
         @functools.wraps(f)
         def decorated_function(*args, **kwargs):
             from flask import jsonify
-            cfg = load_config()
-            if ext_name not in cfg.get("extensions", []):
+            ws_id = kwargs.get('workspace_id') or sniff_tenant_id()
+            if not is_extension_enabled(ext_name, ws_id):
                 return jsonify({"error": f"403 Forbidden: Extension '{ext_name}' is not enabled in this workspace."}), 403
             return f(*args, **kwargs)
         return decorated_function

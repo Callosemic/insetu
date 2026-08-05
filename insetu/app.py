@@ -291,12 +291,11 @@ def serve_extension_static(ext_name, filename):
         return jsonify({"imports": {}})
 
     return "Extension static asset not found", 404
-
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
     """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
     import os
-    from flask import send_file
+    from flask import send_file, Response
 
     # 1. Try bundled topology
     bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
@@ -308,7 +307,8 @@ def serve_extension_js(ext_name):
     if os.path.exists(legacy_path):
         return send_file(legacy_path, mimetype='application/javascript')
 
-    return "Extension UI not found", 404
+    # 3. Virtual fallback for Python-only declarative extensions
+    return Response("export default {};", mimetype='application/javascript')
 
 @app.route('/sw.js')
 def sw():

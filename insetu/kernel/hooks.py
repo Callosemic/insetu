@@ -26,8 +26,10 @@ class HookPayload_RequestChangelogSuggestions(TypedDict, total=False):
 class HookPayload_VFSMutated(TypedDict, total=False):
     mutations: List[Dict[str, Any]]
     workspace_id: Optional[str]
-
 class HookPayload_WorkspaceScoped(TypedDict, total=False):
+    workspace_id: Optional[str]
+
+class HookPayload_WorkspaceShutdown(TypedDict, total=False):
     workspace_id: Optional[str]
 _event_thread_local = threading.local()
 

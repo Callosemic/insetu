@@ -40,8 +40,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
         self.generic_visit(node)
-
     def visit_Call(self, node):
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if any(m in arg.value for m in ('manifest.json', 'manifest_cache.json')):
+                    report_violation(
+                        "MANIFEST_FILE_IO_BAN",
+                        self.filepath,
+                        node.lineno,
+                        f"Direct file I/O on legacy '{arg.value}' detected. Use vfs_index.db, ctx.save_manifest, or request_manifest instead."
+                    )
+
         if isinstance(node.func, ast.Name) and node.func.id == 'save_json_file':
             self.has_save_json = True
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'clear':

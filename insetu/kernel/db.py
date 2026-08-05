@@ -49,6 +49,19 @@ def init_declarative_schemas():
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
             apply_declarative_schema(ext_name, schema, ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
+
+@hooks.on('workspace_shutdown')
+def close_workspace_connections(workspace_id=None, **kwargs):
+    """Evicts and closes thread-local SQLite connections for an unmounting tenant workspace."""
+    if not workspace_id or not hasattr(_local, 'connections'):
+        return
+    keys_to_close = [k for k in _local.connections.keys() if k[0] == workspace_id]
+    for key in keys_to_close:
+        try:
+            _local.connections[key].close()
+        except Exception:
+            pass
+        del _local.connections[key]
 def get_connection(db_name, workspace_id=None):
     """
     Returns a thread-local SQLite connection.

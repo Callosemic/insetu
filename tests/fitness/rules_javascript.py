@@ -48,6 +48,7 @@ def check_javascript_files():
     inline_date_formatting_pattern = re.compile(r'new\s+Date\([^)]*\)\.toLocale(?:Date|Time)?String\(\)')
     raw_poll_job_pattern = re.compile(r'\bthis\.api\.pollJob\s*\(')
     gather_repo_sub_pattern = re.compile(r'stores\.Gather\.getState\(\)\.(?:allRepos|pinnedRepos|targetConfigs)')
+    sutram_settings_event_pattern = re.compile(r'addEventListener\s*\(\s*[\'"]sutram-settings-(?:action|save)[\'"]')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -224,6 +225,8 @@ def check_javascript_files():
                         report_violation("DATE_FORMATTING_MANDATE", filepath, line_num, "Inline new Date().toLocaleString() detected in extension. Consume this.utils.formatDate() instead to ensure theme and locale consistency.")
                     if is_extension and raw_poll_job_pattern.search(line):
                         report_violation("BIND_JOB_ACTION_PREFERENCE", filepath, line_num, "Imperative this.api.pollJob detected in extension. Prefer declarative this.api.bindJobAction or <sutram-async-btn> instead.")
-
                     if is_extension and gather_repo_sub_pattern.search(line):
                         report_violation("ECOSYSTEM_ACCESSOR_MANDATE", filepath, line_num, "Direct GatherStore repository topology subscription detected in extension. Consume 'this.ecosystem' on InSetuElement instead.")
+
+                    if sutram_settings_event_pattern.search(line) and ("fetch(" in line or "window.fetch(" in line):
+                        report_violation("SETTINGS_ACTION_EXPLICIT_API_MANDATE", filepath, line_num, "Event handler for sutram-settings-action/save uses raw fetch(). Route through window.inSetu.api.workspace instead.")
