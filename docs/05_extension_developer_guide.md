@@ -39,7 +39,9 @@ my_ext_bp = InSetuExtension(
     title="My Custom Extension", 
     description="Provides streamlined custom feature capabilities to the workspace context.", 
     schema=MY_SCHEMA, 
-    settings_schema=MY_SETTINGS
+    settings_schema=MY_SETTINGS,
+    dependencies=["beautifulsoup4"], # Optional: Auto-detects missing PyPI packages
+    optional_dependencies={"playwright": "Required for advanced scraping."}
 )
 ```
 
@@ -51,6 +53,7 @@ Handlers must accept the `ctx` object. This object enforces spatial physics and 
 * **`ctx.paths`**: Returns the active tenant's directory resolution maps.
 * **`ctx.settings`**: Returns a dictionary of the extension's runtime configuration, natively bound to either global switchboard settings or tenant configurations.
 * **`ctx.vfs.save()`**: Routes all file writes through the atomic background commit queue.
+* **`ctx.vfs.read(filepath)`**: Reads files safely. Automatically unwraps `vfs://` (physical) and `ctx://` (artifact) URI schemes to support cross-domain fetching.
 * **`ctx.resolve_path(filepath)`**: Anchors relative paths to the physical workspace bounds natively.
 ```python
 @my_ext_bp.route('save', methods=['POST'])

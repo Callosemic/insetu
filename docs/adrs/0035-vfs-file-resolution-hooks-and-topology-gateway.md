@@ -4,13 +4,13 @@
 Accepted
 
 ## Context
-Previously, file path resolution for system artifacts (`system://contexts/...`) and deep workspace Markdown searching were handled via hardcoded methods in `utils_core.py` (`get_gather_paths`, `search_workspace_files`) and explicit conditional branches in `routes_fs.py`. This tightly coupled Tier 2 core utilities to specific Gather artifact folder structures and restricted custom extensions from registering custom virtual URI schemes.
+Previously, file path resolution for system artifacts (`ctx://contexts/...`) and deep workspace Markdown searching were handled via hardcoded methods in `utils_core.py` (`get_gather_paths`, `search_workspace_files`) and explicit conditional branches in `routes_fs.py`. This tightly coupled Tier 2 core utilities to specific Gather artifact folder structures and restricted custom extensions from registering custom virtual URI schemes.
 
 Furthermore, client applications lacked explicit system-level REST endpoints to query target repository topologies and system manifest states directly.
 
 ## Decision
 1. **Decoupled VFS File Resolution (`vfs_resolve_file`)**:
-   - Replaced hardcoded `system://` URI checks in `routes_fs.py` with an event broadcast: `hooks.emit('vfs_resolve_file', filename=..., workspace_id=...)`.
+   - Replaced hardcoded `ctx://` URI checks in `routes_fs.py` with an event broadcast: `hooks.emit('vfs_resolve_file', filename=..., workspace_id=...)`.
    - Registered `@hooks.on('vfs_resolve_file')` handler `resolve_gather_artifacts` in `engine_gather.py` to resolve `contexts` and `workflows` artifact directories dynamically.
 2. **Decoupled Search Hook (`vfs_search`)**:
    - Deprecated `search_workspace_files()` in `utils_core.py`.

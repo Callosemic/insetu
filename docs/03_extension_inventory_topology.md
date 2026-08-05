@@ -8,6 +8,7 @@
 ## 1. The Mother Ship (Core Micro-Kernel)
 The core OS is strictly domain-agnostic. It does not know what a "citation" or a "kanban board" is. Its sole responsibility is orchestration, routing, and physical I/O operations.
 * **`insetu/static/vendor/sutram/` (Sutram Presentation Kernel):** Tier 0 micro-kernel managing UI app shell layout (`sutram-app-shell`), Zustand store factories (`createSutramStore`), background job polling (`createJobPoller`), hierarchical shortcut routing (`initShortcutRouter`), and shared styles.
+* **`insetu/core/topology/engine_topology.py` (The Topology Engine):** Single Source of Truth for physical file existence (`topology_ledger`) and bucket routing, hosting Stage 1 Slew Limiting (`topology_event_buffer`).
 * **`insetu/core/gather/engine_gather.py` (The RAG Compiler):** Blindly compiles virtual contexts and physical directories based on the configuration matrix, hosting background compilation workers and submission endpoints.
 * **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
@@ -180,9 +181,12 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `mutate_workspace_config` | `<Micro-Kernel>` | `tracker` | Allows extensions to dynamically inject virtual directories and sub-buckets into the RAG context tree during boot. |
 | `request_changelog_suggestions` | `git` | `tracker` | Requests a list of recently closed tasks to populate the Git commit/release suggestion UI. |
 | `pre_compile_document` | `<Micro-Kernel>` | `citations` | A generic middleware pipeline hook allowing extensions to inject temp files and CLI flags right before OS compilation. |
-| `vfs_resolve_path` | `<Micro-Kernel>` | `utils_core` | Intercepts VFS path resolution to resolve logical repo boundaries (`repo::path`) and `system://` URIs before physical I/O operations. |
-| `vfs_resolve_file` | `<Micro-Kernel>` | `engine_gather` | Intercepts physical and virtual URI (`system://`) file resolution before I/O execution. |
+| `vfs_resolve_path` | `<Micro-Kernel>` | `utils_core` | Intercepts VFS path resolution to resolve logical repo boundaries (`repo::path`) and `ctx://` URIs before physical I/O operations. |
+| `vfs_resolve_file` | `<Micro-Kernel>` | `engine_gather` | Intercepts physical and virtual URI (`ctx://`) file resolution before I/O execution. |
 | `vfs_search` | `<Micro-Kernel>` | `engine_gather` | Dispatches workspace deep text search queries to active index handlers. |
+| `topology_resolved` | `engine_topology` | `engine_gather` | Emitted after physical disk mutations settle to trigger Stage 2 RAG context compilation. |
+| `force_topology_scan` | `<Micro-Kernel>` | `engine_topology` | Forces physical disk walks to rebuild the `topology_ledger` SSOT. |
+| `request_vfs_manifest` | `<Micro-Kernel>` | `engine_topology` | Returns the `"vfs"` domain portion of the partitioned manifest. |
 | `gather_declare_topology` | `engine_gather` | All Extensions | Emitted during context sweeps to collect declarative topology schemas (`generator_callback`, `recall_callback`). |
 | `register_compilation_steps` | `engine_gather` | All Extensions | Emitted to build topologically sorted background compilation pipelines. |
 | `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
