@@ -240,10 +240,9 @@ def api_create_workspace():
     ws_id = data.get('id', '').strip().lower()
     if not ws_id or ws_id in ['default', 'none']:
         return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
-
     index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
     if not os.path.exists(index_path):
-        w_data = {"active_workspace": "default", "workspaces": {"default": {"config_path": "config.json"}}}
+        w_data = {"workspaces": {"default": {"config_path": "config.json"}}}
     else:
         with open(index_path, 'r', encoding='utf-8') as f:
             w_data = json.load(f)
@@ -281,7 +280,6 @@ def api_create_workspace():
     execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
 
     return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
-
 @system_bp.route('/api/system/workspaces/delete', methods=['POST'])
 def api_delete_workspace():
     data = request.json or {}
@@ -298,10 +296,8 @@ def api_delete_workspace():
 
     if ws_id not in w_data.get("workspaces", {}):
         return jsonify({"error": "Target workspace not found."}), 404
-
     del w_data["workspaces"][ws_id]
-    if w_data.get("active_workspace") == ws_id:
-        w_data["active_workspace"] = "default"
+    hooks.emit('workspace_shutdown', workspace_id=ws_id)
     local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
     ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
     if os.path.exists(ws_dir.as_posix()):
@@ -338,21 +334,22 @@ def api_workspaces():
     index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
 
     if request.method == 'GET':
-        return jsonify(utils.load_json_file(index_path, {"active_workspace": "default", "workspaces": {}}))
+        return jsonify(utils.load_json_file(index_path, {"workspaces": {}}))
     if request.method == 'POST':
-        data = request.json
-        new_active = data.get("active_workspace")
+        data = request.json or {}
+        new_active = data.get("active_workspace") or data.get("workspace_id")
+        old_active = request.headers.get('X-Workspace-ID') or sniff_tenant_id()
         if not os.path.exists(index_path):
             return jsonify({"error": "workspaces.json not found."}), 404
-
         w_data = utils.load_json_file(index_path, {})
-        if new_active not in w_data.get("workspaces", {}):
+        if new_active not in w_data.get("workspaces", {}) and new_active != "default":
             return jsonify({"error": "Workspace ID not found."}), 400
 
-        # UDF & STATELESS ARCHITECTURE: The backend no longer tracks active_workspace globally.
-        # The frontend UI orchestrates the context swap dynamically via localStorage.
+        if old_active and old_active != new_active:
+            hooks.emit('workspace_shutdown', workspace_id=old_active)
 
-    return jsonify({"status": "success", "message": f"Switched to {new_active}"})
+        # Stateless UDF: Session state managed by client
+    return jsonify({"status": "success", "message": f"Validated workspace {new_active}"})
 
 @system_bp.route('/api/system/fs/list_local', methods=['GET'])
 def api_list_local_host_dirs():

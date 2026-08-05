@@ -8,6 +8,11 @@ from insetu.kernel.workers import submit_immediate_job, update_immediate_job_sta
 import uuid
 
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
+@hooks.on('compilation_sequence_complete')
+def hook_cartographer_compile_complete(workspace_id=None, **kwargs):
+    cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(cart_job_id, "cartographer", "map_task", "{}", workspace_id=workspace_id)
+
 def _background_map(job_id, workspace_id, target_repos=None):
     try:
         update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)

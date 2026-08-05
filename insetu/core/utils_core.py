@@ -8,7 +8,7 @@ from insetu.kernel.hooks import hooks
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
     if filepath:
-        if filepath.startswith("system://"):
+        if filepath.startswith("system://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/"):
             from insetu.kernel.hooks import hooks
             overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
             for res in overrides:
@@ -223,56 +223,44 @@ def get_flattened_buckets(workspace_id=None, target_configs=None):
                     b_copy["repo_title"] = repo.get("title") or repo.get("repo_dir", "")
                     flattened.append(b_copy)
     return flattened
-
 def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
-    from insetu.kernel.utils import load_config, load_json_file
-    from insetu.kernel.extension import ExtensionContext
-    from insetu.core.utils_core import get_safe_repo_id
+    from insetu.kernel.hooks import hooks
+    from insetu.kernel.utils import load_config
+
     cfg = load_config(workspace_id)
-    ctx = ExtensionContext('gather', workspace_id)
-    paths = ctx.paths
     flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
+
+    excluded_repos = set()
+    if flags:
+        for c in cfg.get("target_repos", []):
+            if any(c.get(flag) for flag in flags):
+                excluded_repos.add(c.get("repo_dir"))
+
+    declarations = []
+    for res in hooks.emit('gather_declare_topology', workspace_id=workspace_id):
+        if res: declarations.extend(res)
+
     expected_contexts = set()
+    for decl in declarations:
+        meta = decl.get("meta", {})
+        item_type = meta.get("type", "unknown")
+        repo = meta.get("repo")
 
-    for c in (cfg.get("target_repos") or []):
-        if not isinstance(c, dict): continue
-        repo_excluded = any(c.get(flag) for flag in flags if isinstance(flag, str))
-        r_dir = c.get("repo_dir", "")
-        safe_r_dir = get_safe_repo_id(r_dir)
-        subs = [b for b in (c.get("sub_buckets") or []) if isinstance(b, dict)]
+        if repo and repo in excluded_repos:
+            continue
+        if exclude_types and item_type in exclude_types:
+            continue
+        if include_types and item_type not in include_types:
+            continue
 
-        if not repo_excluded and not any(b.get("is_catch_all") for b in subs):
-            out = c.get("out_file", f"{safe_r_dir}_context.txt")
-            if out: expected_contexts.add(f"contexts/{out}")
+        out_dir = "contexts"
+        if item_type == "diff": out_dir = "diffs"
+        elif item_type == "flow": out_dir = "workflows"
 
-        if subs:
-            for b in subs:
-                if repo_excluded or any(b.get(flag) for flag in flags if isinstance(flag, str)):
-                    continue
-                if not b.get("dynamic_split_prefix"):
-                    sub_out = b.get("out_file", f"{r_dir}_{b.get('id', 'bucket')}_context.txt")
-                    if sub_out: expected_contexts.add(f"contexts/{sub_out}")
-                else:
-                    dyn_dir = Path(paths["workspace_root"]).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                    if os.path.exists(dyn_dir):
-                        for module in os.listdir(dyn_dir):
-                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                                expected_contexts.add(f"contexts/{module}_context.txt")
-    manifests = hooks.emit('request_manifest', workspace_id=workspace_id)
-    manifest_data = next((m for m in manifests if m), {})
-
-    for k, v in manifest_data.items():
-        if isinstance(k, str) and k.endswith('.txt') and isinstance(v, dict):
-            item_type = v.get("meta", {}).get("type", "unknown")
-            if exclude_types and item_type in exclude_types:
-                continue
-            if include_types and item_type not in include_types:
-                continue
-            expected_contexts.add(f"contexts/{k}")
+        expected_contexts.add(f"{out_dir}/{decl['filename']}")
 
     return expected_contexts
-
-def resolve_file_bucket(filepath, sub_buckets):
+def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
     """DRY Helper to map a filepath to its configured sub-bucket."""
     import re
     clean_filepath = re.sub(r'^(?:\[[A-Z?!\s]{1,2}\]\s+|[A-Z?!\s]{2}\s+)', '', filepath).strip()
@@ -280,17 +268,29 @@ def resolve_file_bucket(filepath, sub_buckets):
     if ' -> ' in clean_filepath:
         clean_filepath = clean_filepath.split(' -> ')[-1].strip()
 
+    clean_filepath_lower = clean_filepath.lower()
+    safe_repo_prefix = (repo_dir.lower() + "/") if repo_dir else ""
+
     for b in sub_buckets:
         prefix = b.get("dynamic_split_prefix")
         if prefix:
-            if prefix == "." or clean_filepath.startswith(prefix):
+            prefix_lower = prefix.lower()
+            if prefix_lower == "." or clean_filepath_lower.startswith(prefix_lower):
                 parts = clean_filepath.split("/")
                 module_idx = len([p for p in prefix.split('/') if p and p != '.'])
                 if len(parts) > module_idx + 1:
                     return b, parts[module_idx]
                 continue
-        elif b.get("match_prefixes") and any(clean_filepath.startswith(p) for p in b["match_prefixes"]):
-            return b, None
+        elif b.get("match_prefixes"):
+            for p in b["match_prefixes"]:
+                p_lower = p.lower()
+                if clean_filepath_lower.startswith(p_lower):
+                    return b, None
+                # Topology-Aware Fallback: Handle flattened structures where the repo root IS the package
+                if safe_repo_prefix and p_lower.startswith(safe_repo_prefix):
+                    stripped_p = p_lower[len(safe_repo_prefix):]
+                    if stripped_p and clean_filepath_lower.startswith(stripped_p):
+                        return b, None
 
     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
     return catch_all, None
@@ -350,7 +350,6 @@ def resolve_logical_path(path, workspace_id=None):
         repo_cand = repo_base.joinpath(norm_path).resolve()
         if repo_cand.exists():
             return repo_cand.as_posix()
-
     # Pass 3: Handle redundant/duplicated repo prefixes by stripping leading repo_dir segments
     parts = [p for p in norm_path.split('/') if p]
     for repo in target_repos:
@@ -358,13 +357,19 @@ def resolve_logical_path(path, workspace_id=None):
         p_path = repo.get("physical_path")
         repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
 
-        curr_parts = list(parts)
-        while curr_parts and curr_parts[0] == repo_dir:
-            curr_parts.pop(0)
-            if curr_parts:
-                stripped_cand = repo_base.joinpath(*curr_parts).resolve()
-                if stripped_cand.exists():
-                    return stripped_cand.as_posix()
+        if parts and parts[0] == repo_dir:
+            stripped_cand = repo_base.joinpath(*parts[1:]).resolve()
+            if stripped_cand.exists():
+                return stripped_cand.as_posix()
+
+    # Fallback for new file creation: Anchor new paths to their target repository
+    if parts:
+        for repo in target_repos:
+            if parts[0] == repo.get("repo_dir"):
+                repo_dir = repo.get("repo_dir")
+                p_path = repo.get("physical_path")
+                repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
+                return repo_base.joinpath(*parts[1:]).resolve().as_posix()
 
     return direct_cand.as_posix()
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
