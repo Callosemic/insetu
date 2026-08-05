@@ -59,16 +59,19 @@ export class InSetuElement extends SutramElement {
     get ui() { return window.inSetu.ui; }
     get sys() { return window.inSetu.sys; }
     get editor() { return window.inSetu.editor; }
+    isExtensionActive(name = this.extName) {
+        if (window.inSetu?.isCore && window.inSetu.isCore(name)) return true;
+        return !!(window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(name));
+    }
 
     setStatus(msg, timeout = 3000, isError = false) {
         if (window.inSetu?.ui?.setGlobalStatus) {
             window.inSetu.ui.setGlobalStatus(msg, timeout, isError);
         }
     }
-
-    compileSystem() {
+    compileSystem(onProgress = null, forceFull = false, startStep = null, targetRepos = null) {
         if (window.inSetu?.sys?.executeSystemCompile) {
-            return window.inSetu.sys.executeSystemCompile();
+            return window.inSetu.sys.executeSystemCompile(onProgress, forceFull, startStep, targetRepos);
         }
         return Promise.resolve();
     }
@@ -113,10 +116,16 @@ export class InSetuElement extends SutramElement {
                 };
             },
             get: (path, options = {}) => {
+                if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
+                    return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
+                }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'GET' });
             },
             post: (path, payload, options = {}) => {
+                if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
+                    return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
+                }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, {
                     ...options,
@@ -126,6 +135,9 @@ export class InSetuElement extends SutramElement {
                 });
             },
             delete: (path, options = {}) => {
+                if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
+                    return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
+                }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
                 return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'DELETE' });
             },
@@ -186,7 +198,7 @@ export class InSetuElement extends SutramElement {
     onWorkspaceChanged(newWorkspaceId) {}
 }
 // Safely initialize nested global namespaces individually
-export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor']);
+export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer']);
 
 window.inSetu = window.inSetu || {};
 window.inSetu.CORE_MODULES = CORE_MODULES;
@@ -217,6 +229,13 @@ window.inSetu.extensions.Registry = SutramRegistry;
 window.ExtensionRegistry = SutramRegistry;
 window.inSetu.extensions.InSetuElement = InSetuElement;
 window.inSetu.extensions.createExtensionStore = createExtensionStore;
+
+// Wire inSetu's active extension policy into Sutram's agnostic filter slot
+window.ExtensionRegistry.setFilterPredicate((extName) => {
+    if (window.inSetu?.isCore && window.inSetu.isCore(extName)) return true;
+    if (!window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.length === 0) return true;
+    return window.ACTIVE_EXTENSIONS.includes(extName);
+});
 // Apply opinionated inSetu OS extensions to the generic Sutram Registry
 const _baseGetLayoutSlots = typeof window.ExtensionRegistry.getLayoutSlots === 'function' 
     ? window.ExtensionRegistry.getLayoutSlots.bind(window.ExtensionRegistry) 

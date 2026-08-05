@@ -36,6 +36,14 @@ window.inSetu.api = {
     workspace: async function(path, options = {}) {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+
+        // Central Choke Point: Validate extension enablement before touching the network
+        const extName = cleanPath.split('/')[0];
+        const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs'].includes(extName);
+        if (extName && !isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
+            return new Response(JSON.stringify({ error: `Extension '${extName}' is disabled in workspace '${activeWs}'.` }), { status: 403, statusText: "Forbidden" });
+        }
+
         const fullUrl = `/api/${activeWs}/${cleanPath}`;
 
         const headers = this._getHeaders(true);

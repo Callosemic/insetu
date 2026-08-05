@@ -769,11 +769,13 @@ window.ExtensionRegistry.registerExtension('files', {
             targetEntity: 'file',
             id: 'file-download',
             label: (data) => {
+                if (data.chunks && data.chunks.length > 1) return 'View Parts';
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 return (chunks && chunks.length > 1) ? 'View Parts' : 'Download';
             },
             icon: (data) => {
+                if (data.chunks && data.chunks.length > 1) return '📦';
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
                 return (chunks && chunks.length > 1) ? '📦' : '⬇️';
@@ -788,7 +790,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 }
 
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
 
                 if (chunks && chunks.length > 1) {
                     window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: basename } }));
@@ -1575,30 +1577,40 @@ export class InSetuVFSModals extends InSetuElement {
 <sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
-            <div style="display: flex; flex-direction: column; gap: 10px; padding: 15px; overflow-y: auto; flex: 1;">
-                ${(m.browser?.manifest || []).map(f => {
-                    const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                    const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
-                    return html`
-                        <insetu-card
-                            .titleText=${cleanName}
-                            .detailText=${f}
-                            icon="📦"
-                            intentColor="var(--intent-highlight)"
-                            ?disableSelection=${true}
-                            style="margin-bottom: 8px;">
-                            <div style="display: flex; justify-content: flex-end; padding-top: 8px;">
-                                <sutram-async-btn
-                                    label="⬇️ Download"
-                                    intent="primary"
-                                    .onClick=${async () => {
-                                        await fetchAndDownloadState(cleanName, fetchUrl);
-                                    }}>
-                                </sutram-async-btn>
-                            </div>
-                        </insetu-card>
-                    `;
-                })}
+            <div style="display: flex; flex-direction: column; padding: 15px; overflow-y: auto; flex: 1;">
+                <sutram-card-group ?stacked=${true}>
+                    ${(m.browser?.manifest || []).map((f, idx) => {
+                        const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                        const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+
+                        let displayTitle = cleanName;
+                        if (idx > 0) {
+                            const partMatch = cleanName.match(/_part(\d+)/i);
+                            displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
+                        }
+
+                        return html`
+                            <insetu-card
+                                .titleText=${displayTitle}
+                                .detailText=${idx === 0 ? '' : cleanName}
+                                icon=${idx === 0 ? "📦" : "🧩"}
+                                intentColor=${idx === 0 ? "var(--intent-highlight)" : "var(--intent-neutral)"}
+                                ?disableSelection=${true}
+                                style="display: block;">
+                                <div slot="actions" style="display: flex; justify-content: flex-end; align-items: center; height: 100%;">
+                                    <sutram-async-btn
+                                        label="⬇️ Download"
+                                        intent="primary"
+                                        style="margin: 0; padding: 4px 12px; font-size: 0.85rem;"
+                                        .onClick=${async () => {
+                                            await fetchAndDownloadState(cleanName, fetchUrl);
+                                        }}>
+                                    </sutram-async-btn>
+                                </div>
+                            </insetu-card>
+                        `;
+                    })}
+                </sutram-card-group>
             </div>
         ` : html`
             <insetu-file-tree 

@@ -438,12 +438,11 @@ window.ExtensionRegistry.registerExtension('gather', {
         }
     ],
     uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if ((data.parentId === 'context' && data.subId === 'gather') || data.subId === 'gather') {
-                if (data.forceRefresh) {
-                    AppStore.setState({ gatherForceRefreshTick: Date.now() });
-                }
+        'zone:force-refresh': (data) => {
+            if (data.subId === 'gather') {
+                AppStore.setState({ gatherForceRefreshTick: Date.now() });
             }
+            return false;
         }
     }
 });

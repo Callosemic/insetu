@@ -63,7 +63,7 @@ export const BridgeStore = createExtensionStore('Bridge', {
                 if (trimmed === '>>>>>>> REPLACE') {
                     isReplace = true;
                 } else if (trimmed.endsWith('REPLACE')) {
-                    const prefix = trimmed.slice(0, -7).trim();
+                    const prefix = trimmed.slice(0, -7).replace(/\s+/g, '');
                     if (prefix.length > 0 && prefix.split('').every(c => c === '>')) {
                         isReplace = true;
                     }
@@ -86,6 +86,16 @@ export const BridgeStore = createExtensionStore('Bridge', {
                     chunkLines.push(line);
                 }
             }
+        }
+
+        if (isInsideChunk && currentFile) {
+            newCells.push({
+                id: `cell_${Date.now()}_${cellIdx++}`,
+                file: currentFile,
+                content: chunkLines.join('\n') + '\n>>>>>>> REPLACE',
+                active: true
+            });
+            foundChunksInFile = true;
         }
 
         flushFileFallback();

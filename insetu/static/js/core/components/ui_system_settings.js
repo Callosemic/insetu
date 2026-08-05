@@ -97,7 +97,13 @@ export class InSetuSystemSettings extends InSetuElement {
                                     const isActive = activeWs === key;
                                     return html`
                                         <button class="menu-btn ${isActive ? 'active' : ''}" style="margin: 0; background: ${isActive ? 'var(--input-bg)' : 'transparent'}; color: var(--text); text-align: left; padding: 6px; border: 1px solid ${isActive ? 'var(--border)' : 'transparent'}; cursor: pointer; border-radius: 4px; font-weight: ${isActive ? 'bold' : 'normal'};"
-                                            @click=${() => { this.menuOpen = false; if(window.inSetu.sys.executeWorkspaceSwap) window.inSetu.sys.executeWorkspaceSwap(key, ws.title); }}>
+                                            @click=${(e) => { 
+                                                e.stopPropagation(); 
+                                                this.menuOpen = false; 
+                                                if (window.inSetu.sys.executeWorkspaceSwap) {
+                                                    window.inSetu.sys.executeWorkspaceSwap(key, ws.title);
+                                                }
+                                            }}>
                                             ${isActive ? '🟢 ' : '⚪ '} ${ws.title || key}
                                         </button>
                                     `;
