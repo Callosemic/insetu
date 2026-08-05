@@ -407,8 +407,11 @@ export class InSetuExtBridge extends InSetuElement {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._getSyncAction(isDryRun, true)();
         } else if (action === 'deselect-patch') {
-            const oldPath = btn.dataset.old;
-            this._handleParentToggle(oldPath);
+            const pIdx = parseInt(btn.dataset.idx, 10);
+            const activeCells = BridgeStore.getState().cells.filter(c => c.active);
+            if (activeCells[pIdx]) {
+                BridgeStore.getState().toggleCellActive(activeCells[pIdx].id);
+            }
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deep-search') {
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
@@ -498,8 +501,11 @@ export class InSetuExtBridge extends InSetuElement {
                                                     ${p.available_actions?.includes('ignore_syntax_error') ? html`
                                                         <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
                                                     ` : ''}
+                                                    ${p.available_actions?.includes('confirm_candidate') && (!p.candidates || p.candidates.length === 0) ? html`
+                                                        <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${p.original_file}" class="btn-sm" style="background: var(--intent-warning); color: #000;">⚠️ Confirm Overwrite</button>
+                                                    ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
-                                                        <button data-action="deselect-patch" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
+                                                        <button data-action="deselect-patch" data-old="${p.original_file}" data-idx="${p.patch_index}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
                                                     ` : ''}
                                                 </div>
                                             </div>
@@ -666,6 +672,9 @@ export class InSetuExtBridge extends InSetuElement {
                         <sutram-async-btn label="⚡ Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                     ` : html`
                         <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
+                        ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode === 'dry_run' ? html`
+                            <sutram-async-btn label="⚡ Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                        ` : ''}
                     `}
                 </div>
             </div>

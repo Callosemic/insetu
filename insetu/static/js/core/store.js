@@ -20,7 +20,7 @@ window.inSetu.stores.Selection = SelectionStore;
 export const AppStore = createExtensionStore('App', {
     activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
     authToken: sessionStorage.getItem('insetu_boot_token') || '',
-    manifest: {},
+    manifest: { vfs: {}, ctx: {} },
     instanceEmoji: '⚙️',
     isConfigOpen: false,
     isWorkspaceEditorOpen: false,

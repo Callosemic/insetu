@@ -599,6 +599,58 @@ if (!document.getElementById('insetu-config-root')) {
 window.ExtensionRegistry.registerExtension('config', {
     name: "Workspace Configuration",
     version: "2.0.0",
+    entityActions: [
+        {
+            targetEntity: 'system_control',
+            id: 'sys-refresh-files',
+            label: 'Refresh Files',
+            icon: '⚙️',
+            intent: 'primary',
+            order: 10,
+            asyncAction: async (data, e) => {
+                if (window.inSetu.sys.executeSystemCompile) {
+                    await window.inSetu.sys.executeSystemCompile(null, true);
+                }
+            }
+        },
+        {
+            targetEntity: 'system_control',
+            id: 'sys-reboot',
+            label: 'Reboot',
+            icon: '🔄',
+            intent: 'success',
+            order: 20,
+            asyncAction: async (data, e) => {
+                if (!confirm("Reboot the inSetu OS daemon?")) return;
+                if (data && data.closeModal) data.closeModal();
+                AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
+                try {
+                    await window.inSetu.api.system('reboot', { method: 'POST' });
+                    setInterval(async () => {
+                        try {
+                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
+                            if (ping.ok) window.location.reload();
+                        } catch(err) {}
+                    }, 1000);
+                } catch (err) {
+                    alert("Reboot failed: " + err.message);
+                    AppStore.setState({ isRebooting: false });
+                }
+            }
+        },
+        {
+            targetEntity: 'system_control',
+            id: 'sys-lifeboat',
+            label: 'Lifeboat',
+            icon: '⚠️',
+            intent: 'warning',
+            order: 30,
+            onClick: (data, e) => {
+                if (data && data.closeModal) data.closeModal();
+                if (window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic();
+            }
+        }
+    ],
     settingsActions: [
         {
             id: 'workspaces_editor',

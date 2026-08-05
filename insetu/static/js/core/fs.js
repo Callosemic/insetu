@@ -203,7 +203,9 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     await sutramDownloadFile(fetchUrl, fallbackFilename, fetchOptions);
 }
 export async function viewAndCopy(filename) {
-    const cleanName = filename ? filename.replace(/^system:\/\/contexts\//, '') : filename;
+    let cleanName = filename ? filename.replace(/^system:\/\/contexts\//, '') : filename;
+    cleanName = cleanName ? cleanName.replace(/^ctx:\/\/(?:contexts\/)?/, '') : cleanName;
+
     const chunks = getChunks(cleanName);
     const targetFile = (chunks && chunks.length > 0) ? chunks[0] : cleanName;
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
@@ -249,44 +251,63 @@ function refreshActiveFileViews(oldPath, newPath = null) {
 function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
     let changed = false;
-    const newManifest = { ...manifest };
+    const newManifest = { vfs: { ...(manifest?.vfs || {}) }, ctx: { ...(manifest?.ctx || {}) } };
 
     const cleanPath = (p) => p ? p.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
     const normOldPath = cleanPath(oldPath);
     const normNewPath = cleanPath(newPath);
 
     if (normOldPath) {
-        Object.keys(newManifest).forEach(key => {
-            const obj = newManifest[key];
-            if (obj.files) {
-                const index = obj.files.findIndex(f => cleanPath(f) === normOldPath);
-                if (index > -1) {
-                    changed = true;
-                    const newFiles = [...obj.files];
-                    newFiles.splice(index, 1);
-                    if (normNewPath && !newFiles.includes(normNewPath)) {
-                        newFiles.push(normNewPath);
+        ['vfs', 'ctx'].forEach(manifestKey => {
+            Object.keys(newManifest[manifestKey]).forEach(key => {
+                const obj = newManifest[manifestKey][key];
+                if (obj.files) {
+                    let newFiles = [...obj.files];
+                    let fileChanged = false;
+
+                    for (let i = newFiles.length - 1; i >= 0; i--) {
+                        const f = cleanPath(newFiles[i]);
+                        if (f === normOldPath) {
+                            newFiles.splice(i, 1);
+                            if (normNewPath && !newFiles.includes(normNewPath)) {
+                                newFiles.push(normNewPath);
+                            }
+                            fileChanged = true;
+                            changed = true;
+                        } else if (f.startsWith(normOldPath + '/')) {
+                            const suffix = f.substring(normOldPath.length);
+                            newFiles.splice(i, 1);
+                            if (normNewPath) {
+                                const newChildPath = normNewPath + suffix;
+                                if (!newFiles.includes(newChildPath)) {
+                                    newFiles.push(newChildPath);
+                                }
+                            }
+                            fileChanged = true;
+                            changed = true;
+                        }
                     }
 
-                    newManifest[key] = { ...obj, files: newFiles };
+                    if (fileChanged) {
+                        newManifest[manifestKey][key] = { ...obj, files: newFiles };
+                    }
                 }
-            }
+            });
         });
     }
 
-    if (normNewPath) {
-        const alreadyInManifest = Object.values(newManifest).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normNewPath));
+    if (normNewPath && !normOldPath) {
+        const alreadyInManifest = Object.values(newManifest.vfs).some(obj => obj.files && obj.files.some(f => cleanPath(f) === normNewPath));
 
         if (!alreadyInManifest) {
             const repoDir = normNewPath.split('/')[0];
             let added = false;
 
-            for (const key of Object.keys(newManifest)) {
-                const obj = newManifest[key];
-                if (obj.meta?.repo === repoDir || key.startsWith(repoDir + '_')) {
-                    newManifest[key] = {
-                        ...obj,
-                        files: [...(obj.files || []), normNewPath]
+            for (const key of Object.keys(newManifest.vfs)) {
+                if (key.startsWith(repoDir + '::')) {
+                    newManifest.vfs[key] = {
+                        ...newManifest.vfs[key],
+                        files: [...(newManifest.vfs[key].files || []), normNewPath]
                     };
                     changed = true;
                     added = true;
@@ -294,11 +315,11 @@ function updateManifestState(oldPath, newPath = null) {
                 }
             }
 
-            if (!added && Object.keys(newManifest).length > 0) {
-                const firstKey = Object.keys(newManifest)[0];
-                newManifest[firstKey] = {
-                    ...newManifest[firstKey],
-                    files: [...(newManifest[firstKey].files || []), normNewPath]
+            if (!added && Object.keys(newManifest.vfs).length > 0) {
+                const firstKey = Object.keys(newManifest.vfs)[0];
+                newManifest.vfs[firstKey] = {
+                    ...newManifest.vfs[firstKey],
+                    files: [...(newManifest.vfs[firstKey].files || []), normNewPath]
                 };
                 changed = true;
             }
@@ -311,11 +332,27 @@ function updateManifestState(oldPath, newPath = null) {
 
     if (FsStore.getState().modals.browser?.open) {
         const mState = FsStore.getState().modals.browser;
-        const updatedManifest = [...mState.manifest];
-        const index = updatedManifest.indexOf(oldPath);
-        if (index > -1) {
-            updatedManifest.splice(index, 1);
-            // Same Cartographer constraint applies to the active browser modal
+        let updatedManifest = [...mState.manifest];
+        let browserChanged = false;
+
+        for (let i = updatedManifest.length - 1; i >= 0; i--) {
+            const f = cleanPath(updatedManifest[i]);
+            if (f === normOldPath) {
+                updatedManifest.splice(i, 1);
+                if (normNewPath && !updatedManifest.includes(normNewPath)) updatedManifest.push(normNewPath);
+                browserChanged = true;
+            } else if (f.startsWith(normOldPath + '/')) {
+                const suffix = f.substring(normOldPath.length);
+                updatedManifest.splice(i, 1);
+                if (normNewPath) {
+                    const newChildPath = normNewPath + suffix;
+                    if (!updatedManifest.includes(newChildPath)) updatedManifest.push(newChildPath);
+                }
+                browserChanged = true;
+            }
+        }
+
+        if (browserChanged) {
             FsStore.getState().setModal('browser', { manifest: updatedManifest });
         }
     }
@@ -412,31 +449,16 @@ export async function deleteEmptyFolder(dirPath) {
             const parts = dirPath.split('/');
             parts.pop();
             AppStore.setState({ globalBrowsePath: parts });
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
 
-            const manifest = AppStore.getState().manifest;
-            let changed = false;
-            const newManifest = { ...manifest };
-            Object.keys(newManifest).forEach(key => {
-                const obj = newManifest[key];
-                if (obj.files) {
-                    const keepPath = dirPath + '/.gitkeep';
-                    const index = obj.files.indexOf(keepPath);
-                    if (index > -1) {
-                        changed = true;
-                        const newFiles = [...obj.files];
-                        newFiles.splice(index, 1);
-                        newManifest[key] = { ...obj, files: newFiles };
-                    }
-                }
-            });
-            if (changed) AppStore.setState({ manifest: newManifest });
+            updateManifestState(dirPath, null);
+
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
 
             // Ensure the deletion is accurately reflected by the backend Cartographer
             if (window.inSetu.sys.executeSystemCompile) {
                 window.inSetu.sys.executeSystemCompile();
             }
-}
+        }
     });
 }
 
@@ -523,7 +545,13 @@ export const getGlobalManifest = () => {
     const targetConfigs = state.targetConfigs || [];
     const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
-    const allFiles = Array.from(new Set(Object.values(state.manifest || {}).flatMap(obj => obj.files || [])));
+    const vfsManifest = state.manifest?.vfs || {};
+    const ctxManifest = state.manifest?.ctx || {};
+
+    const allFiles = Array.from(new Set([
+        ...Object.values(vfsManifest).flatMap(obj => obj.files || []),
+        ...Object.values(ctxManifest).flatMap(obj => obj.files || [])
+    ]));
 
     // Let extensions inject their own system artifacts (e.g. Prompts)
     const extensionFiles = window.inSetu.events.emitHook('zone:global-manifest-files') || [];
@@ -569,15 +597,21 @@ export class InSetuVFSExplorer extends InSetuElement {
                 // This prevents OS artifact directories (contexts/, diffs/) from leaking into the visual root
                 const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
-                Object.values(state.manifest || {}).forEach(obj => {
-                        if (obj.files) {
-                            obj.files.forEach(f => {
-                                if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
-                                    allFiles.add(f);
-                                }
-                            });
-                        }
+                const vfsManifest = state.manifest?.vfs || {};
+                const ctxManifest = state.manifest?.ctx || {};
+
+                [vfsManifest, ctxManifest].forEach(subManifest => {
+                    Object.values(subManifest).forEach(obj => {
+                            if (obj.files) {
+                                obj.files.forEach(f => {
+                                    if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
+                                        allFiles.add(f);
+                                    }
+                                });
+                            }
+                    });
                 });
+
                 if (targetConfigs) {
                         targetConfigs.forEach(cfg => {
                                 if (cfg.repo_dir && !Array.from(allFiles).some(f => f.startsWith(cfg.repo_dir + '/'))) {
@@ -961,6 +995,8 @@ async function saveNewFolder() {
             }
             FsStore.getState().setModal('newFolder', { open: false });
 
+            updateManifestState(null, filepath);
+
             window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
 
             // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
@@ -971,13 +1007,15 @@ async function saveNewFolder() {
     });
 }
 export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
-    if (!bypassHook && window.inSetu.events.emitHook('zone:file-edit-override', filepath)) return;
+    const cleanPath = filepath ? filepath.replace(/^vfs:\/\//, '') : filepath;
 
-    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(filepath);
+    if (!bypassHook && window.inSetu.events.emitHook('zone:file-edit-override', cleanPath)) return;
+
+    const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(cleanPath);
 
     FsStore.setState({ fileModal: {
         open: true,
-        filename: filepath,
+        filename: cleanPath,
         content: 'Loading...',
         originalContent: 'Loading...',
         fullText: 'Loading...',
@@ -1069,8 +1107,9 @@ function confirmFolderSelection() {
     closeBrowseModal();
 }
 export function openBrowseModal(contextFilename) {
-    const { manifest } = AppStore.getState();
-    const files = (manifest[contextFilename] && manifest[contextFilename].files) ? manifest[contextFilename].files : [];
+    const manifest = AppStore.getState().manifest || {};
+    const ctxManifest = manifest.ctx || {};
+    const files = (ctxManifest[contextFilename] && ctxManifest[contextFilename].files) ? ctxManifest[contextFilename].files : [];
     openWorkspaceBrowser({
         mode: 'view',
         title: `Browsing: ${contextFilename}`,
@@ -1232,20 +1271,37 @@ export class InSetuFileModal extends InSetuElement {
     }
 }
 customElements.define('insetu-file-modal', InSetuFileModal);
+export function extractManifestFiles(manifestData, targetKey = null) {
+    if (!manifestData) return [];
+    const ctxManifest = manifestData.ctx || {};
+    const vfsManifest = manifestData.vfs || {};
 
-export function extractManifestFiles(manifest, targetKey = null) {
-    if (!manifest) return [];
+    const extract = (data) => {
+        if (Array.isArray(data)) return data;
+        if (typeof data === 'object' && data !== null) {
+            return data.chunks || data.files || [];
+        }
+        return [];
+    };
+
     if (targetKey) {
-        const item = manifest[targetKey];
-        if (!item) return [targetKey];
-        if (Array.isArray(item)) return item;
-        return item.chunks || item.files || [targetKey];
+        let entry = ctxManifest[targetKey] || vfsManifest[targetKey];
+        if (!entry && (targetKey.includes('/') || targetKey.includes('\\'))) {
+            const name = targetKey.split('/').pop();
+            entry = ctxManifest[name] || vfsManifest[name];
+        }
+        if (!entry) return [targetKey];
+        return extract(entry);
     }
+
     const allFiles = new Set();
-    Object.keys(manifest).forEach(k => {
-        const item = manifest[k];
-        const list = Array.isArray(item) ? item : (item.chunks || item.files || [k]);
-        list.forEach(f => allFiles.add(f));
+    [ctxManifest, vfsManifest].forEach(subManifest => {
+        Object.entries(subManifest).forEach(([k, v]) => {
+            if (typeof k === 'string' && k.endsWith('.txt')) allFiles.add(k);
+            extract(v).forEach(f => {
+                if (typeof f === 'string') allFiles.add(f);
+            });
+        });
     });
     return Array.from(allFiles);
 }
@@ -1326,7 +1382,10 @@ export async function uploadFileToWorkspace(targetDir) {
         const loadingMsg = files.length > 1 ? `Uploading ${files.length} files...` : `Uploading ${files[0].name}...`;
         await window.inSetu.sys.executeWorkspaceMutation('fs/upload', formData, {
             loadingText: loadingMsg,
-            onSuccess: () => {
+            onSuccess: (data) => {
+                if (data && data.filepaths) {
+                    data.filepaths.forEach(fp => updateManifestState(null, fp));
+                }
                 if (window.inSetu.sys.executeSystemCompile) {
                     window.inSetu.sys.executeSystemCompile();
                 }
@@ -1578,7 +1637,7 @@ export class InSetuVFSModals extends InSetuElement {
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
             <div style="display: flex; flex-direction: column; padding: 15px; overflow-y: auto; flex: 1;">
-                <sutram-card-group ?stacked=${true}>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${(m.browser?.manifest || []).map((f, idx) => {
                         const cleanName = f.includes('/') ? f.split('/').pop() : f;
                         const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
@@ -1590,27 +1649,26 @@ export class InSetuVFSModals extends InSetuElement {
                         }
 
                         return html`
-                            <insetu-card
-                                .titleText=${displayTitle}
-                                .detailText=${idx === 0 ? '' : cleanName}
-                                icon=${idx === 0 ? "📦" : "🧩"}
-                                intentColor=${idx === 0 ? "var(--intent-highlight)" : "var(--intent-neutral)"}
-                                ?disableSelection=${true}
-                                style="display: block;">
-                                <div slot="actions" style="display: flex; justify-content: flex-end; align-items: center; height: 100%;">
-                                    <sutram-async-btn
-                                        label="⬇️ Download"
-                                        intent="primary"
-                                        style="margin: 0; padding: 4px 12px; font-size: 0.85rem;"
-                                        .onClick=${async () => {
-                                            await fetchAndDownloadState(cleanName, fetchUrl);
-                                        }}>
-                                    </sutram-async-btn>
+                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); border: 1px solid var(--border); padding: 10px 15px; border-radius: 6px;">
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <span style="font-size: 1.2rem;">${idx === 0 ? "📦" : "🧩"}</span>
+                                    <div style="display: flex; flex-direction: column;">
+                                        <span style="font-weight: bold; color: ${idx === 0 ? 'var(--intent-highlight)' : 'var(--text)'};">${displayTitle}</span>
+                                        ${idx !== 0 ? html`<span style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;">${cleanName}</span>` : ''}
+                                    </div>
                                 </div>
-                            </insetu-card>
+                                <sutram-async-btn
+                                    label="⬇️ Download"
+                                    intent="primary"
+                                    style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
+                                    .onClick=${async () => {
+                                        await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                    }}>
+                                </sutram-async-btn>
+                            </div>
                         `;
                     })}
-                </sutram-card-group>
+                </div>
             </div>
         ` : html`
             <insetu-file-tree 
@@ -1636,7 +1694,8 @@ export class InSetuVFSModals extends InSetuElement {
                 for (const f of manifestFiles) {
                     const cleanName = f.includes('/') ? f.split('/').pop() : f;
                     const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
-                    await fetchAndDownloadState(cleanName, fetchUrl);
+                    await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                    await new Promise(r => setTimeout(r, 300));
                 }
             }}>
         </sutram-async-btn>

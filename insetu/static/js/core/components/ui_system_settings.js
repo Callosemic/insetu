@@ -124,8 +124,14 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                 ` : ''}
             </div>
-            <sutram-modal ?open=${this.modalOpen} ?fullscreen=${true} titleText="System Settings & Extensions" @sutram-modal-closed=${() => this.modalOpen = false}>
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto; margin-bottom: 20px;">
+            <sutram-modal 
+                ?open=${this.modalOpen} 
+                ?fullscreen=${true} 
+                titleText="System Settings & Extensions" 
+                style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
+                @sutram-modal-closed=${() => this.modalOpen = false}>
+
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
                     ${sortedSections.map(section => html`
                         <div style="font-weight: bold; font-size: 0.85rem; color: var(--intent-primary); margin-top: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">${section}:</div>
                         ${groupedActions[section].map(act => html`
@@ -136,38 +142,13 @@ export class InSetuSystemSettings extends InSetuElement {
                             </button>
                         `)}
                     `)}
-                    <div style="border-top: 1px solid var(--border); padding-top: 15px; display: flex; justify-content: flex-end; margin-top: auto; gap: 8px; flex-wrap: wrap;">
-                        <button class="btn-sm" style="background: var(--intent-primary); margin: 0; font-weight: bold; color: white;" 
-                            @click=${async (e) => {
-                                const btn = e.target;
-                                const orig = btn.innerText;
-                                btn.innerText = "⏳ Recompiling...";
-                                try {
-                                    if (window.inSetu.sys.executeSystemCompile) await window.inSetu.sys.executeSystemCompile(null, true);
-                                } catch(err) {}
-                                btn.innerText = orig;
-                            }}>⚙️ Full Context Recompile</button>
-                        <button class="btn-sm" style="background: var(--intent-success); margin: 0; font-weight: bold; color: white;" 
-                            @click=${async () => {
-                                if (!confirm("Reboot the inSetu OS daemon?")) return;
-                                this.modalOpen = false;
-                                AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
-                                try {
-                                    await window.inSetu.api.system('reboot', { method: 'POST' });
-                                    setInterval(async () => {
-                                        try {
-                                            const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
-                                            if (ping.ok) window.location.reload();
-                                        } catch(err) {}
-                                    }, 1000);
-                                } catch (e) {
-                                    alert("Reboot failed: " + e.message);
-                                    AppStore.setState({ isRebooting: false });
-                                }
-                            }}>🔄 Reboot System</button>
-                        <button class="btn-sm" style="background: var(--intent-warning); margin: 0; font-weight: bold; color: black;" @click=${() => { this.modalOpen = false; if(window.inSetu.sys.simulatePanic) window.inSetu.sys.simulatePanic(); }}>⚠️ Test Recovery</button>
-                    </div>
                 </div>
+                <sutram-entity-actions 
+                    slot="footer" 
+                    .entityType=${'system_control'} 
+                    .entityData=${{ closeModal: () => this.modalOpen = false }}
+                    style="width: 100%; display: flex; gap: 8px;">
+                </sutram-entity-actions>
             </sutram-modal>
         `;
     }

@@ -155,7 +155,7 @@ export class InSetuExtGather extends InSetuElement {
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => {
-            this.manifestFiles = Object.keys(state.manifest || {});
+            this.manifestFiles = Object.keys(state.manifest?.ctx || {});
             this.requestUpdate();
         });
 
@@ -163,7 +163,7 @@ export class InSetuExtGather extends InSetuElement {
             if (tick) this.loadContext(false);
         });
         const aState = AppStore.getState();
-        this.manifestFiles = Object.keys(aState.manifest || {});
+        this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
         const gState = GatherStore.getState();
         this.loading = gState.loading;
         this.loadingMessage = gState.loadingMessage;
@@ -190,11 +190,11 @@ export class InSetuExtGather extends InSetuElement {
     }
     render() {
         const categories = {};
-        const manifest = AppStore.getState().manifest;
+        const ctxManifest = AppStore.getState().manifest?.ctx || {};
         const { categoryOrder, hiddenOutputs } = GatherStore.getState();
         // 1. Enrich data with metadata for searching
         const enrichedFiles = this.manifestFiles.map(file => {
-                const manifestObj = manifest[file] || {};
+                const manifestObj = ctxManifest[file] || {};
                 const meta = manifestObj.meta || { title: file, domain: "Workspaces", desc: "Context payload." };
                 if (meta.type && meta.type !== 'gather') return null;
                 let finalCat = (file.startsWith && file.startsWith('quickpack_')) || file.includes('quickpack_') || file.includes('selection_') ? 'Quickpacks' : meta.domain;
@@ -332,10 +332,10 @@ export class InSetuExtGather extends InSetuElement {
                                                 intentColor="var(--intent-highlight)"
                                                 entityType="file:context"
                                                 .entityData=${{ 
-                                                    filepath: `system://contexts/${f.filename}`, 
+                                                    filepath: `ctx://contexts/${f.filename}`, 
                                                     repoDir: f.repoDir, 
                                                     isFS: false, 
-                                                    isSkeleton: f.isSkeleton, 
+                                                    isSkeleton: f.isSkeleton,  
                                                     suppress: ['file-copy', 'file-browse', 'file-edit'],
                                                     chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
                                                 }}
