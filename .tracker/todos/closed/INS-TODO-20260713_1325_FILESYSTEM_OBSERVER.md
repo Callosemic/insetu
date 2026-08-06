@@ -1,13 +1,12 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "open"
-id: "INS-TODO-20260713_1325_FILESYSTEM_OBSERVER"
+status: "closed"
+id: INS-TODO-20260713_1325_FILESYSTEM_OBSERVER
 title: "Abstract NonGitDirectoryWatcher into core FileSystemObserver macro"
-created_at: "2026-07-13T13:25:00"
-closed_at: null
+created_at: 2026-07-13T13:25:00
+closed_at: 2026-08-05T21:54:55
 sub_bucket: "None"
-delivery_date: "2026-08-23"
 tags: ["Architecture", "Backend", "SDK"]
 ---
 

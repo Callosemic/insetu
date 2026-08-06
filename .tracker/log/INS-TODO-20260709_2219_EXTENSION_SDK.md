@@ -17,3 +17,12 @@ tags: ["Architecture", "DX", "SDK"]
 * **Data Layer:** Shipped declarative SQLite auto-migrations via `apply_declarative_schema()` running securely on the `system_boot` hook.
 
 ## Notes / Execution Log
+
+**2026-08-05 Update:**
+The final V2 SDK Guardrail violations and technical debt have been cleared. The following extensions are officially verified and fully migrated to the V2 architecture:
+* `tracker`: Migrated
+* `citations`: Migrated
+* `git`: Migrated
+* `flow`: Migrated
+* `research`: Migrated
+* `skills`: Migrated
