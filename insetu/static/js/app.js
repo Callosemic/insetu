@@ -176,49 +176,106 @@ async function bootExtensions() {
     // Automatically map schemas to the System Settings menu
     autoWireSettingsSchemas();
 }
-// --- THE CENTRALIZED FRONTEND METRONOME & CQRS SYNC ---
+// --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 let lastManifestSyncTs = 0;
+let localVfsSignatures = {};
+let localCtxSignatures = {};
+
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
     try {
-        const res = await window.inSetu.api.workspace('gather/manifest/version');
-        if (res.ok) {
-            const data = await res.json();
-            if (data.version && data.version > lastManifestSyncTs) {
-                const currentVersion = data.version;
-                const deltaRes = await window.inSetu.api.workspace(`gather/manifest/deltas?since=${lastManifestSyncTs}`);
-                if (deltaRes.ok) {
-                    const deltaData = await deltaRes.json();
-                    if (deltaData.deltas && Object.keys(deltaData.deltas).length > 0) {
-                        const stateManifest = AppStore.getState().manifest || {};
-                        const currentManifest = { 
-                            vfs: { ...(stateManifest.vfs || {}) }, 
-                            ctx: { ...(stateManifest.ctx || {}) } 
-                        };
-                        if (deltaData.deltas && deltaData.deltas.ctx) {
-                            Object.entries(deltaData.deltas.ctx).forEach(([fp, entry]) => {
-                                if (entry === null) {
-                                    delete currentManifest.ctx[fp];
-                                } else {
-                                    currentManifest.ctx[fp] = entry;
-                                }
-                            });
+        const deltaRes = await window.inSetu.api.system(`deltas?since=${lastManifestSyncTs}`);
+        if (!deltaRes.ok) return;
+
+        const deltaData = await deltaRes.json();
+        let manifestUpdated = false;
+
+        const stateManifest = AppStore.getState().manifest || { vfs: {}, ctx: {} };
+        const currentManifest = { 
+            vfs: { ...(stateManifest.vfs || {}) }, 
+            ctx: { ...(stateManifest.ctx || {}) } 
+        };
+
+        const sigs = deltaData.signatures || {};
+
+        // 1. Evaluate VFS Repo Signatures
+        if (sigs.vfs) {
+            for (const [repo, sig] of Object.entries(sigs.vfs)) {
+                if (sig === null) {
+                    // Tombstone: Remove repo buckets
+                    Object.keys(currentManifest.vfs).forEach(key => {
+                        if (key.startsWith(`${repo}::`)) delete currentManifest.vfs[key];
+                    });
+                    delete localVfsSignatures[repo];
+                    manifestUpdated = true;
+                } else if (localVfsSignatures[repo] !== sig) {
+                    // Surgical Fetch: Fetch repo tree
+                    const treeRes = await window.inSetu.api.workspace(`topology/vfs?repo=${encodeURIComponent(repo)}`);
+                    if (treeRes.ok) {
+                        const treeData = await treeRes.json();
+                        if (treeData.buckets) {
+                            Object.assign(currentManifest.vfs, treeData.buckets);
+                            localVfsSignatures[repo] = sig;
+                            manifestUpdated = true;
                         }
-                        AppStore.setState({ manifest: currentManifest });
                     }
-                    lastManifestSyncTs = currentVersion;
                 }
             }
         }
-    } catch (e) {}
+
+        // 2. Evaluate CTX Artifact Signatures
+        if (sigs.ctx) {
+            for (const [path, ts] of Object.entries(sigs.ctx)) {
+                if (ts === null) {
+                    delete currentManifest.ctx[path];
+                    delete localCtxSignatures[path];
+                    manifestUpdated = true;
+                } else if (localCtxSignatures[path] !== ts) {
+                    const entryRes = await window.inSetu.api.workspace(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
+                    if (entryRes.ok) {
+                        const entryData = await entryRes.json();
+                        if (entryData.entry) {
+                            currentManifest.ctx[path] = entryData.entry;
+                        } else {
+                            delete currentManifest.ctx[path];
+                        }
+                        localCtxSignatures[path] = ts;
+                        manifestUpdated = true;
+                    }
+                }
+            }
+        }
+        if (manifestUpdated) {
+            AppStore.setState({ manifest: currentManifest || { vfs: {}, ctx: {} } });
+        }
+
+        // 3. Dispatch Physical Mutations to Event Bus
+        if (deltaData.mutations && deltaData.mutations.length > 0) {
+            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: deltaData.mutations });
+        }
+
+        // 4. Sync UI Status with Kernel Compilation State
+        if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
+            if (deltaData.is_compiling) {
+                window.inSetu.ui.setSyncStatus('syncing');
+            } else if (!deltaData.mutations || deltaData.mutations.length === 0) {
+                window.inSetu.ui.setSyncStatus('synced');
+            }
+        }
+
+        if (deltaData.timestamp) {
+            lastManifestSyncTs = deltaData.timestamp;
+        }
+    } catch (e) {
+        console.warn("Heartbeat delta check failed:", e);
+    }
 }
 window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-
 // Delegate execution to the Tier 1 agnostic metronome
 window.ExtensionRegistry.startMetronome(
     () => window.ACTIVE_EXTENSIONS || [],
-    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh']
+    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh', 'manifest_sync']
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/js/poller.js';
@@ -538,6 +595,9 @@ try {
 } catch(e) {}
 document.body.setAttribute('data-theme', currentTheme);
 async function executeWorkspaceSwap(key, title) {
+    localVfsSignatures = {};
+    localCtxSignatures = {};
+    lastManifestSyncTs = 0;
     window.inSetu.ui.setGlobalStatus(`Switched to ${title || key}. Hydrating UI...`, null);
     if ('caches' in window) {
         try {
@@ -739,7 +799,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
                 const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
-                if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+                if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
@@ -791,6 +851,9 @@ async function simulatePanic() {
     }
 }
 async function performSoftRefresh() {
+    localVfsSignatures = {};
+    localCtxSignatures = {};
+    lastManifestSyncTs = 0;
     // 1. Read the active tenant directly from AppStore
     const currentWs = AppStore.getState().activeWorkspace || window.inSetu.utils.getActiveWorkspace();
 
@@ -891,7 +954,7 @@ async function performSoftRefresh() {
         }
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
-        AppStore.setState({ manifest: {} });
+        AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
         let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
@@ -902,8 +965,8 @@ async function performSoftRefresh() {
             await executeSystemCompile();
         } else {
             // Instant soft switch using cached state or a clean empty baseline
-            AppStore.setState({ manifest: manifestData });
-            // Trust the background watchdog/metronome to maintain SOTU differential syncs; 
+            AppStore.setState({ manifest: manifestData || { vfs: {}, ctx: {} } });
+            // Trust the background watchdog/metronome to maintain SOTU differential syncs;  
             // no need to thrash the compiler heavily on every UI tab swap.
         }
         // 4. Hydrate active DOM views using native routing
@@ -979,7 +1042,7 @@ async function initializeWorkspaceTopology() {
             manifestData = AppStore.getState().manifest;
         }
         if (mRes.ok || manifestData) {
-            AppStore.setState({ manifest: manifestData });
+            AppStore.setState({ manifest: manifestData || { vfs: {}, ctx: {} } });
         }
     } catch (e) {
         console.error("Auto-hydration failed:", e);

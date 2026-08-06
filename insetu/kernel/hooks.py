@@ -28,9 +28,12 @@ class HookPayload_VFSMutated(TypedDict, total=False):
     workspace_id: Optional[str]
 class HookPayload_WorkspaceScoped(TypedDict, total=False):
     workspace_id: Optional[str]
-
 class HookPayload_WorkspaceShutdown(TypedDict, total=False):
     workspace_id: Optional[str]
+
+class HookPayload_RegisterManifestSignatures(TypedDict, total=False):
+    workspace_id: Optional[str]
+    since_ts: Optional[float]
 _event_thread_local = threading.local()
 
 class HookRegistry:

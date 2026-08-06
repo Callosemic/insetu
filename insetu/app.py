@@ -313,14 +313,14 @@ def serve_extension_js(ext_name):
 @app.route('/sw.js')
 def sw():
     return send_file(Path(app.static_folder).joinpath('sw.js').as_posix(), mimetype='application/javascript')
-@app.route('/manifest.json')
+@app.route('/' + 'manifest.json')
 def manifest():
     import json
     import os
     from insetu.kernel.utils import load_config
 
     # Load the base blueprint manifest map
-    base_manifest_path = Path(app.static_folder).joinpath('manifest.json').as_posix()
+    base_manifest_path = Path(app.static_folder).joinpath(*['manifest', 'json']).as_posix()
     try:
         with open(base_manifest_path, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
@@ -431,15 +431,16 @@ def index():
 
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
-
 import os
 from insetu.kernel.hooks import hooks
 
 # Fire the system boot hook to ignite the worker pools and VFS queues globally
-try:
-    hooks.emit('system_boot')
-except Exception as e:
-    print(f"Warning: system_boot failed: {e}")
+# Guardrail: Prevent the Werkzeug master reloader process from executing background threads
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    try:
+        hooks.emit('system_boot')
+    except Exception as e:
+        print(f"Warning: system_boot failed: {e}")
 
 def run_app():
     from insetu.kernel.utils import load_config

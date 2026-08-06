@@ -283,6 +283,14 @@ def _init_worker_schema(workspace_id="default"):
                 conn.commit()
         except Exception:
                 pass
+
+        try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_vfs_event_log_ts ON vfs_event_log(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_immediate_jobs_status ON immediate_jobs(status)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
+                conn.commit()
+        except Exception:
+                pass
         conn.execute("UPDATE jobs SET status='pending' WHERE status='running'")
         conn.execute("""
                 INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
@@ -290,39 +298,8 @@ def _init_worker_schema(workspace_id="default"):
         """)
         conn.commit()
         _INITIALIZED_WORKSPACES.add(workspace_id)
-
 _observer = None
-
-class NonGitDirectoryWatcher:
-    """Listens directly to the host OS filesystem for external unmanaged mutations."""
-    def __init__(self, workspace_id, repo_dir):
-        self.workspace_id = workspace_id
-        self.repo_dir = repo_dir
-    def dispatch(self, event):
-        if event.is_directory: return
-        filename = Path(event.src_path).name
-        if filename.startswith('.') or filename.endswith('~'): return
-
-        from insetu.kernel.utils import get_workspace_physics
-        try:
-            _, ws_root, _ = get_workspace_physics(self.workspace_id)
-            ws_rel_path = os.path.relpath(event.src_path, ws_root).replace('\\', '/')
-
-            mutation_type = 'modified'
-            if event.event_type == 'created': mutation_type = 'added'
-            elif event.event_type == 'deleted': mutation_type = 'deleted'
-
-            from insetu.kernel.db import get_connection
-            import time
-            db_conn = get_connection("workers", workspace_id=self.workspace_id)
-            db_conn.execute(
-                "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
-                (ws_rel_path, mutation_type, time.time())
-            )
-            db_conn.commit()
-        except Exception:
-            pass
-@hooks.on('system_boot')
+@hooks.on('system_boot', priority=10)
 def start_workers():
         global _executor, _metronome_thread, _observer
         _executor = ThreadPoolExecutor(max_workers=3)
@@ -353,32 +330,8 @@ def start_workers():
         try:
             from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
-
-            _observer = Observer()
-            has_watches = False
-            for ws_id in workspace_ids:
-                from insetu.kernel.utils import load_config, get_workspace_physics
-                cfg = load_config(ws_id)
-                _, ws_root, _ = get_workspace_physics(ws_id)
-
-                for repo_cfg in cfg.get("target_repos", []):
-                    if repo_cfg.get("archive_type", "repo") != "repo":
-                        r_dir = repo_cfg.get("repo_dir")
-                        p_path = repo_cfg.get("physical_path")
-                        target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else Path(ws_root).joinpath(r_dir).resolve().as_posix()
-
-                        if os.path.exists(target_path):
-                            handler = FileSystemEventHandler()
-                            watcher = NonGitDirectoryWatcher(ws_id, r_dir)
-                            handler.on_modified = watcher.dispatch
-                            handler.on_created = watcher.dispatch
-                            handler.on_deleted = watcher.dispatch
-
-                            _observer.schedule(handler, target_path, recursive=True)
-                            has_watches = True
-            if has_watches:
-                _observer.start()
-                print("👁️  Native Non-Git Filesystem Watchers Engaged.")
+            from insetu.core.utils_core import start_filesystem_observer
+            _observer = start_filesystem_observer(workspace_ids)
         except ImportError:
             print("⚠️  Optional package 'watchdog' not found. External modifications require full sweeps.")
         except Exception as e:
