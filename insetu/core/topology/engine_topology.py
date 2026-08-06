@@ -21,7 +21,6 @@ TOPOLOGY_SCHEMA = {
         "timestamp": "REAL"
     }
 }
-
 topology_bp = InSetuExtension(
     'topology', 
     __name__, 
@@ -31,6 +30,37 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+
+@hooks.on('register_manifest_signatures')
+def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
+    """Yields lightweight repository signatures for the vfs domain."""
+    ctx = ExtensionContext('topology', workspace_id)
+    rows = ctx.db.execute("SELECT repo, count(*) as cnt, max(timestamp) as max_ts FROM topology_ledger GROUP BY repo").fetchall()
+    vfs_sigs = {}
+    for r in rows:
+        repo = r['repo']
+        vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}"
+    return {"vfs": vfs_sigs}
+
+@topology_bp.route('vfs', methods=['GET'])
+def api_topology_vfs_repo(ctx):
+    """Surgically fetches the VFS bucket structure for a specific repository."""
+    repo = ctx.req.args.get('repo', '').strip()
+    conn = ctx.db
+    if repo:
+        rows = conn.execute("SELECT filepath, bucket_id FROM topology_ledger WHERE repo=?", (repo,)).fetchall()
+    else:
+        rows = conn.execute("SELECT filepath, repo, bucket_id FROM topology_ledger").fetchall()
+
+    files_by_bucket = {}
+    for r in rows:
+        r_name = repo or r['repo']
+        b_id = r['bucket_id']
+        key = f"{r_name}::{b_id}"
+        if key not in files_by_bucket:
+            files_by_bucket[key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": r_name, "bucket_id": b_id}}
+        files_by_bucket[key]["files"].append(r['filepath'])
+    return jsonify({"repo": repo, "buckets": files_by_bucket})
 @hooks.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
@@ -90,7 +120,6 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(Path(r['filepath']).name, r['filepath']) for r in rows]
-
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
@@ -98,19 +127,35 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     and buffers them to absorb the I/O storm.
     """
     if not mutations: return
-    
+
     ctx = ExtensionContext('topology', workspace_id)
     conn = ctx.db
     now = time.time()
-    
+    buffered_count = 0
+
     for m in mutations:
+        if m.get("ignore_ledger"):
+            continue
+
         filepath = m.get("filepath")
+        if not filepath:
+            continue
+
+        # Gatekeeper: Filter out internal system artifacts and VFS context streams
+        norm_path = filepath.replace('\\', '/')
+        if norm_path.startswith("ctx://") or "/data/contexts/" in norm_path or "/data/diffs/" in norm_path or "/data/workflows/" in norm_path or ".insetu/data/" in norm_path:
+            continue
+
         op = m.get("operation")
-        if filepath:
-            conn.execute(
-                "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
-                (filepath, op, now)
-            )
+        conn.execute(
+            "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+            (filepath, op, now)
+        )
+        buffered_count += 1
+
+    if buffered_count == 0:
+        return
+
     conn.commit()
 
     # Dispatch the resolution worker. The `coalesce=True` flag ensures that if a storm 
@@ -143,9 +188,9 @@ def resolve_topology_buffer(workspace_id):
             repo_cfg = next((r for r in target_repos if r.get("repo_dir") == repo_dir), None)
 
             is_ignored = False
-            if repo_cfg:
-                rel_to_repo = filepath[len(repo_dir)+1:] if filepath.startswith(f"{repo_dir}/") else filepath
+            rel_to_repo = filepath[len(repo_dir)+1:] if filepath.startswith(f"{repo_dir}/") else filepath
 
+            if repo_cfg:
                 live_cfg = ctx.config
                 ignore_dirs = set(live_cfg.get("ignore_dirs", [])).union(repo_cfg.get("repo_ignore_dirs", []))
                 ignore_files = set(live_cfg.get("ignore_files", [])).union(repo_cfg.get("repo_ignore_files", []))
@@ -191,6 +236,18 @@ def resolve_topology_buffer(workspace_id):
     )
 
     return event_dicts
+@hooks.on('workspace_boot')
+def init_topology_on_boot(workspace_id=None, **kwargs):
+    """Topology owns the boot sequence. Maps the drive immediately."""
+    job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id)
+
+@topology_bp.worker("boot_scan_task")
+def _background_boot_scan(ctx, job_id=None, **kwargs):
+    ctx.jobs.update_progress("Initializing workspace topology...")
+    force_topology_scan(workspace_id=ctx.workspace_id)
+    from insetu.kernel.hooks import hooks
+    hooks.emit_background('topology_boot_complete', workspace_id=ctx.workspace_id)
 
 @topology_bp.worker("resolve_topology_task")
 def _background_resolve_topology(ctx, job_id=None, **kwargs):
@@ -232,7 +289,8 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 if check_tree.returncode != 0 or 'true' not in check_tree.stdout.lower():
                     subprocess.run(['git', 'init'], capture_output=True, cwd=repo_path)
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
-                        with open(Path(repo_path).joinpath('.gitkeep').as_posix(), 'w') as f: pass
+                        from insetu.kernel.vfs import execute_vfs_save
+                        execute_vfs_save(workspace_id, Path(repo_path).joinpath('.gitkeep').as_posix(), "", data={"is_absolute_artifact": True, "ignore_ledger": True})
             except Exception:
                 pass
         try:

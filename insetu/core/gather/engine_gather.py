@@ -157,9 +157,8 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
                     events.append(oe)
         except Exception:
             pass
-
-    # Write a standard delayed job scheduled 15 seconds in the future
-    run_at = time.time() + 15.0
+    # Write a standard delayed job scheduled 12 seconds in the future
+    run_at = time.time() + 12.0
     args_json = json.dumps({
         "force_full": False,
         "ledger_events": events
@@ -170,9 +169,15 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
         VALUES (?, 'gather', 'execute_delayed_compile', 0, 0, ?, 'pending', ?)
     """, (job_id, run_at, args_json))
     conn.commit()
+def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=None, **kwargs):
+    from insetu.kernel.extension import ExtensionContext
+    ctx = ExtensionContext('gather', workspace_id)
 
-def _execute_delayed_compile(ctx, force_full=False, ledger_events=None, **kwargs):
-    workspace_id = ctx.workspace_id
+    # Self-destruct the one-off scheduled job so the metronome doesn't infinitely loop it
+    w_ctx = ExtensionContext('workers', workspace_id)
+    w_ctx.db.execute("DELETE FROM jobs WHERE id=?", (f"cmp_del_{workspace_id}",))
+    w_ctx.db.commit()
+
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
     steps = []
@@ -203,10 +208,11 @@ def _execute_delayed_compile(ctx, force_full=False, ledger_events=None, **kwargs
         submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id)
 
 register_callback("gather", "execute_delayed_compile", _execute_delayed_compile)
-@hooks.on('workspace_boot', priority=90)
+
+@hooks.on('topology_boot_complete', priority=90)
 def init_gather_workers(workspace_id=None, **kwargs):
     ws_id = workspace_id
-    # Boot-Time Mandate: Always perform a full topology scan and compile on reboot
+    # Boot-Time Mandate: Always perform a full compile safely after Topology settles
     try:
         job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
@@ -230,14 +236,14 @@ def init_gather_workers(workspace_id=None, **kwargs):
         if ordered_steps:
             first_step = ordered_steps[0]
             args_json = json.dumps({
-                "force_full": True,
+                "force_full": "compile_only",
                 "_chain": {
                     "steps": ordered_steps[1:],
                     "on_complete_hook": "compilation_sequence_complete"
                 }
             })
             submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id)
-            update_immediate_job_status(job_id, 'processing', 'Executing full boot scan...', workspace_id=ws_id)
+            update_immediate_job_status(job_id, 'processing', 'Executing full boot compile...', workspace_id=ws_id)
     except Exception as e:
         print(f"Warning: Boot scan failed: {e}")
 
@@ -408,7 +414,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                         content = vfs.read(f"{current_repo_dir}/{f}")
                         if content is None:
                             # Indestructible Physical Fallback: Bypass logical routing for nested structures
-                            fallback_path = os.path.join(physical_repo_path, f)
+                            fallback_path = Path(physical_repo_path).joinpath(f).as_posix()
                             if os.path.exists(fallback_path):
                                 with open(fallback_path, 'r', encoding='utf-8') as f_in:
                                     content = f_in.read()
@@ -503,10 +509,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             if len(parts) > 0: affected_repos.add(parts[0])
 
         ledger_events = [{"filepath": f, "mutation_type": "unknown"} for f in files]
-
         # Collect context declarations across the OS
         declarations = []
-        for res in ctx.emit('gather_declare_topology', target_repos=list(affected_repos), ledger_events=ledger_events):
+        for res in ctx.emit('gather_declare_topology', ledger_events=ledger_events):
             if res: declarations.extend(res)
 
         # Circuit Breaker Evaluation
@@ -758,11 +763,11 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             needs_full_compile = False
         else:
             needs_full_compile = force_full or not manifest_data
-
         ctx.jobs.update_progress("Running pre-compile hooks...")
         try:
             ctx.emit('pre_compile', is_full_sweep=needs_full_compile, forced_repos=forced_repos)
-            ctx.sync_vfs_barrier()
+            # Removed VFS barrier: The 12-second slew limiter guarantees file edits have already settled.
+            # This prevents arbitrary VFS queue deadlocks from stalling the context compiler.
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
         if not needs_full_compile and not forced_repos:
@@ -790,8 +795,9 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         if needs_full_compile or forced_repos:
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
 
-            ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
-            ctx.emit('force_topology_scan', target_repos=None if needs_full_compile else forced_repos)
+            if force_full != "compile_only":
+                ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
+                ctx.emit('force_topology_scan', target_repos=None if needs_full_compile else forced_repos)
 
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
             generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
@@ -973,18 +979,24 @@ def api_manifest_version(ctx):
         return jsonify({"version": max_ts})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@gather_bp.route('manifest/deltas', methods=['GET'])
-def api_manifest_deltas(ctx):
-    try:
-        since = float(ctx.req.args.get('since', 0.0))
-        conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
-        rows = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger WHERE timestamp > ?", (since,)).fetchall()
-        deltas = {}
-        for r in rows:
-            deltas[r['filepath']] = json.loads(r['entry_json']) if r['entry_json'] else None
+@hooks.on('register_manifest_signatures')
+def hook_gather_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
+    """Yields lightweight context artifact signatures for the ctx domain."""
+    conn = get_connection("vfs_index", workspace_id=workspace_id)
+    rows = conn.execute("SELECT filepath, timestamp FROM manifest_ledger WHERE timestamp > ?", (since_ts,)).fetchall()
+    ctx_sigs = {}
+    for r in rows:
+        ctx_sigs[r['filepath']] = r['timestamp']
+    return {"ctx": ctx_sigs}
 
-        # The UI now expects the root manifest to contain 'vfs' and 'ctx'.
-        # These deltas strictly apply to the 'ctx' artifact payloads.
-        return jsonify({"deltas": {"ctx": deltas}, "timestamp": time.time()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+@gather_bp.route('manifest/entry', methods=['GET'])
+def api_gather_manifest_entry(ctx):
+    """Surgically fetches a single manifest entry by context path."""
+    path = ctx.req.args.get('path', '').strip()
+    if not path:
+        return jsonify({"error": "Path parameter required"}), 400
+    conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
+    row = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE filepath=?", (path,)).fetchone()
+    if not row or not row['entry_json']:
+        return jsonify({"path": path, "entry": None}), 404
+    return jsonify({"path": path, "entry": json.loads(row['entry_json'])})

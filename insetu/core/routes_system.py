@@ -8,8 +8,17 @@ from flask import Blueprint, request, jsonify
 from insetu.kernel.utils import load_config, save_json_file, get_workspace_physics, sniff_tenant_id
 import insetu.kernel.utils as utils
 from insetu.kernel.hooks import hooks
+from insetu.kernel.sync import get_system_deltas
 
 system_bp = Blueprint('system', __name__)
+
+@system_bp.route('/api/system/deltas', methods=['GET'])
+@system_bp.route('/api/<workspace_id>/system/deltas', methods=['GET'])
+def api_system_deltas(workspace_id=None):
+    if not workspace_id:
+        workspace_id = sniff_tenant_id()
+    since = float(request.args.get('since', 0.0))
+    return jsonify(get_system_deltas(workspace_id, since_ts=since))
 
 @hooks.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
@@ -36,17 +45,8 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
             targets.append(new_repo)
             cfg["target_repos"] = targets
             save_json_file(cfg_path, cfg, workspace_id)
-
-
 def get_system_config(workspace_id):
-    cfg_path, _, _ = get_workspace_physics(workspace_id)
-    try:
-        with open(cfg_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        from insetu.core.utils_core import sanitize_workspace_config
-        data = sanitize_workspace_config(data)
-    except Exception:
-        data = load_config(workspace_id)
+    data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
     core_engines = {"bridge", "gather"}
     available_ids = set()
@@ -338,7 +338,7 @@ def api_workspaces():
     if request.method == 'POST':
         data = request.json or {}
         new_active = data.get("active_workspace") or data.get("workspace_id")
-        old_active = request.headers.get('X-Workspace-ID') or sniff_tenant_id()
+        old_active = sniff_tenant_id()
         if not os.path.exists(index_path):
             return jsonify({"error": "workspaces.json not found."}), 404
         w_data = utils.load_json_file(index_path, {})

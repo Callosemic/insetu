@@ -4,6 +4,107 @@ import json
 import subprocess
 from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree
 from insetu.kernel.hooks import hooks
+def start_filesystem_observer(workspace_ids):
+    """Initializes a unified Watchdog observer for all active workspaces."""
+    # Fast path: Check if ANY workspace has watchdog enabled before importing or instantiating
+    active_configs = []
+    for ws_id in workspace_ids:
+        cfg = load_config(ws_id)
+        if cfg.get("enable_watchdog", False):
+            active_configs.append((ws_id, cfg))
+            
+    if not active_configs:
+        return None
+    try:
+        from watchdog.observers import Observer
+        from watchdog.observers.polling import PollingObserver
+        from watchdog.events import FileSystemEventHandler
+    except ImportError:
+        raise ImportError("watchdog not installed")
+
+    class FileSystemObserver(FileSystemEventHandler):
+        def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns):
+            super().__init__()
+            self.workspace_id = workspace_id
+            self.repo_dir = repo_dir
+            self.target_path = target_path
+            self.ignore_dirs = ignore_dirs
+            self.ignore_patterns = ignore_patterns
+
+        def process_event(self, event, filepath_override=None, op_override=None):
+            if event.is_directory: return
+
+            src_path = filepath_override or event.src_path
+            filename = Path(src_path).name
+            if filename.startswith('.') or filename.endswith('~'): return
+
+            try:
+                rel_to_target = os.path.relpath(src_path, self.target_path).replace('\\', '/')
+                logical_path = f"{self.repo_dir}/{rel_to_target}"
+
+                # CPU Optimization: Drop events for ignored directories/patterns before waking the Event Bus
+                parts = set(p.lower() for p in logical_path.split('/'))
+                if parts.intersection(self.ignore_dirs): return
+                if any(pattern in logical_path for pattern in self.ignore_patterns): return
+                op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
+
+                print(f"👀 [Watchdog] Caught '{op}' on: {logical_path}")
+
+                # Persistent CQRS Ledger Write
+                try:
+                    from insetu.kernel.db import get_connection
+                    import time
+                    w_conn = get_connection("workers", workspace_id=self.workspace_id)
+                    w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, op, time.time()))
+                    w_conn.commit()
+                except Exception:
+                    pass
+
+                # Emit standard agnostic event bus payload instead of hardcoded SQLite writes
+                hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=[{"filepath": logical_path, "operation": op, "ignore_ledger": False}])
+            except Exception:
+                pass
+
+        def on_modified(self, event): self.process_event(event)
+        def on_created(self, event): self.process_event(event)
+        def on_deleted(self, event): self.process_event(event)
+        def on_moved(self, event):
+            self.process_event(event, filepath_override=event.src_path, op_override='delete')
+            if hasattr(event, 'dest_path'):
+                self.process_event(event, filepath_override=event.dest_path, op_override='save')
+
+    try:
+        observer = Observer()
+    except Exception:
+        observer = PollingObserver()
+    has_watches = False
+
+    for ws_id, cfg in active_configs:
+        _, ws_root, _ = get_workspace_physics(ws_id)
+        global_ignore = set(cfg.get("ignore_dirs", []))
+        global_patterns = cfg.get("ignore_patterns", [])
+
+        for repo_cfg in cfg.get("target_repos", []):
+            r_dir = repo_cfg.get("repo_dir")
+            if not r_dir: continue
+            p_path = repo_cfg.get("physical_path")
+            target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else Path(ws_root).joinpath(r_dir).resolve().as_posix()
+            if os.path.exists(target_path):
+                handler = FileSystemObserver(
+                    workspace_id=ws_id,
+                    repo_dir=r_dir,
+                    target_path=target_path,
+                    ignore_dirs=global_ignore.union(repo_cfg.get("repo_ignore_dirs", [])),
+                    ignore_patterns=global_patterns + repo_cfg.get("repo_ignore_patterns", [])
+                )
+                observer.schedule(handler, target_path, recursive=True)
+                has_watches = True
+
+    if has_watches:
+        observer.start()
+        print("👁️  Native Filesystem Watchers Engaged.")
+    return observer
+
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
