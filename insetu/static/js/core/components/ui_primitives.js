@@ -132,6 +132,30 @@ import { SutramCard, SutramModal, SutramAsyncBtn } from '../../../vendor/sutram/
 if (!customElements.get('insetu-card')) customElements.define('insetu-card', class extends SutramCard {});
 if (!customElements.get('insetu-modal')) customElements.define('insetu-modal', class extends SutramModal {});
 if (!customElements.get('insetu-async-btn')) customElements.define('insetu-async-btn', class extends SutramAsyncBtn {});
+
+export class InSetuSpinner extends LitElement {
+    static properties = { text: { type: String } };
+    static styles = css`
+        :host { display: block; margin: 15px 0; }
+        .spinner-container { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted, #888); font-style: italic; font-size: 0.9rem; }
+        .loader { border: 2px solid var(--border, #444); border-top: 2px solid var(--intent-primary, #3b82f6); border-radius: 50%; width: 16px; height: 16px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    `;
+    render() { return html`<div class="spinner-container"><div class="loader"></div><span>${this.text || ''}<slot></slot></span></div>`; }
+}
+if (!customElements.get('insetu-spinner')) customElements.define('insetu-spinner', InSetuSpinner);
+
+export class InSetuEmptyState extends LitElement {
+    static properties = { icon: { type: String }, text: { type: String } };
+    static styles = css`
+        :host { display: block; padding: 20px; }
+        .empty-container { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted, #888); text-align: center; gap: 8px; }
+        .icon { font-size: 2rem; opacity: 0.8; margin-bottom: 5px; }
+        .text { font-style: italic; font-size: 0.95rem; }
+    `;
+    render() { return html`<div class="empty-container">${this.icon ? html`<div class="icon">${this.icon}</div>` : ''}<div class="text">${this.text || ''}<slot></slot></div></div>`; }
+}
+if (!customElements.get('insetu-empty-state')) customElements.define('insetu-empty-state', InSetuEmptyState);
 if (!document.getElementById('insetu-toast-root')) {
     const toastRoot = document.createElement('sutram-toast-container');
     toastRoot.id = 'insetu-toast-root';

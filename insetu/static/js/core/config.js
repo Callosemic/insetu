@@ -417,62 +417,44 @@ export class InSetuExtConfig extends InSetuElement {
                         <div style="display: flex; flex-direction: column; gap: 12px;">
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 2; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Workspace Title</label>
-                                    <input type="text" .value=${this.configForm.instance_title || ''} placeholder="e.g., My Project OS" @input=${(e) => { this.configForm = { ...this.configForm, instance_title: e.target.value }; }}>
+                                    <sutram-input label="Workspace Title" .value=${this.configForm.instance_title || ''} placeholder="e.g., My Project OS" @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, instance_title: e.detail.value }; }}></sutram-input>
                                 </div>
                                 <div style="flex: 1; min-width: 80px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Menu Emoji</label>
-                                    <input type="text" .value=${this.configForm.instance_emoji || ''} placeholder="⚙️" @input=${(e) => { this.configForm = { ...this.configForm, instance_emoji: e.target.value }; }}>
+                                    <sutram-input label="Menu Emoji" .value=${this.configForm.instance_emoji || ''} placeholder="⚙️" @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, instance_emoji: e.detail.value }; }}></sutram-input>
                                 </div>
                             </div>
-                            <div style="margin-bottom: 4px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
-                                <label style="font-size: 0.85rem; color: var(--text); font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 10px;">
-                                    <input type="checkbox" style="transform: scale(1.2); cursor: pointer;" 
-                                        .checked=${this.configForm.track_os !== false} 
-                                        @change=${(e) => { this.configForm = { ...this.configForm, track_os: e.target.checked }; }}>
-                                    Track inSetu OS (.insetu)
-                                </label>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 26px;">Maps the underlying system directory to natively manage prompts and internal state tracking.</span>
+                            <div style="margin-bottom: 12px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
+                                <sutram-toggle label="Track inSetu OS (.insetu)" .checked=${this.configForm.track_os !== false} @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, track_os: e.detail.value }; }}></sutram-toggle>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 46px;">Maps the underlying system directory to natively manage prompts and internal state tracking.</span>
+                            </div>
+                            <div style="margin-bottom: 12px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
+                                <sutram-toggle label="Enable Native Filesystem Watchdog (watchdog)" .checked=${this.configForm.enable_watchdog === true} @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, enable_watchdog: e.detail.value }; }}></sutram-toggle>
+                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 46px;">Uses the Python <code>watchdog</code> library to detect external out-of-band edits (e.g. from VS Code) and instantly syncs the VFS.</span>
                             </div>
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 200px;">
-                                    <div style="margin-bottom: 4px;">
-                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Directories</label>
-                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Completely ignored by the VFS (e.g. node_modules).</span>
-                                    </div>
-                                    <input type="text" .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, build" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_dirs: arr }; }}>
+                                    <sutram-input label="Global Ignore Directories" .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, build" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_dirs: arr }; }}></sutram-input>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Completely ignored by the VFS (e.g. node_modules).</span>
                                 </div>
                                 <div style="flex: 1; min-width: 200px;">
-                                    <div style="margin-bottom: 4px;">
-                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Files</label>
-                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Exact filenames to completely ignore.</span>
-                                    </div>
-                                    <input type="text" .value=${(this.configForm.ignore_files || []).join(', ')} placeholder=".DS_Store" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_files: arr }; }}>
+                                    <sutram-input label="Global Ignore Files" .value=${(this.configForm.ignore_files || []).join(', ')} placeholder=".DS_Store" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_files: arr }; }}></sutram-input>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Exact filenames to completely ignore.</span>
                                 </div>
                             </div>
 
                             <div>
-                                <div style="margin-bottom: 4px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Ignore Patterns</label>
-                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Wildcard substring matches to completely ignore (e.g. *.log).</span>
-                                </div>
-                                <input type="text" .value=${(this.configForm.ignore_patterns || []).join(', ')} placeholder="*.log, cache_*" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_patterns: arr }; }}>
+                                <sutram-input label="Global Ignore Patterns" .value=${(this.configForm.ignore_patterns || []).join(', ')} placeholder="*.log, cache_*" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_patterns: arr }; }}></sutram-input>
+                                <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Wildcard substring matches to completely ignore (e.g. *.log).</span>
                             </div>
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 200px;">
-                                    <div style="margin-bottom: 4px;">
-                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Global Allowed Extensions</label>
-                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">Merged with repo-specific extensions across all repos.</span>
-                                    </div>
-                                    <input type="text" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, include_extensions: arr }; }}>
+                                    <sutram-input label="Global Allowed Extensions" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, include_extensions: arr }; }}></sutram-input>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Merged with repo-specific extensions across all repos.</span>
                                 </div>
                                 <div style="flex: 1; min-width: 200px;">
-                                    <div style="margin-bottom: 4px;">
-                                        <label style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold; display: block;">Exempted Managed Directories</label>
-                                        <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8;">System folders to exclude from context payloads and diffs.</span>
-                                    </div>
-                                    <input type="text" .value=${(this.configForm.managed_dirs || []).join(', ')} placeholder=".tracker" @input=${(e) => { const arr = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, managed_dirs: arr }; }}>
+                                    <sutram-input label="Exempted Managed Directories" .value=${(this.configForm.managed_dirs || []).join(', ')} placeholder=".tracker" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, managed_dirs: arr }; }}></sutram-input>
+                                    <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">System folders to exclude from context payloads and diffs.</span>
                                 </div>
                             </div>
                         </div>

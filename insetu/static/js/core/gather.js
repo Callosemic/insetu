@@ -98,7 +98,7 @@ const packSelectionPayload = async (items) => {
             onComplete: async (statusData) => {
                 try {
                     const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
-                    if (mRes.ok) window.inSetu.stores.App.setState({ manifest: await mRes.json() });
+                    if (mRes.ok) window.inSetu.stores.App.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                 } catch(e) {}
                 resolve(statusData.artifact);
             },
@@ -314,7 +314,7 @@ export class InSetuExtGather extends InSetuElement {
                                                     const data = await res.json();
                                                     if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
                                                     const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
-                                                    if (mRes.ok) AppStore.setState({ manifest: await mRes.json() });
+                                                    if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                                                 }
                                             } catch(e) {
                                                 console.error("Failed to clear quickpacks: " + e.message);

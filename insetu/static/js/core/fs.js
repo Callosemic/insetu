@@ -325,9 +325,8 @@ function updateManifestState(oldPath, newPath = null) {
             }
         }
     }
-
     if (changed) {
-        AppStore.setState({ manifest: newManifest });
+        AppStore.setState({ manifest: newManifest || { vfs: {}, ctx: {} } });
     }
 
     if (FsStore.getState().modals.browser?.open) {
