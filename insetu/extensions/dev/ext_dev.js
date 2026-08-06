@@ -53,7 +53,7 @@ export class InSetuExtDevDash extends InSetuElement {
                 DevStore.setState({ 
                     thrashingFiles: data.thrashing || [],
                     bridgeErrors: data.bridge_errors || [],
-                    lastUpdate: new Date().toLocaleTimeString()
+                    lastUpdate: this.utils.formatDate(new Date())
                 });
             } else {
                 DevStore.setState({ lastUpdate: `Error (HTTP ${res.status})` });
@@ -206,11 +206,10 @@ window.ExtensionRegistry.registerExtension('dev', {
             if (!payload || !payload.mutations) return false;
             const activeTab = window.inSetu.stores.App.getState().activeTab;
             if (activeTab === 'dev') {
-                if (window.ExtensionRegistry.utils.debounce) {
-                    window.ExtensionRegistry.utils.debounce('dev_dash_refresh', () => {
-                        DevStore.setState({ forceRefreshTick: Date.now() });
-                    }, 2000);
-                }
+                if (window._devDashRefreshTimer) clearTimeout(window._devDashRefreshTimer);
+                window._devDashRefreshTimer = setTimeout(() => {
+                    DevStore.setState({ forceRefreshTick: Date.now() });
+                }, 2000);
             }
             return false;
         }

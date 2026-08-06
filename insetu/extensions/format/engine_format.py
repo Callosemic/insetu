@@ -42,7 +42,7 @@ def compile_document_payload(workspace_id, filepath, target_format):
     chunks = next((r for r in responses if r), [filepath])
     content = ""
     for c in chunks:
-        is_sys = c.startswith("ctx://") or c.startswith("system://")
+        is_sys = c.startswith("ctx://")
         c_text = ctx.vfs.read(c, is_absolute_artifact=is_sys)
         if c_text:
             content += c_text + "\n\n"
@@ -114,35 +114,26 @@ def run_formatter():
     except ImportError:
         print("❌ Missing jsbeautifier. Please run: pip install jsbeautifier")
         sys.exit(1)
-
     # Standardize to your 4-space indentation rule
     opts = jsbeautifier.default_options()
     opts.indent_size = 4
     opts.space_in_empty_paren = True
     opts.end_with_newline = True
-    # Resolve workspace root dynamically via utils_core
-    sys.path.append(Path(__file__).resolve().parent.as_posix())
-    try:
-        import insetu.core.utils_core as utils_core
-        paths = utils_core.get_gather_paths()
-        workspace_root = paths["workspace_root"]
-        manifest_path = Path(paths["contexts_dir"]).joinpath("manifest.json").as_posix()
-    except Exception:
-        print("❌ Error: Could not load core tooling modules.")
-        sys.exit(1)
-
-    if not os.path.exists(manifest_path):
-        print(f"❌ Error: Context manifest not found at {manifest_path}")
-        print("   Please open or refresh the Axoneme web UI to auto-compile the ecosystem context.")
-        sys.exit(1)
-
     print("🧹 Booting native Python JS Formatter (Context-Bound)...")
     try:
-        manifest_text = Path(manifest_path).read_text(encoding="utf-8")
-        manifest = json.loads(manifest_text)
+        from insetu.core.sdk import ExtensionContext
+        ctx = ExtensionContext('format', 'default')
+        manifest = ctx.manifest
     except Exception:
-        print("❌ Error: Failed to parse manifest.json.")
+        print("❌ Error: Failed to load context manifest.")
         sys.exit(1)
+
+    if not manifest:
+        print("❌ Error: Context manifest is empty or unavailable.")
+        print("   Please open or refresh the web UI to auto-compile the ecosystem context.")
+        sys.exit(1)
+
+    workspace_root = os.getcwd()
     # Target the directory where the user executed the command
     target_dir = os.getcwd()
     # Collect unique JS files from the manifest, restricted to the current directory

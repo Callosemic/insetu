@@ -27,6 +27,7 @@ export const FreshdeskStore = createExtensionStore('Freshdesk', {
 window.inSetu.stores.Freshdesk = FreshdeskStore;
 // 2. The Declarative Lit Component
 export class InSetuExtFreshdesk extends InSetuElement {
+    static get extensionName() { return 'freshdesk'; }
     static properties = {
         tickets: { type: Array },
         loadingMsg: { type: String },
@@ -335,7 +336,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         <details open style="background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--intent-primary); border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                             <summary style="padding: 15px; cursor: pointer; display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted); font-weight: bold; outline: none; user-select: none;">
                                 <span>Initial Description</span>
-                                <span>${this.selectedTicket?.created_at ? new Date(this.selectedTicket.created_at).toLocaleString() : ''}</span>
+                                <span>${this.selectedTicket?.created_at ? this.utils.formatDate(this.selectedTicket.created_at) : ''}</span>
                             </summary>
                             <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px;" .innerHTML=${this.selectedTicket?.description || this.selectedTicket?.description_text || 'No description provided.'}></div>
                         </details>
@@ -348,7 +349,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                                         <span>${conv.private ? '📝 Private Note' : (conv.incoming ? '📨 Reply from Customer' : '📤 Agent Response')}</span>
                                         <span style="color: var(--text); opacity: 0.6;">${conv.from_email ? `<${conv.from_email}>` : ''}</span>
                                     </span>
-                                    <span>${new Date(conv.created_at).toLocaleString()}</span>
+                                    <span>${this.utils.formatDate(conv.created_at)}</span>
                                 </summary>
                                 <div style="padding: 0 15px 15px 15px; font-size: 0.95rem; word-break: break-word; color: var(--text); border-top: 1px dashed var(--border); margin-top: 5px; padding-top: 15px;" .innerHTML=${conv.body || conv.body_text || 'No text content.'}></div>
                             </details>

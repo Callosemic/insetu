@@ -23,8 +23,8 @@ export const PromptsStore = createExtensionStore('Prompts', {
 });
 
 window.inSetu.stores.Prompts = PromptsStore;
-
 export class InSetuExtPrompts extends InSetuElement {
+    static get extensionName() { return 'prompts'; }
     get extName() { return 'prompts'; }
     static properties = {
         loading: { type: Boolean },

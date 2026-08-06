@@ -317,17 +317,14 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 active_generated_diffs.update(l_active)
     # Git Vacuum & Manifest Cleanup
     expected_diff_artifacts = active_generated_diffs.copy()
-
     for k, v in list(working_manifest.items()):
         if k.endswith('_diffs.txt'):
             repo = v.get("meta", {}).get("repo")
             if (target_repos is None or repo in target_repos) and k not in active_generated_diffs:
                 manifest_deltas[k] = None
 
-    from insetu.kernel.vfs import VFSTransaction, execute_vfs_delete
-    vfs_v = VFSTransaction(workspace_id)
     if os.path.exists(diffs_dir_path.as_posix()):
-        for ws_rel_path in vfs_v.walk(diffs_dir_path.as_posix(), exts=['.txt']):
+        for ws_rel_path in ctx.vfs.walk(diffs_dir_path.as_posix(), exts=['.txt']):
             f_basename = Path(ctx.resolve_path(ws_rel_path)).name
 
             is_target_repo_file = False
@@ -341,7 +338,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
             if is_target_repo_file and f_basename not in expected_diff_artifacts:
                 try:
-                    execute_vfs_delete(workspace_id, ws_rel_path)
+                    ctx.vfs.save(ws_rel_path, "", data={"action": "delete"})
                 except Exception:
                     pass
 

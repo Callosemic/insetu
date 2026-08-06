@@ -213,7 +213,7 @@ export class InSetuExtHooks extends InSetuElement {
                         ${this.logs.map(log => {
                             const statusColor = log.status === 'completed' ? 'var(--intent-success)' : (log.status === 'failed' ? 'var(--intent-danger)' : 'var(--intent-warning)');
                             // Python time.time() returns seconds, JS expects milliseconds
-                            const safeDate = log.updated_at ? new Date(log.updated_at * 1000).toLocaleString() : 'Unknown';
+                            const safeDate = log.updated_at ? this.utils.formatDate(log.updated_at * 1000) : 'Unknown';
                             const output = log.artifact?.output || '';
 
                             return html`

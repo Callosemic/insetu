@@ -301,12 +301,11 @@ export class InSetuExtNotes extends InSetuElement {
                     @repo-filter-changed=${(e) => NotesStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-
             <div class="notes-body">
-                ${this.loading ? html`<div class="spinner" style="display:block;">Loading notes...</div>` : ''}
+                ${this.loading ? html`<insetu-spinner text="Loading notes..."></insetu-spinner>` : ''}
 
                 <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${filteredNotes.length === 0 && !this.loading ? html`<p style="color: var(--text-muted); font-style: italic;">No notes found. Click "☰" to create one.</p>` : ''}
+                    ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Click '☰' to create one."></insetu-empty-state>` : ''}
 
                     ${filteredNotes.map(n => html`
                         <insetu-card

@@ -44,9 +44,7 @@ def _background_archive_stale_tickets(ctx):
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
 @hooks.on('workspace_boot')
-def init_tracker_db(workspace_id=None):
-    _sync_disk_to_db(workspace_id=workspace_id)
-
+def schedule_tracker_archiving(workspace_id=None, **kwargs):
     # Schedule background archiving to run silently every 1 hour
     from insetu.core.sdk import ExtensionContext
     w_ctx = ExtensionContext('workers', workspace_id)
@@ -147,22 +145,17 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
 def _sync_disk_to_db(workspace_id=None):
     from insetu.core.sdk import ExtensionContext
     ctx = ExtensionContext('tracker', workspace_id)
+    top_ctx = ExtensionContext('topology', workspace_id)
     ctx.db.execute("DELETE FROM tracker_tickets")
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
-    for repo in repos:
-        tracker_path = f"{repo}/.tracker"
-        # SDK VFS Walk abstracts physical path resolution and spatial bounds.
-        # We explicitly step into log directories to bypass global ignore_dirs (like "log").
-        paths_to_walk = [tracker_path, f"{repo}/.tracker/log", f"{repo}/.tracker/log/archived"]
-        walked_files = set()
 
-        for path in paths_to_walk:
-            for ws_rel_path in ctx.vfs.walk(path, exts=['.md']):
-                if ws_rel_path in walked_files:
-                    continue
-                walked_files.add(ws_rel_path)
-                abs_path = ctx.resolve_path(ws_rel_path)
-                _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
+    for repo in repos:
+        # SSOT Elimination of manual OS walking: Fetch tracked paths from Topology Ledger
+        rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ? AND filepath LIKE '%.tracker/%.md'", (repo,)).fetchall()
+        for r in rows:
+            ws_rel_path = r['filepath']
+            abs_path = ctx.resolve_path(ws_rel_path)
+            _parse_and_upsert_ticket(abs_path, ws_rel_path, workspace_id)
 
     ctx.db.commit()
 @hooks.on('mutate_workspace_config')
@@ -174,14 +167,20 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
 
     ctx = ExtensionContext('tracker', workspace_id)
     tracker_cfg = ctx.settings.get_all()
-
     # 1. Register .tracker as a Cartographer managed directory
     if "managed_dirs" not in cfg:
         cfg["managed_dirs"] = []
     if ".tracker" not in cfg["managed_dirs"]:
         cfg["managed_dirs"].append(".tracker")
 
-    # 2. Inject the tracker sub-bucket into all mapped repositories
+    # 2. Force Topology Engine to map .tracker even if the user ignored it
+    for repo_cfg in cfg.get("target_repos", []):
+        if "ignore_exceptions" not in repo_cfg:
+            repo_cfg["ignore_exceptions"] = []
+        if ".tracker/" not in repo_cfg["ignore_exceptions"]:
+            repo_cfg["ignore_exceptions"].append(".tracker/")
+
+    # 3. Inject the tracker sub-bucket into all mapped repositories
     strat = tracker_cfg.get("domain_strategy", "default")
     custom_val = tracker_cfg.get("domain_custom_value", "")
     isolate_context = tracker_cfg.get("isolate_context", True)
@@ -375,13 +374,15 @@ def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
     enforce_declarative_tickets(workspace_id=ctx.workspace_id, specific_file=specific_file)
     return "Ticket housekeeping complete."
 
-@hooks.on('pre_compile')
-def pre_compile_tracker_housekeeping(workspace_id=None, is_full_sweep=False, **kwargs):
-    if is_full_sweep:
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('tracker', workspace_id)
-        # Offload heavy disk-walk to the async worker pool to prevent Event Loop starvation
-        ctx.jobs.submit("enforce_tickets_task")
+@hooks.on('topology_boot_complete')
+@hooks.on('topology_boot_complete')
+@hooks.on('force_topology_scan')
+def manual_tracker_housekeeping(workspace_id=None, **kwargs):
+    """Hydrates Tracker safely after Topology maps the workspace, or on manual refresh."""
+    from insetu.core.sdk import ExtensionContext
+    ctx = ExtensionContext('tracker', workspace_id)
+    _sync_disk_to_db(workspace_id)
+    ctx.jobs.submit("enforce_tickets_task")
 
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
@@ -407,18 +408,12 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     if specific_file:
         target_files.append((specific_file.split('/')[0], specific_file))
     else:
+        top_ctx = ExtensionContext('topology', workspace_id)
         for current_repo in repos:
-            tracker_rel_base = f"{current_repo}/.tracker"
-            # Explicitly step into log directories to bypass global ignore_dirs (like "log")
-            paths_to_walk = [tracker_rel_base, f"{current_repo}/.tracker/log", f"{current_repo}/.tracker/log/archived"]
-            walked_files = set()
+            rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ? AND filepath LIKE '%.tracker/%.md'", (current_repo,)).fetchall()
+            for r in rows:
+                target_files.append((current_repo, r['filepath']))
 
-            for path in paths_to_walk:
-                for ws_rel_path in ctx.vfs.walk(path, exts=['.md']):
-                    if ws_rel_path in walked_files:
-                        continue
-                    walked_files.add(ws_rel_path)
-                    target_files.append((current_repo, ws_rel_path))
     for current_repo, ws_rel_path in target_files:
         tracker_rel_base = f"{current_repo}/.tracker"
 

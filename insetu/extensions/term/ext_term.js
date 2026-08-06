@@ -7,8 +7,8 @@ import { FitAddon } from 'xterm-addon-fit';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 export const TerminalStore = createExtensionStore('Terminal', {});
 window.inSetu.stores.Terminal = TerminalStore;
-
 export class InSetuExtTerm extends InSetuElement {
+    static get extensionName() { return 'term'; }
     get extName() { return 'term'; }
     static styles = css`
         :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }

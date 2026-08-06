@@ -21,6 +21,7 @@ export const ResearchStore = createExtensionStore('Research', {
 
 window.inSetu.stores.Research = ResearchStore;
 export class InSetuExtResearch extends InSetuElement {
+    static get extensionName() { return 'research'; }
     static properties = {
         jobs: { type: Array },
         inbox: { type: Array },
@@ -339,7 +340,7 @@ export class InSetuExtResearch extends InSetuElement {
                 <div style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <div style="flex: 1; display: flex; flex-direction: column; min-height: 200px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);">
                         <div style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; padding: 10px; flex: 1;">
-                            ${activeInbox.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic;">No pending items for this job.</span>` : activeInbox.map(item => {
+                            ${activeInbox.length === 0 ? html`<insetu-empty-state text="No pending items for this job."></insetu-empty-state>` : activeInbox.map(item => {
                                 const statusBadge = item.scraped_at ? '✅' : '⏳';
                                 const isSelected = this.selectedItemId === item.id;
                                 return html`
@@ -410,37 +411,34 @@ export class InSetuExtResearch extends InSetuElement {
             </sutram-modal>
             <sutram-modal ?open=${this.newJobModalOpen} ?fullscreen=${true} titleText="New Research Job" @sutram-modal-closed=${() => ResearchStore.setState({ newJobModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%; padding: 8px; box-sizing: border-box;' })}
+                    ${bindStoreInput(ResearchStore, 'searchForm.query', this.searchForm.query, { placeholder: 'Search Query...', style: 'width: 100%;' })}
                     <div style="display: flex; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.provider', this.searchForm.provider || 'serper', { type: 'select', style: 'flex: 1;', selectOptions: [{value: 'serper', label: 'Google (Serper.dev API)'}, {value: 'google', label: 'Google (Playwright)'}, {value: 'duckduckgo', label: 'DuckDuckGo'}] })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateRange', this.searchForm.dateRange || '', { type: 'select', style: 'flex: 1;', selectOptions: [{value: '', label: 'Any Time'}, {value: 'd', label: 'Past Day'}, {value: 'w', label: 'Past Week'}, {value: 'm', label: 'Past Month'}, {value: 'y', label: 'Past Year'}, {value: 'custom', label: 'Custom Range (Exact)...'}, {value: 'custom_year', label: 'Custom Range (Years)...'}] })}
                     </div>
                     <div style="display: ${this.searchForm.dateRange === 'custom' ? 'flex' : 'none'}; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateStart', this.searchForm.dateStart, { type: 'date', style: 'flex: 1;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.dateEnd', this.searchForm.dateEnd, { type: 'date', style: 'flex: 1;' })}
                     </div>
                     <div style="display: ${this.searchForm.dateRange === 'custom_year' ? 'flex' : 'none'}; gap: 10px;">
-                        ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
-                        ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.yearStart', this.searchForm.yearStart, { type: 'number', placeholder: 'YYYY (e.g. 1999)', min: 1990, max: 2100, style: 'flex: 1;' })}
+                        ${bindStoreInput(ResearchStore, 'searchForm.yearEnd', this.searchForm.yearEnd, { type: 'number', placeholder: 'YYYY (e.g. 2005)', min: 1990, max: 2100, style: 'flex: 1;' })}
                     </div>
                     <div style="display: flex; gap: 10px; align-items: flex-end;">
                         <div style="flex: 1;">
-                            <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Extraction Parser</label>
-                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { type: 'select', style: 'width: 100%; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.parser', this.searchForm.parser || 'jina', { label: 'Extraction Parser', type: 'select', style: 'width: 100%;', selectOptions: [{value: 'jina', label: 'Jina AI (Rich Markdown)'}, {value: 'bs4', label: 'Local (BeautifulSoup)'}] })}
                         </div>
                         <div style="flex: 1;">
-                            <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Default Output Folder</label>
-                            <div style="display: flex; gap: 8px;">
-                                ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { placeholder: 'e.g. research/', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace;' })}
-                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
+                            <div style="display: flex; gap: 8px; align-items: flex-end;">
+                                ${bindStoreInput(ResearchStore, 'targetDir', this.targetDir || 'research/', { label: 'Default Output Folder', placeholder: 'e.g. research/', style: 'flex: 1; font-family: monospace;' })}
+                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 12px; height: 38px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
                             </div>
                         </div>
                     </div>
                     <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 4px;">Max Results</label>
-                        <div style="display: flex; gap: 8px;">
-                            ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { type: 'select', style: 'flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
-                            ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; padding: 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
+                        <div style="display: flex; gap: 8px; align-items: flex-end;">
+                            ${bindStoreInput(ResearchStore, 'searchForm.maxResults', this.searchForm.maxResults || '50', { label: 'Max Results', type: 'select', style: 'flex: 1;', selectOptions: [{value: '10', label: '10 Results'}, {value: '25', label: '25 Results'}, {value: '50', label: '50 Results'}, {value: '100', label: '100 Results'}, {value: '9999', label: 'All (Keep Scraping)'}, {value: 'custom', label: 'Custom...'}] })}
+                            ${bindStoreInput(ResearchStore, 'searchForm.maxCustom', this.searchForm.maxCustom, { type: 'number', placeholder: 'e.g. 150', min: 1, max: 1000, style: `flex: 1; display: ${this.searchForm.maxResults === 'custom' ? 'block' : 'none'};` })}
                         </div>
                     </div>
                 </div>

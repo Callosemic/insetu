@@ -91,8 +91,7 @@ tailscale_bp = InSetuExtension(
     __name__, 
     title="Tailscale Network Manager", 
     description="Auto-bind inSetu over Tailscale Serve on boot.",
-    settings_schema=TAILSCALE_SETTINGS_SCHEMA,
-    has_ui=False
+    settings_schema=TAILSCALE_SETTINGS_SCHEMA
 )
 
 

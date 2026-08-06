@@ -14,8 +14,8 @@ export const IngestStore = createExtensionStore('Ingest', {
 });
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Ingest = IngestStore;
-
 export class InSetuExtIngestModals extends InSetuElement {
+    static get extensionName() { return 'ingest'; }
     static properties = {
         ingestModalOpen: { type: Boolean },
         ingestUrl: { type: String },
@@ -90,22 +90,18 @@ export class InSetuExtIngestModals extends InSetuElement {
         return html`
             <sutram-modal ?open=${this.ingestModalOpen} titleText="Import from URL" @sutram-modal-closed=${() => IngestStore.setState({ ingestModalOpen: false })}>
                 <div slot="body">
-                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Target URL:</label>
-                    <input type="text" placeholder="https://..." style="margin-bottom: 15px; padding: 10px; font-weight: bold; width: 100%; box-sizing: border-box;"
-                        .value=${this.ingestUrl} @input=${e => IngestStore.setState({ ingestUrl: e.target.value })}>
+                    <sutram-input label="Target URL:" placeholder="https://..." .value=${this.ingestUrl} @sutram-input-changed=${e => IngestStore.setState({ ingestUrl: e.detail.value })}></sutram-input>
 
-                    <label style="font-size: 0.9rem; margin-bottom: 5px; display: block; color: var(--text);">Extraction Method:</label>
-                    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; font-size: 0.9rem; background: var(--input-bg); padding: 10px; border: 1px solid var(--border); border-radius: 4px;"
-                        @change=${e => IngestStore.setState({ ingestMethod: e.target.value })}>
-                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="import-method" value="jina" ?checked=${this.ingestMethod === 'jina'}>  
-                            <b>Jina Reader API</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Clean formatting, relies on remote server)</span>
-                        </label>
-                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="import-method" value="bs4" ?checked=${this.ingestMethod === 'bs4'}> 
-                            <b>BeautifulSoup Local</b> <span style="color: var(--text-muted); font-size: 0.8rem;">(Fallback, requires pip install bs4 markdownify)</span>
-                        </label>
-                    </div>
+                    <sutram-select 
+                        label="Extraction Method:" 
+                        .value=${this.ingestMethod} 
+                        .options=${[
+                            {value: 'jina', label: 'Jina Reader API (Clean formatting, remote server)'},
+                            {value: 'bs4', label: 'BeautifulSoup Local (Fallback, requires bs4 & markdownify)'}
+                        ]} 
+                        @sutram-input-changed=${e => IngestStore.setState({ ingestMethod: e.detail.value })}>
+                    </sutram-select>
+
                     ${this.ingestStatus ? html`<div style="color: var(--text-muted); font-weight: bold; margin-bottom: 10px;">${this.ingestStatus}</div>` : ''}
                     ${this.ingestError ? html`<div style="color: var(--intent-danger); font-weight: bold; margin-bottom: 10px;">❌ Error: ${this.ingestError}</div>` : ''}
                 </div>

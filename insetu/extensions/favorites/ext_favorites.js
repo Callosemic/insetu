@@ -81,7 +81,7 @@ export const FavoritesStore = createExtensionStore('Favorites', {
     }
 });
 export class InSetuFavBtn extends InSetuElement {
-    static extensionName = 'favorites';
+    static get extensionName() { return 'favorites'; }
     get extName() { return 'favorites'; }
 
     static properties = { filepath: { type: String }, folderpath: { type: String }, _isPinned: { type: Boolean }, _favId: { type: String } };
@@ -128,8 +128,8 @@ export class InSetuFavBtn extends InSetuElement {
     }
 }
 customElements.define('insetu-fav-btn', InSetuFavBtn);
-
 export class InSetuExtFavorites extends InSetuElement {
+    static get extensionName() { return 'favorites'; }
     static properties = {
         items: { type: Array },
         loading: { type: Boolean }

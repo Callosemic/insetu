@@ -73,8 +73,8 @@ export const SkillsStore = createExtensionStore('Skills', {
                 }));
             }
 });
-
 export class InSetuExtSkills extends InSetuElement {
+    static get extensionName() { return 'skills'; }
     static properties = {
         playlist: { type: Array },
         allSkills: { type: Array },
@@ -313,26 +313,27 @@ export class InSetuExtSkills extends InSetuElement {
             const max = def.max !== undefined ? def.max : 5;
             const options = [];
             for (let i = min; i <= max; i++) {
-                options.push(i);
+                options.push({ value: i, label: String(i) });
             }
 
             return html`
-                <div>
-                    <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">${def.label}</label>
-                    <select .value=${value !== '' ? value : min} 
-                        @change=${(e) => SkillsStore.getState().updateMetricField(key, parseInt(e.target.value, 10))}>
-                        ${options.map(opt => html`<option value="${opt}">${opt}</option>`)}
-                    </select>
-                </div>
+                <sutram-select 
+                    .label=${def.label} 
+                    .value=${value !== '' ? value : min} 
+                    .options=${options}
+                    @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField(key, parseInt(e.detail.value, 10))}>
+                </sutram-select>
             `;
         }
 
         return html`
-            <div>
-                <label style="font-size:0.8rem; font-weight:bold; color:var(--text-muted); display:block; margin-bottom:4px;">${def.label} ${def.unit ? `(${def.unit})` : ''}</label>
-                <input type="number" .value=${value} placeholder="e.g. 120"
-                    @input=${(e) => SkillsStore.getState().updateMetricField(key, e.target.value === '' ? '' : parseFloat(e.target.value))}>
-            </div>
+            <sutram-input 
+                type="number" 
+                .label=${def.label + (def.unit ? ` (${def.unit})` : '')}
+                .value=${value} 
+                placeholder="e.g. 120"
+                @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField(key, e.detail.value === '' ? '' : parseFloat(e.detail.value))}>
+            </sutram-input>
         `;
     }
     _renderGroupsTab() {
@@ -350,24 +351,20 @@ export class InSetuExtSkills extends InSetuElement {
                     const absoluteCompleted = linkedItems.reduce((acc, item) => acc + (item.metrics?.completed_parts ? item.metrics.completed_parts.split(',').map(p => p.trim()).filter(p => p).length : 0), 0);
 
                     const progressPercentage = absoluteParts > 0 ? Math.round((absoluteCompleted / absoluteParts) * 100) : 0;
-
                     return html`
-                        <details style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; cursor: pointer;">
-                            <summary style="display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 1rem; list-style: none; user-select: none;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span>📦 ${groupName}</span>
-                                    <span style="font-size: 0.8rem; color: var(--text-muted); background: var(--bg); padding: 2px 8px; border-radius: 12px; border: 1px solid var(--border);">
-                                        ${linkedItems.length} item(s)
-                                    </span>
-                                </div>
-                                <div style="display: flex; align-items: center; gap: 12px; width: 40%; max-width: 300px;">
-                                    <div style="flex: 1; height: 8px; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); overflow: hidden; position: relative;">
+                        <sutram-collapsible intent="neutral" titleText="📦 ${groupName}">
+                            <div slot="actions" style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 0.8rem; color: var(--text-muted); background: var(--bg); padding: 2px 8px; border-radius: 12px; border: 1px solid var(--border);">
+                                    ${linkedItems.length} item(s)
+                                </span>
+                                <div style="display: flex; align-items: center; gap: 8px; width: 150px;">
+                                    <div style="flex: 1; height: 6px; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); overflow: hidden; position: relative;">
                                         <div style="width: ${progressPercentage}%; height: 100%; background: var(--intent-success); transition: width 0.3s ease;"></div>
                                     </div>
-                                    <span style="font-size: 0.85rem; color: var(--intent-success); white-space: nowrap; font-family: var(--font-mono);">${absoluteCompleted}/${absoluteParts} (${progressPercentage}%)</span>
+                                    <span style="font-size: 0.8rem; color: var(--intent-success); font-family: var(--font-mono);">${absoluteCompleted}/${absoluteParts}</span>
                                 </div>
-                            </summary>
-                            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px; border-top: 1px solid var(--border); padding-top: 12px; cursor: default;" @click=${(e) => e.stopPropagation()}>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 10px; cursor: default;" @click=${(e) => e.stopPropagation()}>
                                 ${linkedItems.map(item => {
                                     const domainMeta = this.domainConfig[item.domain] || { label: item.domain };
                                     const tagsLabel = item.tags ? ` [${item.tags}]` : '';
@@ -388,7 +385,7 @@ export class InSetuExtSkills extends InSetuElement {
                                     `;
                                 })}
                             </div>
-                        </details>
+                        </sutram-collapsible>
                     `;
                 })}
             </div>
@@ -522,30 +519,18 @@ export class InSetuExtSkills extends InSetuElement {
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <sutram-input label="Track / Skill Title" .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
                         <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Track / Skill Title</label>
-                            <input type="text" .value=${this._editName || ''} @input=${(e) => this._editName = e.target.value} style="width:100%;">
-                        </div>
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Parent Collection Group</label>
-                            <input type="text" list="edit-group-list" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @input=${(e) => this._editGroup = e.target.value} style="width:100%;">
+                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Parent Collection Group</label>
+                            <input type="text" list="edit-group-list" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @input=${(e) => this._editGroup = e.target.value} style="width:100%; padding: 8px 12px; font-size: 0.95rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text);">
                             <datalist id="edit-group-list">
                                 ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
                             </datalist>
                         </div>
                     </div>
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Tags</label>
-                        <input type="text" .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @input=${(e) => this._editTags = e.target.value} style="width:100%;">
-                    </div>
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Section / Parts Definition Matrix</label>
-                        <input type="text" .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @input=${(e) => SkillsStore.getState().updateMetricField('parts', e.target.value)} style="width:100%;">
-                    </div>
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Optional Path Custom Steps (Comma Separated Overrides)</label>
-                        <input type="text" .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @input=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.target.value)} style="width:100%;">
-                    </div>
+                    <sutram-input label="Tags" .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => this._editTags = e.detail.value}></sutram-input>
+                    <sutram-input label="Section / Parts Definition Matrix" .value=${this.formMetrics.parts || ''} placeholder="e.g. Intro, Verse, Solo" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('parts', e.detail.value)}></sutram-input>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" .value=${this.formMetrics.custom_steps || ''} placeholder="e.g. Intro, Solo, Chorus, Mastered" @sutram-input-changed=${(e) => SkillsStore.getState().updateMetricField('custom_steps', e.detail.value)}></sutram-input>
                 </div>
                 <button slot="footer" style="background: var(--intent-danger); color: white;" @click=${this._deleteSkillItem}>🗑️ Delete Item</button>
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this._submitStructuralEdit}>💾 Save Structural Changes</button>
@@ -557,57 +542,42 @@ export class InSetuExtSkills extends InSetuElement {
                 @sutram-modal-closed=${() => SkillsStore.setState({ newSkillModalOpen: false })}>
                 <form slot="body" @submit=${this._handleCreateSkill} style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
+                        <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
                         <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Item Name / Track Title</label>
-                            <input type="text" placeholder="e.g. Stairway to Heaven" required style="width: 100%;"
-                                .value=${this._newSkillForm.name || ''} @input=${e => this._newSkillForm.name = e.target.value}>
-                        </div>
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Collection Group</label>
-                            <input type="text" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%;"
+                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Collection Group</label>
+                            <input type="text" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%; padding: 8px 12px; font-size: 0.95rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text);"
                                 .value=${this._newSkillForm.group || ''} @input=${e => this._newSkillForm.group = e.target.value}>
                             <datalist id="new-group-list">
                                 ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
                             </datalist>
                         </div>
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Target Domain Framework</label>
-                            <select .value=${activeNewDomain} @change=${(e) => { this._newSkillDomain = e.target.value; this._newSkillForm.domain = e.target.value; this.requestUpdate(); }}>
-                                ${Object.keys(this.domainConfig).map(k => html`
-                                    <option value="${k}">${this.domainConfig[k].label || k}</option>
-                                `)}
-                            </select>
-                        </div>
+                        <sutram-select 
+                            label="Target Domain Framework" 
+                            .value=${activeNewDomain} 
+                            .options=${Object.keys(this.domainConfig).map(k => ({ value: k, label: this.domainConfig[k].label || k }))}
+                            @sutram-input-changed=${(e) => { this._newSkillDomain = e.detail.value; this._newSkillForm.domain = e.detail.value; this.requestUpdate(); }}>
+                        </sutram-select>
                     </div>
 
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Tags</label>
-                        <input type="text" placeholder="e.g. Piano, Acoustic, Classical" style="width: 100%;"
-                            .value=${this._newSkillForm.tags || ''} @input=${e => this._newSkillForm.tags = e.target.value}>
-                    </div>
+                    <sutram-input label="Tags" placeholder="e.g. Piano, Acoustic, Classical" .value=${this._newSkillForm.tags || ''} @sutram-input-changed=${e => this._newSkillForm.tags = e.detail.value}></sutram-input>
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Initial Starting Status Stage</label>
-                            <select .value=${this._newSkillForm.status || 'untouched'} @change=${e => this._newSkillForm.status = e.target.value}>
-                                ${(() => {
-                                    const cfg = this.domainConfig[activeNewDomain];
-                                    const options = (cfg && cfg.step_labels) ? (Array.isArray(cfg.step_labels) ? cfg.step_labels : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }))) : [{ key: 'untouched', label: 'Untouched' }];
-                                    return options.map(opt => html`<option value="${opt.key}">${opt.label}</option>`);
-                                })()}
-                            </select>
-                        </div>
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Sections / Parts Matrix Checklist</label>
-                            <input type="text" placeholder="e.g. Intro, Verse, Solo" style="width: 100%;"
-                                .value=${this._newSkillForm.parts || ''} @input=${e => this._newSkillForm.parts = e.target.value}>
-                        </div>
+                        ${(() => {
+                            const cfg = this.domainConfig[activeNewDomain];
+                            const options = (cfg && cfg.step_labels) ? (Array.isArray(cfg.step_labels) ? cfg.step_labels : Object.keys(cfg.step_labels).map(k => ({ key: k, label: cfg.step_labels[k] }))) : [{ key: 'untouched', label: 'Untouched' }];
+                            const mappedOptions = options.map(opt => ({ value: opt.key, label: opt.label }));
+                            return html`
+                                <sutram-select 
+                                    label="Initial Starting Status Stage" 
+                                    .value=${this._newSkillForm.status || 'untouched'} 
+                                    .options=${mappedOptions}
+                                    @sutram-input-changed=${e => this._newSkillForm.status = e.detail.value}>
+                                </sutram-select>
+                            `;
+                        })()}
+                        <sutram-input label="Sections / Parts Matrix Checklist" placeholder="e.g. Intro, Verse, Solo" .value=${this._newSkillForm.parts || ''} @sutram-input-changed=${e => this._newSkillForm.parts = e.detail.value}></sutram-input>
                     </div>
-                    <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Optional Path Custom Steps (Comma Separated Overrides)</label>
-                        <input type="text" placeholder="e.g. Intro, Solo, Chorus, Mastered" style="width: 100%;"
-                            .value=${this._newSkillForm.custom_steps || ''} @input=${e => this._newSkillForm.custom_steps = e.target.value}>
-                    </div>
+                    <sutram-input label="Optional Path Custom Steps (Comma Separated Overrides)" placeholder="e.g. Intro, Solo, Chorus, Mastered" .value=${this._newSkillForm.custom_steps || ''} @sutram-input-changed=${e => this._newSkillForm.custom_steps = e.detail.value}></sutram-input>
                     ${(() => {
                         const activeConfig = this.domainConfig[activeNewDomain];
                         if (!activeConfig || !activeConfig.metrics) return '';

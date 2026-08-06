@@ -6,7 +6,6 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 from insetu.kernel.utils import slugify
-from insetu.kernel.workers import submit_immediate_job
 
 flow_bp = InSetuExtension(
     'flow', 
@@ -75,11 +74,10 @@ def _background_compile_workflows(ctx, **kwargs):
     def process_batch(batch):
         batch_id = batch.get("id")
         if not batch_id: return None
-
         includes = batch.get("includes", [])
         target_repos_set = set()
         for i in includes:
-            clean_inc = i.replace("system://", "")
+            clean_inc = i.replace("ctx://", "")
             if '/' in clean_inc:
                 repo_cand = clean_inc.split('/')[0]
                 if repo_cand not in ('contexts', 'diffs', 'prompts'):
@@ -92,9 +90,7 @@ def _background_compile_workflows(ctx, **kwargs):
         resolved_files = []
         expanded_includes = []
         for inc in includes:
-            if inc.startswith("ctx://") or inc.startswith("system://"):
-                if inc.startswith("system://"):
-                    inc = inc.replace("system://", "ctx://", 1)
+            if inc.startswith("ctx://"):
                 expanded_includes.append(inc)
             else:
                 inc_path = ctx.resolve_path(inc)
@@ -157,7 +153,6 @@ def _background_compile_workflows(ctx, **kwargs):
         if k.startswith('workflow_') and k.endswith('_context.txt'):
             if k not in active_workflow_keys:
                 manifest_deltas[k] = None
-
     if manifest_deltas:
         for k, v in manifest_deltas.items():
             if v is None:
@@ -166,14 +161,12 @@ def _background_compile_workflows(ctx, **kwargs):
                 current_manifest[k] = v
         ctx.save_manifest(manifest_deltas, is_full_compile=False)
         ctx.sync_vfs_barrier()
-    from insetu.kernel.vfs import VFSTransaction
-    vfs = VFSTransaction(ctx.workspace_id)
     if os.path.exists(ctx.paths["gather_dir"]):
-        for ws_rel_path in vfs.walk(ctx.paths["gather_dir"], exts=['.txt']):
+        for ws_rel_path in ctx.vfs.walk(ctx.paths["gather_dir"], exts=['.txt']):
             f_basename = Path(ctx.resolve_path(ws_rel_path)).name
             if f_basename not in expected_flow_artifacts:
                 try:
-                    vfs.save(ws_rel_path, "", data={"action": "delete"})
+                    ctx.vfs.save(ws_rel_path, "", data={"action": "delete"})
                 except Exception:
                     pass
 

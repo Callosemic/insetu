@@ -37,8 +37,8 @@ def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
     safe_basename = Path(filename).name
     cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
 
-    if filename.startswith("ctx://prompts/") or filename.startswith("system://prompts/") or os.path.exists(cand):
-        if os.path.exists(cand): 
+    if filename.startswith("ctx://prompts/") or os.path.exists(cand):
+        if os.path.exists(cand):  
             return cand, True
     return None
 @hooks.on('request_available_prompts')

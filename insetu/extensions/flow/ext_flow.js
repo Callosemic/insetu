@@ -304,7 +304,7 @@ export class InSetuExtFlow extends InSetuElement {
                         const filename = f.split('/').pop();
                         if (manifest[filename]) return true;
 
-                        const checkName = f.startsWith('system://') ? f.replace('system://', '') : f;
+                        const checkName = f.startsWith('ctx://') ? f.replace('ctx://', '') : f;
                         return (gatherOptions?.prompts || []).includes(checkName);
                     };
 
@@ -349,11 +349,10 @@ export class InSetuExtFlow extends InSetuElement {
                         </div>
                     </div>
                 </sutram-toolbar>
-
             <div class="flow-body">
-        ${this.loading ? html`<div class="spinner" style="display:block;">Loading batches...</div>` : ''}
+        ${this.loading ? html`<insetu-spinner text="Loading batches..."></insetu-spinner>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
-                        ${this.batches.length === 0 ? html`<p style="color: var(--text-muted);">No workflow batches defined.</p>` : ''}
+                        ${this.batches.length === 0 ? html`<insetu-empty-state text="No workflow batches defined."></insetu-empty-state>` : ''}
                         <sutram-categorized-list
                             .items=${filteredBatches.map(b => ({...b, _domain: b.domain || 'Workflows'}))}
                             categoryKey="_domain"
@@ -400,23 +399,21 @@ export class InSetuExtFlow extends InSetuElement {
                             <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                             <div style="flex: 1; min-width: 150px;">
-                                                    <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Batch Title</label>
-                                                    <input type="text" .value=${this._editForm?.title || ''} placeholder="e.g. API Wrap-Up" style="font-weight: bold;"
-                                                            @input=${(e) => { this._editForm.title = e.target.value; if(!this._editingBatch?.id){ this._editForm.id = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); } this.requestUpdate(); }}>
+                                                    <sutram-input label="Batch Title" .value=${this._editForm?.title || ''} placeholder="e.g. API Wrap-Up" 
+                                                            @sutram-input-changed=${(e) => { this._editForm.title = e.detail.value; if(!this._editingBatch?.id){ this._editForm.id = e.detail.value.toLowerCase().replace(/[^a-z0-9]+/g, '_'); } this.requestUpdate(); }}></sutram-input>
                                             </div>
                                             <div style="flex: 1; min-width: 150px; display: none;">
-                                                    <input type="text" .value=${this._editForm?.id || ''} @input=${(e) => { this._editForm.id = e.target.value; this.requestUpdate(); }}>
+                                                    <sutram-input .value=${this._editForm?.id || ''} @sutram-input-changed=${(e) => { this._editForm.id = e.detail.value; this.requestUpdate(); }}></sutram-input>
                                             </div>
                                             <div style="flex: 1; min-width: 150px;">
-                                                    <label style="font-weight: bold; font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Domain</label>
-                                                    <input type="text" .value=${this._editForm?.domain || 'Workflows'} placeholder="e.g. Workflows"
-                                                            @input=${(e) => { this._editForm.domain = e.target.value; this.requestUpdate(); }}>
+                                                    <sutram-input label="Domain" .value=${this._editForm?.domain || 'Workflows'} placeholder="e.g. Workflows"
+                                                            @sutram-input-changed=${(e) => { this._editForm.domain = e.detail.value; this.requestUpdate(); }}></sutram-input>
                                             </div>
                                     </div>
                                     <div>
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Includes (Contexts & Diffs)</h4>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${this._editForm?.includes?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No files selected.</div>` : 
+                                                    ${this._editForm?.includes?.length === 0 ? html`<insetu-empty-state text="No files selected."></insetu-empty-state>` : 
                                                         this._editForm?.includes?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -479,7 +476,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these exist:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
+                                                    ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
                                                         this._editForm?.showIfExists?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -509,7 +506,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</button>
                                             <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these are missing:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
-                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<div style="color: var(--text-muted); font-style: italic; font-size: 0.85rem;">No requirements.</div>` : 
+                                                    ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
                                                         this._editForm?.showIfMissing?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
@@ -540,30 +537,23 @@ export class InSetuExtFlow extends InSetuElement {
                                     </div>
                                     <div>
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                                    <input type="checkbox" .checked=${this._editForm?.hasPrompt} style="transform: scale(1.3); cursor: pointer;"
-                                                            @change=${() => { this._editForm.hasPrompt = !this._editForm.hasPrompt; this.requestUpdate(); }}>
+                                                    <sutram-toggle .checked=${this._editForm?.hasPrompt} @sutram-input-changed=${(e) => { this._editForm.hasPrompt = e.detail.value; this.requestUpdate(); }}></sutram-toggle>
                                                     <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">3. Instruction Prompt</h4>
                                             </div>
                                             ${this._editForm?.hasPrompt ? html`
                                                     <div style="display: flex; gap: 8px;">
-                                                            <select style="flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 4px;" @change=${(e) => { this._editForm.prompt = e.target.value; this.requestUpdate(); }}>
-                                                                <option value="" ?selected=${!this._editForm.prompt}>-- Select a Prompt --</option>
-                                                                ${(gatherOptions.prompts || []).map(p => p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, '')).map(p => html`<option value="${p}" ?selected=${p === this._editForm.prompt}>${p}</option>`)}
-                                                            </select>
+                                                            <sutram-select style="flex: 1;" .value=${this._editForm.prompt} .options=${[{value: '', label: '-- Select a Prompt --'}, ...(gatherOptions.prompts || []).map(p => { const v = p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''); return {value: v, label: v}; })]} @sutram-input-changed=${(e) => { this._editForm.prompt = e.detail.value; this.requestUpdate(); }}></sutram-select>
                                                     </div>
                                             ` : ''}
                                     </div>
                                     <div>
                                             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                                    <input type="checkbox" .checked=${this._editForm?.hasResponse} style="transform: scale(1.3); cursor: pointer;"
-                                                            @change=${() => { this._editForm.hasResponse = !this._editForm.hasResponse; this.requestUpdate(); }}>
+                                                    <sutram-toggle .checked=${this._editForm?.hasResponse} @sutram-input-changed=${(e) => { this._editForm.hasResponse = e.detail.value; this.requestUpdate(); }}></sutram-toggle>
                                                     <h4 style="margin: 0; color: var(--text); font-size: 1.05rem;">4. Response Text Box</h4>
                                             </div>
                                             ${this._editForm?.hasResponse ? html`
-                                                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Response Path</label>
-                                                    <input type="text" .value=${this._editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: monospace; margin-bottom: 15px;" @input=${(e) => { this._editForm.responsePath = e.target.value; }}>
-                                                    <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Archive Path (Optional)</label>
-                                                    <input type="text" .value=${this._editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: monospace;" @input=${(e) => { this._editForm.archivePath = e.target.value; }}>
+                                                    <sutram-input label="Response Path" .value=${this._editForm.responsePath} placeholder="e.g. sotu/sotu_{date}.current.md" style="font-family: monospace;" @sutram-input-changed=${(e) => { this._editForm.responsePath = e.detail.value; }}></sutram-input>
+                                                    <sutram-input label="Archive Path (Optional)" .value=${this._editForm.archivePath} placeholder="e.g. sotu/archive/" style="font-family: monospace;" @sutram-input-changed=${(e) => { this._editForm.archivePath = e.detail.value; }}></sutram-input>
                                             ` : ''}
                                     </div>
                             </div>
@@ -686,7 +676,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <div>
                                                             <h4 style="margin: 0 0 5px 0; color: var(--text); font-size: 1.05rem;">3. LLM Response Integration</h4>
                                                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste response to save to: <code style="word-break: break-all; color: var(--intent-success);">${this._viewingBatch.response_path}</code></p>
-                                                            <textarea id="batch-response-text" style="width: 100%; box-sizing: border-box; padding: 10px; min-height: 250px; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem;" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} @input=${(e) => { this._responseContent = e.target.value; this.requestUpdate(); }}></textarea>
+                                                            <sutram-textarea id="batch-response-text" placeholder="Paste LLM response here..." .value=${this._responseContent || ''} .monospace=${true} .rows=${10} @sutram-input-changed=${(e) => { this._responseContent = e.detail.value; this.requestUpdate(); }}></sutram-textarea>
                                                             <button class="btn-sm" style="background: var(--intent-success); width: 100%; padding: 15px; font-size: 1.1rem; font-weight: bold;" @click=${this.saveBatchResponse}>💾 Save Response</button>
                                                     </div>
                                             ` : ''}
