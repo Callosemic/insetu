@@ -3,6 +3,7 @@
 This contract sheet serves as the absolute single source of truth for the interfaces between the Core OS Substrate and Custom Functional Extensions. Refer strictly to these signatures during feature development to maintain system-wide multi-tenant compliance.
 
 ---
+hello
 
 ## 1. Backend Extension Substrate (`InSetuExtension`)
 Python feature scripts must leverage the unified `InSetuExtension` wrapper to intercept routing contexts safely and isolate multi-tenant data.

@@ -190,6 +190,8 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `gather_declare_topology` | `engine_gather` | All Extensions | Emitted during context sweeps to collect declarative topology schemas (`generator_callback`, `recall_callback`). |
 | `register_compilation_steps` | `engine_gather` | All Extensions | Emitted to build topologically sorted background compilation pipelines. |
 | `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
+| `register_manifest_signatures` | `<Micro-Kernel>` | All Extensions | Yields domain-specific manifest signatures (hashes/timestamps) for decentralized delta sync. |
+| `topology_boot_complete` | `engine_topology` | `engine_gather` | Emitted when physical topology disk mapping completes on workspace boot. |
 
 ### 2. Frontend UI Zones (`ExtensionRegistry`)
 | Zone ID | Context / Trigger | Primary Use Case |
