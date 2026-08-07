@@ -78,10 +78,11 @@ Network synchronization must route through the client API abstraction to inherit
 * `this.api.pollJob(jobId, { interval, onProgress, onComplete, onError })`
 
 ### 3.3 Brokered Lifecycle Managers
-
 * `this.subscribe(store, selector, listener)`: Unified Zustand observer that cleanly unmounts itself on element disconnection to eliminate memory bleed.
 * `this.registerInterval(callback, delayMs)`: Tracked scheduling mechanism dismantled automatically on component destruction.
 * `this.registerGlobalListener(type, target, callback)`: Base-managed event routing wrapper preventing global namespace contamination.
+* `this.onWorkspaceChanged(newWorkspaceId)`: Class lifecycle hook invoked reactively when the active workspace context hot-swaps.
+* `this.onForceRefresh()`: Class lifecycle hook invoked reactively when the active tab/sub-tab is re-selected or force-refreshed by the user.
 
 ---
 
