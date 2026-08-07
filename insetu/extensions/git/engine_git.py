@@ -7,13 +7,23 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.kernel.utils import get_workspace_physics
 from insetu.kernel.hooks import hooks
-
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
     import os
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     return env
+
+def execute_git(repo_path, args, check=True, **kwargs):
+    """Universal Git command wrapper with headless SSH injection."""
+    import subprocess
+    env = get_headless_git_env()
+    if 'capture_output' not in kwargs: kwargs['capture_output'] = True
+    if 'text' not in kwargs: kwargs['text'] = True
+
+    cmd = ['git', '--no-optional-locks'] + args
+    return subprocess.run(cmd, cwd=repo_path, check=check, env=env, **kwargs)
+
 def get_git_settings_schema(workspace_id):
     """Dynamically generates distinct setting configuration slots for every tracked repository."""
     from insetu.core.sdk import ExtensionContext
@@ -127,14 +137,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         else:
             repo_path = (ws_root_path / config["repo_dir"]).resolve()
         if not repo_path.exists(): return None
-
         try:
             # OPTIMIZATION 1: --no-optional-locks avoids heavy background index refreshes
-            result = subprocess.run(['git', '--no-optional-locks', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=str(repo_path))
+            result = execute_git(str(repo_path), ['status', '--porcelain', '-uall'], check=False)
             lines = result.stdout.splitlines()
             if not lines: return None
 
-            git_root_res = subprocess.run(['git', '--no-optional-locks', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, cwd=str(repo_path))
+            git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
             changed_files = []
 
@@ -216,7 +225,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 bulk_diffs = {}
                 if files_to_diff:
                     try:
-                        diff_res = subprocess.run(['git', '--no-optional-locks', 'diff', 'HEAD', '--'] + files_to_diff, capture_output=True, text=True, cwd=str(git_root))
+                        diff_res = execute_git(str(git_root), ['diff', 'HEAD', '--'] + files_to_diff, check=False)
                         for chunk in diff_res.stdout.split('diff --git '):
                             if not chunk.strip(): continue
                             first_line = chunk.split('\n')[0]
@@ -376,7 +385,7 @@ def _background_sweep_status(ctx):
         if not os.path.exists(repo_path): continue
 
         try:
-            res = subprocess.run(['git', 'status', '--porcelain', '-uall'], capture_output=True, text=True, cwd=repo_path)
+            res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
             lines = res.stdout.splitlines()
             files = []
 
@@ -443,18 +452,17 @@ def _background_sweep_push(ctx, selections, message):
             # Guarantee topology is perfectly mapped before staging
             from insetu.core.cartographer.cartographer import map_repositories
             map_repositories(ctx.workspace_id)
-            subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True)
-            subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
-            git_env = get_headless_git_env()
+            execute_git(repo_path, ['add'] + files)
+            execute_git(repo_path, ['commit', '-m', message])
 
             try:
-                subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+                execute_git(repo_path, ['push'])
             except subprocess.CalledProcessError as e:
                 err_out = e.stderr or e.stdout
                 err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else str(err_out)
 
                 if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                    subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+                    execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
                 else:
                     raise e
 
@@ -515,7 +523,7 @@ def _background_git_push(ctx, repo, message, diff_file):
     target_diff_name = Path(diff_file).name if diff_file else None
 
     # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
-    status_res = subprocess.run(['git', 'status', '--porcelain', '-uall'], cwd=repo_path, capture_output=True, text=True)
+    status_res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     for line in status_res.stdout.splitlines():
         if len(line) >= 3:
             filepath = line[3:]
@@ -543,9 +551,8 @@ def _background_git_push(ctx, repo, message, diff_file):
                 files_to_stage.add(filepath)
     if not files_to_stage:
         raise ValueError("No files found to commit. Working tree is clean.")
-
     # Pre-flight check: verify a remote actually exists before attempting to push
-    remote_check = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+    remote_check = execute_git(repo_path, ['remote'], check=False)
     if not remote_check.stdout.strip():
         raise ValueError(f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
     try:
@@ -553,17 +560,16 @@ def _background_git_push(ctx, repo, message, diff_file):
         map_repositories(ctx.workspace_id)
 
         ctx.jobs.update_progress(f"Committing and pushing {repo}...")
-        subprocess.run(['git', 'add'] + list(files_to_stage), cwd=repo_path, check=True, capture_output=True)
+        execute_git(repo_path, ['add'] + list(files_to_stage))
 
         committed = False
-        status_res = subprocess.run(['git', 'status', '--porcelain'], cwd=repo_path, capture_output=True, text=True)
+        status_res = execute_git(repo_path, ['status', '--porcelain'], check=False)
         if status_res.stdout.strip():
-            subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True)
+            execute_git(repo_path, ['commit', '-m', message])
             committed = True
-        git_env = get_headless_git_env()
 
         try:
-            push_res = subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            push_res = execute_git(repo_path, ['push'])
             output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
         except subprocess.CalledProcessError as e:
             err_out = e.stderr or e.stdout
@@ -571,7 +577,7 @@ def _background_git_push(ctx, repo, message, diff_file):
 
             # Auto-heal missing upstream branches
             if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+                push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
                 output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
             else:
                 raise e
@@ -637,15 +643,15 @@ def api_git_status(ctx):
         repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ctx.resolve_path(repo_dir))
         if not repo_path.exists(): continue
         try:
-            check_git = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], capture_output=True, text=True, cwd=repo_path)
+            check_git = execute_git(repo_path, ['rev-parse', '--is-inside-work-tree'], check=False)
             if check_git.returncode == 0 and 'true' in check_git.stdout.lower():
-                curr_res = subprocess.run(['git', 'branch', '--show-current'], capture_output=True, text=True, cwd=repo_path)
+                curr_res = execute_git(repo_path, ['branch', '--show-current'], check=False)
                 current_branch = curr_res.stdout.strip()
-                br_res = subprocess.run(['git', 'branch', '--format=%(refname:short)'], capture_output=True, text=True, cwd=repo_path)
+                br_res = execute_git(repo_path, ['branch', '--format=%(refname:short)'], check=False)
                 branches = [b.strip() for b in br_res.stdout.splitlines() if b.strip()]
                 ahead_behind = ""
                 try:
-                    remote_res = subprocess.run(['git', 'remote', '-v'], capture_output=True, text=True, cwd=repo_path)
+                    remote_res = execute_git(repo_path, ['remote', '-v'], check=False)
                     remotes_out = remote_res.stdout.lower()
 
                     # 1. Verify a remote exists and has an online network protocol
@@ -657,7 +663,7 @@ def api_git_status(ctx):
                     else:
                         try:
                             # 2. Compare HEAD against its configured upstream tracking branch
-                            ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path, check=True)
+                            ab_res = execute_git(repo_path, ['rev-list', '--left-right', '--count', 'HEAD...@{u}'])
                             parts = ab_res.stdout.strip().split()
                             if len(parts) == 2:
                                 ahead, behind = int(parts[0]), int(parts[1])
@@ -674,7 +680,7 @@ def api_git_status(ctx):
                     ahead_behind = "☁️ Local Only"
 
                 try:
-                    status_res = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=repo_path)
+                    status_res = execute_git(repo_path, ['status', '--porcelain'], check=False)
                     # Detect unmerged states: DD, AU, UD, UA, DU, AA, UU
                     conflicts = [line[3:] for line in status_res.stdout.splitlines() if len(line) >= 2 and line[:2] in ('DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU')]
                 except Exception:
@@ -695,7 +701,7 @@ def _background_git_init(ctx, repo, branch):
     repo_path = ctx.get_repo_path(repo)
 
     try:
-        subprocess.run(['git', 'init', '-b', branch], cwd=repo_path, check=True, capture_output=True, text=True)
+        execute_git(repo_path, ['init', '-b', branch])
         return f"Initialized Git repository on branch '{branch}'."
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
@@ -722,20 +728,17 @@ def _background_git_fetch_preview(ctx, repo):
         git_dir = Path(repo_path) / '.git'
         if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
             raise RuntimeError(f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.")
-
         # Pre-flight check: verify a remote actually exists
-        remote_check = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+        remote_check = execute_git(repo_path, ['remote'], check=False)
         if not remote_check.stdout.strip():
             raise RuntimeError(f"No remote configured for '{repo}'. Please add a remote (e.g., 'git remote add origin <url>') via the terminal first.")
 
-        # Prevent SSH prompts from hanging the background process indefinitely
-        git_env = get_headless_git_env()
         # Fetch and prune dead tracking branches to prevent ghost upstream checks
-        subprocess.run(['git', 'fetch', '--prune'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
+        execute_git(repo_path, ['fetch', '--prune'], timeout=30)
         # Check if an upstream branch is actually configured
-        up_res = subprocess.run(['git', 'rev-parse', '--verify', '@{u}'], cwd=repo_path, capture_output=True)
+        up_res = execute_git(repo_path, ['rev-parse', '--verify', '@{u}'], check=False)
         if up_res.returncode != 0:
-            curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+            curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
             if curr_branch:
                 err_msg = f"No upstream tracking branch configured for '{curr_branch}'.\nPlease run this in your terminal:\n\ngit branch --set-upstream-to=origin/{curr_branch} {curr_branch}"
             else:
@@ -743,16 +746,16 @@ def _background_git_fetch_preview(ctx, repo):
             raise RuntimeError(err_msg)
 
         # Gather the incoming commits and file statistics using the robust branch reference name
-        curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+        curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
         remote_target = f"origin/{curr_branch}" if curr_branch else "@{u}"
 
-        log_res = subprocess.run(['git', 'log', f'HEAD..{remote_target}', '--oneline'], cwd=repo_path, capture_output=True, text=True)
-        stat_res = subprocess.run(['git', 'diff', '--stat', f'HEAD..{remote_target}'], cwd=repo_path, capture_output=True, text=True)
+        log_res = execute_git(repo_path, ['log', f'HEAD..{remote_target}', '--oneline'], check=False)
+        stat_res = execute_git(repo_path, ['diff', '--stat', f'HEAD..{remote_target}'], check=False)
 
         incoming_log = log_res.stdout.strip()
         if not incoming_log:
             # Fallback to an outright verification if git tracking is desynced but upstream reports commits
-            ab_res = subprocess.run(['git', 'rev-list', '--left-right', '--count', 'HEAD...@{u}'], capture_output=True, text=True, cwd=repo_path)
+            ab_res = execute_git(repo_path, ['rev-list', '--left-right', '--count', 'HEAD...@{u}'], check=False)
             parts = ab_res.stdout.strip().split()
             behind_count = int(parts[1]) if len(parts) == 2 else 0
 
@@ -810,24 +813,23 @@ def _background_git_pull(ctx, repo, strategy=None):
     if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
         raise RuntimeError(f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.")
 
-    curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
-    remote = subprocess.run(['git', 'config', f'branch.{curr_branch}.remote'], cwd=repo_path, capture_output=True, text=True).stdout.strip() or 'origin'
-    merge = subprocess.run(['git', 'config', f'branch.{curr_branch}.merge'], cwd=repo_path, capture_output=True, text=True).stdout.strip()
+    curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
+    remote = execute_git(repo_path, ['config', f'branch.{curr_branch}.remote'], check=False).stdout.strip() or 'origin'
+    merge = execute_git(repo_path, ['config', f'branch.{curr_branch}.merge'], check=False).stdout.strip()
     remote_branch = merge.replace('refs/heads/', '') if merge.startswith('refs/heads/') else curr_branch
 
-    cmd = ['git', 'pull']
-    if strategy == "rebase": cmd.append('--rebase')
-    elif strategy == "merge": cmd.append('--no-rebase')
-    elif strategy == "ff_only": cmd.append('--ff-only')
+    args = ['pull']
+    if strategy == "rebase": args.append('--rebase')
+    elif strategy == "merge": args.append('--no-rebase')
+    elif strategy == "ff_only": args.append('--ff-only')
 
     # Explicitly target the remote and branch to prevent ambiguous configuration failures
     if remote and remote_branch:
-        cmd.extend([remote, remote_branch])
-    git_env = get_headless_git_env()
+        args.extend([remote, remote_branch])
 
     try:
         # Enforce a strict 30-second circuit breaker to prevent zombie network deadlocks
-        res = subprocess.run(cmd, cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
+        res = execute_git(repo_path, args, timeout=30)
         # Combine stdout and stderr to capture fetch logs and rebase outputs
         output = res.stdout.strip() + "\n" + res.stderr.strip()
         return output.strip()
@@ -853,36 +855,34 @@ def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
     repo_path = ctx.get_repo_path(repo)
     try:
         # Ensure HEAD exists by creating an empty initial commit if the repo is completely empty
-        head_check = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo_path, capture_output=True)
+        head_check = execute_git(repo_path, ['rev-parse', 'HEAD'], check=False)
         if head_check.returncode != 0:
             ctx.jobs.update_progress("Creating initial commit to establish HEAD...")
-            subprocess.run(['git', 'commit', '--allow-empty', '-m', 'chore: initial commit'], cwd=repo_path, check=True, capture_output=True)
+            execute_git(repo_path, ['commit', '--allow-empty', '-m', 'chore: initial commit'])
         # Check if origin already exists to handle retries gracefully
-        check_remote = subprocess.run(['git', 'remote'], cwd=repo_path, capture_output=True, text=True)
+        check_remote = execute_git(repo_path, ['remote'], check=False)
         if 'origin' in check_remote.stdout.split():
-            subprocess.run(['git', 'remote', 'set-url', 'origin', remote_url], cwd=repo_path, check=True, capture_output=True, text=True)
+            execute_git(repo_path, ['remote', 'set-url', 'origin', remote_url])
         else:
-            subprocess.run(['git', 'remote', 'add', 'origin', remote_url], cwd=repo_path, check=True, capture_output=True, text=True)
-
-        git_env = get_headless_git_env()
+            execute_git(repo_path, ['remote', 'add', 'origin', remote_url])
 
         if resolution == "force":
             ctx.jobs.update_progress("Force pushing to overwrite remote...")
-            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD', '--force'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD', '--force'])
             return push_res.stdout + push_res.stderr
         elif resolution == "pull":
             ctx.jobs.update_progress("Pulling and merging unrelated histories...")
             # Fetch first, then merge allowing unrelated histories
-            curr_branch = subprocess.run(['git', 'branch', '--show-current'], cwd=repo_path, capture_output=True, text=True).stdout.strip() or 'main'
-            subprocess.run(['git', 'pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env, timeout=30)
+            curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip() or 'main'
+            execute_git(repo_path, ['pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], timeout=30)
 
             ctx.jobs.update_progress("Pushing merged history to remote...")
-            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
             return push_res.stdout + push_res.stderr
         else:
             # Standard push
             ctx.jobs.update_progress("Pushing initial commit to remote...")
-            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'HEAD'], cwd=repo_path, check=True, capture_output=True, text=True, env=git_env)
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
             return push_res.stdout + push_res.stderr
 
     except subprocess.CalledProcessError as e:
@@ -906,13 +906,12 @@ def api_git_remote_add(ctx):
 def _background_git_checkout(ctx, repo, branch, create_new):
     import subprocess
     import os
-
     ctx.jobs.update_progress(f"Checking out {branch} in {repo}...")
     repo_path = ctx.get_repo_path(repo)
 
-    cmd = ['git', 'checkout', '-b', branch] if create_new else ['git', 'checkout', branch]
+    args = ['checkout', '-b', branch] if create_new else ['checkout', branch]
     try:
-        res = subprocess.run(cmd, cwd=repo_path, check=True, capture_output=True, text=True)
+        res = execute_git(repo_path, args)
         return res.stdout + res.stderr
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout

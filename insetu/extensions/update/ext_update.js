@@ -133,6 +133,11 @@ export const UpdateStore = createExtensionStore('Update', {
                         }
                         UpdateStore.getState().fetchRepoStatus(repo);
                         UpdateStore.getState().fetchEligibleRepos();
+
+                        // Notify the Git extension to clear out staged diffs
+                        if (window.inSetu.events && window.inSetu.events.emit) {
+                            window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
+                        }
                     },
                     onError: (err) => alert(`Error: ${err.message}`)
                 });
@@ -174,7 +179,11 @@ export const UpdateStore = createExtensionStore('Update', {
                         }
                         UpdateStore.getState().fetchRepoStatus(repo);
                         UpdateStore.getState().fetchEligibleRepos();
-                        UpdateStore.getState().previewBump(repo);
+
+                        // Notify the Git extension to clear out staged diffs
+                        if (window.inSetu.events && window.inSetu.events.emit) {
+                            window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
+                        }
                     },
                     onError: (err) => alert(`Error: ${err.message}`)
                 });
@@ -398,9 +407,9 @@ export class InSetuExtUpdate extends InSetuElement {
                                         UpdateStore.getState().createDummyToml(this.targetRepo, initVer.trim());
                                     }
                                 }}>
-                                📄 Create Basic TOML
+                                📄 Create Basic TOML and Tag
                             </button>
-                            <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. Update manually as needed.</span>
+                            <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version. Update manually as needed.</span>
                         </div>
                     ` : ''}
                     ${!this.repoConfigured ? html`
@@ -457,7 +466,6 @@ export class InSetuExtUpdate extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-update', InSetuExtUpdate);
-
 window.ExtensionRegistry.registerExtension('update', {
     name: "Semantic Update",
     version: "1.0.0",
@@ -470,5 +478,23 @@ window.ExtensionRegistry.registerExtension('update', {
             order: 4,
             component: "insetu-ext-update"
         }
-    ]
+    ],
+    uiHooks: {
+        'zone:vfs-mutated': (payload) => {
+            if (!payload || !payload.mutations) return false;
+            const repo = UpdateStore.getState().targetRepo;
+            if (repo) {
+                // Check if any mutation happened inside the active target repository
+                const affected = payload.mutations.some(m => m.filepath && (m.filepath.startsWith(repo + '/') || m.filepath === repo));
+                if (affected) {
+                    // Debounce the status check so we don't spam Git on bulk saves
+                    if (window._updateExtDebounce) clearTimeout(window._updateExtDebounce);
+                    window._updateExtDebounce = setTimeout(() => {
+                        UpdateStore.getState().fetchRepoStatus(repo);
+                    }, 500);
+                }
+            }
+            return false;
+        }
+    }
 });
