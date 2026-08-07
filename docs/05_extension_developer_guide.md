@@ -43,6 +43,8 @@ my_ext_bp = InSetuExtension(
     dependencies=["beautifulsoup4"], # Optional: Auto-detects missing PyPI packages
     optional_dependencies={"playwright": "Required for advanced scraping."}
 )
+# Modules may also declare host CLI binary requirements:
+# __external_binaries__ = ["git", "pandoc"]
 ```
 
 ### The Extension Context (`ctx`)

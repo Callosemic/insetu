@@ -11,7 +11,7 @@ Extensions are strictly opt-in. The OS kernel is blind to an extension unless it
 
 ### Topological Sorting & Dependency Injection (The DAG)
 Extensions must be capable of relying on one another (e.g., a `zotero_sync` extension extending the `citations` extension).
-* **The Python Metadata:** Every `engine_{ext}.py` module must expose a module-level list named `__depends__ = ['citations', ...]` mapping its upstream requirements.
+* **The Python Metadata:** Every `engine_{ext}.py` module must expose a module-level list named `__depends__ = ['citations', ...]` mapping its upstream requirements, and optionally `__external_depends__` (PyPI packages) or `__external_binaries__` (system CLI tools like `git` or `pandoc`) to communicate system dependencies.
 * **The Blueprint Wrapper:** Backend extensions must utilize the `InSetuExtension` SDK class instead of raw Flask Blueprints to guarantee strict tenant path isolation and context injection.
 * **The Bootloader (app.py):** The `load_workspace_extensions()` routine must perform a topological sort (Directed Acyclic Graph) of the requested extensions in `config.json`. 
     * If an extension requires a dependency that is missing or fails to import, the child extension is gracefully aborted and logged as an `ImportError`.
