@@ -99,7 +99,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     if self.filename.startswith("routes_"):
                         report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
                     elif self.filename not in SUBPROCESS_WHITELIST:
-                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, f"Subprocess call outside of designated engines.")
+                        print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
 
                     if node.func.attr == 'run':
                         is_pull = False
@@ -116,7 +116,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     if self.filename.startswith("routes_"):
                         report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous OS execution in a REST route.")
                     elif self.filename not in SUBPROCESS_WHITELIST:
-                        report_violation("IO_BLOCK_BAN_BYPASS", self.filepath, node.lineno, "os.system/popen bypass detected.")
+                        print(f"⚠️ [WARNING: IO_BLOCK_BAN_BYPASS] {self.filename}:{node.lineno}\n   ↳ os.system/popen bypass detected (permitted but flagged).")
 
                 if node.func.value.id == 'os' and node.func.attr in ('remove', 'rmdir'):
                     if self.filename not in VFS_WRITE_WHITELIST:

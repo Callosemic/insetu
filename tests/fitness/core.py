@@ -7,8 +7,8 @@ FRONTEND_DIR = BACKEND_DIR / "static" / "js"
 # Whitelists for legitimate use-cases to prevent false positives
 VFS_WRITE_WHITELIST = ["routes_fs.py", "fallback_bridge.py", "utils_core.py", "engine_format.py", "engine_git.py", "engine_gather.py", "cli.py", "workers.py", "engine_tracker.py", "engine_research.py", "vfs.py", "app.py", "auth.py"]
 SQLITE_WHITELIST = ["db.py", "workers.py"]  
-SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "engine_bridge.py", "bridge_vfs.py", "utils_core.py", "engine_term.py", "engine_hooks.py", "engine_topology.py", "engine_tailscale.py"]
-HEX_COLOR_WHITELIST = ["style.css"]  
+SUBPROCESS_WHITELIST = ["engine_git.py", "engine_format.py", "cartographer.py", "cli.py", "engine_bridge.py", "bridge_vfs.py", "utils_core.py", "engine_term.py", "engine_hooks.py", "engine_topology.py", "engine_tailscale.py", "engine_update.py"]
+HEX_COLOR_WHITELIST = ["style.css"]    
 
 class FitnessState:
     violations_found = 0

@@ -81,14 +81,6 @@ window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
     el.selectionStart = el.selectionEnd = start + 4;
     el.dispatchEvent(new Event('input'));
 });
-// Auto-resize generic textareas (prompts, descriptions) as the user types, piercing Shadow DOM boundaries
-document.addEventListener('input', (e) => {
-    const target = e.composedPath()[0];
-    if (target && target.tagName.toLowerCase() === 'textarea' && target.id !== 'payload' && !target.closest('.EasyMDEContainer') && !target.classList.contains('cell-textarea')) {
-        target.style.height = 'auto';
-        target.style.height = Math.min(target.scrollHeight + 2, 500) + 'px';
-    }
-});
 // Map Cmd/Ctrl + S contextually depending on which modal is currently visible
 window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
 window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
