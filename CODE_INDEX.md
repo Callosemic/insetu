@@ -4,7 +4,6 @@ This index serves as the architectural map. It outlines the core directories and
 
 ```text
 insetu/
-├── .gitignore                      # [comment required]
 ├── .gitkeep                        # [comment required]
 ├── CODE_INDEX.md                   # [comment required]
 ├── docs/                           # Internal Documentation and Architecture.
