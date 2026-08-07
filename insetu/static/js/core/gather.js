@@ -172,6 +172,9 @@ export class InSetuExtGather extends InSetuElement {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
+    onForceRefresh() {
+        this.loadContext(false);
+    }
     async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
@@ -439,12 +442,5 @@ window.ExtensionRegistry.registerExtension('gather', {
             }
         }
     ],
-    uiHooks: {
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'gather') {
-                AppStore.setState({ gatherForceRefreshTick: Date.now() });
-            }
-            return false;
-        }
-    }
+    uiHooks: {}
 });

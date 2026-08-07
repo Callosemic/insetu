@@ -167,6 +167,18 @@ export class InSetuElement extends SutramElement {
     }
     connectedCallback() {
         super.connectedCallback();
+
+        // Wire up the new unified onForceRefresh lifecycle method
+        this.registerGlobalListener('insetu:force-refresh', window, (e) => {
+            if (typeof this.onForceRefresh === 'function') {
+                const { parentId, subId } = e.detail || {};
+                const mySubId = this.dataset.subId || this.extName;
+                if (subId === mySubId || (!subId && parentId === this.extName)) {
+                    this.onForceRefresh();
+                }
+            }
+        });
+
         const appStore = window.inSetu?.stores?.App;
         if (appStore) {
             this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
@@ -211,13 +223,15 @@ window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.sys = window.inSetu.sys || {};
 window.inSetu.editor = window.inSetu.editor || {};
 window.inSetu.utils = window.inSetu.utils || {};
-
 // Abstracted Event Bus & Fail-Safe Hook Emitter
 window.inSetu.events = window.inSetu.events || {
     emit: function(eventName, detail = null) {
         window.dispatchEvent(new CustomEvent(eventName, { detail, bubbles: true, composed: true }));
     },
     emitHook: function(zoneName, payload = null) {
+        if (zoneName === 'zone:force-refresh') {
+            window.dispatchEvent(new CustomEvent('insetu:force-refresh', { detail: payload, bubbles: true, composed: true }));
+        }
         if (window.inSetu?.extensions?.Registry?.executeUIHook) {
             return window.inSetu.extensions.Registry.executeUIHook(zoneName, payload);
         }
