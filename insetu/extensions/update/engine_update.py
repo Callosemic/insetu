@@ -157,9 +157,13 @@ def _background_preview_bump_task(ctx, repo):
         clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
         clean_log = re.sub(r' +', ' ', clean_log)
 
+        # Extract the release notes / changelog block
+        changelog_match = re.search(r'with the following notes:\s*\n(.*?)(?=\n\s*(?:INFO|\[🛡 NOP\]|Next Version:|$))', clean_log, re.DOTALL)
+        changelog = changelog_match.group(1).strip() if changelog_match else "No changelog notes generated for this release."
+
         # Combine stderr (evaluation logs) and stdout (raw version)
         combined_output = f"{clean_log}\n\nNext Version: {res.stdout.strip()}".strip()
-        return {"message": "Preview generated.", "artifact": {"output": combined_output}}
+        return {"message": "Preview generated.", "artifact": {"output": combined_output, "changelog": changelog}}
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
         raise RuntimeError(f"Semantic Release Preview Failed:\n{err_msg}")
@@ -330,6 +334,11 @@ version_toml = [
 commit_parser = "conventional"
 vcs_release = false
 {allow_zero}
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    \'\'\'(?i)chore(?:\\([^)]*?\\))?: .+$\'\'\',
+    \'\'\'(?i)ci(?:\\([^)]*?\\))?: .+$\'\'\'
+]
 '''
     content += psr_config
 

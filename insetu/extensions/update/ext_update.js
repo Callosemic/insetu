@@ -16,6 +16,8 @@ export const UpdateStore = createExtensionStore('Update', {
     eligibleRepos: {},
     previewModalOpen: false,
     previewOutput: '',
+    previewChangelog: '',
+    previewTab: 'changelog',
     previewBump: async (repo) => {
         if (!repo) return;
         const res = await window.inSetu.api.post('update/preview_bump', { repo });
@@ -30,7 +32,9 @@ export const UpdateStore = createExtensionStore('Update', {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Preview ready.`, 2000);
                         UpdateStore.setState({ 
                             previewOutput: statusData.artifact.output || 'No changes to release.',
-                            previewModalOpen: true 
+                            previewChangelog: statusData.artifact.changelog || 'No changelog notes generated.',
+                            previewModalOpen: true,
+                            previewTab: 'changelog'
                         });
                         resolve();
                     },
@@ -213,7 +217,9 @@ export class InSetuExtUpdate extends InSetuElement {
         missingBinaries: { type: Array },
         eligibleRepos: { type: Object },
         previewModalOpen: { type: Boolean },
-        previewOutput: { type: String }
+        previewOutput: { type: String },
+        previewChangelog: { type: String },
+        previewTab: { type: String }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
@@ -233,6 +239,8 @@ export class InSetuExtUpdate extends InSetuElement {
         this.eligibleRepos = {};
         this.previewModalOpen = false;
         this.previewOutput = '';
+        this.previewChangelog = '';
+        this.previewTab = 'changelog';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -249,6 +257,8 @@ export class InSetuExtUpdate extends InSetuElement {
             this.eligibleRepos = state.eligibleRepos || {};
             this.previewModalOpen = state.previewModalOpen;
             this.previewOutput = state.previewOutput;
+            this.previewChangelog = state.previewChangelog || '';
+            this.previewTab = state.previewTab || 'changelog';
             this.requestUpdate();
 
             // Fetch status when the selected repo changes
@@ -460,11 +470,24 @@ export class InSetuExtUpdate extends InSetuElement {
                     </div>
                 </div>
             </div>
-
             <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Release Preview" @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
                     <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed to the repository.</p>
-                    <div class="output-box" style="margin-top: 0;">${this.previewOutput}</div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                        <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
+                            @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
+                            📝 Change Log
+                        </button>
+                        <button class="btn-sm" style="background: ${this.previewTab === 'full' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'full' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
+                            @click=${() => UpdateStore.setState({ previewTab: 'full' })}>
+                            📋 Complete Report
+                        </button>
+                    </div>
+                    ${this.previewTab === 'changelog' ? html`
+                        <div class="output-box" style="margin-top: 0;">${this.previewChangelog}</div>
+                    ` : html`
+                        <div class="output-box" style="margin-top: 0;">${this.previewOutput}</div>
+                    `}
                 </div>
                 <button slot="footer" class="btn-sm" style="background: var(--intent-neutral); color: white; border: none; padding: 10px 15px; font-weight: bold; border-radius: 4px; cursor: pointer;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>❌ Cancel</button>
                 <sutram-async-btn slot="footer" label="⚡ Confirm & Execute Bump" intent="success" .onClick=${async () => {
