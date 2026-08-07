@@ -117,7 +117,6 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`.
     * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `zone:file-edit-override` for `.insetu/notes/` pathing.
-
 ### N. Tailscale Network Manager (`engine_tailscale.py` & `ext_tailscale.js`)
 * **Status:** Active Extension (SDK V2 / Declarative).
 * **Role:** Automated HTTPS port binding over Tailscale Serve on workspace boot.
@@ -126,6 +125,15 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Core Hooks: `@hooks.on('workspace_boot')` triggering non-blocking background worker tasks.
     * Settings Schema: Declarative port mode selector and manual bind action trigger.
+
+### O. Semantic Update (`engine_update.py` & `ext_update.js`)
+* **Status:** Active Extension (SDK V2).
+* **Role:** Automated semantic versioning, dry-run release previews, baseline tagging, and package distribution.
+* **Dependencies (`__depends__`):** `['git']`
+* **Data Containment:** Ephemeral / Workspace settings.
+* **Injection Surfaces:**
+    * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `update`), `zone:vfs-mutated` for debounced repo status refresh.
+    * Event Bus: Emits `insetu:git:generate-diffs` on version scaffold/tag creation.
 
 ---
 
