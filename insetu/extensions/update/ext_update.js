@@ -382,7 +382,18 @@ export class InSetuExtUpdate extends InSetuElement {
                                 ` : ''}
                             </div>
                             ${this.repoConfigured && !this.hasRelease ? html`
-                                <span style="font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin-top: 4px;">Note: this is a local version only. Release your first version below.</span>
+                                <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">⚠️ Local version configured, but no Git release tag has been established.</span>
+                                    <button class="btn-sm" style="background: var(--intent-primary); color: #fff; border: none; padding: 6px 12px; font-weight: bold; font-size: 0.8rem; border-radius: 4px; cursor: pointer; align-self: flex-start;"
+                                        @click=${() => {
+                                            const ver = this.repoVersion || "0.1.0";
+                                            if (confirm(`Establish and tag initial baseline release v${ver}?`)) {
+                                                UpdateStore.getState().forceVersion(this.targetRepo, ver);
+                                            }
+                                        }}>
+                                        🏷️ Tag and Sync Initial Version
+                                    </button>
+                                </div>
                             ` : ''}
                         </div>
                         ${this.repoConfigured ? html`
@@ -429,9 +440,9 @@ export class InSetuExtUpdate extends InSetuElement {
                     <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
                         <sutram-async-btn 
                             style="width: 100%;" 
-                            label=${!this.hasRelease ? "🚀 Launch first release" : "📦 Bump & Tag"} 
+                            label="📦 Bump & Tag" 
                             intent="primary" 
-                            ?disabled=${!this.repoConfigured || !this.isClean}
+                            ?disabled=${!this.repoConfigured || !this.isClean || !this.hasRelease}
                             .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
                         </sutram-async-btn>
                         <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Calculates the next version and commits the changelog.</span>
@@ -442,7 +453,7 @@ export class InSetuExtUpdate extends InSetuElement {
                             style="width: 100%;" 
                             label="🚀 Release" 
                             intent="highlight" 
-                            ?disabled=${!this.repoConfigured || !this.isClean}
+                            ?disabled=${!this.repoConfigured || !this.isClean || !this.hasRelease}
                             .onClick=${this._getPublishAction()}>
                         </sutram-async-btn>
                         <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Distributes the package to the configured registry.</span>
