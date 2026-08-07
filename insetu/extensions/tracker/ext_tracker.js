@@ -169,15 +169,7 @@ constructor() {
     disconnectedCallback() {
         super.disconnectedCallback();
     }
-    updated(changedProperties) {
-        super.updated(changedProperties);
-        // Ensure the title textarea expands dynamically on initial render
-        const titleArea = this.shadowRoot.querySelector('textarea[placeholder="Ticket Summary Blueprint..."]');
-        if (titleArea) {
-            titleArea.style.height = 'auto';
-            titleArea.style.height = Math.min(titleArea.scrollHeight, 150) + 'px';
-        }
-    }
+
     _renderTaskCard(t) {
         const dateStr = this.utils.formatDate(t.timestamp);
         const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
@@ -498,26 +490,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _isDownloading: { type: Boolean }
     };
     static styles = [sharedStyles, css`
-        select, input[type="date"] {
-            background: var(--input-bg) !important;
-            color: var(--text) !important;
-            border: 1px solid var(--border) !important;
-            border-radius: 4px !important;
-            box-sizing: border-box;
-        }
-        .editor-wrapper {
-            flex: 1;
-            min-height: 0;
-            display: flex;
-            flex-direction: column;
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        .editor-wrapper insetu-markdown-editor {
-            flex: 1;
-            background: var(--bg);
-        }
+        :host { display: contents; }
     `];
     constructor() {
         super();
@@ -556,7 +529,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         if (!repoConfig) return [];
         return getFn([repoConfig]);
     }
-
     _openNewTaskModal(activeTab) {
         const state = KanbanStore.getState();
         const isBugs = activeTab === 'bugs';
@@ -569,15 +541,38 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setNewTaskField('title', '');
         state.setNewTaskField('desc', '');
         state.setNewTaskField('status', 'open');
-        state.setNewTaskField('bucket', 'None');
         state.setNewTaskField('deliveryDate', '');
-        if (this.ecosystem.allRepos.length > 0) state.setNewTaskField('repo', this.ecosystem.allRepos[0]);
+
+        let targetRepo = this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : '';
         if (this.ecosystem.pinnedRepos.size === 1 && !this.ecosystem.pinnedRepos.has('ALL')) {
             const pinnedRepo = Array.from(this.ecosystem.pinnedRepos)[0];
             if (this.ecosystem.allRepos.includes(pinnedRepo)) {
-                state.setNewTaskField('repo', pinnedRepo);
+                targetRepo = pinnedRepo;
             }
         }
+        state.setNewTaskField('repo', targetRepo);
+
+        // Smart Bucket Resolution from active bucket filters
+        let targetBucket = 'None';
+        const activeBucketPins = Array.from(state.pinnedBuckets || []).filter(b => b !== 'ALL');
+        if (activeBucketPins.length > 0) {
+            const repoPrefix = targetRepo ? `${targetRepo}::` : '';
+            const matchingPins = activeBucketPins.filter(b => !targetRepo || b.startsWith(repoPrefix));
+            const bucketIds = Array.from(new Set(matchingPins.map(b => b.includes('::') ? b.split('::')[1] : b)));
+            if (bucketIds.length === 1) {
+                targetBucket = bucketIds[0];
+            } else if (activeBucketPins.length === 1) {
+                const singlePin = activeBucketPins[0];
+                if (singlePin.includes('::')) {
+                    const [pRepo, pBucket] = singlePin.split('::');
+                    if (!targetRepo || pRepo === targetRepo) {
+                        targetBucket = pBucket;
+                        if (!targetRepo) state.setNewTaskField('repo', pRepo);
+                    }
+                }
+            }
+        }
+        state.setNewTaskField('bucket', targetBucket);
 
         state.setModal('new', true);
     }
@@ -630,7 +625,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setEditTaskField('status', yaml.status || inferredStatus);
         state.setEditTaskField('repo', yaml.repo || repo);
         state.setEditTaskField('origYaml', JSON.stringify(yaml));
-
         this._originalTaskSnapshot = {
             title: yaml.title || defaultTitle,
             tagsRaw: cleanTags.join(', '),
@@ -718,29 +712,28 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
                 @sutram-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
-
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
-                    <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { type: 'select', style: 'flex: 1; min-width: 120px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { type: 'date', style: 'flex: 1; min-width: 120px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono);' })}
+                    <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { label: 'Sub-Bucket Mapping', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
                     </div>
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { placeholder: 'Ticket Title (e.g., Fix schema registry timeout)', style: 'margin-bottom: 10px; font-weight: bold;' })}
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { placeholder: 'Tags (comma separated, e.g. frontend, critical)', style: 'margin-bottom: 10px;' })}
-                    ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; margin-bottom: 10px; min-height: 150px;' })}
+                    <div class="meta-grid" style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px; flex: 1; min-height: 0;">
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { label: 'Ticket Title', placeholder: 'e.g., Fix schema registry timeout', style: 'font-weight: bold;', flush: true })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { label: 'Tags (comma-separated tokens)', placeholder: 'Architecture, Offline, Service-Worker, Epic', flush: true })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { label: 'Description', type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; min-height: 150px;', flush: true })}
+                    </div>
                 </div>
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${async (e) => {
-                    this._isSaving = true;
-                    try { await this._saveNewTask(); } catch(err) {}
-                    this._isSaving = false;
-                }}>${this._isSaving ? '⏳...' : '💾 Save'}</button>
+                <sutram-async-btn slot="footer" label="💾 Save" intent="primary" .onClick=${async (e) => {
+                    await this._saveNewTask();
+                }}></sutram-async-btn>
             </sutram-modal>
             <!-- Edit Task Modal -->
             <sutram-modal 
                 ?open=${this._modals?.edit} 
-                titleText="Edit Ticket"
+                titleText="✏️ ${editTaskForm.filepath || ''}"
                 ?fullscreen=${true}
                 ?flush=${true}
                 style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
@@ -753,56 +746,43 @@ export class InSetuExtTrackerModals extends InSetuElement {
                             .filepath=${editTaskForm.filepath}
                             .defaultExpanded=${false}
                             @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
+                            @insetu:request-frontmatter=${this._onRequestFrontmatter}
+                            @insetu:editor-delete=${this._deleteTask}
+                            @insetu:editor-raw-edit=${() => {
+                                KanbanStore.getState().setModal('edit', false);
+                                if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);
+                            }}>
 
-                            <div slot="title-control" style="padding: 15px 20px 5px 20px;">
-                                <textarea placeholder="Ticket Summary Blueprint..." rows="1" style="font-weight: bold; font-size: 1.5rem; border: none !important; outline: none !important; box-shadow: none !important; padding: 2px 0; background: transparent; width: 100%; color: var(--text); resize: none; overflow: hidden; min-height: 24px; line-height: 1.4; font-family: inherit;"
+                            <div slot="title-control" style="padding: 0;">
+                                <sutram-textarea
                                     .value=${editTaskForm.title}
-                                    @input=${(e) => { e.target.value = e.target.value.replace(/[\r\n]+/g, ' '); KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: e.target.value } })); }}></textarea>
+                                    placeholder="Ticket Summary Blueprint..."
+                                    ?autoSize=${true}
+                                    .minRows=${1}
+                                    .maxHeight=${150}
+                                    ?borderless=${true}
+                                    style="font-weight: bold; font-size: 1.25rem; width: 100%; color: var(--text); margin: 0;"
+                                    @sutram-input-changed=${(e) => {
+                                        const val = e.detail.value.replace(/[\r\n]+/g, ' ');
+                                        KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, title: val } }));
+                                    }}>
+                                </sutram-textarea>
                             </div>
-
-                            <div slot="metadata-controls" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;">
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Repository</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None' } })) })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Ticket Type</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Status Zone</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Sub-Bucket Mapping</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { type: 'select', style: 'width: 100%; padding: 6px 8px;', selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Delivery Deadline</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { type: 'date', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Created At</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { type: 'datetime-local', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Closed At</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { type: 'datetime-local', style: 'width: 100%; padding: 5px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 13px;' })}
-                                </div>
-                                <div style="grid-column: 1 / -1; margin-top: 4px;">
-                                    <label style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Tags (comma-separated tokens)</label>
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { placeholder: 'Tags (comma-separated tokens, e.g. architecture, latency)...', style: 'width: 100%; padding: 6px 8px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;' })}
+                            <div slot="metadata-controls" class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 15px; margin: 0;">
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None' } })) })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket Mapping', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
+                                ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
+                                <div style="grid-column: 1 / -1; margin-top: 2px;">
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated tokens)', placeholder: 'Architecture, Offline, Service-Worker, Epic', flush: true })}
                                 </div>
                             </div>
                         </insetu-frontmatter-editor>
                     ` : ''}
                 </div>
-                <button slot="footer" style="flex: 0 0 auto; background: var(--intent-danger); color: white;" @click=${this._deleteTask} title="Delete Ticket">🗑️</button>
-                <button slot="footer" style="background: var(--intent-warning); color: black;" @click=${() => {
-                    KanbanStore.getState().setModal('edit', false);
-                    if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);
-                }}>📝 Raw Edit</button>
             </sutram-modal>
 `;
     }

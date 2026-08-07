@@ -62,7 +62,7 @@ export class InSetuExtFlow extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .flow-body { flex: 1; overflow-y: auto; padding: 20px; }
+        .flow-body { flex: 1; overflow-y: auto; padding: 0; }
     `];
     constructor() {
         super();
@@ -352,43 +352,70 @@ export class InSetuExtFlow extends InSetuElement {
             <div class="flow-body">
         ${this.loading ? html`<insetu-spinner text="Loading batches..."></insetu-spinner>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
-                        ${this.batches.length === 0 ? html`<insetu-empty-state text="No workflow batches defined."></insetu-empty-state>` : ''}
-                        <sutram-categorized-list
-                            .items=${filteredBatches.map(b => ({...b, _domain: b.domain || 'Workflows'}))}
-                            categoryKey="_domain"
-                            .categoryOrder=${categoryOrder}
-                            .renderItem=${(b) => {
-                                const filename = b._filename;
-                                const manifestObj = AppStore.getState().manifest?.ctx?.[filename] || {};
-                                const meta = manifestObj.meta || {};
-                                let sizeStr = "";
-                                if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                                    const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-                                    sizeStr = sizes.join(' + ') + " kb";
-                                } else if (meta.size_bytes !== undefined) {
-                                    const kb = Math.round(meta.size_bytes / 1024);
-                                    sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-                                }
-                                return html`
-                                <insetu-card
-                                        .filename=${b.id}
-                                        .titleText=${`📦 ${b.title || b.id}`}
-                                        .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
-                                        .detailText=${sizeStr ? `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename} | ${sizeStr}` : `${b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : ''}${filename}`}
-                                        icon=""
-                                        intentColor="var(--intent-primary)"
-                                        .entityType=${'file:workflow_batch'}
-                                        .entityData=${{  
-                                            ...b, 
-                                            filepath: filename, 
-                                            suppress: ['file-browse', 'file-edit'], 
-                                            chunks: manifestObj.chunks || [filename]  
-                                        }}
-                                        @card-clicked=${() => this.openBatchModal(b)}>
-                                </insetu-card>
-                                `;
-                            }}>
-                        </sutram-categorized-list>
+                        ${this.batches.length === 0 ? html`<div style="padding: 20px;"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
+                        ${(() => {
+                            const groups = {};
+                            filteredBatches.forEach(b => {
+                                const cat = b.domain || 'Workflows';
+                                if (!groups[cat]) groups[cat] = [];
+                                groups[cat].push(b);
+                            });
+                            const sortedCats = Object.keys(groups).sort((a, b) => {
+                                const idxA = categoryOrder.indexOf(a);
+                                const idxB = categoryOrder.indexOf(b);
+                                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                                if (idxA !== -1) return -1;
+                                if (idxB !== -1) return 1;
+                                return a.localeCompare(b);
+                            });
+
+                            return sortedCats.map(cat => html`
+                                <sutram-collapsible 
+                                    titleText=${cat} 
+                                    intent="neutral" 
+                                    ?open=${true}
+                                    ?flush=${true}
+                                    style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
+
+                                    <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                                        ${groups[cat].map(b => {
+                                            const filename = b._filename;
+                                            const manifestObj = AppStore.getState().manifest?.ctx?.[filename] || {};
+                                            const meta = manifestObj.meta || {};
+                                            let sizeStr = "";
+                                            if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+                                                const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
+                                                sizeStr = sizes.join(' + ') + " kb";
+                                            } else if (meta.size_bytes !== undefined) {
+                                                const kb = Math.round(meta.size_bytes / 1024);
+                                                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+                                            }
+                                            const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
+                                            return html`
+                                                <insetu-card
+                                                        .filename=${b.id}
+                                                        .titleText=${`📦 ${b.title || b.id}`}
+                                                        .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
+                                                        .detailPrefix=${repoStr}
+                                                        .detailText=${filename}
+                                                        .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
+                                                        icon=""
+                                                        intentColor="var(--intent-primary)"
+                                                        .entityType=${'file:workflow_batch'}
+                                                        .entityData=${{  
+                                                            ...b, 
+                                                            filepath: filename, 
+                                                            suppress: ['file-browse', 'file-edit'], 
+                                                            chunks: manifestObj.chunks || [filename]  
+                                                        }}
+                                                        @card-clicked=${() => this.openBatchModal(b)}>
+                                                </insetu-card>
+                                            `;
+                                        })}
+                                    </div>
+                                </sutram-collapsible>
+                            `);
+                        })()}
                     </div>
             </div>
                     <sutram-modal  
@@ -662,8 +689,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                                                 .entityData=${{ 
                                                                                     filepath: promptPath, 
                                                                                     isFS: false,
-                                                                                    resolvedText: this._viewingBatchPromptText,
-                                                                                    showOnly: ['copy-prompt', 'file-edit']
+                                                                                    showOnly: ['file-copy', 'file-edit']
                                                                                 }}>
                                                                             </sutram-entity-actions>
                                                                         `;

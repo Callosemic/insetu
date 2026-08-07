@@ -86,7 +86,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .git-body { flex: 1; overflow-y: auto; padding: 20px; }
+        .git-body { flex: 1; overflow-y: auto; padding: 0; }
     `];
     constructor() {
         super();
@@ -360,83 +360,108 @@ disconnectedCallback() {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div class="git-body">
-            ${this.activeDiffJobId ? html`<div class="spinner" style="display: block;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
-            ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
+            ${this.activeDiffJobId ? html`<div class="spinner" style="display: block; padding: 20px;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
+            ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px; padding: 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
-                    <sutram-category-section titleText=${catName}>
-                        ${categories[catName].map(f => {
-                            const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
-                            return html`
-                            <insetu-card
-                                .filename=${f.filename}
-                                .titleText=${f.displayName}
-                                .descriptionText=${descText}
-                                .detailText=${f.detailText}
-                                icon="📦"
-                                intentColor="var(--intent-highlight)"
-                                entityType="file:diff"
-                                .entityData=${{ 
-                                    filepath: `ctx://diffs/${f.filename}`, 
-                                    repoDir: f.repoDir, 
-                                    isFS: f.isFS,
-                                    chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
-                                }}
-                                @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
-                            </insetu-card>
-                        `;})}
-                    </sutram-category-section>
-                `)}
-                ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px;">Diffs automatically map when this tab is opened.</p>` : ''}
-                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
-                    <sutram-category-section titleText="🧹 Sweepable State">
-                        <sutram-async-btn slot="header-actions" label="🚀 Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
-                        <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
-                        ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
-                            const branch = GitStore.getState().reposStatus[repo]?.current;
-                            const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
-                            return html`
-                            <insetu-card
-                            .filename=${repo}
-                            .titleText=${repo}
-                            .descriptionText=${descText}
-                            icon="📦"
-                            intentColor="var(--intent-neutral)"
-                            entityType="repo"
-                            .entityData=${{ repoDir: repo }}
-                            @card-clicked=${() => {
-                                const newSet = new Set(this.sweepExpandedRepos);
-                                newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);
-                                this.sweepExpandedRepos = newSet;
-                                this.requestUpdate();
-                            }}>
-                        </insetu-card>
+                    <sutram-collapsible 
+                        titleText=${catName} 
+                        intent="neutral" 
+                        ?open=${true}
+                        ?flush=${true}
+                        style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
 
-                        ${this.sweepExpandedRepos.has(repo) ? html`
-                            <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: -8px; margin-bottom: 15px; margin-left: 15px;">
-                                ${files.map(f => html`
-                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                        <input type="checkbox" 
-                                            .checked=${(this.selectedSweepFiles[repo] || []).includes(f.path)}
-                                            @change=${(e) => {
-                                                const isChecked = e.target.checked;
-                                                const currentList = this.selectedSweepFiles[repo] || [];
-                                                this.selectedSweepFiles = {
-                                                    ...this.selectedSweepFiles,
-                                                    [repo]: isChecked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
-                                                };
-                                                this.requestUpdate();
-                                            }}>
-                                        <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
+                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                            ${categories[catName].map(f => {
+                                const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
+                                const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
+
+                                // Extract sizes if previously stuffed into detailText
+                                let sizeStr = "";
+                                if (f.detailText && f.detailText.includes(' | ')) {
+                                    sizeStr = f.detailText.split(' | ')[1];
+                                }
+                                return html`
+                                <insetu-card
+                                    .filename=${f.filename}
+                                    .titleText=${f.displayName}
+                                    .descriptionText=${descText}
+                                    .detailPrefix=${repoStr}
+                                    .detailText=${f.filename}
+                                    .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
+                                    icon="📦"
+                                    intentColor="var(--intent-highlight)"
+                                    entityType="file:diff"
+                                    .entityData=${{ 
+                                        filepath: `ctx://diffs/${f.filename}`, 
+                                        repoDir: f.repoDir, 
+                                        isFS: f.isFS,
+                                        chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
+                                    }}
+                                    @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
+                                </insetu-card>
+                            `;})}
+                        </div>
+                    </sutram-collapsible>
+                `)}
+                ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0 20px;">Diffs automatically map when this tab is opened.</p>` : ''}
+                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
+                    <sutram-collapsible 
+                        titleText="🧹 Sweepable State" 
+                        intent="neutral" 
+                        ?open=${true}
+                        ?flush=${true}
+                        style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
+                        <sutram-async-btn slot="actions" label="🚀 Sweep All" intent="primary" style="margin: 0;" .onClick=${this._getSweepAllAction()}></sutram-async-btn>
+
+                        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
+                            <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
+                            ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
+                                const branch = GitStore.getState().reposStatus[repo]?.current;
+                                const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
+                                return html`
+                                <insetu-card
+                                    .filename=${repo}
+                                    .titleText=${repo}
+                                    .descriptionText=${descText}
+                                    icon="📦"
+                                    intentColor="var(--intent-neutral)"
+                                    entityType="repo"
+                                    .entityData=${{ repoDir: repo }}
+                                    @card-clicked=${() => {
+                                        const newSet = new Set(this.sweepExpandedRepos);
+                                        newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);
+                                        this.sweepExpandedRepos = newSet;
+                                        this.requestUpdate();
+                                    }}>
+                                </insetu-card>
+
+                                ${this.sweepExpandedRepos.has(repo) ? html`
+                                    <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: -8px; margin-bottom: 15px; margin-left: 15px;">
+                                        ${files.map(f => html`
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                                <input type="checkbox" 
+                                                    .checked=${(this.selectedSweepFiles[repo] || []).includes(f.path)}
+                                                    @change=${(e) => {
+                                                        const isChecked = e.target.checked;
+                                                        const currentList = this.selectedSweepFiles[repo] || [];
+                                                        this.selectedSweepFiles = {
+                                                            ...this.selectedSweepFiles,
+                                                            [repo]: isChecked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
+                                                        };
+                                                        this.requestUpdate();
+                                                    }}>
+                                                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
+                                            </div>
+                                        `)}
                                     </div>
-                                `)}
-                            </div>
-                        ` : ''}
-                    `;})}
-                    </sutram-category-section>
+                                ` : ''}
+                            `;})}
+                        </div>
+                    </sutram-collapsible>
                 ` : ''}
                 ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
-                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin-top: 20px;">
+                    <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin: 20px;">
                         <div style="font-size: 2.5rem; margin-bottom: 10px;">✨</div>
                         <h3 style="margin: 0 0 5px 0; color: var(--text);">Working Tree Clean</h3>
                         <p style="color: var(--text-muted); font-size: 0.9rem; margin: 0;">No diffs or untracked metadata detected.</p>

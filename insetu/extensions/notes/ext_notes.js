@@ -67,7 +67,7 @@ export class InSetuExtNotesModals extends InSetuElement {
         newNoteModalOpen: { type: Boolean },
         noteForm: { type: Object }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: contents; }`];
 
     constructor() {
         super();
@@ -129,7 +129,7 @@ export class InSetuExtNotesEditor extends InSetuElement {
         allRepos: { type: Array },
         editForm: { type: Object }
     };
-    static styles = [sharedStyles];
+    static styles = [sharedStyles, css`:host { display: contents; }`];
 
     constructor() {
         super();
@@ -185,15 +185,25 @@ export class InSetuExtNotesEditor extends InSetuElement {
         };
         respond(updatedYaml);
     }
+    async _deleteNote() {
+        if (!this.filepath) return;
+        if (!confirm("Are you sure you want to permanently delete this note? This cannot be undone.")) return;
 
+        await this.sys.executeWorkspaceMutation('fs/delete', { filepath: this.filepath }, {
+            onSuccess: () => {
+                NotesStore.setState({ editNoteFilepath: null });
+                NotesStore.getState().fetchNotes();
+            }
+        });
+    }
     render() {
         return html`
             <sutram-modal 
                 ?open=${!!this.filepath} 
+                titleText="📝 ${this.filepath || ''}"
                 ?fullscreen=${true}
                 ?flush=${true}
                 style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
-                titleText="📝 Edit Note"
                 @sutram-modal-closed=${() => NotesStore.setState({ editNoteFilepath: null })}>
 
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
@@ -202,13 +212,28 @@ export class InSetuExtNotesEditor extends InSetuElement {
                             .filepath=${this.filepath}
                             .defaultExpanded=${false}
                             @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
-
-                            <div slot="title-control" style="padding: 15px 20px 5px 20px;">
-                                <input type="text" .value=${this.editForm.title} 
-                                    placeholder="Note Title..."
-                                    @input=${e => { this.editForm.title = e.target.value; this.requestUpdate(); }}
-                                    style="width: 100%; font-size: 1.5rem; font-weight: bold; border: none; background: transparent; color: var(--text); outline: none; padding: 0; margin: 0; font-family: inherit;">
+                            @insetu:request-frontmatter=${this._onRequestFrontmatter}
+                            @insetu:editor-delete=${this._deleteNote}
+                            @insetu:editor-raw-edit=${() => {
+                                const fp = this.filepath;
+                                NotesStore.setState({ editNoteFilepath: null });
+                                if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
+                            }}>
+                            <div slot="title-control" style="padding: 0;">
+                                <sutram-textarea 
+                                    .value=${this.editForm.title} 
+                                    placeholder="Note Title..." 
+                                    ?autoSize=${true}
+                                    .minRows=${1}
+                                    .maxHeight=${150}
+                                    ?borderless=${true}
+                                    style="font-weight: bold; font-size: 1.3rem; width: 100%; color: var(--text);"
+                                    @sutram-input-changed=${e => { 
+                                        const val = e.detail.value.replace(/[\r\n]+/g, ' '); 
+                                        this.editForm.title = val; 
+                                        this.requestUpdate(); 
+                                    }}>
+                                </sutram-textarea>
                             </div>
                             <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
                                 <div style="display: flex; gap: 15px; flex-wrap: wrap;">

@@ -178,29 +178,7 @@ function isPromptPath(filepath) {
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
-    entityActions: [
-        {
-            targetEntity: 'prompt',
-            id: 'copy-prompt',
-            label: 'Copy Text',
-            icon: '📋',
-            intent: 'primary',
-            order: 85,
-            asyncAction: async (data, e) => {
-                if (data.resolvedText) {
-                    await window.inSetu.utils.copyRawText(data.resolvedText);
-                    return;
-                }
-                const res = await window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(data.filepath)}`);
-                if (res.ok) {
-                    const text = await res.text();
-                    await window.inSetu.utils.copyRawText(text);
-                } else {
-                    throw new Error("Failed to resolve prompt.");
-                }
-            }
-        }
-    ],
+    entityActions: [],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
