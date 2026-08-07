@@ -104,13 +104,18 @@ def get_system_config(workspace_id):
                                     if bp_obj:
                                             title = getattr(bp_obj, 'title', title)
                                             desc = getattr(bp_obj, 'description', desc)
-
                                     for dep in getattr(mod, '__external_depends__', []):
                                             import importlib.util
                                             if importlib.util.find_spec(dep) is None:
                                                     missing_exts.append(dep)
 
-                            available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts})
+                                    missing_bins = []
+                                    for binary in getattr(mod, '__external_binaries__', []):
+                                            import shutil
+                                            if not shutil.which(binary):
+                                                    missing_bins.append(binary)
+
+                            available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
     from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
 
     evaluated_schemas = {}
