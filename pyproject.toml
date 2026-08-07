@@ -36,4 +36,4 @@ packages = ["insetu"]
 version_toml = [
     "pyproject.toml:project.version"
 ]
-commit_parser = "angular"
+commit_parser = "conventional"
