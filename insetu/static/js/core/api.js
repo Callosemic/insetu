@@ -97,12 +97,19 @@ window.inSetu.api = {
         }
 
         let res = await originalFetch(fullUrl, { ...options, headers });
-
         if (res.status === 401) {
             const retryRes = await this._attemptReAuthAndRetry(fullUrl, options, true);
             if (retryRes) res = retryRes;
         }
 
         return res;
+    },
+    post: function(path, payload, options = {}) {
+        return this.workspace(path, {
+            ...options,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+            body: JSON.stringify(payload)
+        });
     }
 };

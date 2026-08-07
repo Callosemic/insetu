@@ -1157,6 +1157,12 @@ export class InSetuFileModal extends InSetuElement {
         .fs-modal-container::backdrop { background: transparent; }
         .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
         insetu-async-btn { flex: 1; display: block; --btn-padding: 12px; --btn-border-radius: 6px; }
+        :host-context([data-theme="e-ink"]) .btn-back {
+            background: #ffffff !important;
+            color: #000000 !important;
+            border: 2px solid #000000 !important;
+            font-weight: bold !important;
+        }
     `];
     constructor() {
         super();
@@ -1195,8 +1201,8 @@ export class InSetuFileModal extends InSetuElement {
             <dialog class="fs-modal-container" @cancel=${(e) => { e.preventDefault(); closeFileModal(); }}>
                 <div class="fullscreen-wrapper">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
-                        <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; color: var(--text);" title="${m.filename}">${m.filename}</h3>
-                        <button @click=${() => closeFileModal()} class="btn-sm" style="background: #64748b; margin: 0;">Back</button>
+                        <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; unicode-bidi: plaintext; color: var(--text);" title="${m.filename}">${m.filename}</h3>
+                        <button @click=${() => closeFileModal()} class="btn-sm btn-back" style="background: #64748b; margin: 0; color: white;">Back</button>
                     </div>
                     ${m.isFS ? html`
                         <div style="display: flex; gap: 10px; margin: 0; padding: 10px 20px 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); border-radius: 0; align-items: center; flex-shrink: 0;">

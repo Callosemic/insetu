@@ -98,10 +98,12 @@ export class InSetuMarkdownEditor extends InSetuElement {
         language: { type: String },
         _customExtensions: { type: Array }
     };
-
-    static styles = css`
-        :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
-    `;
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+        `
+    ];
 
     constructor() {
         super();
@@ -241,11 +243,88 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         _isDirty: { type: Boolean },
         _metadataExpanded: { type: Boolean }
     };
-
     static styles = [
         sharedStyles,
         css`
-            :host { display: flex; flex-direction: column; height: 100%; width: 100%; container-type: inline-size; overflow: hidden; }
+            :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
+            .meta-btn {
+                background: transparent;
+                color: var(--text);
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                padding: 4px 8px;
+                cursor: pointer;
+                font-weight: bold;
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 0.85rem;
+                transition: background 0.2s;
+                margin: 0;
+                flex-shrink: 0;
+            }
+            .meta-btn:hover { background: var(--input-bg); }
+            .meta-btn.active {
+                background: var(--input-bg);
+                border-color: var(--intent-primary);
+                color: var(--intent-primary);
+            }
+            @container (max-width: 480px) {
+                .meta-btn-text { display: none; }
+                .meta-btn { padding: 4px 6px; }
+            }
+            @media (max-width: 480px) {
+                .meta-btn-text { display: none; }
+                .meta-btn { padding: 4px 6px; }
+            }
+            .action-bar-row {
+                padding: 6px 15px;
+                background: var(--bg);
+                border-top: 1px solid var(--border);
+                border-bottom: 1px solid var(--border);
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                flex-shrink: 0;
+            }
+            .action-bar-scroll {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex: 1;
+                min-width: 0;
+                overflow-x: auto;
+                scrollbar-width: none;
+                flex-wrap: nowrap;
+                white-space: nowrap;
+            }
+            .action-bar-scroll::-webkit-scrollbar { display: none; }
+            .footer-row {
+                padding: 12px 20px;
+                border-top: 1px solid var(--border);
+                background: var(--input-bg);
+                display: flex;
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+                flex-shrink: 0;
+                gap: 12px;
+                box-sizing: border-box;
+                width: 100%;
+            }
+            .footer-btn-group {
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 10px;
+                flex-shrink: 0;
+            }
+            .btn-truncate {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
         `
     ];
 
@@ -279,9 +358,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 const { meta, content } = window.inSetu.utils.parseFrontmatter(text);
                 this._yamlData = meta;
                 this._content = content.replace(/^\s+/, ''); // Strip leading newlines to keep it clean
-                this._originalContent = this._content;
-                this._originalYaml = JSON.stringify(meta);
-                this._isDirty = false;
+                this._originalContent = this._content.trim();
                 this._metadataExpanded = this.defaultExpanded;
 
                 // Alert the parent extension so it can bind to its Zustand store if needed
@@ -289,6 +366,19 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                     detail: { yaml: meta, content: this._content },
                     bubbles: true, composed: true 
                 }));
+
+                let latestYaml = { ...this._yamlData };
+                this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
+                    detail: {
+                        currentYaml: latestYaml,
+                        respond: (newYaml) => { latestYaml = newYaml; }
+                    },
+                    bubbles: true, composed: true
+                }));
+
+                this._yamlData = { ...latestYaml };
+                this._originalYaml = JSON.stringify(latestYaml);
+                this._isDirty = false;
             } else {
                 throw new Error("Failed to read file.");
             }
@@ -300,7 +390,18 @@ export class InSetuFrontmatterEditor extends InSetuElement {
     }
 
     _checkDirty() {
-        this._isDirty = (this._content !== this._originalContent) || (JSON.stringify(this._yamlData) !== this._originalYaml);
+        let latestYaml = { ...this._yamlData };
+        this.dispatchEvent(new CustomEvent('insetu:request-frontmatter', {
+            detail: {
+                currentYaml: latestYaml,
+                respond: (newYaml) => { latestYaml = newYaml; }
+            },
+            bubbles: true, composed: true
+        }));
+        const contentDirty = (this._content.trim() !== this._originalContent.trim());
+        const yamlDirty = (JSON.stringify(latestYaml) !== this._originalYaml);
+        this._isDirty = contentDirty || yamlDirty;
+        this.requestUpdate();
     }
 
     async _handleSave() {
@@ -322,9 +423,11 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         }, {
             loadingText: 'Saving...',
             onSuccess: () => {
-                this._originalContent = this._content;
+                this._yamlData = { ...latestYaml };
+                this._originalContent = this._content.trim();
                 this._originalYaml = JSON.stringify(latestYaml);
                 this._isDirty = false;
+                this.requestUpdate();
 
                 window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
 
@@ -339,26 +442,44 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         if (this._loading) {
             return html`<div class="spinner" style="display:block; padding: 20px;">Loading file...</div>`;
         }
-
         return html`
-            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg);">
-                <!-- YAML Metadata Injection Slot -->
-                <div style="background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
+            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg);"
+                @input=${() => this._checkDirty()}
+                @sutram-input-changed=${() => this._checkDirty()}>
+                <!-- Full-Width Title Control Header -->
+                <div style="padding: 8px 15px 6px 15px; background: var(--bg); flex-shrink: 0;">
                     <slot name="title-control"></slot>
-                    <sutram-collapsible 
-                        titleText="Properties & Metadata" 
-                        intent="neutral" 
-                        ?flush=${true}
-                        .open=${this._metadataExpanded}
-                        @sutram-collapsible-toggled=${(e) => this._metadataExpanded = e.detail.open}
-                        style="--title-weight: bold; --title-size: 0.85rem; color: var(--text-muted);">
-                        <div style="padding: 5px 20px 20px 20px;">
+                </div>
+
+                <!-- Entity Action Bar Row with Metadata Button on the Right -->
+                <div class="action-bar-row">
+                    <div class="action-bar-scroll">
+                        <slot name="action-bar-extra"></slot>
+                        <sutram-entity-actions 
+                            style="flex-wrap: nowrap; display: flex;"
+                            .entityType=${'file'} 
+                            .entityData=${{ 
+                                filepath: this.filepath, 
+                                isFS: true,
+                                suppress: ['file-edit']
+                            }}>
+                        </sutram-entity-actions>
+                    </div>
+                    <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
+                        @click=${() => this._metadataExpanded = !this._metadataExpanded}
+                        title="Toggle Metadata">
+                        ⚙️<span class="meta-btn-text"> Metadata</span> <span style="font-size: 0.7rem; margin-left: 2px;">${this._metadataExpanded ? '▲' : '▼'}</span>
+                    </button>
+                </div>
+
+                <!-- Collapsible Metadata Drawer (Default Collapsed, BELOW Action Bar) -->
+                ${this._metadataExpanded ? html`
+                    <div style="padding: 8px 15px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
                         <slot name="metadata-controls">
-                            <!-- Graceful Fallback: Render raw YAML keys if the extension doesn't provide a custom UI -->
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 ${Object.keys(this._yamlData || {}).map(k => html`
                                     <div style="flex: 1; min-width: 150px;">
-                                        <sutram-input label=${k} .value=${this._yamlData[k]} @sutram-input-changed=${e => {
+                                        <sutram-input ?flush=${true} label=${k} .value=${this._yamlData[k]} @sutram-input-changed=${e => {
                                             this._yamlData = { ...this._yamlData, [k]: e.detail.value };
                                             this._checkDirty();
                                         }}></sutram-input>
@@ -366,11 +487,10 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                                 `)}
                             </div>
                         </slot>
-                        </div>
-                    </sutram-collapsible>
-                </div>
+                    </div>
+                ` : ''}
 
-                <!-- Core Markdown Editor -->
+                <!-- Core Markdown / CodeMirror Canvas -->
                 <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
                     <insetu-markdown-editor 
                         .value=${this._content}
@@ -381,24 +501,24 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         }}>
                     </insetu-markdown-editor>
                 </div>
-                <!-- Execution Toolbar -->
-                <div style="padding: 12px 20px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
-                    <div style="display: flex; gap: 8px;">
-                        <sutram-entity-actions 
-                            .entityType=${'file'} 
-                            .entityData=${{ 
-                                filepath: this.filepath, 
-                                isFS: true,
-                                suppress: ['file-edit']
-                            }}>
-                        </sutram-entity-actions>
+
+                <!-- Unified Single-Row Footer Bar -->
+                <div class="footer-row">
+                    <slot name="footer-left">
+                        <button class="btn-sm btn-truncate" style="background: var(--intent-danger); color: white; margin: 0; flex-shrink: 0;" @click=${() => this.dispatchEvent(new CustomEvent('insetu:editor-delete', { bubbles: true, composed: true }))}>🗑️ Delete</button>
+                    </slot>
+                    <div class="footer-btn-group">
+                        <slot name="footer-middle">
+                            <button class="btn-sm btn-truncate" style="background: var(--intent-warning); color: black; margin: 0; flex-shrink: 1;" @click=${() => this.dispatchEvent(new CustomEvent('insetu:editor-raw-edit', { bubbles: true, composed: true }))}>📝 Raw Edit</button>
+                        </slot>
+                        ${this._isDirty ? html`
+                            <sutram-async-btn 
+                                label="💾 Save" 
+                                intent="success" 
+                                .onClick=${() => this._handleSave()}>
+                            </sutram-async-btn>
+                        ` : ''}
                     </div>
-                    <sutram-async-btn 
-                        label="💾 Save Changes" 
-                        intent="success" 
-                        ?disabled=${!this._isDirty} 
-                        .onClick=${() => this._handleSave()}>
-                    </sutram-async-btn>
                 </div>
             </div>
         `;

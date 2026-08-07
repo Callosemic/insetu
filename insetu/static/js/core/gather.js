@@ -327,7 +327,9 @@ export class InSetuExtGather extends InSetuElement {
                                                 .filename=${f.filename}
                                                 .titleText=${f.finalTitle || f.filename}
                                                 .descriptionText=${f.finalDesc || ''}
-                                                .detailText=${f.sizeStr ? `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename} | ${f.sizeStr}` : `${f.repoDir ? `[${f.repoDir}] ` : ''}${f.filename}`}
+                                                .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
+                                                .detailText=${f.filename}
+                                                .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
                                                 icon="📦"
                                                 intentColor="var(--intent-highlight)"
                                                 entityType="file:context"
