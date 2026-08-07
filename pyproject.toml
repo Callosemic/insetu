@@ -37,3 +37,5 @@ version_toml = [
     "pyproject.toml:project.version"
 ]
 commit_parser = "conventional"
+allow_zero_version = true
+major_on_zero = false
