@@ -321,7 +321,7 @@ def _background_scaffold_task(ctx, repo, initial_version):
             content = re.sub(r'(\[project\])', r'\1\nversion = "' + initial_version + '"', content)
         else:
             content = re.sub(r'^version\s*=\s*[\'"][^\'"]+[\'"]', f'version = "{initial_version}"', content, flags=re.MULTILINE)
-    allow_zero = 'allow_zero_version = true' if initial_version.startswith('0.') else ''
+    allow_zero = 'allow_zero_version = true\nmajor_on_zero = false' if initial_version.startswith('0.') else ''
     psr_config = f'''
 [tool.semantic_release]
 version_toml = [
@@ -359,7 +359,6 @@ def _background_create_dummy_toml(ctx, repo, initial_version):
 
     ctx.jobs.update_progress(f"Creating basic pyproject.toml for {repo} (v{initial_version})...")
     pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
-
     content = f'''[project]
 name = "{repo}"
 version = "{initial_version}"
@@ -371,7 +370,7 @@ version_toml = [
 commit_parser = "conventional"
 vcs_release = false
 build_command = "false"
-{'allow_zero_version = true' if initial_version.startswith('0.') else ''}
+{'allow_zero_version = true\nmajor_on_zero = false' if initial_version.startswith('0.') else ''}
 '''
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging
     ctx.vfs.save(pyproject_file, content, data={"is_absolute_artifact": True})
