@@ -51,6 +51,7 @@ def check_javascript_files():
     sutram_settings_event_pattern = re.compile(r'addEventListener\s*\(\s*[\'"]sutram-settings-(?:action|save)[\'"]')
     legacy_system_uri_pattern = re.compile(r'system://')
     sutram_form_control_pattern = re.compile(r'<(?:input|select|textarea)\b(?!.*type=["\'](?:checkbox|radio|file)["\'])')
+    legacy_refresh_pattern = re.compile(r'\bon(?:Sub)?NavReselected\s*\(')
     unmanaged_document_input_listener_pattern = re.compile(r"document\.addEventListener\(\s*['\"](input|change)['\"]")
 
     for root, _, files in os.walk(FRONTEND_DIR):
@@ -238,5 +239,9 @@ def check_javascript_files():
                         report_violation("SETTINGS_ACTION_EXPLICIT_API_MANDATE", filepath, line_num, "Event handler for sutram-settings-action/save uses raw fetch(). Route through window.inSetu.api.workspace instead.")
                     if legacy_system_uri_pattern.search(line):
                         report_violation("LEGACY_SYSTEM_URI_BAN", filepath, line_num, "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme.")
+                    if is_extension and legacy_refresh_pattern.search(line):
+                        report_violation("LIFECYCLE_CONSOLIDATION_MANDATE", filepath, line_num, "Legacy onNavReselected or onSubNavReselected detected. Migrate to unified onForceRefresh() lifecycle method.")
+                    if is_extension and re.search(r'[\'"]zone:force-refresh[\'"]', line):
+                        report_violation("LEGACY_FORCE_REFRESH_HOOK_BAN", filepath, line_num, "Deprecated 'zone:force-refresh' UI hook detected. Migrate to native onForceRefresh() class lifecycle method on InSetuElement.")
                     if unmanaged_document_input_listener_pattern.search(line):
                         report_violation("UNMANAGED_FORM_INPUT_LISTENER_BAN", filepath, line_num, "Direct DOM input/change listener on 'document' detected. Form input management must route through Sutram web component lifecycles (<sutram-input>, <sutram-textarea>).")
