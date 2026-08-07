@@ -66,6 +66,9 @@ export class InSetuExtTerm extends InSetuElement {
             this._resizeObserver.observe(this);
         }
     }
+    onForceRefresh() {
+        this.onWorkspaceChanged(this.workspaceId);
+    }
     disconnectedCallback() {
         super.disconnectedCallback();
         clearTimeout(this._initTimer);
@@ -306,11 +309,6 @@ window.ExtensionRegistry.registerExtension('term', {
         }
     ],
     uiHooks: {
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'term') {
-                window.dispatchEvent(new CustomEvent('insetu:term:restart'));
-            }
-        },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'ctrl') {
                 window.inSetu.events.emit('insetu:term:resize');

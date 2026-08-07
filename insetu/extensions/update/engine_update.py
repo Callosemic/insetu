@@ -137,10 +137,9 @@ def _background_preview_bump_task(ctx, repo):
     env = os.environ.copy()
     parser_style = ctx.settings.get("commit_parser", "angular")
     env["PSR_COMMIT_PARSER"] = parser_style
-
     try:
         res = subprocess.run(
-            ['semantic-release', 'version', '--noop'], 
+            ['semantic-release', '--noop', 'version'], 
             cwd=repo_path, 
             capture_output=True, 
             text=True, 
@@ -204,8 +203,8 @@ def _background_status_task(ctx, repo):
         content = ""
 
     configured = "[tool.semantic_release]" in content
-
     version = None
+    has_release = False
     import re
 
     # 1. Always attempt to parse the static baseline version
@@ -225,9 +224,10 @@ def _background_status_task(ctx, repo):
             )
             if res.stdout.strip():
                 version = res.stdout.strip()
+                has_release = True
         except subprocess.CalledProcessError:
             pass
-    return {"message": "Status resolved.", "artifact": {"version": version, "configured": configured, "has_pyproject": has_pyproject, "is_clean": is_clean}}
+    return {"message": "Status resolved.", "artifact": {"version": version, "configured": configured, "has_pyproject": has_pyproject, "is_clean": is_clean, "has_release": has_release}}
 
 @update_bp.route('status', methods=['POST'])
 def api_update_status(ctx):
@@ -332,6 +332,50 @@ commit_parser = "angular"
         subprocess.run(['git', 'commit', '-m', f'chore: initialize semantic versioning at v{initial_version} [skip ci]'], cwd=repo_path, check=True)
 
         return {"message": f"Successfully initialized at v{initial_version}. Ready for first release."}
+@update_bp.worker("create_dummy_toml_task")
+def _background_create_dummy_toml(ctx, repo, initial_version):
+    import os
+    import subprocess
+    from pathlib import Path
+
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError("Target repository path not found.")
+
+    ctx.jobs.update_progress(f"Creating basic pyproject.toml for {repo} (v{initial_version})...")
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
+
+    content = f'''[project]
+name = "{repo}"
+version = "{initial_version}"
+description = "Auto-generated project configuration"
+
+[tool.semantic_release]
+version_toml = [
+    "pyproject.toml:project.version"
+]
+commit_parser = "angular"
+build_command = "false"
+'''
+    # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging
+    ctx.vfs.save(pyproject_file, content, data={"is_absolute_artifact": True})
+    ctx.sync_vfs_barrier()
+
+    ctx.jobs.update_progress("Committing pyproject.toml...")
+    subprocess.run(['git', 'add', 'pyproject.toml'], cwd=repo_path, check=True)
+    status_res = subprocess.run(['git', 'status', '--porcelain', 'pyproject.toml'], cwd=repo_path, capture_output=True, text=True)
+    if status_res.stdout.strip():
+        subprocess.run(['git', 'commit', '-m', f'chore: add basic pyproject.toml [skip ci]'], cwd=repo_path, check=True)
+
+    return {"message": "Successfully created pyproject.toml. Ready for initialization."}
+@update_bp.route('create_dummy_toml', methods=['POST'])
+def api_update_create_dummy_toml(ctx):
+    repo = ctx.req.json.get('repo')
+    initial_version = ctx.req.json.get('initial_version', '0.1.0')
+    if not repo: return jsonify({"error": "Repo required"}), 400
+    job_id = ctx.jobs.submit("create_dummy_toml_task", repo=repo, initial_version=initial_version)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 @update_bp.route('eligible_repos', methods=['GET'])
 def api_update_eligible_repos(ctx):
     import os

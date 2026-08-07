@@ -165,6 +165,10 @@ constructor() {
     onWorkspaceChanged(newWorkspaceId) {
         KanbanStore.getState().fetchTasks();
     }
+    onForceRefresh() {
+        KanbanStore.setState({ tasks: [] });
+        KanbanStore.getState().fetchTasks();
+    }
 
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -952,13 +956,6 @@ window.ExtensionRegistry.registerExtension('tracker', {
             if (tabId === 'tasks') {
                 KanbanStore.getState().fetchTasks();
             }
-        },
-        'zone:force-refresh': (data) => {
-            if (data.parentId === 'tasks') {
-                KanbanStore.setState({ tasks: [] });
-                KanbanStore.getState().fetchTasks();
-            }
-            return false;
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

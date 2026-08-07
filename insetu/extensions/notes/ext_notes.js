@@ -300,8 +300,10 @@ export class InSetuExtNotes extends InSetuElement {
 
         this.registerGlobalListener('insetu:notes:new', window, () => NotesStore.setState({ newNoteModalOpen: true }));
     }
-
     onWorkspaceChanged(newWorkspaceId) {
+        NotesStore.getState().fetchNotes();
+    }
+    onForceRefresh() {
         NotesStore.getState().fetchNotes();
     }
 
@@ -401,12 +403,6 @@ window.ExtensionRegistry.registerExtension('notes', {
         }
     ],
     uiHooks: {
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'notes') {
-                NotesStore.getState().fetchNotes();
-            }
-            return false;
-        },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;
             const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/notes/'));

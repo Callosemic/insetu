@@ -65,8 +65,10 @@ export class InSetuExtPrompts extends InSetuElement {
 
         PromptsStore.getState().fetchPrompts();
     }
-
     onWorkspaceChanged(newWorkspaceId) {
+        PromptsStore.getState().fetchPrompts();
+    }
+    onForceRefresh() {
         PromptsStore.getState().fetchPrompts();
     }
     static openPromptEmbedModal() {
@@ -209,12 +211,6 @@ window.ExtensionRegistry.registerExtension('prompts', {
             if (data.parentId === 'context' && data.subId === 'prompts') {
                 syncPromptsState();
             }
-        },
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'prompts') {
-                PromptsStore.getState().fetchPrompts();
-            }
-            return false;
         },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'context') {

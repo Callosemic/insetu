@@ -163,10 +163,12 @@ export class InSetuExtGitDiffs extends InSetuElement {
 disconnectedCallback() {
         super.disconnectedCallback();
 }
-
     onWorkspaceChanged(newWorkspaceId) {
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
+    }
+    onForceRefresh() {
+        generateDiffs(true);
     }
     async _handleOpenPush(e) {
         const { diffFile, repo } = e.detail;
@@ -909,11 +911,6 @@ if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.regis
             GitStore.setState({ dirtyDiffRepos: newDirty });
         }
     });
-    window.inSetu.extensions.Registry.registerUIHook('zone:force-refresh', (data) => {
-        if (data.subId === 'diffs') {
-            generateDiffs(true);
-        }
-        return false;
-    });
+
 }
 // Legacy zone:file-card-actions hook for git removed in favor of entityActions

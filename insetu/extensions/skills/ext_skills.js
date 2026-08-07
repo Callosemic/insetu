@@ -161,9 +161,12 @@ export class InSetuExtSkills extends InSetuElement {
 
         this._reloadAll();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
+    }
+    onForceRefresh() {
+        SkillsStore.getState().fetchPlaylist(true);
+        SkillsStore.getState().fetchAllSkills();
     }
     _reloadAll(silent = false) {
         SkillsStore.getState().fetchPlaylist(silent);
@@ -682,13 +685,6 @@ window.ExtensionRegistry.registerExtension('skills', {
         }
     ],
     uiHooks: {
-        'zone:force-refresh': (data) => {
-            if (data.parentId === 'skills') {
-                SkillsStore.getState().fetchPlaylist(true);
-                SkillsStore.getState().fetchAllSkills();
-            }
-            return false;
-        },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;
             const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/skills/'));

@@ -118,8 +118,11 @@ export class InSetuExtResearch extends InSetuElement {
             console.error("Failed to fetch research state:", e);
         }
     }
-
     onWorkspaceChanged(newWorkspaceId) {
+        this.fetchState();
+    }
+    onForceRefresh() {
+        ResearchStore.setState({ jobs: [], inbox: [] });
         this.fetchState();
     }
     async startJob(e) {
@@ -546,13 +549,6 @@ window.ExtensionRegistry.registerExtension('research', {
             } else {
                 ResearchStore.setState({ isTabActive: false });
             }
-        },
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'research') {
-                ResearchStore.setState({ jobs: [], inbox: [] });
-                window.inSetu.events.emit('insetu:research:fetch');
-            }
-            return false;
         }
     }
 });

@@ -83,8 +83,12 @@ export class InSetuExtFlow extends InSetuElement {
         this.allRepos = [];
         this._applyVisibilityFilter = true;
     }
-
     onWorkspaceChanged(newWorkspaceId) {
+        FlowStore.getState().fetchBatches();
+    }
+    onForceRefresh() {
+        FlowStore.setState({ batches: [] });
+        if (this.sys && this.sys.refreshManifest) this.sys.refreshManifest();
         FlowStore.getState().fetchBatches();
     }
     connectedCallback() {
@@ -771,14 +775,6 @@ window.ExtensionRegistry.registerExtension('flow', {
                     FlowStore.getState().fetchBatches();
                 }
             }
-        },
-        'zone:force-refresh': (data) => {
-            if (data.subId === 'flow') {
-                FlowStore.setState({ batches: [] });
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
-                FlowStore.getState().fetchBatches();
-            }
-            return false;
         },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;

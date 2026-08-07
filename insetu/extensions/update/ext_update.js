@@ -6,11 +6,11 @@ window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const UpdateStore = createExtensionStore('Update', {
     targetRepo: '',
-    jobOutput: '',
     repoVersion: null,
     repoConfigured: false,
     hasPyproject: true,
     isClean: true,
+    hasRelease: false,
     missingDependencies: [],
     missingBinaries: [],
     eligibleRepos: {},
@@ -104,7 +104,8 @@ export const UpdateStore = createExtensionStore('Update', {
                             repoVersion: statusData.artifact.version, 
                             repoConfigured: statusData.artifact.configured,
                             hasPyproject: statusData.artifact.has_pyproject !== false,
-                            isClean: statusData.artifact.is_clean !== false
+                            isClean: statusData.artifact.is_clean !== false,
+                            hasRelease: statusData.artifact.has_release === true
                         });
                     },
                     onError: (err) => {
@@ -117,6 +118,27 @@ export const UpdateStore = createExtensionStore('Update', {
             }
         } catch (e) {
             console.error("Failed to queue status job:", e);
+        }
+    },
+    createDummyToml: async (repo, initialVersion) => {
+        if (!repo) return;
+        try {
+            const res = await window.inSetu.api.post('update/create_dummy_toml', { repo, initial_version: initialVersion || '0.1.0' });
+            if (res.status === 202) {
+                const data = await res.json();
+                window.inSetu.utils.pollJob(data.job_id, {
+                    onComplete: () => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                            window.inSetu.ui.setGlobalStatus(`✅ Created basic TOML for ${repo}.`, 3000);
+                        }
+                        UpdateStore.getState().fetchRepoStatus(repo);
+                        UpdateStore.getState().fetchEligibleRepos();
+                    },
+                    onError: (err) => alert(`Error: ${err.message}`)
+                });
+            }
+        } catch (e) {
+            alert(`Network error: ${e.message}`);
         }
     },
     forceVersion: async (repo, version) => {
@@ -172,11 +194,11 @@ export class InSetuExtUpdate extends InSetuElement {
     static get extensionName() { return 'update'; }
     static properties = {
         targetRepo: { type: String },
-        jobOutput: { type: String },
         repoVersion: { type: String },
         repoConfigured: { type: Boolean },
         hasPyproject: { type: Boolean },
         isClean: { type: Boolean },
+        hasRelease: { type: Boolean },
         allRepos: { type: Array },
         missingDependencies: { type: Array },
         missingBinaries: { type: Array },
@@ -184,19 +206,18 @@ export class InSetuExtUpdate extends InSetuElement {
         previewModalOpen: { type: Boolean },
         previewOutput: { type: String }
     };
-    
     static styles = [sharedStyles, css`
-        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; padding: 20px; }
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
         .output-box { font-family: var(--font-mono); background: var(--input-bg); border: 1px solid var(--border); padding: 12px; border-radius: 4px; font-size: 0.85rem; color: var(--text); white-space: pre-wrap; overflow-y: auto; flex: 1; min-height: 150px; margin-top: 15px; }
     `];
     constructor() {
         super();
         this.targetRepo = '';
-        this.jobOutput = '';
         this.repoVersion = null;
         this.repoConfigured = false;
         this.hasPyproject = true;
         this.isClean = true;
+        this.hasRelease = false;
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -209,11 +230,11 @@ export class InSetuExtUpdate extends InSetuElement {
         this.subscribe(UpdateStore, state => {
             const previousRepo = this.targetRepo;
             this.targetRepo = state.targetRepo;
-            this.jobOutput = state.jobOutput;
             this.repoVersion = state.repoVersion;
             this.repoConfigured = state.repoConfigured;
             this.hasPyproject = state.hasPyproject !== false;
             this.isClean = state.isClean !== false;
+            this.hasRelease = state.hasRelease === true;
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
             this.eligibleRepos = state.eligibleRepos || {};
@@ -249,27 +270,25 @@ export class InSetuExtUpdate extends InSetuElement {
         }
         UpdateStore.getState().fetchEligibleRepos();
     }
-
-    onSubNavReselected() {
-        // Triggered when the user taps the active "Update" sub-tab
+    onForceRefresh() {
         if (this.targetRepo) {
             UpdateStore.getState().fetchRepoStatus(this.targetRepo);
         }
+        UpdateStore.getState().fetchEligibleRepos();
+        UpdateStore.getState().checkDependencies();
     }
-
     _getBumpAction() {
         return this.api.bindJobAction('bump', { repo: this.targetRepo }, {
             onProgress: (msg) => {
-                UpdateStore.setState({ jobOutput: msg });
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
             },
             onComplete: (statusData) => {
-                const output = statusData.artifact?.output || statusData.message;
-                UpdateStore.setState({ jobOutput: `✅ ${statusData.message}\n\n${output}` });
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Bump complete.`, 2000);
+                console.log("Bump Output:\n", statusData.artifact?.output || statusData.message);
             },
             onError: (err) => {
-                UpdateStore.setState({ jobOutput: `❌ Failed:\n\n${err.message}` });
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`❌ Bump failed: ${err.message}`, 5000, true);
+                console.error("Bump Error:\n", err);
             }
         });
     }
@@ -277,16 +296,15 @@ export class InSetuExtUpdate extends InSetuElement {
     _getPublishAction() {
         return this.api.bindJobAction('publish', { repo: this.targetRepo }, {
             onProgress: (msg) => {
-                UpdateStore.setState({ jobOutput: msg });
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
             },
             onComplete: (statusData) => {
-                const output = statusData.artifact?.output || statusData.message;
-                UpdateStore.setState({ jobOutput: `✅ ${statusData.message}\n\n${output}` });
                 if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Publish complete.`, 2000);
+                console.log("Publish Output:\n", statusData.artifact?.output || statusData.message);
             },
             onError: (err) => {
-                UpdateStore.setState({ jobOutput: `❌ Failed:\n\n${err.message}` });
+                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`❌ Publish failed: ${err.message}`, 5000, true);
+                console.error("Publish Error:\n", err);
             }
         });
     }
@@ -354,6 +372,9 @@ export class InSetuExtUpdate extends InSetuElement {
                                     </button>
                                 ` : ''}
                             </div>
+                            ${this.repoConfigured && !this.hasRelease ? html`
+                                <span style="font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin-top: 4px;">Note: this is a local version only. Release your first version below.</span>
+                            ` : ''}
                         </div>
                         ${this.repoConfigured ? html`
                             <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold;">
@@ -367,10 +388,19 @@ export class InSetuExtUpdate extends InSetuElement {
                             ⚠️ Working tree is not clean. Commit changes before releasing.
                         </div>
                     ` : ''}
-
                     ${!this.hasPyproject ? html`
-                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center;">
-                            ⚠️ Missing pyproject.toml in this repository.
+                        <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                            <span>⚠️ Missing pyproject.toml in this repository.</span>
+                            <button class="btn-sm" style="background: var(--intent-warning); color: #000; border: none; padding: 4px 10px; font-weight: bold; font-size: 0.75rem; border-radius: 4px; cursor: pointer;"
+                                @click=${() => {
+                                    const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
+                                    if (initVer) {
+                                        UpdateStore.getState().createDummyToml(this.targetRepo, initVer.trim());
+                                    }
+                                }}>
+                                📄 Create Basic TOML
+                            </button>
+                            <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. Update manually as needed.</span>
                         </div>
                     ` : ''}
                     ${!this.repoConfigured ? html`
@@ -390,7 +420,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
                         <sutram-async-btn 
                             style="width: 100%;" 
-                            label="📦 Bump & Tag" 
+                            label=${!this.hasRelease ? "🚀 Launch first release" : "📦 Bump & Tag"} 
                             intent="primary" 
                             ?disabled=${!this.repoConfigured || !this.isClean}
                             .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
@@ -409,7 +439,6 @@ export class InSetuExtUpdate extends InSetuElement {
                         <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Distributes the package to the configured registry.</span>
                     </div>
                 </div>
-                <div class="output-box">${this.jobOutput || 'Awaiting execution...'}</div>
             </div>
 
             <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Release Preview" @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
