@@ -576,18 +576,19 @@ export class InSetuVFSExplorer extends InSetuElement {
         static properties = {
                 searchQuery: { type: String },
                 manifestFiles: { type: Array },
-                globalBrowsePath: { type: Array }
+                globalBrowsePath: { type: Array },
+                loading: { type: Boolean }
         };
         static styles = [sharedStyles, css`
                 :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
                 .vfs-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
         `];
-
         constructor() {
                 super();
                 this.searchQuery = '';
                 this.manifestFiles = [];
                 this.globalBrowsePath = [];
+                this.loading = false;
         }
         _updateState(state) {
                 const allFiles = new Set();
@@ -634,19 +635,37 @@ export class InSetuVFSExplorer extends InSetuElement {
                 this._updateState(AppStore.getState());
                 this.searchQuery = FsStore.getState().searchQuery || '';
         }
-
         disconnectedCallback() {
                 super.disconnectedCallback();
         }
+        async onForceRefresh() {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                        this.loading = true;
+                        await window.inSetu.sys.refreshManifest();
+                        this.loading = false;
+                }
+        }
+
+        async onWorkspaceChanged(newWorkspaceId) {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                        this.loading = true;
+                        await window.inSetu.sys.refreshManifest();
+                        this.loading = false;
+                }
+        }
+
         _handlePathChange(e) {
                 AppStore.setState({ globalBrowsePath: e.detail.path });
         }
         render() {
+            if (this.loading) {
+                return html`<div style="padding: 20px;"><insetu-spinner text="Refreshing file system..."></insetu-spinner></div>`;
+            }
             if (this.manifestFiles.length === 0) {
                 return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
             }
             return html`
-                <insetu-file-tree  
+                <insetu-file-tree    
                     style="flex: 1;"
                     @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
                     basePath=""
@@ -858,7 +877,16 @@ window.ExtensionRegistry.registerExtension('files', {
             component: "insetu-vfs-explorer-actions",
             order: 2
         }
-    ]
+    ],
+    uiHooks: {
+        'zone:subtab-changed': (data) => {
+            if (data.parentId === 'edit' && data.subId === 'files') {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                    window.inSetu.sys.refreshManifest();
+                }
+            }
+        }
+    }
 });
 export function checkFileExtension(filename) {
     const warningEl = document.getElementById('new-file-ext-warning');

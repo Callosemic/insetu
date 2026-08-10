@@ -340,12 +340,12 @@ export class InSetuExtBridge extends InSetuElement {
             const textVal = BridgeStore.getState().getCompiledPayload();
             BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
             const activeFiles = BridgeStore.getState().getActiveFiles();
-
             const action = this.api.bindJobAction('sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
                 pinned_repos: Array.from(this.ecosystem.pinnedRepos),
+                force: Boolean(bypassSandwich || this._globalBypassSandwich || overridePayload.force),
                 ...overridePayload
             }, {
                 interval: 250,
@@ -392,7 +392,12 @@ export class InSetuExtBridge extends InSetuElement {
             const cells = BridgeStore.getState().cells;
             const target = cells.find(c => c.file === oldPath);
             if (target) BridgeStore.getState().updateGroupFile(oldPath, newPath);
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+            // Semantically correct: Pass the explicit file array the VFS engine requires
+            this._getSyncAction(this._lastDryRun || false, true, { 
+                force: true, 
+                confirmed_overwrites: [newPath],
+                confirmed_candidates: { [oldPath]: newPath }
+            })();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             if (this.vfs && this.vfs.openVirtualFile) this.vfs.openVirtualFile('Diff_Analysis.diff', decodedDiff);
@@ -405,7 +410,7 @@ export class InSetuExtBridge extends InSetuElement {
             this.vfs.fetchAndDownloadState(btn.dataset.file);
         } else if (action === 'force-sync' || action === 'ignore-syntax') {
             const isDryRun = btn.dataset.dryrun === 'true';
-            this._getSyncAction(isDryRun, true)();
+            this._getSyncAction(isDryRun, true, { force: true, ignore_syntax_errors: true })();
         } else if (action === 'deselect-patch') {
             const pIdx = parseInt(btn.dataset.idx, 10);
             const activeCells = BridgeStore.getState().cells.filter(c => c.active);
@@ -414,13 +419,12 @@ export class InSetuExtBridge extends InSetuElement {
             }
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deep-search') {
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
+            this._getSyncAction(this._lastDryRun || false, true, { allow_deep_search: true, force: true })();
         }
     }
     _renderTelemetry() {
         const t = this.telemetry;
         if (!t) return html`<div id="status-box" style="width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);" .innerHTML=${this.consoleOutput}></div>`;
-
         return html`
             <div style="width: 100%; display: flex; flex-direction: column;">
                 <h3 style="color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;">
@@ -429,6 +433,7 @@ export class InSetuExtBridge extends InSetuElement {
                 <p style="color: var(--text-muted); font-size: 0.9rem;">
                     Total: ${t.summary?.total_patches || 0} | Resolved: ${t.summary?.resolved || 0} | Skipped: ${t.summary?.auto_skipped || 0} | Failed: ${t.summary?.failed || 0}
                 </p>
+                ${t.message ? html`<div style="margin-top: 10px; padding: 12px; background: var(--input-bg); border-left: 4px solid var(--intent-warning); border-radius: 4px; color: var(--text); font-weight: bold;">${t.message}</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
                     ${(() => {
                         const safePatches = t.patches || [];
@@ -673,7 +678,7 @@ export class InSetuExtBridge extends InSetuElement {
                     ` : html`
                         <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
                         ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode === 'dry_run' ? html`
-                            <sutram-async-btn label="⚡ Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
+                            <sutram-async-btn label="⚡ Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
                         ` : ''}
                     `}
                 </div>
