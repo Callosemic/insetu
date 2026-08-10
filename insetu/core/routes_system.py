@@ -9,6 +9,59 @@ from insetu.kernel.utils import load_config, save_json_file, get_workspace_physi
 import insetu.kernel.utils as utils
 from insetu.kernel.hooks import hooks
 from insetu.kernel.sync import get_system_deltas
+from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
+
+_REGISTERED_SETTINGS_SCHEMAS['core_system'] = [
+    {
+        "id": "port",
+        "label": "Daemon Port",
+        "type": "number",
+        "scope": "daemon",
+        "default": 5005,
+        "description": "The port the inSetu daemon binds to. Requires reboot to take effect."
+    },
+    {
+        "id": "enable_watchdog",
+        "label": "Enable Native Filesystem Watchdog",
+        "type": "boolean",
+        "scope": "daemon",
+        "default": True,
+        "description": "Uses the Python watchdog library to detect external out-of-band edits and instantly sync the VFS."
+    },
+    {
+        "id": "preload_all_extensions",
+        "label": "Preload All Extensions on Boot",
+        "type": "boolean",
+        "scope": "daemon",
+        "default": False,
+        "description": "Aggressively loads all available extensions into RAM during boot, eliminating daemon reboots when activating new extensions later."
+    },
+    {
+        "id": "instance_title",
+        "label": "Workspace Title",
+        "type": "text",
+        "scope": "workspace",
+        "default": "inSetu Developer OS",
+        "description": "The display title for this workspace."
+    },
+    {
+        "id": "instance_emoji",
+        "label": "Menu Emoji",
+        "type": "text",
+        "scope": "workspace",
+        "default": "⚙️",
+        "description": "The emoji used in the top-right application menu."
+    }
+]
+from insetu.kernel.extension import InSetuExtension
+
+core_system_ext = InSetuExtension(
+    'core_system', __name__,
+    title="Core OS",
+    description="Core OS daemon and workspace environment configurations.",
+    core=True,
+    settings_schema=_REGISTERED_SETTINGS_SCHEMAS['core_system']
+)
 
 system_bp = Blueprint('system', __name__)
 
@@ -245,12 +298,14 @@ def api_create_workspace():
     ws_id = data.get('id', '').strip().lower()
     if not ws_id or ws_id in ['default', 'none']:
         return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
-    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
     if not os.path.exists(index_path):
         w_data = {"workspaces": {"default": {"config_path": "config.json"}}}
     else:
         with open(index_path, 'r', encoding='utf-8') as f:
             w_data = json.load(f)
+        if "workspaces" not in w_data:
+            w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
     if ws_id in w_data.get("workspaces", {}):
         return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
@@ -264,11 +319,9 @@ def api_create_workspace():
         os.makedirs(ws_insetu_dir.joinpath("data").as_posix(), exist_ok=True)
     except Exception as e:
         return jsonify({"error": f"Failed to mount physical directory. Check path permissions: {str(e)}"}), 500
-    
     config_abs_path = ws_insetu_dir.joinpath("config.json").as_posix()
     config_rel_path = config_abs_path
     starter_config = {
-        "instance_title": f"inSetu Workspace: {ws_id}",
         "workspace_root": resolved_root,
         "extensions": ["config"],
         "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
@@ -276,7 +329,13 @@ def api_create_workspace():
     os.makedirs(starter_config["workspace_root"], exist_ok=True)
 
     from insetu.kernel.vfs import execute_vfs_save
-    execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
+    # Save the pure topology mapping
+    execute_vfs_save(ws_id, config_abs_path, json.dumps(starter_config, indent=2), data={"is_absolute_artifact": True})
+
+    # Seed the Tier 2 Workspace Settings
+    from insetu.kernel.extension import SettingsManager
+    settings = SettingsManager('core_system', ws_id)
+    settings.set("instance_title", f"inSetu Workspace: {ws_id}")
 
     if "workspaces" not in w_data:
         w_data["workspaces"] = {}
@@ -291,13 +350,14 @@ def api_delete_workspace():
     ws_id = data.get('id', '').strip().lower()
     if ws_id == 'default':
         return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
-
-    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
     if not os.path.exists(index_path):
-        return jsonify({"error": "workspaces.json not found"}), 404
+        return jsonify({"error": "system.json not found"}), 404
 
     with open(index_path, 'r', encoding='utf-8') as f:
         w_data = json.load(f)
+        if "workspaces" not in w_data:
+            w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
     if ws_id not in w_data.get("workspaces", {}):
         return jsonify({"error": "Target workspace not found."}), 404
@@ -336,16 +396,19 @@ def api_job_status(job_id):
         return jsonify({"error": str(e)}), 500
 @system_bp.route('/api/system/workspaces', methods=['GET', 'POST'])
 def api_workspaces():
-    index_path = Path(utils._cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
 
     if request.method == 'GET':
-        return jsonify(utils.load_json_file(index_path, {"workspaces": {}}))
+        data = utils.load_json_file(index_path, {})
+        if "workspaces" not in data:
+            data["workspaces"] = {"default": {"config_path": "config.json"}}
+        return jsonify(data)
     if request.method == 'POST':
         data = request.json or {}
         new_active = data.get("active_workspace") or data.get("workspace_id")
         old_active = sniff_tenant_id()
         if not os.path.exists(index_path):
-            return jsonify({"error": "workspaces.json not found."}), 404
+            return jsonify({"error": "system.json not found."}), 404
         w_data = utils.load_json_file(index_path, {})
         if new_active not in w_data.get("workspaces", {}) and new_active != "default":
             return jsonify({"error": "Workspace ID not found."}), 400
