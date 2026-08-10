@@ -68,57 +68,6 @@ export class InSetuExtConfig extends InSetuElement {
             console.error("Failed to fetch config", e);
         }
     }
-
-    renderExtensions() {
-        if (!this.configForm) return '';
-        const knownExtensions = this.configMeta?.available_extensions || [];
-        const activeExtensions = this.configForm.extensions || ['config'];
-
-        const extMap = new Map();
-        knownExtensions.forEach(ext => extMap.set(ext.id, ext));
-        activeExtensions.forEach(extId => {
-            if (!extMap.has(extId)) {
-                if (extId === 'config') {
-                    extMap.set(extId, { id: extId, title: 'Workspace Configuration', description: 'Core system settings and repository management UI.' });
-                } else {
-                    extMap.set(extId, { id: extId, title: extId, description: "Unknown or missing extension." });
-                }
-            }
-        });
-
-        const allExtensions = Array.from(extMap.values()).sort((a, b) => a.title.localeCompare(b.title));
-
-        return html`
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                ${allExtensions.map(ext => {
-                    const isConfig = ext.id === 'config';
-                    const isChecked = activeExtensions.includes(ext.id) || isConfig;
-                    return html`
-                        <div style="display: flex; flex-direction: column; gap: 4px; background: var(--bg); padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                                <input type="checkbox" id="ext_chk_${ext.id}" .checked=${isChecked} ?disabled=${isConfig} @change=${(e) => {
-                                    const current = this.configForm.extensions || [];
-                                    const newExts = e.target.checked 
-                                        ? (current.includes(ext.id) ? current : [...current, ext.id])
-                                        : current.filter(x => x !== ext.id);
-
-                                    this.configForm = { ...this.configForm, extensions: newExts };
-                                }}>
-                                <label for="ext_chk_${ext.id}" style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; cursor: pointer;"><b>${ext.id}</b>: ${ext.title}</label>
-                            </div>
-                            ${ext.description ? html`<div style="font-size: 0.8rem; color: var(--text-muted); margin-left: 26px;">${ext.description}</div>` : ''}
-                            ${(ext.missing_externals && ext.missing_externals.length > 0) ? html`
-                                <div style="font-size: 0.8rem; color: var(--intent-warning); font-weight: bold; margin-left: 26px; margin-top: 4px;">
-                                    ⚠️ Missing dependencies. Run: <code style="background: var(--bg); padding: 2px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--text);">pip install ${ext.missing_externals.join(' ')}</code>
-                                </div>
-                            ` : ''}
-                        </div>
-                    `;
-                })}
-            </div>
-        `;
-    }
-
     renderSubBuckets(repo, rIdx) {
         const buckets = repo.sub_buckets || [];
         const visibleBuckets = buckets.filter(b => !b.is_system);
@@ -410,27 +359,11 @@ export class InSetuExtConfig extends InSetuElement {
             : html`
                 <div style="display: flex; flex-direction: column;">
                     <sutram-collapsible 
-                        titleText="General Settings" 
-                        intent="success"
+                        titleText="Global Ignore Rules" 
+                        intent="neutral"
                         .open=${this._generalExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._generalExpanded = e.detail.open; }}>
                         <div style="display: flex; flex-direction: column; gap: 12px;">
-                            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 2; min-width: 200px;">
-                                    <sutram-input label="Workspace Title" .value=${this.configForm.instance_title || ''} placeholder="e.g., My Project OS" @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, instance_title: e.detail.value }; }}></sutram-input>
-                                </div>
-                                <div style="flex: 1; min-width: 80px;">
-                                    <sutram-input label="Menu Emoji" .value=${this.configForm.instance_emoji || ''} placeholder="⚙️" @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, instance_emoji: e.detail.value }; }}></sutram-input>
-                                </div>
-                            </div>
-                            <div style="margin-bottom: 12px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
-                                <sutram-toggle label="Track inSetu OS (.insetu)" .checked=${this.configForm.track_os !== false} @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, track_os: e.detail.value }; }}></sutram-toggle>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 46px;">Maps the underlying system directory to natively manage prompts and internal state tracking.</span>
-                            </div>
-                            <div style="margin-bottom: 12px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
-                                <sutram-toggle label="Enable Native Filesystem Watchdog (watchdog)" .checked=${this.configForm.enable_watchdog === true} @sutram-input-changed=${(e) => { this.configForm = { ...this.configForm, enable_watchdog: e.detail.value }; }}></sutram-toggle>
-                                <span style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-top: 4px; margin-left: 46px;">Uses the Python <code>watchdog</code> library to detect external out-of-band edits (e.g. from VS Code) and instantly syncs the VFS.</span>
-                            </div>
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 200px;">
                                     <sutram-input label="Global Ignore Directories" .value=${(this.configForm.ignore_dirs || []).join(', ')} placeholder="node_modules, build" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, ignore_dirs: arr }; }}></sutram-input>
@@ -460,15 +393,7 @@ export class InSetuExtConfig extends InSetuElement {
                         </div>
                     </sutram-collapsible>
                     <sutram-collapsible 
-                        titleText="Active Extensions" 
-                        intent="highlight"
-                        .open=${this._extExpanded}
-                        @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._extExpanded = e.detail.open; }}>
-                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Enable or disable system extensions. The 'config' extension is locked.</p>
-                        ${this.renderExtensions()}
-                    </sutram-collapsible>
-                    <sutram-collapsible 
-                        titleText="Target Repositories" 
+                        titleText="Target Repositories"  
                         intent="primary"
                         .open=${this._reposExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._reposExpanded = e.detail.open; }}>
@@ -499,14 +424,14 @@ export class InSetuExtConfig extends InSetuElement {
             ${this.renderRepoEditorModal()}
             <sutram-modal 
                 ?open=${this._isOpen} 
-                titleText="Workspace Configuration" 
+                titleText="Workspace Manager" 
                 ?fullscreen=${true} 
                 ?flush=${true}
                 @sutram-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
                 <div slot="body">${bodyContent}</div>
 
                 <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveConfig}>
-                    💾 Save & Reload
+                    💾 Save & Remap Disk
                 </button>
             </sutram-modal>
         `;

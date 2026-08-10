@@ -6,10 +6,13 @@ export class InSetuSystemSettings extends InSetuElement {
     static properties = {
         menuOpen: { type: Boolean },
         modalOpen: { type: Boolean },
+        manageExtOpen: { type: Boolean },
+        activeTab: { type: String },
         workspaces: { type: Object },
         emoji: { type: String },
         currentTheme: { type: String },
-        settingsActions: { type: Array }
+        _sysConfigForm: { type: Object },
+        _sysConfigMeta: { type: Object }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -25,14 +28,24 @@ export class InSetuSystemSettings extends InSetuElement {
         super();
         this.menuOpen = false;
         this.modalOpen = false;
+        this.manageExtOpen = false;
+        this.activeTab = 'system';
         this.workspaces = {};
         this.emoji = '⚙️';
         this.currentTheme = document.body.getAttribute('data-theme') || 'dark';
-        this.settingsActions = [];
+        this._sysConfigForm = {};
+        this._sysConfigMeta = {};
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
-        this._handleActionsUpdate = () => {
-            this.settingsActions = window.ExtensionRegistry._settingsActions || [];
-        };
+    }
+    async _openGenericSettings(extName) {
+        const genericModal = document.getElementById('insetu-generic-settings-root');
+        const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName];
+        let formData = {};
+        try {
+            const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
+            if (res.ok) formData = await res.json();
+        } catch(e) {}
+        if (genericModal) genericModal.openModal(extName, schema, formData);
     }
     connectedCallback() {
         super.connectedCallback();
@@ -42,8 +55,6 @@ export class InSetuSystemSettings extends InSetuElement {
             this.emoji = state.instanceEmoji || '⚙️';
         });
         this.registerGlobalListener('click', document, this._handleOutsideClick);
-        this.registerGlobalListener('sutram-settings-actions-updated', window, this._handleActionsUpdate);
-        this.settingsActions = window.ExtensionRegistry?._settingsActions || [];
     }
 
     disconnectedCallback() {
@@ -63,21 +74,73 @@ export class InSetuSystemSettings extends InSetuElement {
         localStorage.setItem('insetu_theme', theme);
         this.menuOpen = false;
     }
+
+    async _openSettings() {
+        this.menuOpen = false; 
+        this.modalOpen = true;
+        try {
+            const res = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                this._sysConfigForm = data.config || {};
+                this._sysConfigMeta = data.meta || {};
+            }
+        } catch(e) {}
+    }
+
+    async _saveActiveExtensions() {
+        try {
+            const res = await window.inSetu.api.workspace('system/config', {
+                method: 'POST',
+                body: JSON.stringify(this._sysConfigForm)
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.requires_reboot) {
+                    this.setStatus("Reboot required. Restarting...", 3000, true);
+                    await window.inSetu.api.system('reboot', { method: 'POST' });
+                    setInterval(() => window.location.reload(), 2000);
+                } else {
+                    this.setStatus("Extensions updated. Refreshing UI...", 2000);
+                    if (window.inSetu.sys.performSoftRefresh) await window.inSetu.sys.performSoftRefresh();
+                }
+            }
+        } catch(e) {
+            this.setStatus(`Error: ${e.message}`, 3000, true);
+            throw e;
+        }
+    }
     render() {
         const activeWs = window.inSetu.utils.getActiveWorkspace();
-        const groupedActions = this.settingsActions.reduce((acc, act) => {
-            const isSystem = act.section === 'System' || act.section === 'Workspace';
-            const sec = isSystem ? 'System Settings' : 'Extension Settings';
-            if (!acc[sec]) acc[sec] = [];
-            acc[sec].push(act);
-            return acc;
-        }, {});
+        const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas };
+        const coreList = [];
+        const extList = [];
+        Object.entries(allSchemas).forEach(([ext, schema]) => {
+            if (ext === 'core_system') return; 
+            if (!schema || schema.length === 0) return;
 
-        const sortedSections = Object.keys(groupedActions).sort((a, b) => {
-            if (a === 'System Settings') return -1;
-            if (b === 'System Settings') return 1;
-            return a.localeCompare(b);
+            // Enforce ecosystem boundaries: hide settings for disabled domain extensions
+            if (!window.inSetu.isCore(ext) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(ext)) {
+                return;
+            }
+
+            const title = (window.ExtensionRegistry?._manifests?.get(ext)?.name) || ext.charAt(0).toUpperCase() + ext.slice(1);
+
+            if (window.inSetu.isCore(ext)) {
+                coreList.push({ id: ext, title });
+            } else {
+                extList.push({ id: ext, title });
+            }
         });
+
+        const renderBtn = (icon, label, onClick) => html`
+            <button style="background: var(--input-bg); color: var(--text); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px; font-weight: bold; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 10px; transition: background 0.2s; width: 100%;"
+                onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'"
+                @click=${onClick}>
+                <span style="font-size: 1.2rem;">${icon}</span>
+                <span>${label}</span>
+            </button>
+        `;
 
         return html`
             <div style="position: relative; display: inline-block;">
@@ -85,8 +148,8 @@ export class InSetuSystemSettings extends InSetuElement {
                 ${this.menuOpen ? html`
                     <div style="position: absolute; top: 100%; right: 0; margin-top: 10px; background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); width: 280px; z-index: 2000; overflow: hidden; padding: 15px;">
                         <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;">
-                            <button class="menu-btn" @click=${() => { this.menuOpen = false; this.modalOpen = true; }} style="margin: 0; background: var(--input-bg); color: var(--text); text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'">
-                                <span style="font-size: 1.1rem;">⚙️</span> <span>Settings</span>
+                            <button class="menu-btn" @click=${() => this._openSettings()} style="margin: 0; background: var(--input-bg); color: var(--text); text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'">
+                                <span style="font-size: 1.1rem;">⚙️</span> <span>Settings Hub</span>
                             </button>
                         </div>
 
@@ -127,28 +190,80 @@ export class InSetuSystemSettings extends InSetuElement {
             <sutram-modal 
                 ?open=${this.modalOpen} 
                 ?fullscreen=${true} 
-                titleText="System Settings & Extensions" 
+                titleText="OS Settings Hub" 
                 style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
                 @sutram-modal-closed=${() => this.modalOpen = false}>
 
-                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
-                    ${sortedSections.map(section => html`
-                        <div style="font-weight: bold; font-size: 0.85rem; color: var(--intent-primary); margin-top: 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">${section}:</div>
-                        ${groupedActions[section].map(act => html`
-                            <button class="btn-sm" style="background: var(--input-bg); color: var(--text); border: 1px solid var(--border); text-align: left; padding: 10px 15px; font-size: 1rem; margin: 0; display: flex; align-items: center; gap: 10px; font-weight: bold; transition: background 0.2s; width: 100%;"
-                                onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'"
-                                @click=${() => { act.callback(); }}>
-                                <span style="font-size: 1.2rem;">${act.icon}</span> <span>${act.label}</span>
-                            </button>
-                        `)}
-                    `)}
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: hidden;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 8px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none;">
+                        <button class="btn-sm" style="background: ${this.activeTab === 'system' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'system' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'system'}>
+                            ⚙️ System
+                        </button>
+                        <button class="btn-sm" style="background: ${this.activeTab === 'core' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'core' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'core'}>
+                            🛠️ Core
+                        </button>
+                        <button class="btn-sm" style="background: ${this.activeTab === 'extensions' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.activeTab === 'extensions' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; font-weight: bold; padding: 8px 16px; cursor: pointer; white-space: nowrap;" @click=${() => this.activeTab = 'extensions'}>
+                            🧩 Extensions
+                        </button>
+                    </div>
+
+                    <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
+                        ${this.activeTab === 'system' ? html`
+                            ${renderBtn('⚙️', 'System Preferences', () => this._openGenericSettings('core_system'))}
+                            ${renderBtn('🗃️', 'Add / Remove Workspaces', () => { this.modalOpen = false; AppStore.setState({ isWorkspaceEditorOpen: true }); })}
+                            ${renderBtn('📂', 'Configure Current Workspace', () => { this.modalOpen = false; AppStore.setState({ isConfigOpen: true }); })}
+                            ${renderBtn('🧩', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
+                        ` : ''}
+
+                        ${this.activeTab === 'core' ? html`
+                            ${coreList.map(ext => renderBtn('🔧', `${ext.title} Settings`, () => this._openGenericSettings(ext.id)))}
+                        ` : ''}
+
+                        ${this.activeTab === 'extensions' ? html`
+                            ${extList.map(ext => renderBtn('🧩', `${ext.title} Settings`, () => this._openGenericSettings(ext.id)))}
+                            ${extList.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic; padding: 10px;">No third-party extensions active.</span>` : ''}
+                        ` : ''}
+                    </div>
                 </div>
-                <sutram-entity-actions 
-                    slot="footer" 
-                    .entityType=${'system_control'} 
-                    .entityData=${{ closeModal: () => this.modalOpen = false }}
-                    style="width: 100%; display: flex; gap: 8px;">
-                </sutram-entity-actions>
+                <div slot="footer" style="width: 100%; display: flex; gap: 8px;">
+                    <sutram-entity-actions 
+                        .entityType=${'system_control'} 
+                        .entityData=${{ closeModal: () => this.modalOpen = false }}
+                        style="width: 100%; display: flex; gap: 8px;">
+                    </sutram-entity-actions>
+                </div>
+            </sutram-modal>
+
+            <sutram-modal 
+                ?open=${this.manageExtOpen} 
+                titleText="Manage Workspace Extensions" 
+                ?fullscreen=${true} 
+                @sutram-modal-closed=${() => this.manageExtOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; overflow-y: auto;">
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Enable or disable optional tools for this specific workspace ecosystem.</p>
+                    ${(this._sysConfigMeta?.available_extensions || []).map(ext => {
+                        const isConfig = ext.id === 'config';
+                        const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
+                        return html`
+                            <div style="display: flex; align-items: center; gap: 8px; background: var(--input-bg); padding: 12px; border: 1px solid var(--border); border-radius: 6px;">
+                                <input type="checkbox" id="ext_chk_${ext.id}" style="transform: scale(1.2); cursor: pointer;" .checked=${isChecked} ?disabled=${isConfig} @change=${(e) => {
+                                    const current = this._sysConfigForm.extensions || [];
+                                    const newExts = e.target.checked 
+                                        ? (current.includes(ext.id) ? current : [...current, ext.id])
+                                        : current.filter(x => x !== ext.id);
+                                    this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts };
+                                    this.requestUpdate();
+                                }}>
+                                <label for="ext_chk_${ext.id}" style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; cursor: pointer; font-weight: bold; flex: 1; margin: 0;">
+                                    ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
+                                </label>
+                            </div>
+                        `;
+                    })}
+                </div>
+                <div slot="footer" style="width: 100%;">
+                    <sutram-async-btn style="width: 100%; display: block;" label="💾 Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
+                </div>
             </sutram-modal>
         `;
     }
@@ -395,41 +510,28 @@ window.addEventListener('sutram-settings-action', async (e) => {
         reject(err);
     }
 });
-
 window.addEventListener('sutram-settings-save', async (e) => {
     const { extName, formData, btn, origText } = e.detail;
-    const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
-
-    // Derive isLocal from settings instantiation properties if needed, or check local context
-    let isLocal = (extName === 'editor'); // We know editor is local for now
+    const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName] || window.ExtensionRegistry?._manifests?.get(extName)?.settingsSchema || [];
 
     try {
-        if (isLocal) {
-            schema.forEach(f => {
-                const val = formData[f.id] !== undefined ? formData[f.id] : f.default;
-                localStorage.setItem(f.id, JSON.stringify(val));
-            });
+        const payload = {};
+        schema.forEach(f => {
+            payload[f.id] = formData[f.id] !== undefined ? formData[f.id] : f.default;
+        });
+        const res = await window.inSetu.api.workspace(`${extName}/settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
             document.getElementById('insetu-generic-settings-root').open = false;
             btn.innerText = origText;
             window.dispatchEvent(new Event(`insetu-${extName}-settings-changed`));
+            if (window.inSetu?.sys?.executeSystemCompile) window.inSetu.sys.executeSystemCompile(null, true);
         } else {
-            const payload = {};
-            schema.forEach(f => {
-                payload[f.id] = formData[f.id] !== undefined ? formData[f.id] : f.default;
-            });
-            const res = await window.inSetu.api.workspace(`${extName}/settings`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (res.ok) {
-                document.getElementById('insetu-generic-settings-root').open = false;
-                btn.innerText = origText;
-                if (window.inSetu?.sys?.executeSystemCompile) window.inSetu.sys.executeSystemCompile(null, true);
-            } else {
-                alert("Failed to save settings.");
-                btn.innerText = origText;
-            }
+            alert("Failed to save settings.");
+            btn.innerText = origText;
         }
     } catch(err) {
         alert("Network error: " + err.message);

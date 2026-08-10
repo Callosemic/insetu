@@ -90,13 +90,13 @@ window.inSetu.editor.setEditorContent = setEditorContent;
 window.inSetu.editor.insertTextAtCursor = insertTextAtCursor;
 window.inSetu.editor.resolveEditorMode = resolveEditorMode;
 window.inSetu.editor.insertLinkToEditor = insertLinkToEditor;
-
 export class InSetuMarkdownEditor extends InSetuElement {
     static properties = {
         value: { type: String },
         readOnly: { type: Boolean },
         language: { type: String },
-        _customExtensions: { type: Array }
+        _customExtensions: { type: Array },
+        _mdLinksEnabled: { type: Boolean }
     };
     static styles = [
         sharedStyles,
@@ -111,6 +111,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
         this.readOnly = false;
         this.language = 'markdown';
         this._customExtensions = [];
+        this._mdLinksEnabled = true;
         this._settingsListener = this._handleSettingsChange.bind(this);
         this._linkPluginBase = null;
         this._checkboxPluginBase = null;
@@ -120,15 +121,26 @@ export class InSetuMarkdownEditor extends InSetuElement {
         super.connectedCallback();
         window.addEventListener('insetu-editor-settings-changed', this._settingsListener);
         this._buildExtensions();
+        this._fetchSettings();
+    }
+
+    async _fetchSettings() {
+        try {
+            const res = await window.inSetu.api.workspace('editor/settings');
+            if (res.ok) {
+                const data = await res.json();
+                this._mdLinksEnabled = data.insetu_md_links !== false;
+                this._updateCustomExtensions();
+            }
+        } catch(e) {}
     }
 
     disconnectedCallback() {
         super.disconnectedCallback();
         window.removeEventListener('insetu-editor-settings-changed', this._settingsListener);
     }
-
     _handleSettingsChange() {
-        this._updateCustomExtensions();
+        this._fetchSettings();
     }
 
     async _buildExtensions() {
@@ -190,15 +202,11 @@ export class InSetuMarkdownEditor extends InSetuElement {
 
         this._updateCustomExtensions();
     }
-
     _updateCustomExtensions() {
         if (!this._linkPluginBase || !this._checkboxPluginBase) return;
 
-        const val = localStorage.getItem('insetu_md_links');
-        const enableLinks = val !== null ? JSON.parse(val) : true;
-
         const exts = [this._checkboxPluginBase];
-        if (enableLinks) exts.push(this._linkPluginBase);
+        if (this._mdLinksEnabled) exts.push(this._linkPluginBase);
 
         this._customExtensions = [...exts];
     }
@@ -527,28 +535,10 @@ export class InSetuFrontmatterEditor extends InSetuElement {
 if (!customElements.get('insetu-frontmatter-editor')) {
     customElements.define('insetu-frontmatter-editor', InSetuFrontmatterEditor);
 }
-
-// Register local schema and action for the generic settings modal
+// Register extension manifest for proper labeling in OS UI
 if (window.ExtensionRegistry) {
-    window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
-    window.inSetu.settingsSchemas['editor'] = [
-        { id: 'insetu_md_links', label: 'Enable Interactive MD Links', type: 'boolean', default: true, description: 'Renders Markdown links as clickable icons in the editor.' }
-    ];
     window.ExtensionRegistry.registerExtension('editor', {
-        name: "Editor Configuration",
-        version: "1.0.0",
-        settingsActions: [
-            {
-                id: 'editor_generic_settings',
-                label: 'Editor Settings',
-                icon: '📝',
-                onClick: () => {
-                    const genericModal = document.getElementById('insetu-generic-settings-root');
-                    const schema = window.inSetu.settingsSchemas['editor'];
-                    const formData = { insetu_md_links: JSON.parse(localStorage.getItem('insetu_md_links') ?? 'true') };
-                    if (genericModal) genericModal.openModal('editor', schema, formData);
-                }
-            }
-        ]
+        name: "Editor Preferences",
+        version: "2.0.0"
     });
 }
