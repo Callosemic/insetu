@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "insetu"
-version = "0.10.0"
+version = "0.10.1"
 description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
 readme = "readme.md"
 authors = [{ name = "inSetu Contributors", email = "hello@insetu.io" }]

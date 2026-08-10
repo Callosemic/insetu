@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.10.1 (2026-08-09)
+
+### Bug Fixes
+
+- **bridge,core**: Resolve candidate path confirmations and standardize extension context retrieval
+  ([`11b563b`](https://github.com/Callosemic/insetu/commit/11b563b47f930b4c6f8ee6c1a62b3414fdb589b6))
+
+- **ui**: Refine Yomama bridge candidate confirmation overrides and VFS explorer reactive manifest
+  refresh
+  ([`5a2d293`](https://github.com/Callosemic/insetu/commit/5a2d29344eca3eec102b457dbf24873ce6f65f84))
+
+### Refactoring
+
+- **extensions**: Standardize extension context accessors and fix flow batch editing reactivity
+  ([`04fe927`](https://github.com/Callosemic/insetu/commit/04fe9275f463b9187e55f9dff0bc9d93559420bc))
+
+
 ## v0.10.0 (2026-08-07)
 
 ### Bug Fixes
