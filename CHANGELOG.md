@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v0.11.0 (2026-08-10)
+
+### Features
+
+- Migrate system configuration to system.json and implement multi-scoped settings
+  ([`67b6611`](https://github.com/Callosemic/insetu/commit/67b6611e8172d92a664892774181a711b82db9ff))
+
+- **core**: Encapsulate core system settings and establish editor preferences extension
+  ([`cd6c25f`](https://github.com/Callosemic/insetu/commit/cd6c25f1a70df3f3bca80a5916779323b602ddb5))
+
+- **extensions**: Update settings scoping, add release publish preview, and fix terminal PTY stream
+  decoding
+  ([`39712ba`](https://github.com/Callosemic/insetu/commit/39712ba00ccdd35fe2d234ad39145e90bb681f3d))
+
+### Refactoring
+
+- **ui**: Modernize settings hub layout and migrate editor preferences to backend api
+  ([`0b3e109`](https://github.com/Callosemic/insetu/commit/0b3e109824cb527e329d0593555237917b3888a3))
+
+
 ## v0.10.1 (2026-08-09)
 
 ### Bug Fixes
