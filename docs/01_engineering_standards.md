@@ -4,6 +4,38 @@
 **Mission**: To define the strict engineering principles, performance guardrails, and architectural hygiene required to maintain the inSetu Developer OS and its Virtual File System (VFS).
 
 ---
+## 0. Three-Tier Architecture & Module Classification
+
+`inSetu` enforces a strict three-tier module hierarchy to preserve system resilience, prevent cognitive overload, and eliminate logic drift.
+
+### Tier 1: Kernel & Micro-Kernel Substrate (`insetu.kernel` / `sutram` / `yenvui`)
+* **`insetu.kernel` (Python Kernel):** Thread-local SQLite connection pooling, non-blocking VFS commit worker queue, background worker metronome scheduler, priority event bus (`hooks.py`), and security token gatehouse (Note: Extraction into standalone package `akasa` is planned).
+* **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and URL hash routing.
+
+### Tier 2: Core Substrate Engines (The Four Core Engines)
+The Tier 2 Core Substrate consists strictly of four core engines that provide essential local-first AI Developer OS infrastructure:
+1. **Gather (`engine_gather.py`):** RAG context payload compiler, topology declaration broker, and differential context synthesizer.
+2. **Yomama Sync Bridge (`engine_bridge.py`, `bridge_vfs.py`, `bridge_fuzzy.py`):** Multi-file `SEARCH`/`REPLACE` block parser, relative indentation healer, pre-flight AST syntax bouncer, and transactional patch ledger.
+3. **Virtual File System (`vfs.py`, `routes_fs.py`):** Asynchronous commit pipeline, POSIX path sandbox resolution, and mutation event ledger logging.
+4. **Cartographer (`cartographer.py`):** Repository topographer and deterministic `CODE_INDEX.md` architectural map generator.
+
+### Tier 3: Domain Extensions
+All other feature modules are Tier 3 Domain Extensions that plug into the core substrate via the `InSetuExtension` SDK and the synchronous/asynchronous Event Bus (`hooks` / `window.inSetu.events`):
+* **Kanban Tracker (`tracker`)**
+* **Version Control (`git`)**
+* **Batch Automation (`flow`)**
+* **Prompt Library (`prompts`)**
+* **Reference Manager & Research Inbox (`citations`, `research`, `ingest`)**
+* **Notes Library (`notes`)**
+* **Skills Spaced-Repetition Tracker (`skills`)**
+* **Automation Hooks (`hooks`)**
+* **Terminal Multiplexer (`term`)**
+* **Tailscale Networking (`tailscale`)**
+* **Semantic Release (`update`)**
+* **Developer Dashboard & Telemetry (`dev`)**
+* **Favorites Bar (`favorites`)**
+
+---
 
 ## 1. Single Source of Truth (SSOT) & Spatial Physics
 Logic, schemas, and configurations must exist in exactly one place. Redundancy breeds silent desynchronization across the local-first ecosystem.

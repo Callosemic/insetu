@@ -7,10 +7,8 @@ hello
 
 ## 1. Backend Extension Substrate (`InSetuExtension`)
 Python feature scripts must leverage the unified `InSetuExtension` wrapper to intercept routing contexts safely and isolate multi-tenant data.
-
-### 1.1 Declarative Instantiation
+1.1 Declarative Instantiation
 Extensions define their SQLite requirements and UI settings schemas upon initialization.
-```python
 from insetu.sdk import InSetuExtension
 
 my_ext_bp = InSetuExtension(
@@ -20,6 +18,9 @@ my_ext_bp = InSetuExtension(
     schema={"my_table": {"id": "TEXT PRIMARY KEY", "val": "TEXT"}},
     settings_schema=[{"id": "api_key", "label": "API Key", "type": "text", "default": ""}]
 )
+
+# Retrieve a fully hydrated ExtensionContext bound to a tenant workspace
+ctx = my_ext_bp.get_context(workspace_id)
 
 ```
 
