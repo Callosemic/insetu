@@ -191,8 +191,7 @@ class GooglePlaywrightProvider(SearchProvider):
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
-                    from insetu.core.sdk import ExtensionContext
-                    dump_ctx = ExtensionContext('research', 'default')
+                    dump_ctx = research_bp.get_context('default')
                     dump_ctx.vfs.save(dump_path.as_posix(), page.content(), data={"is_absolute_artifact": True})
                     print(f"  [!] SERP parsing failed. Raw HTML dumped to: {dump_path}")
                 except Exception:
@@ -203,9 +202,8 @@ class GooglePlaywrightProvider(SearchProvider):
         return results
 class SerperDevProvider(SearchProvider):
     def execute_search(self, query, max_results=10, date_range=None, start_index=0, workspace_id='default'):
-        from insetu.core.sdk import ExtensionContext
         import urllib.error
-        ctx = ExtensionContext('research', workspace_id)
+        ctx = research_bp.get_context(workspace_id)
 
         api_key = ctx.settings.get("serper_api_key")
 
@@ -270,7 +268,7 @@ def get_provider(provider_name):
 def gather_next_page(job_id, workspace_id=None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
   from insetu.core.sdk import ExtensionContext
-  ctx = ExtensionContext('research', workspace_id)
+  ctx = research_bp.get_context(workspace_id)
   conn = ctx.db
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
 
@@ -339,7 +337,7 @@ def gather_next_page(job_id, workspace_id=None):
 def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
     from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('research', workspace_id)
+    ctx = research_bp.get_context(workspace_id)
     conn = ctx.db
 
     job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
@@ -386,8 +384,7 @@ register_callback("research", "scrape_next_link", scrape_next_link)
 register_callback("research", "gather_next_page", gather_next_page)
 def _get_research_intervals():
     """Reads dynamic pacing configurations from the workspace config."""
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('research', 'default')
+    ctx = research_bp.get_context('default')
     cfg = ctx.config
     r_cfg = cfg.get("extension_config", {}).get("research", {})
     return (

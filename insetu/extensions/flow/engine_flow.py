@@ -23,10 +23,9 @@ __depends__ = ['prompts', 'gather']
 @hooks.on('vfs_resolve_file')
 def resolve_flow_artifacts(filename=None, workspace_id=None, **kwargs):
     if not filename: return None
-    from insetu.core.sdk import ExtensionContext
     from pathlib import Path
     import os
-    ctx = ExtensionContext('flow', workspace_id)
+    ctx = flow_bp.get_context(workspace_id)
     safe_basename = Path(filename).name
     cand = Path(ctx.paths.get("gather_dir", "")).joinpath(safe_basename).as_posix()
     if os.path.exists(cand):
@@ -230,14 +229,13 @@ def api_flow_batches(ctx):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 @hooks.on('pre_file_save')
 def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data:
         archive_path = data.get("archive_path")
         original_response_path = data.get("original_response_path")
         if archive_path and original_response_path and "{date}" in original_response_path:
-            ctx = ExtensionContext('flow', workspace_id)
+            ctx = flow_bp.get_context(workspace_id)
             resolved_archive = ctx.resolve_path(archive_path)
             os.makedirs(resolved_archive, exist_ok=True)
 

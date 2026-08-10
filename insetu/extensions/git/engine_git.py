@@ -23,12 +23,10 @@ def execute_git(repo_path, args, check=True, **kwargs):
 
     cmd = ['git', '--no-optional-locks'] + args
     return subprocess.run(cmd, cwd=repo_path, check=check, env=env, **kwargs)
-
 def get_git_settings_schema(workspace_id):
     """Dynamically generates distinct setting configuration slots for every tracked repository."""
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('git', workspace_id)
-    cfg = ctx.config
+    from insetu.kernel.utils import load_config
+    cfg = load_config(workspace_id)
     schema = []
     for repo in cfg.get("target_repos", []):
         repo_dir = repo.get("repo_dir")
@@ -69,10 +67,9 @@ def hook_git_request_paths(workspace_id=None, **kwargs):
 def resolve_git_artifacts(filename=None, workspace_id=None, **kwargs):
     """Resolves ctx://diffs URIs and fallback searches for git diffs."""
     if not filename: return None
-    from insetu.core.sdk import ExtensionContext
     from pathlib import Path
     import os
-    ctx = ExtensionContext('git', workspace_id)
+    ctx = git_bp.get_context(workspace_id)
 
     safe_basename = Path(filename).name
     cand = Path(ctx.paths["diffs_dir"]).joinpath(safe_basename).as_posix()
@@ -100,12 +97,11 @@ def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs
 
     return {"message": "Git diffs evaluated successfully."}
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
-    from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.topology.engine_topology import resolve_file_bucket
     import concurrent.futures
 
-    ctx = ExtensionContext('git', workspace_id)
+    ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
     _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
     live_cfg = ctx.config
@@ -610,10 +606,9 @@ def api_git_push(ctx):
 @hooks.on('request_available_diffs')
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
-    from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import get_available_contexts
     import os
-    ctx = ExtensionContext('git', workspace_id)
+    ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
     base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"], include_types=["gather"])

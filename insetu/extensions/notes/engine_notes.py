@@ -29,10 +29,9 @@ notes_bp = InSetuExtension(
 )
 
 __depends__ = []
-
 def _parse_and_upsert_note(abs_path, rel_path, workspace_id):
     """Parses frontmatter and upserts the note into the SQLite ledger."""
-    ctx = ExtensionContext('notes', workspace_id)
+    ctx = notes_bp.get_context(workspace_id)
     content = ctx.vfs.read(abs_path, is_absolute_artifact=True)
     if content is None: return
     
@@ -61,12 +60,11 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id):
         "sub_bucket": sub_bucket, "filepath": rel_path,
         "created_at": created_at, "updated_at": updated_at
     })
-
 @hooks.on('vfs_mutated')
 def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     """Event Bus hook: Keeps the Notes DB perfectly synced with disk changes."""
     if not mutations: return
-    ctx = ExtensionContext('notes', workspace_id)
+    ctx = notes_bp.get_context(workspace_id)
     for m in mutations:
         filepath = m.get("filepath", "")
         if ".insetu/notes/" in filepath and filepath.endswith(".md"):
@@ -125,11 +123,10 @@ def api_notes_new(ctx):
     # Save via VFS to trigger the Cartographer and Event Ledger
     ctx.vfs.save(filepath, content)
     return jsonify({"status": "success", "filepath": filepath})
-
 @hooks.on('compile_contexts')
 def inject_notes_context(manifest, workspace_id=None, **kwargs):
     """Injects the notes library into the RAG manifest dynamically."""
-    ctx = ExtensionContext('notes', workspace_id)
+    ctx = notes_bp.get_context(workspace_id)
     notes = ctx.db.get_all("notes_ledger")
     if notes:
         files = [n['filepath'] for n in notes]

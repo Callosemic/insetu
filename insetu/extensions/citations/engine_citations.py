@@ -30,8 +30,7 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
         cfg["virtual_contexts"] = []
 
     try:
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('citations', workspace_id)
+        ctx = citations_bp.get_context(workspace_id)
         # Read from the fast JSON memory cache instead of hitting SQLite synchronously
         cached_scopes = ctx.store.get("citations_ui.json", "virtual_contexts", [])
 
@@ -46,8 +45,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         is_full_sweep = kwargs.get('is_full_sweep', True)
         if not is_full_sweep:
             return
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('citations', workspace_id)
+        ctx = citations_bp.get_context(workspace_id)
         paths = ctx.paths
 
         conn = ctx.db
@@ -334,8 +332,7 @@ def inject_citation_middleware(text, workspace_id=None, **kwargs):
 
     csl_items = []
     try:
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('citations', workspace_id)
+        ctx = citations_bp.get_context(workspace_id)
         conn = ctx.db
         placeholders = ','.join(['?'] * len(true_ids))
         cursor = conn.execute(f"SELECT raw_json FROM citations WHERE id IN ({placeholders})", tuple(true_ids))

@@ -56,7 +56,6 @@ def term_stream(ws, workspace_id):
             ws.close()
         except:
             pass
-
 def _run_term_stream(ws, workspace_id):
     from insetu.kernel.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
@@ -67,7 +66,7 @@ def _run_term_stream(ws, workspace_id):
         ws.close()
         return
 
-    ctx = ExtensionContext('term', workspace_id)
+    ctx = term_bp.get_context(workspace_id)
     ws_root = ctx.paths['workspace_root']
 
     # Fork a new PTY natively

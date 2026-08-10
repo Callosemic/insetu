@@ -5,11 +5,9 @@ from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 
 __depends__ = []
-
-
 def _execute_serve_bind(workspace_id="default"):
     """Internal helper to safely trigger Tailscale Serve with dynamic port resolution."""
-    ctx = ExtensionContext('tailscale', workspace_id)
+    ctx = tailscale_bp.get_context(workspace_id)
 
     insetu_port = int(os.environ.get("INSETU_PORT", ctx.config.get("port", 5005)))
     
@@ -99,8 +97,6 @@ tailscale_bp = InSetuExtension(
 def _background_bind_serve(ctx, **kwargs):
     ctx.jobs.update_progress("Configuring Tailscale Serve binding...")
     return _execute_serve_bind(ctx.workspace_id)
-
-
 @hooks.on('workspace_boot')
 def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
     """Tenant Boot Hook: Evaluates auto-bind preference off-thread when the workspace mounts."""
@@ -108,7 +104,7 @@ def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
         return
 
     try:
-        ctx = ExtensionContext('tailscale', workspace_id)
+        ctx = tailscale_bp.get_context(workspace_id)
         if ctx.settings.get("auto_bind", True):
             # Dispatch to worker queue to keep workspace boot non-blocking
             ctx.jobs.submit("bind_serve_task")

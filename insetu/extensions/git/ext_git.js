@@ -134,6 +134,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
             this.requestUpdate();
         });
+        this.subscribe(AppStore, state => state.manifest, (manifest) => {
+            const manifestCtx = manifest?.ctx || {};
+            this.cachedDiffFiles = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+                filename: k,
+                repo: manifestCtx[k].meta?.repo
+            }));
+            this.requestUpdate();
+        });
         const state = AppStore.getState();
         const gitState = GitStore.getState();
         const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};

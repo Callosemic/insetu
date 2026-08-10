@@ -34,8 +34,7 @@ def api_format_compile_document(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def compile_document_payload(workspace_id, filepath, target_format):
     import re, os, tempfile, subprocess, json, shutil, io
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('format', workspace_id)
+    ctx = format_bp.get_context(workspace_id)
 
     # Resolve chunks statelessly via Event Bus if the target is a system payload
     responses = ctx.emit('resolve_payload_chunks', uri=filepath)
@@ -121,8 +120,7 @@ def run_formatter():
     opts.end_with_newline = True
     print("🧹 Booting native Python JS Formatter (Context-Bound)...")
     try:
-        from insetu.core.sdk import ExtensionContext
-        ctx = ExtensionContext('format', 'default')
+        ctx = format_bp.get_context('default')
         manifest = ctx.manifest
     except Exception:
         print("❌ Error: Failed to load context manifest.")

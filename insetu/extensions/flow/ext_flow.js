@@ -224,9 +224,9 @@ export class InSetuExtFlow extends InSetuElement {
             const res = await this.api.post('batches/save', payload);
             if (res.ok) {
                 const currentBatches = FlowStore.getState().batches;
-                const isExisting = currentBatches.some(b => b.id === payload.id);
+                const isExisting = currentBatches.some(b => b.id === originalId);
                 if (isExisting) {
-                    FlowStore.setState({ batches: currentBatches.map(b => b.id === payload.id ? payload : b) });
+                    FlowStore.setState({ batches: currentBatches.map(b => b.id === originalId ? payload : b) });
                 } else {
                     FlowStore.setState({ batches: [...currentBatches, payload] });
                 }

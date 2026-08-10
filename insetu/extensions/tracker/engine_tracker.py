@@ -163,9 +163,8 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     """Dynamically injects the .tracker logic into the core OS pipelines."""
     if "tracker" not in cfg.get("extensions", []): return
     from insetu.core.utils_core import get_safe_repo_id
-    from insetu.core.sdk import ExtensionContext
 
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
     tracker_cfg = ctx.settings.get_all()
     # 1. Register .tracker as a Cartographer managed directory
     if "managed_dirs" not in cfg:
@@ -597,11 +596,9 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 print(f"Warning: Ticket Housekeeping failed on {ws_rel_path}: {e}")
 
     return enforced_count
-
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
     tracker_cfg = ctx.settings.get_all()
 
     grace_days = int(tracker_cfg.get("grace_period_days", 7))
@@ -735,8 +732,7 @@ def api_tracker_transition(ctx):
 @hooks.on('request_changelog_suggestions')
 def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     """Provides recent closed tickets to other extensions (like Git) without exposing DB internals."""
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
     include_archived = ctx.settings.get("include_archived_in_log", False)
 
     # Ensure proper boolean conversion in case the JSON config stored it as a string
@@ -758,3 +754,13 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     except Exception:
         pass
     return changelogs
+
+@hooks.on('tracker_settings_updated')
+def on_tracker_settings_updated(workspace_id=None, **kwargs):
+    """Event Bus hook: Rebuilds context payloads immediately when tracker settings are updated."""
+    import json
+    import uuid
+    from insetu.kernel.workers import submit_immediate_job
+    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
+    return {"job_id": job_id}

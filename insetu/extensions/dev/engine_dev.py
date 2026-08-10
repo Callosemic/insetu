@@ -35,7 +35,7 @@ dev_bp = InSetuExtension(
 def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
     if not mutations: return
     try:
-        ctx = ExtensionContext('dev', workspace_id)
+        ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         now = time.time()
         for m in mutations:
@@ -46,12 +46,11 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
         conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log VFS telemetry: {e}")
-
 @hooks.on('bridge_error')
 def log_bridge_error(filepath=None, error_type=None, details=None, file_content=None, patch_payload=None, workspace_id="default", **kwargs):
     if not filepath: return
     try:
-        ctx = ExtensionContext('dev', workspace_id)
+        ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         conn.execute(
             "INSERT INTO bridge_errors (filepath, error_type, details, file_content, patch_payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",

@@ -30,10 +30,9 @@ def hook_prompts_request_paths(workspace_id=None, **kwargs):
 def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
     """Resolves ctx://prompts URIs and prompt fallback searches."""
     if not filename: return None
-    from insetu.core.sdk import ExtensionContext
     from pathlib import Path
     import os
-    ctx = ExtensionContext('prompts', workspace_id)
+    ctx = prompts_bp.get_context(workspace_id)
     safe_basename = Path(filename).name
     cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
 
@@ -44,11 +43,10 @@ def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies available OS-managed prompts to the Gather extension's UI dropdowns."""
-    from insetu.core.sdk import ExtensionContext
     from pathlib import Path
     import os
 
-    ctx = ExtensionContext('prompts', workspace_id)
+    ctx = prompts_bp.get_context(workspace_id)
     prompts = []
 
     prompts_dir = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
