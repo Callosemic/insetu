@@ -55,16 +55,43 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     patch_index = 0
     for target_file, blocks in parsed_structure.items():
         if target_file not in active_files or not blocks: continue
-
         norm_target = target_file
         if norm_target.endswith('insetu/cli.py') or norm_target.endswith('fallback_bridge.py'):
             telemetry["can_commit"] = False
+            patch_tel = {
+                "patch_index": patch_index,
+                "original_file": target_file,
+                "resolved_file": target_file,
+                "status": "failed",
+                "error_message": "Kernel Guardrail: Core CLI and Fallback Bridge files cannot be patched dynamically over the air.",
+                "flags": ["banned_target"],
+                "candidates": [],
+                "available_actions": []
+            }
+            patch_index += 1
+            telemetry["summary"]["total_patches"] += 1
+            telemetry["summary"]["failed"] += 1
+            telemetry["patches"].append(patch_tel)
             continue
 
         # Execution Lock Containment Check
         explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
         if explicit_repo in sister_repos and explicit_repo not in allowed_repos:
             telemetry["can_commit"] = False
+            patch_tel = {
+                "patch_index": patch_index,
+                "original_file": target_file,
+                "resolved_file": target_file,
+                "status": "failed",
+                "error_message": f"Execution Lock Triggered: Target repository '{explicit_repo}' is not currently pinned in your UI filters. Unpin the active repository or pin 'ALL' to authorize cross-boundary patching.",
+                "flags": ["execution_locked"],
+                "candidates": [],
+                "available_actions": []
+            }
+            patch_index += 1
+            telemetry["summary"]["total_patches"] += 1
+            telemetry["summary"]["failed"] += 1
+            telemetry["patches"].append(patch_tel)
             continue
 
         for b in blocks:
@@ -121,12 +148,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["can_commit"] = False
                     telemetry["patches"].append(patch_tel)
                     continue
-
                 if get_file_content(resolved_path) is not None:
-                    patch_tel["status"] = "needs_confirmation"
-                    patch_tel["flags"].append("confirm-to-overwrite")
-                    patch_tel["available_actions"].append("confirm_candidate")
-                    telemetry["can_commit"] = False
+                    if target_file in data.get("confirmed_candidates", {}):
+                        pass # Overwrite explicitly authorized
+                    else:
+                        patch_tel["status"] = "needs_confirmation"
+                        patch_tel["flags"].append("confirm-to-overwrite")
+                        patch_tel["available_actions"].append("confirm_candidate")
+                        telemetry["can_commit"] = False
             # Step b: Direct Path Match
             elif content is not None:
                 ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
@@ -191,24 +220,34 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         telemetry["patches"].append(patch_tel)
                         continue
                 elif best_search_cand:
-                    patch_tel["status"] = "needs_confirmation"
-                    patch_tel["resolution_type"] = "scored_path"
-                    patch_tel["candidates"] = cand_list
-                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                    telemetry["can_commit"] = False
-                    telemetry["summary"]["action_required"] += 1
-                    telemetry["patches"].append(patch_tel)
-                    continue
+                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                        resolved_path = confirmed
+                        resolution_type = "confirmed_candidate"
+                    else:
+                        patch_tel["status"] = "needs_confirmation"
+                        patch_tel["resolution_type"] = "scored_path"
+                        patch_tel["candidates"] = cand_list
+                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["action_required"] += 1
+                        telemetry["patches"].append(patch_tel)
+                        continue
                 elif best_replace_cand:
-                    patch_tel["status"] = "needs_confirmation"
-                    patch_tel["resolution_type"] = "scored_path"
-                    patch_tel["flags"].append("already_applied")
-                    patch_tel["candidates"] = cand_list
-                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                    telemetry["can_commit"] = False
-                    telemetry["summary"]["action_required"] += 1
-                    telemetry["patches"].append(patch_tel)
-                    continue
+                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                        resolved_path = confirmed
+                        resolution_type = "confirmed_candidate"
+                    else:
+                        patch_tel["status"] = "needs_confirmation"
+                        patch_tel["resolution_type"] = "scored_path"
+                        patch_tel["flags"].append("already_applied")
+                        patch_tel["candidates"] = cand_list
+                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                        telemetry["can_commit"] = False
+                        telemetry["summary"]["action_required"] += 1
+                        telemetry["patches"].append(patch_tel)
+                        continue
             # Step e.5: Anchor Failure Diff Generation
             if not resolved_path and not is_genesis and content is not None:
                 import difflib
@@ -258,17 +297,21 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                 ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
                                 if ok_search and s_status != "idempotent":
                                     cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
-
                         if cand_list:
-                            patch_tel["status"] = "needs_confirmation"
-                            patch_tel["resolution_type"] = "deep_search"
-                            patch_tel["candidates"] = cand_list
-                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                            telemetry["can_commit"] = False
-                            telemetry["summary"]["action_required"] += 1
-                            telemetry["patches"].append(patch_tel)
-                            continue
-            
+                            confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                            if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                                resolved_path = confirmed
+                                resolution_type = "confirmed_candidate"
+                            else:
+                                patch_tel["status"] = "needs_confirmation"
+                                patch_tel["resolution_type"] = "deep_search"
+                                patch_tel["candidates"] = cand_list
+                                patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                                telemetry["can_commit"] = False
+                                telemetry["summary"]["action_required"] += 1
+                                telemetry["patches"].append(patch_tel)
+                                continue
+
             if not resolved_path:
                 patch_tel["status"] = "failed"
                 patch_tel["error_message"] = "Resolution failed."

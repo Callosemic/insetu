@@ -45,7 +45,7 @@ __depends__ = []
 def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
     """Resolves ctx://contexts URIs and fallback searches."""
     if not filename: return None
-    ctx = ExtensionContext('gather', workspace_id)
+    ctx = gather_bp.get_context(workspace_id)
 
     safe_basename = Path(filename).name
     if "diffs/" in filename:
@@ -61,9 +61,7 @@ def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
 def compile_context_payload(workspace_id, output_dir, base_filename, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
     if max_kb is None:
-        from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
-        schema = _REGISTERED_SETTINGS_SCHEMAS.get('gather')
-        ctx = ExtensionContext('gather', workspace_id, settings_schema=schema)
+        ctx = gather_bp.get_context(workspace_id)
         max_kb = ctx.settings.get("max_context_size_kb", 0)
 
     vfs = VFSTransaction(workspace_id)
@@ -171,7 +169,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
     conn.commit()
 def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=None, **kwargs):
     from insetu.kernel.extension import ExtensionContext
-    ctx = ExtensionContext('gather', workspace_id)
+    ctx = gather_bp.get_context(workspace_id)
 
     # Self-destruct the one-off scheduled job so the metronome doesn't infinitely loop it
     w_ctx = ExtensionContext('workers', workspace_id)
@@ -216,8 +214,7 @@ def init_gather_workers(workspace_id=None, **kwargs):
     try:
         job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
-        from insetu.kernel.extension import ExtensionContext
-        ctx = ExtensionContext('gather', ws_id)
+        ctx = gather_bp.get_context(ws_id)
         steps = []
         for res in ctx.emit('register_compilation_steps'):
             if res: steps.extend(res)
@@ -252,14 +249,13 @@ def on_gather_settings_updated(workspace_id=None, **kwargs):
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
     submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
     return {"job_id": job_id}
-
 @hooks.on('vfs_search')
 def hook_vfs_search(workspace_id=None, query=None, **kwargs):
     if not query: return []
     terms = [t for t in query.split() if t]
     if not terms: return []
 
-    ctx = ExtensionContext('gather', workspace_id)
+    ctx = gather_bp.get_context(workspace_id)
     md_files = set()
     manifest = ctx.manifest
     for filepath in extract_manifest_files(manifest):
@@ -299,7 +295,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.kernel.extension import ExtensionContext
 
-    ctx = ExtensionContext('gather', workspace_id)
+    ctx = gather_bp.get_context(workspace_id)
     cfg = ctx.config
     declarations = []
 
@@ -492,14 +488,13 @@ def get_compiler_lock(wid):
         if wid not in _COMPILER_LOCKS:
             _COMPILER_LOCKS[wid] = threading.RLock()
         return _COMPILER_LOCKS[wid]
-
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Differential Compiler: Iterates declared recall_callbacks to update dirty artifacts statelessly."""
     if not files and not filepath: return
     if filepath: files = [filepath]
 
     with get_compiler_lock(workspace_id or "default"):
-        ctx = ExtensionContext('gather', workspace_id)
+        ctx = gather_bp.get_context(workspace_id)
         paths = ctx.paths
 
         # Determine the affected scope
@@ -557,10 +552,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         if dirty:
             ctx.sync_vfs_barrier()
             ctx.save_manifest(touched_manifest, is_full_compile=False)
-
 def generate_context_file(workspace_id=None, target_repos=None):
     """The Master Orchestrator Loop: Executes full sweeps based on declared topology and garbage collects."""
-    ctx = ExtensionContext('gather', workspace_id)
+    ctx = gather_bp.get_context(workspace_id)
     paths = ctx.paths
 
     # Pre-flight purge: Preserve active ephemerals from garbage collection

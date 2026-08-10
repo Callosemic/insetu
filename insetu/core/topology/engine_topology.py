@@ -30,11 +30,10 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
-
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight repository signatures for the vfs domain."""
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.execute("SELECT repo, count(*) as cnt, max(timestamp) as max_ts FROM topology_ledger GROUP BY repo").fetchall()
     vfs_sigs = {}
     for r in rows:
@@ -64,7 +63,7 @@ def api_topology_vfs_repo(ctx):
 @hooks.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
 
     target_configs = ctx.config.get("target_repos", [])
@@ -95,11 +94,10 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             )
     conn.commit()
     return True
-
 @hooks.on('request_vfs_manifest')
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger."""
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.get_all("topology_ledger")
 
     manifest = {}
@@ -112,10 +110,9 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         manifest[manifest_key]["files"].append(r['filepath'])
 
     return manifest
-
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     if not allowed_repos: return []
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
@@ -128,7 +125,7 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
     if not mutations: return
 
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
     now = time.time()
     buffered_count = 0
@@ -164,7 +161,7 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=workspace_id, coalesce=True)
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
-    ctx = ExtensionContext('topology', workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
 
     events = conn.execute("SELECT filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
