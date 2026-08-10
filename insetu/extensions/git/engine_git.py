@@ -23,30 +23,23 @@ def execute_git(repo_path, args, check=True, **kwargs):
 
     cmd = ['git', '--no-optional-locks'] + args
     return subprocess.run(cmd, cwd=repo_path, check=check, env=env, **kwargs)
-def get_git_settings_schema(workspace_id):
-    """Dynamically generates distinct setting configuration slots for every tracked repository."""
-    from insetu.kernel.utils import load_config
-    cfg = load_config(workspace_id)
-    schema = []
-    for repo in cfg.get("target_repos", []):
-        repo_dir = repo.get("repo_dir")
-        if not repo_dir or repo.get("exclude_from_diffs") or repo.get("archive_type") == "media-vault":
-            continue
-        schema.append({
-            "id": f"strategy_{repo_dir}",
-            "title": f"Pull Strategy: {repo.get('title', repo_dir)}",
-            "type": "select",
-            "options": [
-                {"value": "rebase", "label": "Rebase (--rebase)"},
-                {"value": "merge", "label": "Merge (--no-rebase)"},
-                {"value": "ff_only", "label": "Fast-Forward Only (--ff-only)"},
-                {"value": "runtime", "label": "🤔 Decide at Runtime"}
-            ],
-            "default": "rebase",
-            "description": f"Reconciliation strategy for branch divergence inside the '{repo_dir}' workspace target."
-        })
-    return schema
-git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=get_git_settings_schema)
+GIT_SETTINGS_SCHEMA = [
+    {
+        "id": "pull_strategy",
+        "label": "Pull Strategy",
+        "type": "select",
+        "scope": "repo",
+        "options": [
+            {"value": "rebase", "label": "Rebase (--rebase)"},
+            {"value": "merge", "label": "Merge (--no-rebase)"},
+            {"value": "ff_only", "label": "Fast-Forward Only (--ff-only)"},
+            {"value": "runtime", "label": "🤔 Decide at Runtime"}
+        ],
+        "default": "rebase",
+        "description": "Reconciliation strategy for branch divergence inside this repository."
+    }
+]
+git_bp = InSetuExtension('git', __name__, title="Version Control", description="Version control integration, diff generation, and workspace sweeping.", settings_schema=GIT_SETTINGS_SCHEMA)
 __depends__ = ['gather']
 @hooks.on('request_paths')
 def hook_git_request_paths(workspace_id=None, **kwargs):
@@ -787,8 +780,8 @@ def _background_git_pull(ctx, repo, strategy=None):
     ctx.jobs.update_progress(f"Pulling {repo}...")
     repo_path = ctx.get_repo_path(repo)
 
-    # Query the repository-namespaced setting from the dynamic schema
-    configured_strategy = ctx.settings.get(f"strategy_{repo}", "rebase")
+    # Query the repository-scoped setting from the strict 3-tier cascade
+    configured_strategy = ctx.settings.get("pull_strategy", "rebase", repo=repo)
 
     if configured_strategy == "runtime":
         # If set to runtime, allow the interactive UI choice parameter to take precedence

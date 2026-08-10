@@ -3,13 +3,13 @@ import subprocess
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
-
 # Declarative schema for Semantic Release parameters
 UPDATE_SETTINGS_SCHEMA = [
     {
         "id": "commit_parser",
         "label": "Commit Parser Style",
         "type": "select",
+        "scope": "repo",
         "options": [
             {"value": "conventional", "label": "Conventional Commits (Angular)"},
             {"value": "emoji", "label": "Emoji"},
@@ -22,6 +22,7 @@ UPDATE_SETTINGS_SCHEMA = [
         "id": "auto_publish",
         "label": "Auto-Publish after Bump",
         "type": "boolean",
+        "scope": "repo",
         "default": False,
         "description": "If enabled, successfully bumping the version will immediately trigger distribution."
     },
@@ -29,6 +30,7 @@ UPDATE_SETTINGS_SCHEMA = [
         "id": "pypi_token",
         "label": "PyPI Distribution Token",
         "type": "password",
+        "scope": "workspace",
         "secure": True,
         "default": "",
         "description": "Token utilized for authentication during the PyPI publishing phase."
@@ -56,11 +58,10 @@ def _background_bump_task(ctx, repo):
     status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before initiating a release bump.")
-
     ctx.jobs.update_progress("Calculating semantic version and bumping repository...")
     # Environment Variable Injection for Parser Settings
     env = os.environ.copy()
-    parser_style = ctx.settings.get("commit_parser", "conventional")
+    parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
 
@@ -81,9 +82,8 @@ def _background_bump_task(ctx, repo):
 
         # Combine stderr (evaluation logs) and stdout (raw version)
         output = f"{clean_log}\n\nNext Version: {res.stdout.strip()}".strip()
-
         # Evaluate Phase 2 Automation
-        if ctx.settings.get("auto_publish", False):
+        if ctx.settings.get("auto_publish", False, repo=repo):
             ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
             ctx.jobs.submit("publish_task", repo=repo)
             output += "\n\nAuto-publish workflow triggered."
@@ -185,6 +185,51 @@ def api_update_bump(ctx):
     
     job_id = ctx.jobs.submit("bump_task", repo=repo)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+@update_bp.worker("preview_publish_task")
+def _background_preview_publish_task(ctx, repo):
+    import subprocess
+    import os
+    import re
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError(f"Target repository path not found: {repo}")
+
+    ctx.jobs.update_progress("Evaluating dry-run semantic publish...")
+
+    env = os.environ.copy()
+    pypi_token = ctx.settings.get("pypi_token", "")
+    if pypi_token:
+        env["TWINE_PASSWORD"] = pypi_token
+        env["TWINE_USERNAME"] = "__token__"
+
+    try:
+        res = subprocess.run(
+            ['semantic-release', '-v', '--noop', 'publish'], 
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True, 
+            check=True,
+            env=env
+        )
+        # Clean up timestamps and python file references from the raw logs
+        clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', res.stderr.strip())
+        clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
+        clean_log = re.sub(r' +', ' ', clean_log)
+
+        combined_output = f"{clean_log}\n\n{res.stdout.strip()}".strip()
+        return {"message": "Publish preview generated.", "artifact": {"output": combined_output}}
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
+        raise RuntimeError(f"Semantic Release Publish Preview Failed:\n{err_msg}")
+@update_bp.route('preview_publish', methods=['POST'])
+def api_update_preview_publish(ctx):
+    repo = ctx.req.json.get('repo')
+    if not repo: 
+        return jsonify({"error": "Repository target is required."}), 400
+
+    job_id = ctx.jobs.submit("preview_publish_task", repo=repo)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 @update_bp.route('publish', methods=['POST'])
 def api_update_publish(ctx):
     repo = ctx.req.json.get('repo')
@@ -193,6 +238,7 @@ def api_update_publish(ctx):
 
     job_id = ctx.jobs.submit("publish_task", repo=repo)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 @update_bp.worker("status_task")
 def _background_status_task(ctx, repo):
     """Runs the semantic-release CLI off-thread to retrieve the current version."""
@@ -222,11 +268,13 @@ def _background_status_task(ctx, repo):
     version = None
     has_release = False
     import re
-
     # 1. Always attempt to parse the static baseline version
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     if v_match:
         version = v_match.group(1)
+
+    b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
+    build_command = b_match.group(1) if b_match else "false"
 
     # 2. If configured, let the CLI take precedence (as it resolves Git tags accurately)
     if configured:
@@ -243,7 +291,48 @@ def _background_status_task(ctx, repo):
                 has_release = True
         except subprocess.CalledProcessError:
             pass
-    return {"message": "Status resolved.", "artifact": {"version": version, "configured": configured, "has_pyproject": has_pyproject, "is_clean": is_clean, "has_release": has_release}}
+    return {"message": "Status resolved.", "artifact": {"version": version, "configured": configured, "has_pyproject": has_pyproject, "is_clean": is_clean, "has_release": has_release, "build_command": build_command}}
+
+@update_bp.worker("update_toml_config_task")
+def _background_update_toml_config(ctx, repo, build_command):
+    import os
+    import re
+    from pathlib import Path
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError(f"Target repository path not found: {repo}")
+
+    ctx.jobs.update_progress("Updating pyproject.toml...")
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    content = ctx.vfs.read(pyproject_file, is_absolute_artifact=True)
+    if content is None:
+        raise ValueError("pyproject.toml not found.")
+
+    if re.search(r'^build_command\s*=', content, re.MULTILINE):
+        new_content = re.sub(r'^build_command\s*=\s*[\'"][^\'"]*[\'"]', f'build_command = "{build_command}"', content, flags=re.MULTILINE)
+    else:
+        new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nbuild_command = "' + build_command + '"', content)
+
+    ctx.vfs.save(pyproject_file, new_content, data={"is_absolute_artifact": True})
+    ctx.sync_vfs_barrier()
+
+    from insetu.extensions.git.engine_git import execute_git
+    execute_git(repo_path, ['add', 'pyproject.toml'], check=False)
+    status_res = execute_git(repo_path, ['status', '--porcelain', 'pyproject.toml'], check=False)
+    if status_res.stdout.strip():
+        execute_git(repo_path, ['commit', '-m', f'chore: update build_command in pyproject.toml [skip ci]'], check=False)
+
+    return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command}}
+
+@update_bp.route('update_toml_config', methods=['POST'])
+def api_update_toml_config(ctx):
+    repo = ctx.req.json.get('repo')
+    build_command = ctx.req.json.get('build_command')
+    if not repo or build_command is None:
+        return jsonify({"error": "Repo and build_command required"}), 400
+
+    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('status', methods=['POST'])
 def api_update_status(ctx):

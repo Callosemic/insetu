@@ -52,6 +52,7 @@ TAILSCALE_SETTINGS_SCHEMA = [
         "id": "auto_bind",
         "label": "Auto-Bind Tailscale Serve on Boot",
         "type": "boolean",
+        "scope": "daemon",
         "default": True,
         "description": "Automatically runs 'tailscale serve' to expose inSetu over HTTPS when the workspace boots."
     },
@@ -59,6 +60,7 @@ TAILSCALE_SETTINGS_SCHEMA = [
         "id": "serve_port_mode",
         "label": "Tailscale Serve HTTPS Port Mode",
         "type": "select",
+        "scope": "daemon",
         "default": "443",
         "options": [
             {"value": "443", "label": "443 (Standard HTTPS)"},
@@ -71,6 +73,7 @@ TAILSCALE_SETTINGS_SCHEMA = [
         "id": "custom_serve_port",
         "label": "Custom HTTPS Port",
         "type": "number",
+        "scope": "daemon",
         "default": 8443,
         "description": "Used only when Port Mode is set to 'Custom Port'."
     },
@@ -78,6 +81,7 @@ TAILSCALE_SETTINGS_SCHEMA = [
         "id": "trigger_bind_now",
         "label": "Bind Tailscale Serve Now",
         "type": "action",
+        "scope": "daemon",
         "button_label": "⚡ Execute Bind",
         "intent": "primary",
         "endpoint": "tailscale/bind",

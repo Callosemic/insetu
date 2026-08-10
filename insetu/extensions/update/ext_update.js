@@ -11,6 +11,7 @@ export const UpdateStore = createExtensionStore('Update', {
     hasPyproject: true,
     isClean: true,
     hasRelease: false,
+    repoBuildCommand: 'false',
     missingDependencies: [],
     missingBinaries: [],
     eligibleRepos: {},
@@ -18,6 +19,7 @@ export const UpdateStore = createExtensionStore('Update', {
     previewOutput: '',
     previewChangelog: '',
     previewTab: 'changelog',
+    previewActionType: 'bump',
     previewBump: async (repo) => {
         if (!repo) return;
         const res = await window.inSetu.api.post('update/preview_bump', { repo });
@@ -33,8 +35,40 @@ export const UpdateStore = createExtensionStore('Update', {
                         UpdateStore.setState({ 
                             previewOutput: statusData.artifact.output || 'No changes to release.',
                             previewChangelog: statusData.artifact.changelog || 'No changelog notes generated.',
+                            previewActionType: 'bump',
                             previewModalOpen: true,
                             previewTab: 'changelog'
+                        });
+                        resolve();
+                    },
+                    onError: (err) => {
+                        alert(`Preview Error: ${err.message}`);
+                        reject(err);
+                    }
+                });
+            });
+        } else {
+            throw new Error("Failed to start preview");
+        }
+    },
+    previewPublish: async (repo) => {
+        if (!repo) return;
+        const res = await window.inSetu.api.post('update/preview_publish', { repo });
+        if (res.status === 202) {
+            const data = await res.json();
+            return new Promise((resolve, reject) => {
+                window.inSetu.utils.pollJob(data.job_id, {
+                    onProgress: (msg) => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                    },
+                    onComplete: (statusData) => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Publish preview ready.`, 2000);
+                        UpdateStore.setState({ 
+                            previewOutput: statusData.artifact.output || 'No publish operations required.',
+                            previewChangelog: 'N/A (Publish Phase)',
+                            previewActionType: 'publish',
+                            previewModalOpen: true,
+                            previewTab: 'full'
                         });
                         resolve();
                     },
@@ -102,17 +136,21 @@ export const UpdateStore = createExtensionStore('Update', {
             const res = await window.inSetu.api.post('update/status', { repo });
             if (res.status === 202) {
                 const data = await res.json();
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: (statusData) => {
+                        if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                         UpdateStore.setState({ 
                             repoVersion: statusData.artifact.version, 
                             repoConfigured: statusData.artifact.configured,
                             hasPyproject: statusData.artifact.has_pyproject !== false,
                             isClean: statusData.artifact.is_clean !== false,
-                            hasRelease: statusData.artifact.has_release === true
+                            hasRelease: statusData.artifact.has_release === true,
+                            repoBuildCommand: statusData.artifact.build_command || 'false'
                         });
                     },
                     onError: (err) => {
+                        if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                         console.error("Status check failed:", err.message);
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                             window.inSetu.ui.setGlobalStatus(`❌ Status Error: ${err.message}`, 5000, true);
@@ -148,6 +186,33 @@ export const UpdateStore = createExtensionStore('Update', {
             }
         } catch (e) {
             alert(`Network error: ${e.message}`);
+        }
+    },
+    updateTomlConfig: async (repo, buildCommand) => {
+        if (!repo) return;
+        try {
+            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand });
+            if (res.status === 202) {
+                const data = await res.json();
+                return new Promise((resolve, reject) => {
+                    window.inSetu.utils.pollJob(data.job_id, {
+                        onComplete: () => {
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Build command updated.`, 2000);
+                            UpdateStore.getState().fetchRepoStatus(repo);
+                            resolve();
+                        },
+                        onError: (err) => {
+                            alert(`Error: ${err.message}`);
+                            reject(err);
+                        }
+                    });
+                });
+            } else {
+                throw new Error("Failed to update build command.");
+            }
+        } catch (e) {
+            alert(`Network error: ${e.message}`);
+            throw e;
         }
     },
     forceVersion: async (repo, version) => {
@@ -212,6 +277,7 @@ export class InSetuExtUpdate extends InSetuElement {
         hasPyproject: { type: Boolean },
         isClean: { type: Boolean },
         hasRelease: { type: Boolean },
+        repoBuildCommand: { type: String },
         allRepos: { type: Array },
         missingDependencies: { type: Array },
         missingBinaries: { type: Array },
@@ -219,7 +285,8 @@ export class InSetuExtUpdate extends InSetuElement {
         previewModalOpen: { type: Boolean },
         previewOutput: { type: String },
         previewChangelog: { type: String },
-        previewTab: { type: String }
+        previewTab: { type: String },
+        previewActionType: { type: String }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
@@ -233,6 +300,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.hasPyproject = true;
         this.isClean = true;
         this.hasRelease = false;
+        this.repoBuildCommand = 'false';
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -241,6 +309,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.previewOutput = '';
         this.previewChangelog = '';
         this.previewTab = 'changelog';
+        this.previewActionType = 'bump';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -252,6 +321,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.hasPyproject = state.hasPyproject !== false;
             this.isClean = state.isClean !== false;
             this.hasRelease = state.hasRelease === true;
+            this.repoBuildCommand = state.repoBuildCommand || 'false';
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
             this.eligibleRepos = state.eligibleRepos || {};
@@ -259,6 +329,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.previewOutput = state.previewOutput;
             this.previewChangelog = state.previewChangelog || '';
             this.previewTab = state.previewTab || 'changelog';
+            this.previewActionType = state.previewActionType || 'bump';
             this.requestUpdate();
 
             // Fetch status when the selected repo changes
@@ -446,6 +517,39 @@ export class InSetuExtUpdate extends InSetuElement {
                         </button>
                     ` : ''}
                 </div>
+                ${this.repoConfigured ? html`
+                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 4px;">
+                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Build Command</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" 
+                                style="flex: 1; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;"
+                                .value=${this.repoBuildCommand === 'false' ? '' : this.repoBuildCommand}
+                                placeholder="e.g., python -m build (leave blank to skip)"
+                                @keydown=${(e) => {
+                                    if (e.key === 'Enter') {
+                                        const newVal = e.target.value.trim() || 'false';
+                                        if (newVal !== this.repoBuildCommand) {
+                                            UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
+                                        }
+                                    }
+                                }}>
+                            <sutram-async-btn 
+                                label="💾 Save" 
+                                intent="success" 
+                                style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
+                                .onClick=${async (e) => {
+                                    const inputEl = e.target.previousElementSibling;
+                                    const newVal = inputEl ? (inputEl.value.trim() || 'false') : 'false';
+                                    if (newVal !== this.repoBuildCommand) {
+                                        await UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
+                                    }
+                                }}>
+                            </sutram-async-btn>
+                        </div>
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
+                    </div>
+                ` : ''}
+
                 <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px;">
                     <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
                         <sutram-async-btn 
@@ -457,14 +561,13 @@ export class InSetuExtUpdate extends InSetuElement {
                         </sutram-async-btn>
                         <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Calculates the next version and commits the changelog.</span>
                     </div>
-
                     <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
                         <sutram-async-btn 
                             style="width: 100%;" 
                             label="🚀 Release" 
                             intent="highlight" 
                             ?disabled=${!this.repoConfigured || !this.isClean || !this.hasRelease}
-                            .onClick=${this._getPublishAction()}>
+                            .onClick=${async () => await UpdateStore.getState().previewPublish(this.targetRepo)}>
                         </sutram-async-btn>
                         <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Distributes the package to the configured registry.</span>
                     </div>
@@ -490,9 +593,9 @@ export class InSetuExtUpdate extends InSetuElement {
                     `}
                 </div>
                 <button slot="footer" class="btn-sm" style="background: var(--intent-neutral); color: white; border: none; padding: 10px 15px; font-weight: bold; border-radius: 4px; cursor: pointer;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>❌ Cancel</button>
-                <sutram-async-btn slot="footer" label="⚡ Confirm & Execute Bump" intent="success" .onClick=${async () => {
+                <sutram-async-btn slot="footer" label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : '⚡ Confirm & Execute Bump'}" intent="success" .onClick=${async () => {
                     UpdateStore.setState({ previewModalOpen: false });
-                    const action = this._getBumpAction();
+                    const action = this.previewActionType === 'publish' ? this._getPublishAction() : this._getBumpAction();
                     await action();
                 }}></sutram-async-btn>
             </sutram-modal>
