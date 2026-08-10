@@ -96,7 +96,7 @@ Extensions must respect the ASGI event loop and the Cloud Run Serverless Lock co
 * **The Metronome Dispatcher:** A single, lightweight OS thread ticks continuously. It queries the ledger for any jobs where `next_run_at <= NOW()`. 
 * **Overrun & Starvation Protection:** To prevent long-running tasks from blocking the Metronome, ready jobs are flagged as `running` and handed off to a constrained `ThreadPoolExecutor` for execution. If the execution time eclipses the task's interval, the `running` flag prevents it from being double-queued. If the ThreadPool is full, jobs gracefully remain `pending` in the ledger (Backpressure handling).
 * **The Switchboard Sweep (Process Relay):** * During a workspace swap (`os.execv`), the `@hooks.on('system_shutdown')` event signals the ThreadPool to gracefully drain and commit active state to the database.
-    * Upon initialization, the Metronome sweeps `workspaces.json`, checking local databases across *all* registered workspaces for pending jobs, providing seamless cross-workspace background execution.
+    * Upon initialization, the Metronome sweeps `system.json`, checking local databases across *all* registered workspaces for pending jobs, providing seamless cross-workspace background execution.
 
 ## 5. Artifact Containment (SQLite & Storage)
 Extensions must be good neighbors on the filesystem.

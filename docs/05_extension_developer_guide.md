@@ -23,12 +23,12 @@ MY_SCHEMA = {
         "name": "TEXT NOT NULL"
     }
 }
-
 MY_SETTINGS = [
     {
         "id": "api_key",
         "label": "API Key",
         "type": "text",
+        "scope": "workspace", # Options: "workspace", "daemon", "repo"
         "default": "",
         "description": "Global API key for this extension."
     }
