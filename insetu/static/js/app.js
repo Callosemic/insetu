@@ -189,7 +189,6 @@ async function checkManifestVersion() {
         };
 
         const sigs = deltaData.signatures || {};
-
         // 1. Evaluate VFS Repo Signatures
         if (sigs.vfs) {
             for (const [repo, sig] of Object.entries(sigs.vfs)) {
@@ -201,6 +200,11 @@ async function checkManifestVersion() {
                     delete localVfsSignatures[repo];
                     manifestUpdated = true;
                 } else if (localVfsSignatures[repo] !== sig) {
+                    // Short-circuit N+1 fetches on workspace swap/boot if we already have the data
+                    if (lastManifestSyncTs === 0 && currentManifest.vfs && Object.keys(currentManifest.vfs).some(k => k.startsWith(`${repo}::`))) {
+                        localVfsSignatures[repo] = sig;
+                        continue;
+                    }
                     // Surgical Fetch: Fetch repo tree
                     const treeRes = await window.inSetu.api.workspace(`topology/vfs?repo=${encodeURIComponent(repo)}`);
                     if (treeRes.ok) {
@@ -223,6 +227,11 @@ async function checkManifestVersion() {
                     delete localCtxSignatures[path];
                     manifestUpdated = true;
                 } else if (localCtxSignatures[path] !== ts) {
+                    // Short-circuit N+1 fetches on workspace swap/boot if we already have the data
+                    if (lastManifestSyncTs === 0 && currentManifest.ctx && currentManifest.ctx[path]) {
+                        localCtxSignatures[path] = ts;
+                        continue;
+                    }
                     const entryRes = await window.inSetu.api.workspace(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (entryRes.ok) {
                         const entryData = await entryRes.json();
@@ -271,10 +280,27 @@ window.ExtensionRegistry.startMetronome(
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/js/poller.js';
+
 // Define the Job Polling Subroutine using the abstracted kernel
-window.inSetu.utils.pollJob = createJobPoller({
+const _basePoller = createJobPoller({
     get: async (path) => window.inSetu.api.system(path)
 });
+
+// ADR 0017: Wrap the global poller to statelessly swallow callbacks if the tenant workspace shifts mid-flight
+window.inSetu.utils.pollJob = (jobId, options = {}) => {
+    const initWs = window.inSetu.utils.getActiveWorkspace();
+    const safeOptions = { ...options };
+    ['onProgress', 'onComplete', 'onError'].forEach(cbName => {
+        if (options[cbName]) {
+            safeOptions[cbName] = (...args) => {
+                if (window.inSetu.utils.getActiveWorkspace() !== initWs) return;
+                return options[cbName](...args);
+            };
+        }
+    });
+    return _basePoller(jobId, safeOptions);
+};
+
 // Restore UI State on Load
 let bootCurrentStep = 0;
 let bootTotalSteps = 8;
@@ -465,7 +491,6 @@ async function executeBootSequence() {
     }
     // Always trigger handleHashChange on startup to populate activeTab in AppStore
     handleHashChange();
-
     // UDF Subscription: State -> URL mapping
     AppStore.subscribe(
         state => [state.activeWorkspace, state.activeTab, state.activeSubTabs, state.globalBrowsePath],
@@ -474,6 +499,10 @@ async function executeBootSequence() {
             const currentSub = subs[tab] || '';
             const deepStr = (deep && deep.length > 0) ? '/' + deep.map(encodeURIComponent).join('/') : '';
             const newHash = `#/${encodeURIComponent(ws)}/${encodeURIComponent(tab)}/${encodeURIComponent(currentSub)}${deepStr}`;
+
+            // Persist the active tab layout per-workspace so it hydrates correctly on swap
+            localStorage.setItem(`insetu_active_tab_${ws}`, tab);
+            if (currentSub) localStorage.setItem(`insetu_active_subtab_${ws}_${tab}`, currentSub);
 
             // Silently update URL without triggering a hashchange event reload loop
             if (window.location.hash !== newHash && window.location.hash !== newHash.replace(/\/$/, '')) {
@@ -608,9 +637,9 @@ async function executeWorkspaceSwap(key, title) {
     AppStore.setState({ activeWorkspace: key, pinnedRepos: newPinned });
 
     // Explicitly update location hash to keep router and location bar synchronized
-    const currentTab = AppStore.getState().activeTab || 'context';
-    const currentSub = AppStore.getState().activeSubTabs[currentTab] || '';
-    window.location.hash = `#/${encodeURIComponent(key)}/${encodeURIComponent(currentTab)}/${encodeURIComponent(currentSub)}`;
+    const savedTab = localStorage.getItem(`insetu_active_tab_${key}`) || 'context';
+    const savedSub = localStorage.getItem(`insetu_active_subtab_${key}_${savedTab}`) || '';
+    window.location.hash = `#/${encodeURIComponent(key)}/${encodeURIComponent(savedTab)}/${encodeURIComponent(savedSub)}`;
 
     // 4. Notify backend of the swap
     await window.inSetu.api.system('workspaces', {
@@ -866,6 +895,12 @@ async function performSoftRefresh() {
         if (rRes.ok) {
             const d = await rRes.json();
             const tabOrder = d.tab_order || [];
+
+            // Layout Guardrail: If the restored tab is no longer valid (e.g. extension disabled), fallback to the first available tab
+            if (tabOrder.length > 0 && !tabOrder.includes(AppStore.getState().activeTab)) {
+                AppStore.getState().setActiveRoute(tabOrder[0], null);
+            }
+
             AppStore.setState({ 
                 allRepos: d.repos,
                 targetConfigs: d.targets || [],

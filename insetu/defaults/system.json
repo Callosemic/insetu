@@ -1,0 +1,10 @@
+{
+  "port": 5005,
+  "enable_watchdog": true,
+  "preload_all_extensions": false,
+  "workspaces": {
+    "default": {
+      "config_path": "config.json"
+    }
+  }
+}

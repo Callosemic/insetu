@@ -42,132 +42,223 @@ class SettingsManager:
     def __init__(self, ext_name, workspace_id, schema=None):
         self.ext_name = ext_name
         self.workspace_id = workspace_id
-        self.filename = f"{ext_name}.settings.json"
         self.secrets_filename = "secrets.json"
+        self.workspace_filename = "workspace.settings.json"
+        self.repo_filename = "repo.settings.json"
         if schema is None:
             schema = _REGISTERED_SETTINGS_SCHEMAS.get(ext_name)
         self.schema = schema(workspace_id) if callable(schema) else (schema or [])
+        self._migrate_workspaces_to_system()
 
-    def _is_secure(self, key):
+    def _migrate_workspaces_to_system(self):
+        from insetu.kernel.utils import _cwd, load_json_file, save_json_file
+        from pathlib import Path
+        import os
+
+        system_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+        legacy_ws_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+
+        if os.path.exists(legacy_ws_path):
+            legacy_data = load_json_file(legacy_ws_path, {})
+            if not legacy_data.get("_deprecated"):
+                system_data = load_json_file(system_path, {})
+
+                if "workspaces" in legacy_data:
+                    system_data["workspaces"] = legacy_data["workspaces"]
+                if "active_workspace" in legacy_data:
+                    system_data["active_workspace"] = legacy_data["active_workspace"]
+
+                save_json_file(system_path, system_data, workspace_id="default")
+
+                # Quietly deprecate the legacy file
+                save_json_file(legacy_ws_path, {"_deprecated": True, "message": "Routing index migrated to system.json natively per Tier 1 hierarchy."}, workspace_id="default")
+
+    def _get_field_meta(self, key):
         for field in self.schema:
             if field.get('id') == key:
-                return field.get('secure', False)
-        return False
-    def get(self, key, default=None):
+                return field
+        return None
+
+    def _resolve_filepath(self, scope):
+        from insetu.kernel.utils import get_tenant_control_dir, _cwd
+        from pathlib import Path
+        if scope == 'daemon':
+            return Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+
+        control_dir = get_tenant_control_dir(self.workspace_id)
+        if scope == 'repo':
+            return Path(control_dir).joinpath(self.repo_filename).as_posix()
+        else:
+            return Path(control_dir).joinpath(self.workspace_filename).as_posix()
+
+    def get(self, key, default=None, repo=None):
         from insetu.kernel.utils import load_json_file, get_tenant_control_dir
         from pathlib import Path
-        control_dir = get_tenant_control_dir(self.workspace_id)
 
-        if self._is_secure(key):
+        field = self._get_field_meta(key)
+        if not field:
+            return default
+
+        scope = field.get('scope', 'workspace')
+        is_secure = field.get('secure', False)
+
+        if is_secure:
+            control_dir = get_tenant_control_dir(self.workspace_id)
             filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
             data = load_json_file(filepath, {})
+
             ext_secrets = data.get(self.ext_name, {})
+            if scope == 'repo' and repo:
+                ext_secrets = ext_secrets.get(repo, {})
+
             if key in ext_secrets:
                 val = ext_secrets[key]
                 if isinstance(val, str) and val.startswith("v1:"):
                     from insetu.kernel.auth import decrypt_secret
                     return decrypt_secret(val)
                 elif val:
-                    # Auto-migrate legacy plaintext to encrypted
-                    self.set(key, val)
+                    self.set(key, val, repo=repo)
                     return val
                 return val
         else:
-            filepath = Path(control_dir).joinpath(self.filename).as_posix()
+            filepath = self._resolve_filepath(scope)
             data = load_json_file(filepath, {})
-            if key in data:
-                return data[key]
 
-        for field in self.schema:
-            if field.get('id') == key and 'default' in field:
-                return field['default']
+            if scope == 'daemon':
+                if self.ext_name == 'core_system' and key in data:
+                    return data[key]
+                elif key in data.get(self.ext_name, {}):
+                    return data[self.ext_name][key]
+            elif scope == 'repo':
+                if repo and key in data.get(repo, {}).get(self.ext_name, {}):
+                    return data[repo][self.ext_name][key]
+            else:
+                if key in data.get(self.ext_name, {}):
+                    return data[self.ext_name][key]
 
-        return default
-    def set(self, key, value):
+        return field.get('default', default)
+
+    def set(self, key, value, repo=None):
         from insetu.kernel.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
-        control_dir = get_tenant_control_dir(self.workspace_id)
 
-        if self._is_secure(key):
+        field = self._get_field_meta(key)
+        if not field: return
+
+        scope = field.get('scope', 'workspace')
+        is_secure = field.get('secure', False)
+
+        if is_secure:
             if value:
                 from insetu.kernel.auth import encrypt_secret
                 value = encrypt_secret(value)
+            control_dir = get_tenant_control_dir(self.workspace_id)
             filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
             data = load_json_file(filepath, {})
             if self.ext_name not in data:
                 data[self.ext_name] = {}
-            data[self.ext_name][key] = value
-        else:
-            filepath = Path(control_dir).joinpath(self.filename).as_posix()
-            data = load_json_file(filepath, {})
-            data[key] = value
 
-        save_json_file(filepath, data, self.workspace_id)
+            if scope == 'repo' and repo:
+                if repo not in data[self.ext_name]:
+                    data[self.ext_name][repo] = {}
+                data[self.ext_name][repo][key] = value
+            else:
+                data[self.ext_name][key] = value
+
+            save_json_file(filepath, data, self.workspace_id)
+        else:
+            filepath = self._resolve_filepath(scope)
+            data = load_json_file(filepath, {})
+
+            if scope == 'daemon':
+                if self.ext_name == 'core_system':
+                    data[key] = value
+                else:
+                    if self.ext_name not in data: data[self.ext_name] = {}
+                    data[self.ext_name][key] = value
+            elif scope == 'repo':
+                if repo:
+                    if repo not in data: data[repo] = {}
+                    if self.ext_name not in data[repo]: data[repo][self.ext_name] = {}
+                    data[repo][self.ext_name][key] = value
+            else:
+                if self.ext_name not in data: data[self.ext_name] = {}
+                data[self.ext_name][key] = value
+
+            save_json_file(filepath, data, self.workspace_id)
+
         _MUTATED_CONFIG_CACHE.clear()
         _MUTATED_CONFIG_MTIME.clear()
-    def get_all(self):
-        from insetu.kernel.utils import load_json_file, get_tenant_control_dir
-        from pathlib import Path
-        control_dir = get_tenant_control_dir(self.workspace_id)
 
-        filepath = Path(control_dir).joinpath(self.filename).as_posix()
-        data = load_json_file(filepath, {})
-
-        secrets_filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
-        secrets_data = load_json_file(secrets_filepath, {}).get(self.ext_name, {})
-
+    def get_all(self, repo=None):
         result = {}
         for field in self.schema:
             fid = field.get('id')
             if not fid: continue
-
-            if field.get('secure'):
-                val = secrets_data.get(fid, field.get('default'))
-                if isinstance(val, str) and val.startswith("v1:"):
-                    from insetu.kernel.auth import decrypt_secret
-                    val = decrypt_secret(val)
-                result[fid] = val
-            else:
-                result[fid] = data.get(fid, field.get('default'))
-
+            result[fid] = self.get(fid, repo=repo)
         return result
-
-    def update(self, payload_dict):
+    def update(self, payload_dict, repo=None):
         from insetu.kernel.utils import load_json_file, save_json_file, get_tenant_control_dir, _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
         from pathlib import Path
+
         control_dir = get_tenant_control_dir(self.workspace_id)
+        daemon_path = self._resolve_filepath('daemon')
+        ws_path = self._resolve_filepath('workspace')
+        repo_path = self._resolve_filepath('repo')
+        secrets_path = Path(control_dir).joinpath(self.secrets_filename).as_posix()
 
-        filepath = Path(control_dir).joinpath(self.filename).as_posix()
-        secrets_filepath = Path(control_dir).joinpath(self.secrets_filename).as_posix()
+        # Load memory buffers
+        buffers = {
+            'daemon': load_json_file(daemon_path, {}),
+            'workspace': load_json_file(ws_path, {}),
+            'repo': load_json_file(repo_path, {}),
+            'secure': load_json_file(secrets_path, {})
+        }
+        dirty = set()
 
-        data = load_json_file(filepath, {})
-        secrets_data = load_json_file(secrets_filepath, {})
-        ext_secrets = secrets_data.get(self.ext_name, {})
-
-        dirty_normal = False
-        dirty_secrets = False
         for field in self.schema:
             k = field.get('id')
             if not k or k not in payload_dict: continue
 
-            v = payload_dict[k]
-            if field.get('secure'):
-                if v:
+            val = payload_dict[k]
+            scope = field.get('scope', 'workspace')
+            is_secure = field.get('secure', False)
+
+            if is_secure:
+                if val:
                     from insetu.kernel.auth import encrypt_secret
-                    v = encrypt_secret(v)
-                ext_secrets[k] = v
-                dirty_secrets = True
+                    val = encrypt_secret(val)
+                if self.ext_name not in buffers['secure']: buffers['secure'][self.ext_name] = {}
+                if scope == 'repo' and repo:
+                    if repo not in buffers['secure'][self.ext_name]: buffers['secure'][self.ext_name][repo] = {}
+                    buffers['secure'][self.ext_name][repo][k] = val
+                else:
+                    buffers['secure'][self.ext_name][k] = val
+                dirty.add('secure')
             else:
-                data[k] = v
-                dirty_normal = True
+                target = buffers[scope]
+                if scope == 'daemon':
+                    if self.ext_name == 'core_system': target[k] = val
+                    else:
+                        if self.ext_name not in target: target[self.ext_name] = {}
+                        target[self.ext_name][k] = val
+                elif scope == 'repo':
+                    if repo:
+                        if repo not in target: target[repo] = {}
+                        if self.ext_name not in target[repo]: target[repo][self.ext_name] = {}
+                        target[repo][self.ext_name][k] = val
+                else:
+                    if self.ext_name not in target: target[self.ext_name] = {}
+                    target[self.ext_name][k] = val
+                dirty.add(scope)
 
-        if dirty_normal:
-            save_json_file(filepath, data, self.workspace_id)
-        if dirty_secrets:
-            secrets_data[self.ext_name] = ext_secrets
-            save_json_file(secrets_filepath, secrets_data, self.workspace_id)
+        # Commit dirty buffers exactly once
+        if 'daemon' in dirty: save_json_file(daemon_path, buffers['daemon'], self.workspace_id)
+        if 'workspace' in dirty: save_json_file(ws_path, buffers['workspace'], self.workspace_id)
+        if 'repo' in dirty: save_json_file(repo_path, buffers['repo'], self.workspace_id)
+        if 'secure' in dirty: save_json_file(secrets_path, buffers['secure'], self.workspace_id)
 
-        if dirty_normal or dirty_secrets:
+        if dirty:
             _MUTATED_CONFIG_CACHE.clear()
             _MUTATED_CONFIG_MTIME.clear()
 class StoreManager:
@@ -377,14 +468,16 @@ class InSetuExtension:
 
         if self.schema:
             register_schema(self.name, self.schema)
-
         # Universal REST endpoints for extension settings management
         @self.route('settings', methods=['GET'])
         def get_settings(ctx):
-            return jsonify(ctx.settings.get_all())
+            repo = ctx.req.args.get('repo')
+            return jsonify(ctx.settings.get_all(repo=repo))
+
         @self.route('settings', methods=['POST'])
         def update_settings(ctx):
-            ctx.settings.update(ctx.req.json or {})
+            repo = ctx.req.args.get('repo') or (ctx.req.json.get('_repo') if ctx.req.json else None)
+            ctx.settings.update(ctx.req.json or {}, repo=repo)
 
             # Emit a strictly scoped event for this specific extension
             results = ctx.emit(f'{self.name}_settings_updated')

@@ -19,14 +19,13 @@ def get_physics_for(workspace_id):
 def get_tenant_control_dir(workspace_id=None):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
     return Path(cfg_path).parent.as_posix()
-
 def get_workspace_physics(workspace_id=None):
     if not workspace_id:
         workspace_id = sniff_tenant_id()
 
     local_insetu_dir = Path(_cwd).joinpath(".insetu").as_posix()
     default_config = Path(local_insetu_dir).joinpath("config.json").as_posix()
-    index_path = Path(local_insetu_dir).joinpath("workspaces.json").as_posix()
+    index_path = Path(local_insetu_dir).joinpath("system.json").as_posix()
 
     env_config = os.environ.get("INSETU_CONFIG")
     if env_config:
@@ -146,9 +145,8 @@ def load_config(workspace_id=None):
         _MUTATED_CONFIG_MTIME[cfg_path] = current_mtime
 
     return _MUTATED_CONFIG_CACHE[cfg_path]
-
 def get_all_workspace_ids():
-    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
     workspace_ids = ["default"]
     if os.path.exists(index_path):
         try:

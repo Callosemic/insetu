@@ -148,12 +148,12 @@ def scaffold_profiles(cwd):
         with open(target_workflows, "w", encoding="utf-8") as f:
             json.dump({"context_batches": []}, f, indent=2)
 
-    # Scaffold the switchboard locally
-    target_ws = Path(base_dir).joinpath("workspaces.json").as_posix()
-    if not os.path.exists(target_ws):
-        src_ws = Path(defaults_dir).joinpath("workspaces.json").as_posix()
-        if os.path.exists(src_ws):
-            shutil.copy(src_ws, target_ws)
+    # Scaffold the Tier 1 OS config locally
+    target_sys = Path(base_dir).joinpath("system.json").as_posix()
+    if not os.path.exists(target_sys):
+        src_sys = Path(defaults_dir).joinpath("system.json").as_posix()
+        if os.path.exists(src_sys):
+            shutil.copy(src_sys, target_sys)
             
     # Scaffold the Git safeguard
     target_gitignore = Path(base_dir).joinpath(".gitignore").as_posix()

@@ -202,7 +202,7 @@ def _metronome_loop():
     from insetu.kernel.utils import _cwd, load_json_file
     while not _shutdown_event.is_set():
         try:
-            index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+            index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
             workspace_ids = ["default"]
 
             if os.path.exists(index_path):
@@ -306,7 +306,7 @@ def start_workers():
 
         from insetu.kernel.utils import _cwd, load_json_file
         import os
-        index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+        index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
         workspace_ids = ["default"]
         if os.path.exists(index_path):
                 try:

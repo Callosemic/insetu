@@ -32,9 +32,11 @@ app.register_blueprint(security_bp.bp)
 
 # Explicitly register system core routes first to prevent dynamic loader misfires
 try:
-    from insetu.core.routes_system import system_bp
+    from insetu.core.routes_system import system_bp, core_system_ext
     if 'system' not in app.blueprints:
         app.register_blueprint(system_bp)
+    if 'core_system' not in app.blueprints:
+        app.register_blueprint(core_system_ext.bp)
     from insetu.core.routes_fs import fs_bp
     if 'fs' not in app.blueprints:
         app.register_blueprint(fs_bp)
@@ -61,8 +63,15 @@ def load_workspace_extensions():
 
     raw_extensions = set()
 
-    # 1. Sweep workspaces.json for a Union of all required extensions globally
-    index_path = Path(_cwd).joinpath(".insetu", "workspaces.json").as_posix()
+    # 0. Check global preload preference
+    preload_all = False
+    try:
+        cfg = load_config()
+        preload_all = cfg.get("preload_all_extensions", False)
+    except Exception:
+        pass
+    # 1. Sweep system.json for a Union of all required extensions globally
+    index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
     if os.path.exists(index_path):
         try:
             with open(index_path, 'r', encoding='utf-8') as f:
@@ -78,6 +87,13 @@ def load_workspace_extensions():
         cfg = load_config()
         for ext in cfg.get("extensions", []):
             raw_extensions.add(ext)
+
+    # If preload is enabled, aggressively scan and add all available extensions
+    ext_dir = Path(__file__).parent.joinpath("extensions")
+    if preload_all and ext_dir.exists() and ext_dir.is_dir():
+        for item in os.listdir(ext_dir):
+            if os.path.isdir(ext_dir.joinpath(item)) and not item.startswith("__"):
+                raw_extensions.add(item)
 
     # Inject Tier 2 Core Modules into the DAG automatically
     core_dir = Path(__file__).parent.joinpath("core")
@@ -318,6 +334,7 @@ def manifest():
     import json
     import os
     from insetu.kernel.utils import load_config
+    from insetu.kernel.extension import SettingsManager
 
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath(*['manifest', 'json']).as_posix()
@@ -327,7 +344,8 @@ def manifest():
     except Exception:
         manifest_data = {}
     cfg = load_config()
-    instance_title = cfg.get("instance_title", "inSetu Developer OS")
+    settings = SettingsManager('core_system', "default")
+    instance_title = settings.get("instance_title", "inSetu Developer OS")
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
     manifest_data["short_name"] = instance_title.split()[0] if instance_title else "inSetu"
@@ -423,9 +441,11 @@ def recovery_ui():
 @app.route('/')
 def index():
     from insetu.kernel.utils import load_config
+    from insetu.kernel.extension import SettingsManager
     cfg = load_config()
-    instance_title = cfg.get("instance_title", "inSetu Developer OS")
-    instance_emoji = cfg.get("instance_emoji", "⚙️")
+    settings = SettingsManager('core_system', "default")
+    instance_title = settings.get("instance_title", "inSetu Developer OS")
+    instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])
     return render_template('index.html', title=instance_title, emoji=instance_emoji, extensions=extensions)
 

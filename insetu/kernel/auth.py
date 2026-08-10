@@ -32,7 +32,6 @@ def decrypt_secret(val: str) -> str:
         return f.decrypt(val[3:].encode('utf-8')).decode('utf-8')
     except Exception:
         return ""
-
 security_bp = InSetuExtension(
     'security', __name__, title="Security & Encryption", 
     description="Local encryption key management.",
@@ -41,6 +40,7 @@ security_bp = InSetuExtension(
         "id": "master_fernet_key",
         "label": "inSetu Master Encryption Key (Fernet)",
         "type": "text",
+        "scope": "daemon",
         "secure": False,
         "default": get_master_key().decode('utf-8'),
         "description": "This key encrypts your secrets.json. If you move this workspace to another machine, you must copy this key to .insetu/master_key.txt on the new machine. DO NOT LOSE THIS."

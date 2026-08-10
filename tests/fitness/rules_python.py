@@ -32,7 +32,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Setting field '{setting_id}' contains sensitive keywords but is missing 'secure': True."
                     )
-        self.generic_visit(node)
+
+    if 'id' in dict_keys and 'scope' in dict_keys:
+        scope_val = dict_keys['scope']
+        if isinstance(scope_val, ast.Constant) and isinstance(scope_val.value, str):
+            valid_scopes = {'workspace', 'daemon', 'repo'}
+            if scope_val.value not in valid_scopes:
+                report_violation(
+                    "SETTINGS_SCHEMA_SCOPE_VALIDATION",
+                    self.filepath,
+                    node.lineno,
+                    f"Invalid settings scope '{scope_val.value}'. Must be one of {valid_scopes}."
+                )
+    self.generic_visit(node)
 
     def visit_Subscript(self, node):
         if self.filename not in ('extension.py', 'engine_hooks.py'):
@@ -251,13 +263,21 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
     def visit_Constant(self, node):
-        if isinstance(node.value, str) and "system://" in node.value:
-            if self.filename not in ("routes_fs.py", "fallback_bridge.py"):
+        if isinstance(node.value, str):
+            if "system://" in node.value and self.filename not in ("routes_fs.py", "fallback_bridge.py"):
                 report_violation(
                     "LEGACY_SYSTEM_URI_BAN",
                     self.filepath,
                     node.lineno,
                     "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme."
+                )
+            if "workspaces.json" in node.value and self.filename != "extension.py":
+                report_violation(
+                    "LEGACY_SWITCHBOARD_REFERENCE_BAN",
+                    self.filepath,
+                    node.lineno,
+                    f"Hardcoded reference to deprecated 'workspaces.json' detected in string literal '{node.value}'. "
+                    "Use load_config(), get_all_workspace_ids(), or '.insetu/system.json' instead."
                 )
         self.generic_visit(node)
 
