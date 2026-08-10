@@ -1,0 +1,15 @@
+inSetu Developer OS
+Copyright 2026 inSetu Contributors
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+=========================================================================
+Third-Party Dependencies
+=========================================================================
+This project bundles the following third-party dependencies:
+
+* Sutram Micro-Kernel & yenVUI (Apache 2.0 License)
+* Lit (BSD-3-Clause License) - https://lit.dev/
+* CodeMirror 6 (MIT License) - https://codemirror.net/
+* xterm.js (MIT License) - https://xtermjs.org/

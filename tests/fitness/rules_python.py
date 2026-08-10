@@ -50,9 +50,16 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Direct file I/O on legacy '{arg.value}' detected. Use vfs_index.db, ctx.save_manifest, or request_manifest instead."
                     )
-
         if isinstance(node.func, ast.Name) and node.func.id == 'save_json_file':
             self.has_save_json = True
+        if isinstance(node.func, ast.Name) and node.func.id == 'ExtensionContext':
+            if ('core' in self.filepath.parts or 'extensions' in self.filepath.parts) and self.filename != 'extension.py':
+                report_violation(
+                    "EXTENSION_CONTEXT_ACCESSOR_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    "Direct ExtensionContext(...) instantiation detected in core/extension module. Use bp.get_context(workspace_id) instead."
+                )
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'clear':
             if isinstance(node.func.value, ast.Name) and node.func.value.id == '_MUTATED_CONFIG_CACHE':
                 self.has_cache_clear = True

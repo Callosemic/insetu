@@ -44,6 +44,8 @@ class SettingsManager:
         self.workspace_id = workspace_id
         self.filename = f"{ext_name}.settings.json"
         self.secrets_filename = "secrets.json"
+        if schema is None:
+            schema = _REGISTERED_SETTINGS_SCHEMAS.get(ext_name)
         self.schema = schema(workspace_id) if callable(schema) else (schema or [])
 
     def _is_secure(self, key):
@@ -400,7 +402,6 @@ class InSetuExtension:
         @self.route('settings/schema', methods=['GET'])
         def get_settings_schema(ctx):
             return jsonify(self.settings_schema)
-
         if self.virtual_contexts or self.target_repos:
             from insetu.kernel.hooks import hooks
             @hooks.on('mutate_workspace_config')
@@ -420,6 +421,10 @@ class InSetuExtension:
                     for vc in self.virtual_contexts:
                         if not any(v.get("out_file") == vc.get("out_file") for v in cfg["virtual_contexts"]):
                             cfg["virtual_contexts"].append(vc)
+
+    def get_context(self, workspace_id, job_id=None):
+        """SDK Factory: Returns a fully hydrated context inherently bound to this extension's schema."""
+        return ExtensionContext(self.name, workspace_id, settings_schema=self.settings_schema, job_id=job_id)
 
     def worker(self, task_name):
         """
