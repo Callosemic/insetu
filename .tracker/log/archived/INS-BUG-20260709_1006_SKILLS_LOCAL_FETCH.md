@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "logged"
+status: "archived"
 id: INS-BUG-20260709_1006_SKILLS_LOCAL_FETCH
 title: "Skills Extension Uses Localized API Fetch Wrapper"
 created_at: 2026-07-09T10:03:14

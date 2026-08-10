@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-TODO-20260709_2219_EXTENSION_SDK
 title: "Phase 7: The Extension SDK & 'Pit of Success' Architecture"
 created_at: 2026-07-09T22:19:00

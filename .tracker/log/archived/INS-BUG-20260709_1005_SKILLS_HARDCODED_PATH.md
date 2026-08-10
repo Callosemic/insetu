@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "bug"
-status: "logged"
+status: "archived"
 id: INS-BUG-20260709_1005_SKILLS_HARDCODED_PATH
 title: "Skills Engine Hardcodes Global Profile Path"
 created_at: 2026-07-09T10:03:14
