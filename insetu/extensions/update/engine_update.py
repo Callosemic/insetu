@@ -64,35 +64,111 @@ def _background_bump_task(ctx, repo):
     parser_style = ctx.settings.get("commit_parser", "conventional", repo=repo)
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
+    res = subprocess.run(
+        ['semantic-release', 'version'], 
+        cwd=repo_path, 
+        capture_output=True, 
+        text=True, 
+        check=False,
+        env=env
+    )
+    import re
+    # Clean up timestamps and python file references from the raw logs
+    clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', res.stderr.strip())
+    clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
+    clean_log = re.sub(r' +', ' ', clean_log)
 
-    try:
-        res = subprocess.run(
-            ['semantic-release', 'version'], 
-            cwd=repo_path, 
-            capture_output=True, 
-            text=True, 
-            check=True,
-            env=env
-        )
-        import re
-        # Clean up timestamps and python file references from the raw logs
-        clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', res.stderr.strip())
-        clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
-        clean_log = re.sub(r' +', ' ', clean_log)
+    # Combine stderr (evaluation logs) and stdout (raw version)
+    output = f"{clean_log}\n\nNext Version: {res.stdout.strip()}".strip()
 
-        # Combine stderr (evaluation logs) and stdout (raw version)
-        output = f"{clean_log}\n\nNext Version: {res.stdout.strip()}".strip()
-        # Evaluate Phase 2 Automation
-        if ctx.settings.get("auto_publish", False, repo=repo):
-            ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
-            ctx.jobs.submit("publish_task", repo=repo)
-            output += "\n\nAuto-publish workflow triggered."
+    if res.returncode != 0:
+        if "no release" in clean_log.lower() or "nothing to do" in clean_log.lower():
+            return {"message": "No version bump required.", "artifact": {"output": output}}
 
-        return {"message": "Version bumped successfully.", "artifact": {"output": output}}
-        
-    except subprocess.CalledProcessError as e:
-        err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
+        tag_check = execute_git(repo_path, ['tag', '--points-at', 'HEAD'], check=False)
+        if tag_check.returncode == 0 and tag_check.stdout.strip():
+            output += f"\n\n⚠️ Local version bump and tag ({tag_check.stdout.strip()}) succeeded, but remote VCS publishing/pushing failed."
+            return {"message": "Version bumped locally with VCS warnings.", "artifact": {"output": output}}
+
+        err_msg = res.stderr.strip() if res.stderr else res.stdout.strip()
         raise RuntimeError(f"Semantic Release Engine Failed:\n{err_msg}")
+
+    # Evaluate Phase 2 Automation
+    if ctx.settings.get("auto_publish", False, repo=repo):
+        ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
+        ctx.jobs.submit("publish_task", repo=repo)
+        output += "\n\nAuto-publish workflow triggered."
+
+    return {"message": "Version bumped successfully.", "artifact": {"output": output}}
+@update_bp.worker("first_release_task")
+def _background_first_release_task(ctx, repo):
+    """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
+    import zipfile
+    import tarfile
+    from pathlib import Path
+
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError(f"Target repository path not found: {repo}")
+
+    log_lines = []
+
+    ctx.jobs.update_progress("Validating working tree cleanliness...")
+    status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
+    if status_check.stdout.strip():
+        raise RuntimeError("Working tree is not clean. Please commit or stash your changes before issuing the initial release.")
+
+    ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
+    build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
+    log_lines.append(f"=== BUILD STDOUT ===\n{build_res.stdout}\n=== BUILD STDERR ===\n{build_res.stderr}")
+    if build_res.returncode != 0:
+        raise RuntimeError(f"Build failed:\n{build_res.stderr or build_res.stdout}")
+
+    ctx.jobs.update_progress("Validating package data in wheel distribution...")
+    dist_dir = Path(repo_path) / "dist"
+    wheels = list(dist_dir.glob("*.whl"))
+    if not wheels:
+        raise RuntimeError("No .whl package found in dist/ after build.")
+    latest_wheel = max(wheels, key=lambda p: p.stat().st_mtime)
+    with zipfile.ZipFile(latest_wheel, 'r') as z:
+        archived_files = z.namelist()
+        # Agnostic check: Ensure the archive contains valid non-metadata payload files
+        has_package_payload = any(not f.endswith('/') and '.dist-info/' not in f and '.data/' not in f for f in archived_files)
+        if not has_package_payload:
+            raise RuntimeError(f"Package validation failed: No active code or asset payload found in {latest_wheel.name}.")
+    log_lines.append(f"=== WHEEL VALIDATION ===\nVerified package payload present in {latest_wheel.name}")
+
+    ctx.jobs.update_progress("Running twine check on distribution artifacts...")
+    twine_check = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False)
+    log_lines.append(f"=== TWINE CHECK STDOUT ===\n{twine_check.stdout}\n=== TWINE CHECK STDERR ===\n{twine_check.stderr}")
+    if twine_check.returncode != 0:
+        raise RuntimeError(f"Twine validation failed:\n{twine_check.stderr or twine_check.stdout}")
+
+    ctx.jobs.update_progress("Uploading initial release to PyPI...")
+    env = os.environ.copy()
+    pypi_token = ctx.settings.get("pypi_token", "") or os.getenv("TWINE_PASSWORD", "") or os.getenv("PYPI_TOKEN", "")
+    if pypi_token:
+        env["TWINE_PASSWORD"] = pypi_token
+        env["TWINE_USERNAME"] = "__token__"
+
+    upload_res = subprocess.run([sys.executable, "-m", "twine", "upload", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False, env=env)
+    log_lines.append(f"=== TWINE UPLOAD STDOUT ===\n{upload_res.stdout}\n=== TWINE UPLOAD STDERR ===\n{upload_res.stderr}")
+    if upload_res.returncode != 0:
+        raise RuntimeError(f"PyPI upload failed:\n{upload_res.stderr or upload_res.stdout}")
+
+    ctx.jobs.update_progress("Tagging initial release in Git...")
+    pyproject_file = Path(repo_path) / "pyproject.toml"
+    content = pyproject_file.read_text(encoding='utf-8')
+    import re
+    v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
+    version_str = v_match.group(1) if v_match else "0.1.0"
+
+    tag_res = execute_git(repo_path, ['tag', '-a', f'v{version_str}', '-m', f'v{version_str} initial PyPI release baseline'], check=False)
+    push_res = execute_git(repo_path, ['push', 'origin', f'v{version_str}'], check=False)
+    log_lines.append(f"=== GIT TAG & PUSH ===\nTag: {tag_res.stdout}\nPush: {push_res.stdout} {push_res.stderr}")
+
+    full_output = "\n\n".join(log_lines)
+    return {"message": f"Successfully published initial release v{version_str} to PyPI and tagged Git!", "artifact": {"version": version_str, "output": full_output}}
 
 @update_bp.worker("publish_task")
 def _background_publish_task(ctx, repo):
@@ -229,6 +305,14 @@ def api_update_preview_publish(ctx):
 
     job_id = ctx.jobs.submit("preview_publish_task", repo=repo)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+@update_bp.route('first_release', methods=['POST'])
+def api_update_first_release(ctx):
+    repo = ctx.req.json.get('repo')
+    if not repo:
+        return jsonify({"error": "Repository target is required."}), 400
+
+    job_id = ctx.jobs.submit("first_release_task", repo=repo)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('publish', methods=['POST'])
 def api_update_publish(ctx):
@@ -268,12 +352,20 @@ def _background_status_task(ctx, repo):
     version = None
     has_release = False
     import re
-    # 1. Always attempt to parse the static baseline version
+    # 1. Parse package name and static baseline version from pyproject.toml
+    name_match = re.search(r'^name\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
+    package_name = name_match.group(1) if name_match else repo
+
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     if v_match:
         version = v_match.group(1)
     b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     build_command = b_match.group(1) if b_match else ""
+
+    vcs_match = re.search(r'^vcs_release\s*=\s*(true|false)', content, re.MULTILINE | re.IGNORECASE)
+    vcs_release = vcs_match.group(1).lower() == 'true' if vcs_match else True
+    has_pypi_token = bool(ctx.settings.get("pypi_token") or os.getenv("TWINE_PASSWORD") or os.getenv("PYPI_TOKEN"))
+    has_token = bool(has_pypi_token or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN"))
 
     # 2. If configured, let the CLI take precedence (as it resolves Git tags accurately)
     if configured:
@@ -290,10 +382,36 @@ def _background_status_task(ctx, repo):
                 has_release = True
         except subprocess.CalledProcessError:
             pass
-    return {"message": "Status resolved.", "artifact": {"version": version, "configured": configured, "has_pyproject": has_pyproject, "is_clean": is_clean, "has_release": has_release, "build_command": build_command}}
+
+    # 3. Query PyPI JSON API to verify if this version is published on PyPI.org
+    pypi_published = False
+    if version:
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"https://pypi.org/pypi/{package_name}/json", headers={'User-Agent': 'inSetu-OS/1.0'})
+            with urllib.request.urlopen(req, timeout=3) as response:
+                if response.status == 200:
+                    pypi_data = json.loads(response.read().decode('utf-8'))
+                    pypi_published = version in pypi_data.get("releases", {})
+        except Exception:
+            pypi_published = False
+
+    return {"message": "Status resolved.", "artifact": {
+        "version": version, 
+        "package_name": package_name,
+        "configured": configured, 
+        "has_pyproject": has_pyproject, 
+        "is_clean": is_clean, 
+        "has_release": has_release, 
+        "pypi_published": pypi_published,
+        "build_command": build_command,
+        "vcs_release": vcs_release,
+        "has_pypi_token": has_pypi_token,
+        "has_token": has_token
+    }}
 
 @update_bp.worker("update_toml_config_task")
-def _background_update_toml_config(ctx, repo, build_command):
+def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None):
     import os
     import re
     from pathlib import Path
@@ -307,10 +425,19 @@ def _background_update_toml_config(ctx, repo, build_command):
     if content is None:
         raise ValueError("pyproject.toml not found.")
 
-    if re.search(r'^build_command\s*=', content, re.MULTILINE):
-        new_content = re.sub(r'^build_command\s*=\s*[\'"][^\'"]*[\'"]', f'build_command = "{build_command}"', content, flags=re.MULTILINE)
-    else:
-        new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nbuild_command = "' + build_command + '"', content)
+    new_content = content
+    if build_command is not None:
+        if re.search(r'^build_command\s*=', new_content, re.MULTILINE):
+            new_content = re.sub(r'^build_command\s*=\s*[\'"][^\'"]*[\'"]', f'build_command = "{build_command}"', new_content, flags=re.MULTILINE)
+        else:
+            new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nbuild_command = "' + build_command + '"', new_content)
+
+    if vcs_release is not None:
+        vcs_str = "true" if vcs_release else "false"
+        if re.search(r'^vcs_release\s*=', new_content, re.MULTILINE):
+            new_content = re.sub(r'^vcs_release\s*=\s*(true|false)', f'vcs_release = {vcs_str}', new_content, flags=re.MULTILINE | re.IGNORECASE)
+        else:
+            new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nvcs_release = ' + vcs_str, new_content)
 
     ctx.vfs.save(pyproject_file, new_content, data={"is_absolute_artifact": True})
     ctx.sync_vfs_barrier()
@@ -319,18 +446,19 @@ def _background_update_toml_config(ctx, repo, build_command):
     execute_git(repo_path, ['add', 'pyproject.toml'], check=False)
     status_res = execute_git(repo_path, ['status', '--porcelain', 'pyproject.toml'], check=False)
     if status_res.stdout.strip():
-        execute_git(repo_path, ['commit', '-m', f'chore: update build_command in pyproject.toml [skip ci]'], check=False)
+        execute_git(repo_path, ['commit', '-m', f'chore: update semantic_release config in pyproject.toml [skip ci]'], check=False)
 
-    return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command}}
+    return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command, "vcs_release": vcs_release}}
 
 @update_bp.route('update_toml_config', methods=['POST'])
 def api_update_toml_config(ctx):
     repo = ctx.req.json.get('repo')
     build_command = ctx.req.json.get('build_command')
-    if not repo or build_command is None:
-        return jsonify({"error": "Repo and build_command required"}), 400
+    vcs_release = ctx.req.json.get('vcs_release')
+    if not repo:
+        return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command)
+    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('status', methods=['POST'])

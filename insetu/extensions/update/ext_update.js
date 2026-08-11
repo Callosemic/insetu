@@ -7,11 +7,18 @@ const AppStore = window.inSetu.stores.App;
 export const UpdateStore = createExtensionStore('Update', {
     targetRepo: '',
     repoVersion: null,
+    repoLoading: false,
     repoConfigured: false,
     hasPyproject: true,
     isClean: true,
     hasRelease: false,
+    pypiPublished: false,
+    packageName: '',
     repoBuildCommand: '',
+    repoVcsRelease: true,
+    hasToken: true,
+    hasPypiToken: true,
+    lastReleaseLog: '',
     missingDependencies: [],
     missingBinaries: [],
     eligibleRepos: {},
@@ -20,6 +27,36 @@ export const UpdateStore = createExtensionStore('Update', {
     previewChangelog: '',
     previewTab: 'changelog',
     previewActionType: 'bump',
+    firstRelease: async (repo) => {
+        if (!repo) return;
+        const res = await window.inSetu.api.post('update/first_release', { repo });
+        if (res.status === 202) {
+            const data = await res.json();
+            return new Promise((resolve, reject) => {
+                window.inSetu.utils.pollJob(data.job_id, {
+                    onProgress: (msg) => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                    },
+                    onComplete: (statusData) => {
+                        const output = statusData.artifact?.output || statusData.message;
+                        UpdateStore.setState({ lastReleaseLog: output });
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
+                        UpdateStore.getState().fetchRepoStatus(repo);
+                        UpdateStore.getState().fetchEligibleRepos();
+                        resolve();
+                    },
+                    onError: (err) => {
+                        const logText = `❌ First Release Error:\n\n${err.message}`;
+                        UpdateStore.setState({ lastReleaseLog: logText });
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ First release failed. See log below.`, 5000, true);
+                        reject(err);
+                    }
+                });
+            });
+        } else {
+            throw new Error("Failed to start first release");
+        }
+    },
     previewBump: async (repo) => {
         if (!repo) return;
         const res = await window.inSetu.api.post('update/preview_bump', { repo });
@@ -131,7 +168,7 @@ export const UpdateStore = createExtensionStore('Update', {
     },
     fetchRepoStatus: async (repo) => {
         if (!repo) return;
-        UpdateStore.setState({ repoVersion: null }); // Clear while loading
+        UpdateStore.setState({ repoVersion: null, repoLoading: true }); // Clear and mark loading
         try {
             const res = await window.inSetu.api.post('update/status', { repo });
             if (res.status === 202) {
@@ -146,20 +183,29 @@ export const UpdateStore = createExtensionStore('Update', {
                             hasPyproject: statusData.artifact.has_pyproject !== false,
                             isClean: statusData.artifact.is_clean !== false,
                             hasRelease: statusData.artifact.has_release === true,
-                            repoBuildCommand: statusData.artifact.build_command || ''
+                            pypiPublished: statusData.artifact.pypi_published === true,
+                            packageName: statusData.artifact.package_name || '',
+                            repoBuildCommand: statusData.artifact.build_command || '',
+                            repoVcsRelease: statusData.artifact.vcs_release !== false,
+                            hasToken: statusData.artifact.has_token !== false,
+                            repoLoading: false
                         });
                     },
                     onError: (err) => {
                         if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                         console.error("Status check failed:", err.message);
+                        UpdateStore.setState({ repoLoading: false });
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                             window.inSetu.ui.setGlobalStatus(`❌ Status Error: ${err.message}`, 5000, true);
                         }
                     }
                 });
+            } else {
+                UpdateStore.setState({ repoLoading: false });
             }
         } catch (e) {
             console.error("Failed to queue status job:", e);
+            UpdateStore.setState({ repoLoading: false });
         }
     },
     createDummyToml: async (repo, initialVersion) => {
@@ -188,16 +234,16 @@ export const UpdateStore = createExtensionStore('Update', {
             alert(`Network error: ${e.message}`);
         }
     },
-    updateTomlConfig: async (repo, buildCommand) => {
+    updateTomlConfig: async (repo, buildCommand, vcsRelease) => {
         if (!repo) return;
         try {
-            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand });
+            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand, vcs_release: vcsRelease });
             if (res.status === 202) {
                 const data = await res.json();
                 return new Promise((resolve, reject) => {
                     window.inSetu.utils.pollJob(data.job_id, {
                         onComplete: () => {
-                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Build command updated.`, 2000);
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Release config updated.`, 2000);
                             UpdateStore.getState().fetchRepoStatus(repo);
                             resolve();
                         },
@@ -208,7 +254,7 @@ export const UpdateStore = createExtensionStore('Update', {
                     });
                 });
             } else {
-                throw new Error("Failed to update build command.");
+                throw new Error("Failed to update config.");
             }
         } catch (e) {
             alert(`Network error: ${e.message}`);
@@ -273,11 +319,18 @@ export class InSetuExtUpdate extends InSetuElement {
     static properties = {
         targetRepo: { type: String },
         repoVersion: { type: String },
+        repoLoading: { type: Boolean },
         repoConfigured: { type: Boolean },
         hasPyproject: { type: Boolean },
         isClean: { type: Boolean },
         hasRelease: { type: Boolean },
+        pypiPublished: { type: Boolean },
+        packageName: { type: String },
         repoBuildCommand: { type: String },
+        repoVcsRelease: { type: Boolean },
+        hasToken: { type: Boolean },
+        hasPypiToken: { type: Boolean },
+        lastReleaseLog: { type: String },
         allRepos: { type: Array },
         missingDependencies: { type: Array },
         missingBinaries: { type: Array },
@@ -296,11 +349,15 @@ export class InSetuExtUpdate extends InSetuElement {
         super();
         this.targetRepo = '';
         this.repoVersion = null;
+        this.repoLoading = false;
         this.repoConfigured = false;
         this.hasPyproject = true;
         this.isClean = true;
         this.hasRelease = false;
         this.repoBuildCommand = '';
+        this.repoVcsRelease = true;
+        this.hasToken = true;
+        this.hasPypiToken = true;
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -317,11 +374,18 @@ export class InSetuExtUpdate extends InSetuElement {
             const previousRepo = this.targetRepo;
             this.targetRepo = state.targetRepo;
             this.repoVersion = state.repoVersion;
+            this.repoLoading = !!state.repoLoading;
             this.repoConfigured = state.repoConfigured;
             this.hasPyproject = state.hasPyproject !== false;
             this.isClean = state.isClean !== false;
             this.hasRelease = state.hasRelease === true;
+            this.pypiPublished = state.pypiPublished === true;
+            this.packageName = state.packageName || '';
             this.repoBuildCommand = state.repoBuildCommand || '';
+            this.repoVcsRelease = state.repoVcsRelease !== false;
+            this.hasToken = state.hasToken !== false;
+            this.hasPypiToken = state.hasPypiToken !== false;
+            this.lastReleaseLog = state.lastReleaseLog || '';
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
             this.eligibleRepos = state.eligibleRepos || {};
@@ -446,10 +510,10 @@ export class InSetuExtUpdate extends InSetuElement {
                         <div style="display: flex; flex-direction: column;">
                             <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Current Version</span>
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <span style="font-family: var(--font-mono); font-size: 1.1rem; color: ${this.repoVersion ? 'var(--intent-primary)' : 'var(--text-muted)'}; font-weight: bold;">
-                                    ${this.repoVersion ? `v${this.repoVersion}` : 'Unversioned'}
+                                <span style="font-family: var(--font-mono); font-size: 1.1rem; color: ${this.repoLoading ? 'var(--text-muted)' : (this.repoVersion ? 'var(--intent-primary)' : 'var(--text-muted)')}; font-weight: bold;">
+                                    ${this.repoLoading ? 'refreshing repo state...' : (this.repoVersion ? `v${this.repoVersion}` : 'Unversioned')}
                                 </span>
-                                ${this.repoConfigured ? html`
+                                ${!this.repoLoading && this.repoConfigured ? html`
                                     <button style="background: transparent; border: 1px dashed var(--intent-warning); color: var(--intent-warning); border-radius: 4px; padding: 2px 6px; font-size: 0.7rem; font-weight: bold; cursor: pointer;"
                                         title="Force version override"
                                         @click=${() => {
@@ -462,7 +526,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     </button>
                                 ` : ''}
                             </div>
-                            ${this.repoConfigured && !this.hasRelease ? html`
+                            ${!this.repoLoading && this.repoConfigured && !this.hasRelease ? html`
                                 <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
                                     <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">⚠️ Local version configured, but no Git release tag has been established.</span>
                                     <button class="btn-sm" style="background: var(--intent-primary); color: #fff; border: none; padding: 6px 12px; font-weight: bold; font-size: 0.8rem; border-radius: 4px; cursor: pointer; align-self: flex-start;"
@@ -477,19 +541,19 @@ export class InSetuExtUpdate extends InSetuElement {
                                 </div>
                             ` : ''}
                         </div>
-                        ${this.repoConfigured ? html`
+                        ${!this.repoLoading && this.repoConfigured ? html`
                             <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold;">
                                 ✅ Configured
                             </span>
                         ` : ''}
                     </div>
 
-                    ${!this.isClean && this.repoConfigured ? html`
+                    ${!this.repoLoading && !this.isClean && this.repoConfigured ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-top: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center;">
                             ⚠️ Working tree is not clean. Commit changes before releasing.
                         </div>
                     ` : ''}
-                    ${!this.hasPyproject ? html`
+                    ${!this.repoLoading && !this.hasPyproject ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
                             <span>⚠️ Missing pyproject.toml in this repository.</span>
                             <button class="btn-sm" style="background: var(--intent-warning); color: #000; border: none; padding: 4px 10px; font-weight: bold; font-size: 0.75rem; border-radius: 4px; cursor: pointer;"
@@ -504,7 +568,7 @@ export class InSetuExtUpdate extends InSetuElement {
                             <span style="font-size: 0.7rem; font-weight: normal; font-style: italic; opacity: 0.9;">The TOML file will be initialized with Python build disabled to accommodate versioning for all project types. This action will also instantly create a Git tag to establish your baseline version. Update manually as needed.</span>
                         </div>
                     ` : ''}
-                    ${!this.repoConfigured ? html`
+                    ${!this.repoLoading && !this.repoConfigured ? html`
                         <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 10px; font-weight: bold; width: 100%; ${!this.hasPyproject ? 'opacity: 0.5; cursor: not-allowed;' : ''}"
                             ?disabled=${!this.hasPyproject}
                             @click=${() => {
@@ -517,87 +581,180 @@ export class InSetuExtUpdate extends InSetuElement {
                         </button>
                     ` : ''}
                 </div>
-                ${this.repoConfigured ? html`
-                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 4px;">
-                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Build Command</label>
-                        <div style="display: flex; gap: 8px;">
-                            <input type="text" 
-                                style="flex: 1; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;"
-                                .value=${this.repoBuildCommand === 'false' || this.repoBuildCommand === '' ? '' : this.repoBuildCommand}
-                                placeholder="e.g., python -m build (leave blank to skip)"
-                                @keydown=${(e) => {
-                                    if (e.key === 'Enter') {
-                                        const newVal = e.target.value.trim();
-                                        if (newVal !== this.repoBuildCommand) {
-                                            UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
-                                        }
-                                    }
-                                }}>
-                            <sutram-async-btn 
-                                label="💾 Save" 
-                                intent="success" 
-                                style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
-                                .onClick=${async (e) => {
-                                    const inputEl = e.target.previousElementSibling;
-                                    const newVal = inputEl ? inputEl.value.trim() : '';
-                                    if (newVal !== this.repoBuildCommand) {
-                                        await UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
-                                    }
-                                }}>
-                            </sutram-async-btn>
+                ${!this.repoLoading && this.repoConfigured && this.isClean ? html`
+                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer;">
+                                <input type="checkbox" .checked=${this.repoVcsRelease}
+                                    @change=${(e) => {
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.target.checked);
+                                    }}>
+                                <span style="font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
+                            </label>
+                            ${this.repoVcsRelease && !this.hasToken ? html`
+                                <div style="color: var(--intent-warning); font-size: 0.75rem; margin-left: 24px;">
+                                    ⚠️ No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail.
+                                </div>
+                            ` : ''}
                         </div>
-                        <span style="font-size: 0.75rem; color: var(--text-muted);">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer;">
+                                <input type="checkbox" .checked=${!!this.repoBuildCommand}
+                                    @change=${(e) => {
+                                        const enabled = e.target.checked;
+                                        const cmd = enabled ? (this.repoBuildCommand || 'python -m build') : '';
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease);
+                                    }}>
+                                <span style="font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
+                            </label>
+
+                            ${this.repoBuildCommand ? html`
+                                <div style="display: flex; gap: 8px; margin-left: 24px; margin-top: 4px;">
+                                    <input type="text" 
+                                        style="flex: 1; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;"
+                                        .value=${this.repoBuildCommand}
+                                        placeholder="e.g., python -m build"
+                                        @keydown=${(e) => {
+                                            if (e.key === 'Enter') {
+                                                const newVal = e.target.value.trim();
+                                                UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal, this.repoVcsRelease);
+                                            }
+                                        }}>
+                                    <sutram-async-btn 
+                                        label="💾 Save" 
+                                        intent="success" 
+                                        style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
+                                        .onClick=${async (e) => {
+                                            const inputEl = e.target.previousElementSibling;
+                                            const newVal = inputEl ? inputEl.value.trim() : '';
+                                            await UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal, this.repoVcsRelease);
+                                        }}>
+                                    </sutram-async-btn>
+                                </div>
+                            ` : ''}
+                            <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 24px;">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
+                        </div>
+                    </div>
+
+                    <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px;">
+                        <!-- Step 1 Column -->
+                        <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
+                            <sutram-async-btn 
+                                style="width: 100%;" 
+                                label="📦 Step 1: Bump & Tag" 
+                                intent="primary" 
+                                ?disabled=${!this.repoConfigured || !this.isClean}
+                                .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
+                            </sutram-async-btn>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                                <strong>Phase 1 (Code & Git Preparation):</strong>
+                                <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
+                                    <li>Analyzes commit logs (<code>feat:</code>, <code>fix:</code>) to pick next version.</li>
+                                    <li>Updates version in <code>pyproject.toml</code> & generates <code>CHANGELOG.md</code>.</li>
+                                    <li>Triggers build command (e.g. <code>python -m build</code>) to make wheels.</li>
+                                    <li>Commits, tags (<code>vX.Y.Z</code>), and pushes directly to GitHub via SSH.</li>
+                                </ol>
+                            </div>
+                        </div>
+
+                        <!-- Step 2 Column -->
+                        <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
+                            ${!this.hasRelease || !this.pypiPublished ? html`
+                                <sutram-async-btn 
+                                    style="width: 100%;" 
+                                    label="🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI" 
+                                    intent="highlight" 
+                                    ?disabled=${!this.isClean || !this.hasPypiToken}
+                                    .onClick=${async () => {
+                                        if (confirm(`Publish v${this.repoVersion || '0.1.0'} of ${this.packageName || this.targetRepo} to PyPI?`)) {
+                                            await UpdateStore.getState().firstRelease(this.targetRepo);
+                                        }
+                                    }}>
+                                </sutram-async-btn>
+                                ${!this.hasPypiToken ? html`
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block;">
+                                        ⚠️ API token missing
+                                    </span>
+                                ` : ''}
+                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                                    ${!this.pypiPublished && this.hasRelease 
+                                        ? `Git release tag v${this.repoVersion || '0.1.0'} exists, but package '${this.packageName || this.targetRepo}' is not published on PyPI.org yet. Click above to build wheels and upload.` 
+                                        : `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.`}
+                                </div>
+                            ` : html`
+                                <sutram-async-btn 
+                                    style="width: 100%;" 
+                                    label="🚀 Step 2: Publish Release" 
+                                    intent="highlight" 
+                                    ?disabled=${!this.repoConfigured || !this.isClean || !this.hasPypiToken}
+                                    .onClick=${async () => await UpdateStore.getState().previewPublish(this.targetRepo)}>
+                                </sutram-async-btn>
+                                ${!this.hasPypiToken ? html`
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block;">
+                                        ⚠️ API token missing
+                                    </span>
+                                ` : ''}
+                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                                    <strong>Phase 2 (External Distribution):</strong>
+                                    <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
+                                        <li>Uploads compiled package files (<code>.whl</code> / <code>.tar.gz</code>) to PyPI.</li>
+                                        <li>Mints the official GitHub Release card UI with notes and attached binaries via API.</li>
+                                    </ol>
+                                </div>
+                            `}
+                        </div>
                     </div>
                 ` : ''}
-
-                <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px;">
-                    <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
-                        <sutram-async-btn 
-                            style="width: 100%;" 
-                            label="📦 Bump & Tag" 
-                            intent="primary" 
-                            ?disabled=${!this.repoConfigured || !this.isClean || !this.hasRelease}
-                            .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
-                        </sutram-async-btn>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Calculates the next version and commits the changelog.</span>
-                    </div>
-                    <div style="flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 5px;">
-                        <sutram-async-btn 
-                            style="width: 100%;" 
-                            label="🚀 Release" 
-                            intent="highlight" 
-                            ?disabled=${!this.repoConfigured || !this.isClean || !this.hasRelease}
-                            .onClick=${async () => await UpdateStore.getState().previewPublish(this.targetRepo)}>
-                        </sutram-async-btn>
-                        <span style="font-size: 0.75rem; color: var(--text-muted); text-align: center; line-height: 1.2;">Distributes the package to the configured registry.</span>
-                    </div>
-                </div>
-            </div>
-            <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText="Release Preview" @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed to the repository.</p>
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
-                        <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
-                            @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
-                            📝 Change Log
+                ${this.lastReleaseLog ? html`
+                    <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
+                        <button class="btn-sm" style="background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 8px 14px; font-weight: bold; cursor: pointer;"
+                            @click=${() => {
+                                UpdateStore.setState({
+                                    previewOutput: this.lastReleaseLog,
+                                    previewChangelog: 'Release Execution Log',
+                                    previewActionType: 'log_view',
+                                    previewModalOpen: true,
+                                    previewTab: 'full'
+                                });
+                            }}>
+                            👁️ View Last Release Log
                         </button>
+                    </div>
+                ` : ''}
+            </div>
+            <sutram-modal ?open=${this.previewModalOpen} ?fullscreen=${true} titleText=${this.previewActionType === 'log_view' ? 'Release Execution Log' : 'Release Preview'} @sutram-modal-closed=${() => UpdateStore.setState({ previewModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+                    <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">
+                        ${this.previewActionType === 'log_view' ? 'Execution log output for the release action.' : 'This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed to the repository.'}
+                    </p>
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                        ${this.previewActionType !== 'log_view' ? html`
+                            <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
+                                @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
+                                📝 Change Log
+                            </button>
+                        ` : ''}
                         <button class="btn-sm" style="background: ${this.previewTab === 'full' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'full' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
                             @click=${() => UpdateStore.setState({ previewTab: 'full' })}>
                             📋 Complete Report
                         </button>
                     </div>
-                    ${this.previewTab === 'changelog' ? html`
+                    ${this.previewTab === 'changelog' && this.previewActionType !== 'log_view' ? html`
                         <div class="output-box" style="margin-top: 0;">${this.previewChangelog}</div>
                     ` : html`
                         <div class="output-box" style="margin-top: 0;">${this.previewOutput}</div>
                     `}
                 </div>
-                <button slot="footer" class="btn-sm" style="background: var(--intent-neutral); color: white; border: none; padding: 10px 15px; font-weight: bold; border-radius: 4px; cursor: pointer;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>❌ Cancel</button>
-                <sutram-async-btn slot="footer" label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : '⚡ Confirm & Execute Bump'}" intent="success" .onClick=${async () => {
-                    UpdateStore.setState({ previewModalOpen: false });
-                    const action = this.previewActionType === 'publish' ? this._getPublishAction() : this._getBumpAction();
-                    await action();
-                }}></sutram-async-btn>
+                <button slot="footer" class="btn-sm" style="background: var(--intent-neutral); color: white; border: none; padding: 10px 15px; font-weight: bold; border-radius: 4px; cursor: pointer;" @click=${() => UpdateStore.setState({ previewModalOpen: false })}>
+                    ${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'}
+                </button>
+                ${this.previewActionType !== 'log_view' ? html`
+                    <sutram-async-btn slot="footer" label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : '⚡ Confirm & Execute Bump'}" intent="success" .onClick=${async () => {
+                        UpdateStore.setState({ previewModalOpen: false });
+                        const action = this.previewActionType === 'publish' ? this._getPublishAction() : this._getBumpAction();
+                        await action();
+                    }}></sutram-async-btn>
+                ` : ''}
             </sutram-modal>
         `;
     }
