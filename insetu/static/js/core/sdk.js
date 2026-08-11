@@ -24,11 +24,11 @@ export class InSetuElement extends SutramElement {
         workspaceId: { type: String },
         ecosystem: { type: Object }
     };
-
     constructor() {
         super();
         this.workspaceId = window.inSetu?.utils?.getActiveWorkspace() || 'default';
-        this.ecosystem = { allRepos: [], pinnedRepos: new Set(['ALL']), targetConfigs: [] };
+        /** @type {import('./types.js').WorkspaceConfig} */
+        this.ecosystem = { activeWorkspace: this.workspaceId, allRepos: [], pinnedRepos: new Set(['ALL']), targetConfigs: [] };
     }
 
     get extName() {
@@ -330,6 +330,12 @@ window.ExtensionRegistry.registerExtension = function(extName, config) {
     }
     _originalRegister(extName, config);
 
+    if (config.shortcuts) {
+        config.shortcuts.forEach(s => {
+            window.ExtensionRegistry.registerShortcut(s.context, s.key, s.action);
+        });
+    }
+
     if (config.settingsActions) {
         config.settingsActions.forEach(act => {
             let sectionName = 'Extensions';
@@ -402,8 +408,27 @@ window.inSetu.utils.serializeFrontmatter = function(yamlObj, markdownBody) {
     text += '---\n\n' + markdownBody;
     return text;
 };
+/**
+* Normalizes polymorphic entity data objects onto the SSOT EntityData contract.
+* @param {Object|string} data - Raw entity data object or path string.
+* @returns {import('./types.js').EntityData} Standardized EntityData payload.
+*/
+window.inSetu.utils.normalizeEntityData = function(data) {
+    if (!data) return { filepath: '' };
+    if (typeof data === 'string') return { filepath: data };
+
+    const rawPath = data.filepath || data.path || data.filename || '';
+    return {
+        ...data,
+        filepath: rawPath
+    };
+};
 
 window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null) {
+    if (!manifestData) return [];
+    const ctxManifest = manifestData.ctx || {};
+    const vfsManifest = manifestData.vfs || {};
+
     const extract = (data) => {
         if (Array.isArray(data)) return data;
         if (typeof data === 'object' && data !== null) {
@@ -413,11 +438,18 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
     };
 
     if (targetKey) {
-        return extract(manifestData[targetKey]);
+        let entry = ctxManifest[targetKey] || vfsManifest[targetKey] || manifestData[targetKey];
+        if (!entry && (targetKey.includes('/') || targetKey.includes('\\'))) {
+            const name = targetKey.split('/').pop();
+            entry = ctxManifest[name] || vfsManifest[name] || manifestData[name];
+        }
+        if (!entry) return [targetKey];
+        return extract(entry);
     }
 
     const allFiles = new Set();
-    Object.entries(manifestData).forEach(([k, v]) => {
+    const combined = (manifestData.ctx || manifestData.vfs) ? { ...vfsManifest, ...ctxManifest } : manifestData;
+    Object.entries(combined).forEach(([k, v]) => {
         if (typeof k === 'string' && k.endsWith('.txt')) allFiles.add(k);
         extract(v).forEach(f => {
             if (typeof f === 'string') allFiles.add(f);

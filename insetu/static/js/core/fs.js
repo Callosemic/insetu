@@ -152,7 +152,6 @@ export async function fetchAndDownloadState(filePath, explicitUrl = null) {
         throw e;
     }
 }
-
 export async function shareFiles(baseFile, chunks = null, isFS = false) {
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const filesToFetch = (chunks && chunks.length > 1) ? chunks : [baseFile];
@@ -163,9 +162,10 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
 
             if (!fetchUrl) {
                 const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
+                const cleanPath = filepath.replace(/^(ctx|system):\/\//, '');
                 fetchUrl = fileIsFS 
                     ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
-                    : `/download/${encodeURIComponent(filepath)}`;
+                    : `/download/${cleanPath.split('/').map(encodeURIComponent).join('/')}`;
             }
 
             const res = await fetch(fetchUrl, { headers: window.inSetu.api._getHeaders(true) });
@@ -258,7 +258,9 @@ function updateManifestState(oldPath, newPath = null) {
     const normNewPath = cleanPath(newPath);
 
     if (normOldPath) {
-        ['vfs', 'ctx'].forEach(manifestKey => {
+        // Stage 1 Isolation: Optimistically mutate Stage 1 VFS manifest only.
+        // Stage 2 CTX manifests are downstream artifacts recompiled asynchronously.
+        ['vfs'].forEach(manifestKey => {
             Object.keys(newManifest[manifestKey]).forEach(key => {
                 const obj = newManifest[manifestKey][key];
                 if (obj.files) {
@@ -545,11 +547,9 @@ export const getGlobalManifest = () => {
     const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
     const vfsManifest = state.manifest?.vfs || {};
-    const ctxManifest = state.manifest?.ctx || {};
 
     const allFiles = Array.from(new Set([
-        ...Object.values(vfsManifest).flatMap(obj => obj.files || []),
-        ...Object.values(ctxManifest).flatMap(obj => obj.files || [])
+        ...Object.values(vfsManifest).flatMap(obj => obj.files || [])
     ]));
 
     // Let extensions inject their own system artifacts (e.g. Prompts)
@@ -598,18 +598,15 @@ export class InSetuVFSExplorer extends InSetuElement {
                 const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
                 const vfsManifest = state.manifest?.vfs || {};
-                const ctxManifest = state.manifest?.ctx || {};
 
-                [vfsManifest, ctxManifest].forEach(subManifest => {
-                    Object.values(subManifest).forEach(obj => {
-                            if (obj.files) {
-                                obj.files.forEach(f => {
-                                    if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
-                                        allFiles.add(f);
-                                    }
-                                });
+                Object.values(vfsManifest).forEach(obj => {
+                    if (obj.files) {
+                        obj.files.forEach(f => {
+                            if (validPrefixes.length === 0 || validPrefixes.some(prefix => f.startsWith(prefix))) {
+                                allFiles.add(f);
                             }
-                    });
+                        });
+                    }
                 });
 
                 if (targetConfigs) {
@@ -734,6 +731,32 @@ customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
 window.ExtensionRegistry.registerExtension('files', {
     name: "Virtual File System",
     version: "2.0.0",
+    shortcuts: [
+        {
+            context: 'global',
+            key: 'escape',
+            label: 'Close File Modal',
+            action: () => {
+                const fsStore = window.inSetu?.stores?.Fs;
+                if (fsStore && fsStore.getState().fileModal?.open) {
+                    if (window.inSetu?.ui?.closeFileModal) window.inSetu.ui.closeFileModal();
+                    else fsStore.setState({ fileModal: { ...fsStore.getState().fileModal, open: false } });
+                }
+            }
+        },
+        {
+            context: 'modal:file-modal',
+            key: 'ctrl+s',
+            label: 'Save Active File',
+            action: () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false)
+        },
+        {
+            context: 'modal:new-file-modal',
+            key: 'ctrl+s',
+            label: 'Save New File',
+            action: () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile()
+        }
+    ],
     entityActions: [
         {
             targetEntity: 'file',
@@ -813,25 +836,34 @@ window.ExtensionRegistry.registerExtension('files', {
                 }
 
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+
                 await shareFiles(data.filepath, chunks, data.isFS);
             }
         },
         {
             targetEntity: 'file',
+            id: 'file-view-parts',
+            label: 'View Parts',
+            icon: '🧩',
+            intent: 'neutral',
+            order: 105,
+            match: (data) => {
+                if (data.isSkeleton) return false;
+                // Fast-path: Utilize the pre-computed chunks array passed by the UI cards
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath ? data.filepath.split('/').pop() : null);
+                return chunks && chunks.length > 1;
+            },
+            onClick: (data, e) => {
+                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
+                window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: basename } }));
+            }
+        },
+        {
+            targetEntity: 'file',
             id: 'file-download',
-            label: (data) => {
-                if (data.chunks && data.chunks.length > 1) return 'View Parts';
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
-                return (chunks && chunks.length > 1) ? 'View Parts' : 'Download';
-            },
-            icon: (data) => {
-                if (data.chunks && data.chunks.length > 1) return '📦';
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
-                return (chunks && chunks.length > 1) ? '📦' : '⬇️';
-            },
+            label: 'Download',
+            icon: '⬇️',
             intent: 'primary',
             order: 100,
             match: (data) => !data.isSkeleton,
@@ -845,16 +877,23 @@ window.ExtensionRegistry.registerExtension('files', {
                 const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
 
                 if (chunks && chunks.length > 1) {
-                    window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: basename } }));
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
+                    for (const f of chunks) {
+                        const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                        const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                        await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                        await new Promise(r => setTimeout(r, 300));
+                    }
                 } else {
                     let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
 
                     // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                     if (!fetchUrl) {
                         const activeWs = window.inSetu.utils.getActiveWorkspace();
+                        const cleanPath = data.filepath.replace(/^(ctx|system):\/\//, '');
                         fetchUrl = data.isFS 
                             ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
-                            : `/download/${encodeURIComponent(data.filepath)}`;
+                            : `/download/${cleanPath.split('/').map(encodeURIComponent).join('/')}`;
                     }
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
@@ -1666,42 +1705,47 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
-<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} @sutram-modal-closed=${closeBrowseModal}>
+<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:'))} style="${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? '--modal-backdrop: transparent; --modal-backdrop-filter: none;' : ''}" @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
-            <div style="display: flex; flex-direction: column; padding: 15px; overflow-y: auto; flex: 1;">
-                <div style="display: flex; flex-direction: column; gap: 10px;">
-                    ${(m.browser?.manifest || []).map((f, idx) => {
-                        const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                        const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+            <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">
+                ${(() => {
+                    const manifest = m.browser?.manifest || [];
+                    if (manifest.length === 0) return '';
+                    const baseFile = manifest[0];
+                    const baseCleanName = baseFile.includes('/') ? baseFile.split('/').pop() : baseFile;
+                    return html`
+                        <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); border-bottom: 1px solid var(--border); padding: 15px 20px; flex-shrink: 0;">
+                            <span style="font-size: 1.2rem; flex-shrink: 0;">📦</span>
+                            <span style="font-weight: bold; color: var(--intent-highlight); word-break: break-all;">${baseCleanName}</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column;">
+                            ${manifest.map((f, idx) => {
+                                const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                                const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                                const partMatch = cleanName.match(/_part(\d+)/i);
+                                const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
 
-                        let displayTitle = cleanName;
-                        if (idx > 0) {
-                            const partMatch = cleanName.match(/_part(\d+)/i);
-                            displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
-                        }
-
-                        return html`
-                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--input-bg); border: 1px solid var(--border); padding: 10px 15px; border-radius: 6px;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <span style="font-size: 1.2rem;">${idx === 0 ? "📦" : "🧩"}</span>
-                                    <div style="display: flex; flex-direction: column;">
-                                        <span style="font-weight: bold; color: ${idx === 0 ? 'var(--intent-highlight)' : 'var(--text)'};">${displayTitle}</span>
-                                        ${idx !== 0 ? html`<span style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;">${cleanName}</span>` : ''}
+                                return html`
+                                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); border-bottom: 1px solid var(--border); padding: 12px 20px;">
+                                        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                                            <span style="font-size: 1.2rem; flex-shrink: 0;">🧩</span>
+                                            <span style="font-weight: bold; color: var(--text);">${displayTitle}</span>
+                                        </div>
+                                        <sutram-async-btn
+                                            label="⬇️ Download"
+                                            intent="primary"
+                                            style="margin: 0; padding: 6px 12px; font-size: 0.85rem; flex-shrink: 0;"
+                                            .onClick=${async () => {
+                                                await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                            }}>
+                                        </sutram-async-btn>
                                     </div>
-                                </div>
-                                <sutram-async-btn
-                                    label="⬇️ Download"
-                                    intent="primary"
-                                    style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
-                                    .onClick=${async () => {
-                                        await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
-                                    }}>
-                                </sutram-async-btn>
-                            </div>
-                        `;
-                    })}
-                </div>
+                                `;
+                            })}
+                        </div>
+                    `;
+                })()}
             </div>
         ` : html`
             <insetu-file-tree 

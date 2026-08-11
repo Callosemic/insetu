@@ -506,6 +506,19 @@ if (!document.getElementById('insetu-config-root')) {
 window.ExtensionRegistry.registerExtension('config', {
     name: "Workspace Configuration",
     version: "2.0.0",
+    shortcuts: [
+        {
+            context: 'modal:config-editor-modal',
+            key: 'ctrl+s',
+            label: 'Save Workspace Config',
+            action: () => {
+                const cfgEl = document.getElementById('insetu-config-root');
+                if (cfgEl && cfgEl.saveConfig) {
+                    cfgEl.saveConfig({ target: { innerText: '💾 Save & Remap Disk' }});
+                }
+            }
+        }
+    ],
     entityActions: [
         {
             targetEntity: 'system_control',

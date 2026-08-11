@@ -340,12 +340,12 @@ export class InSetuExtBridge extends InSetuElement {
             const textVal = BridgeStore.getState().getCompiledPayload();
             BridgeStore.setState({ viewMode: 'console', consoleOutput: "Dispatching transaction to the Bridge...", telemetry: null });
             const activeFiles = BridgeStore.getState().getActiveFiles();
+
             const action = this.api.bindJobAction('sync', {
                 text: textVal,
                 active_files: activeFiles,
                 dry_run: dryRunActive,
                 pinned_repos: Array.from(this.ecosystem.pinnedRepos),
-                force: Boolean(bypassSandwich || this._globalBypassSandwich || overridePayload.force),
                 ...overridePayload
             }, {
                 interval: 250,
@@ -392,12 +392,7 @@ export class InSetuExtBridge extends InSetuElement {
             const cells = BridgeStore.getState().cells;
             const target = cells.find(c => c.file === oldPath);
             if (target) BridgeStore.getState().updateGroupFile(oldPath, newPath);
-            // Semantically correct: Pass the explicit file array the VFS engine requires
-            this._getSyncAction(this._lastDryRun || false, true, { 
-                force: true, 
-                confirmed_overwrites: [newPath],
-                confirmed_candidates: { [oldPath]: newPath }
-            })();
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             if (this.vfs && this.vfs.openVirtualFile) this.vfs.openVirtualFile('Diff_Analysis.diff', decodedDiff);
@@ -410,21 +405,19 @@ export class InSetuExtBridge extends InSetuElement {
             this.vfs.fetchAndDownloadState(btn.dataset.file);
         } else if (action === 'force-sync' || action === 'ignore-syntax') {
             const isDryRun = btn.dataset.dryrun === 'true';
-            this._getSyncAction(isDryRun, true, { force: true, ignore_syntax_errors: true })();
+            this._getSyncAction(isDryRun, true)();
         } else if (action === 'deselect-patch') {
-            const pIdx = parseInt(btn.dataset.idx, 10);
-            const activeCells = BridgeStore.getState().cells.filter(c => c.active);
-            if (activeCells[pIdx]) {
-                BridgeStore.getState().toggleCellActive(activeCells[pIdx].id);
-            }
+            const oldPath = btn.dataset.old;
+            this._handleParentToggle(oldPath);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deep-search') {
-            this._getSyncAction(this._lastDryRun || false, true, { allow_deep_search: true, force: true })();
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
         }
     }
     _renderTelemetry() {
         const t = this.telemetry;
         if (!t) return html`<div id="status-box" style="width: 100%; font-family: var(--font-mono); white-space: pre-wrap; color: var(--text);" .innerHTML=${this.consoleOutput}></div>`;
+
         return html`
             <div style="width: 100%; display: flex; flex-direction: column;">
                 <h3 style="color: ${t.can_commit ? 'var(--intent-success)' : 'var(--intent-warning)'}; margin-top: 0;">
@@ -433,7 +426,6 @@ export class InSetuExtBridge extends InSetuElement {
                 <p style="color: var(--text-muted); font-size: 0.9rem;">
                     Total: ${t.summary?.total_patches || 0} | Resolved: ${t.summary?.resolved || 0} | Skipped: ${t.summary?.auto_skipped || 0} | Failed: ${t.summary?.failed || 0}
                 </p>
-                ${t.message ? html`<div style="margin-top: 10px; padding: 12px; background: var(--input-bg); border-left: 4px solid var(--intent-warning); border-radius: 4px; color: var(--text); font-weight: bold;">${t.message}</div>` : ''}
                 <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 20px;">
                     ${(() => {
                         const safePatches = t.patches || [];
@@ -506,11 +498,8 @@ export class InSetuExtBridge extends InSetuElement {
                                                     ${p.available_actions?.includes('ignore_syntax_error') ? html`
                                                         <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
                                                     ` : ''}
-                                                    ${p.available_actions?.includes('confirm_candidate') && (!p.candidates || p.candidates.length === 0) ? html`
-                                                        <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${p.original_file}" class="btn-sm" style="background: var(--intent-warning); color: #000;">⚠️ Confirm Overwrite</button>
-                                                    ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
-                                                        <button data-action="deselect-patch" data-old="${p.original_file}" data-idx="${p.patch_index}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
+                                                        <button data-action="deselect-patch" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
                                                     ` : ''}
                                                 </div>
                                             </div>
@@ -677,7 +666,7 @@ export class InSetuExtBridge extends InSetuElement {
                         <sutram-async-btn label="⚡ Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false)}></sutram-async-btn>
                     ` : html`
                         <button @click=${() => BridgeStore.setState({ viewMode: 'input' })} style="flex: 1; margin: 0; padding: 12px; border-radius: 6px; font-size: 0.95rem; font-weight: normal; border: none; cursor: pointer; background: var(--intent-neutral); color: white;">🔙 Back to Edit</button>
-                        ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode === 'dry_run' ? html`
+                        ${this.telemetry && this.telemetry.can_commit && this.telemetry.mode !== 'live' ? html`
                             <sutram-async-btn label="⚡ Apply Patch" intent="success" style="flex: 1; margin: 0; --btn-padding: 12px; --btn-border-radius: 6px; --btn-font-size: 0.95rem; color: white;" .onClick=${this._getSyncAction(false, true, { force: true, ignore_syntax_errors: true, confirmed_candidates: Object.fromEntries(BridgeStore.getState().getActiveFiles().map(f => [f, f])) })}></sutram-async-btn>
                         ` : ''}
                     `}
@@ -930,10 +919,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             order: 10,
             asyncAction: async (data) => {
                 if (!confirm(`Undo this entire turn? All ${data.records.length} files will be restored to their pre-turn state.`)) return;
-                const res = await window.inSetu.api.workspace('bridge/revert', {
-                    method: 'POST',
-                    body: JSON.stringify({ transaction_id: data.transaction_id, target_state: 'initial' })
-                });
+                const res = await window.inSetu.api.post('bridge/revert', { transaction_id: data.transaction_id, target_state: 'initial' });
                 if (!res.ok) {
                     const err = await res.json().catch(()=>({}));
                     throw new Error(err.error || "Undo turn failed.");
@@ -952,10 +938,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             order: 20,
             asyncAction: async (data) => {
                 if (!confirm(`Restore all ${data.records.length} files to their end state at the completion of this turn?`)) return;
-                const res = await window.inSetu.api.workspace('bridge/revert', {
-                    method: 'POST',
-                    body: JSON.stringify({ transaction_id: data.transaction_id, target_state: 'final' })
-                });
+                const res = await window.inSetu.api.post('bridge/revert', { transaction_id: data.transaction_id, target_state: 'final' });
                 if (!res.ok) {
                     const err = await res.json().catch(()=>({}));
                     throw new Error(err.error || "Turn restore failed.");
@@ -1013,10 +996,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             order: 10,
             asyncAction: async (data) => {
                 if (!confirm(`Revert ${data.filepath} to its state BEFORE this patch?`)) return;
-                const res = await window.inSetu.api.workspace('bridge/revert', {
-                    method: 'POST',
-                    body: JSON.stringify({ patch_id: data.patch_id, target_state: 'initial' })
-                });
+                const res = await window.inSetu.api.post('bridge/revert', { patch_id: data.patch_id, target_state: 'initial' });
                 if (!res.ok) {
                     const err = await res.json().catch(()=>({}));
                     throw new Error(err.error || "Revert failed.");
@@ -1035,10 +1015,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             order: 15,
             asyncAction: async (data) => {
                 if (!confirm(`Revert ${data.filepath} to its state AFTER this patch?`)) return;
-                const res = await window.inSetu.api.workspace('bridge/revert', {
-                    method: 'POST',
-                    body: JSON.stringify({ patch_id: data.patch_id, target_state: 'final' })
-                });
+                const res = await window.inSetu.api.post('bridge/revert', { patch_id: data.patch_id, target_state: 'final' });
                 if (!res.ok) {
                     const err = await res.json().catch(()=>({}));
                     throw new Error(err.error || "Revert failed.");

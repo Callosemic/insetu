@@ -383,10 +383,10 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                     },
                     bubbles: true, composed: true
                 }));
-
                 this._yamlData = { ...latestYaml };
                 this._originalYaml = JSON.stringify(latestYaml);
                 this._isDirty = false;
+                this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: false }, bubbles: true, composed: true }));
             } else {
                 throw new Error("Failed to read file.");
             }
@@ -409,6 +409,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         const contentDirty = (this._content.trim() !== this._originalContent.trim());
         const yamlDirty = (JSON.stringify(latestYaml) !== this._originalYaml);
         this._isDirty = contentDirty || yamlDirty;
+        this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: this._isDirty }, bubbles: true, composed: true }));
         this.requestUpdate();
     }
 
@@ -435,6 +436,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 this._originalContent = this._content.trim();
                 this._originalYaml = JSON.stringify(latestYaml);
                 this._isDirty = false;
+                this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: false }, bubbles: true, composed: true }));
                 this.requestUpdate();
 
                 window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
@@ -509,25 +511,6 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         }}>
                     </insetu-markdown-editor>
                 </div>
-
-                <!-- Unified Single-Row Footer Bar -->
-                <div class="footer-row">
-                    <slot name="footer-left">
-                        <button class="btn-sm btn-truncate" style="background: var(--intent-danger); color: white; margin: 0; flex-shrink: 0;" @click=${() => this.dispatchEvent(new CustomEvent('insetu:editor-delete', { bubbles: true, composed: true }))}>🗑️ Delete</button>
-                    </slot>
-                    <div class="footer-btn-group">
-                        <slot name="footer-middle">
-                            <button class="btn-sm btn-truncate" style="background: var(--intent-warning); color: black; margin: 0; flex-shrink: 1;" @click=${() => this.dispatchEvent(new CustomEvent('insetu:editor-raw-edit', { bubbles: true, composed: true }))}>📝 Raw Edit</button>
-                        </slot>
-                        ${this._isDirty ? html`
-                            <sutram-async-btn 
-                                label="💾 Save" 
-                                intent="success" 
-                                .onClick=${() => this._handleSave()}>
-                            </sutram-async-btn>
-                        ` : ''}
-                    </div>
-                </div>
             </div>
         `;
     }
@@ -539,6 +522,21 @@ if (!customElements.get('insetu-frontmatter-editor')) {
 if (window.ExtensionRegistry) {
     window.ExtensionRegistry.registerExtension('editor', {
         name: "Editor Preferences",
-        version: "2.0.0"
+        version: "2.0.0",
+        shortcuts: [
+            {
+                context: 'element:textarea',
+                key: 'tab',
+                label: 'Indent (4 Spaces)',
+                action: (e) => {
+                    const el = e.target;
+                    const start = el.selectionStart;
+                    const end = el.selectionEnd;
+                    el.value = el.value.substring(0, start) + "    " + el.value.substring(end);
+                    el.selectionStart = el.selectionEnd = start + 4;
+                    el.dispatchEvent(new Event('input'));
+                }
+            }
+        ]
     });
 }

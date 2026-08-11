@@ -405,9 +405,15 @@ window.ExtensionRegistry.registerExtension('gather', {
                     const artifact = await packSelectionPayload(items);
                     window.inSetu.stores.Selection.getState().clearSelection();
                     if (artifact.chunks && artifact.chunks.length > 1) {
-                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Opening Parts...", 2000);
-                        if (window.inSetu.sys && window.inSetu.sys.switchTab) window.inSetu.sys.switchTab(null, 'context');
-                        window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: artifact.base_filename } }));
+                        if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
+                        for (const f of artifact.chunks) {
+                            const cleanName = f.includes('/') ? f.split('/').pop() : f;
+                            const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                            if (window.inSetu.vfs.fetchAndDownloadState) {
+                                await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                await new Promise(r => setTimeout(r, 300));
+                            }
+                        }
                     } else {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
                         if (window.inSetu.vfs.fetchAndDownloadState) {
