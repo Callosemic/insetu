@@ -4,6 +4,28 @@ import json
 import subprocess
 from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree
 from insetu.kernel.hooks import hooks
+import threading
+
+_NATIVE_VFS_WRITES = {}
+_WATCHDOG_TIMERS = {}
+_WATCHDOG_DEBOUNCE_WINDOW = 10.0
+
+@hooks.on('vfs_mutated')
+def _track_native_vfs_writes(mutations=None, **kwargs):
+    """Records native VFS mutations to prevent watchdog double-fires and cancels pending watchdog events."""
+    if not mutations: return
+    import time
+    now = time.time()
+    for m in mutations:
+        if not m.get("is_watchdog"):
+            filepath = m.get("filepath")
+            if filepath:
+                _NATIVE_VFS_WRITES[filepath] = now
+                # Cancel any pending watchdog timer since the VFS natively handled it
+                if filepath in _WATCHDOG_TIMERS:
+                    _WATCHDOG_TIMERS[filepath].cancel()
+                    del _WATCHDOG_TIMERS[filepath]
+
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
     # Fast path: Check if ANY workspace has watchdog enabled before importing or instantiating
@@ -41,27 +63,45 @@ def start_filesystem_observer(workspace_ids):
             try:
                 rel_to_target = os.path.relpath(src_path, self.target_path).replace('\\', '/')
                 logical_path = f"{self.repo_dir}/{rel_to_target}"
-
                 # CPU Optimization: Drop events for ignored directories/patterns before waking the Event Bus
                 parts = set(p.lower() for p in logical_path.split('/'))
                 if parts.intersection(self.ignore_dirs): return
                 if any(pattern in logical_path for pattern in self.ignore_patterns): return
                 op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
+                import time
+                now = time.time()
 
-                print(f"👀 [Watchdog] Caught '{op}' on: {logical_path}")
+                # Deduplication 1: Was this file recently modified natively by our own VFS?
+                if now - _NATIVE_VFS_WRITES.get(logical_path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                    return
 
-                # Persistent CQRS Ledger Write
-                try:
-                    from insetu.kernel.db import get_connection
-                    import time
-                    w_conn = get_connection("workers", workspace_id=self.workspace_id)
-                    w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, op, time.time()))
-                    w_conn.commit()
-                except Exception:
-                    pass
+                # Deduplication 2: Trailing Debounce for external edits
+                if logical_path in _WATCHDOG_TIMERS:
+                    _WATCHDOG_TIMERS[logical_path].cancel()
 
-                # Emit standard agnostic event bus payload instead of hardcoded SQLite writes
-                hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=[{"filepath": logical_path, "operation": op, "ignore_ledger": False}])
+                def _emit_debounced():
+                    # Final Guardrail: Ensure the VFS didn't touch it while the timer was ticking
+                    if time.time() - _NATIVE_VFS_WRITES.get(logical_path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                        return
+
+                    print(f"👀 [Watchdog] Caught '{op}' on: {logical_path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
+                    try:
+                        from insetu.kernel.db import get_connection
+                        w_conn = get_connection("workers", workspace_id=self.workspace_id)
+                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, op, time.time()))
+                        w_conn.commit()
+                    except Exception:
+                        pass
+
+                    hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=[{"filepath": logical_path, "operation": op, "ignore_ledger": False, "is_watchdog": True}])
+
+                    if logical_path in _WATCHDOG_TIMERS:
+                        del _WATCHDOG_TIMERS[logical_path]
+
+                timer = threading.Timer(_WATCHDOG_DEBOUNCE_WINDOW, _emit_debounced)
+                _WATCHDOG_TIMERS[logical_path] = timer
+                timer.start()
+
             except Exception:
                 pass
 

@@ -66,8 +66,7 @@ def bridge_revert(ctx):
             if r['filepath'] not in seen:
                 targets.append(r)
                 seen.add(r['filepath'])
-
-    import uuid, time, hashlib, zlib
+    import uuid, time, hashlib, zlib, json
     from insetu.kernel.vfs import VFSTransaction
     from insetu.core.bridge.bridge_fuzzy import apply_block_in_memory
 
@@ -91,15 +90,23 @@ def bridge_revert(ctx):
             else:
                 content = ""
                 start_ts = 0
-
             # 2. Replay patches forward in memory
             patch_op = "<" if is_initial else "<="
-            patches = ctx.db.execute(f"SELECT search_block, replace_block FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp {patch_op} ? ORDER BY timestamp ASC", (filepath, start_ts, target_ts)).fetchall()
+            patches = ctx.db.execute(f"SELECT search_block, replace_block, chunks_json FROM bridge_ledger WHERE filepath=? AND timestamp >= ? AND timestamp {patch_op} ? ORDER BY timestamp ASC", (filepath, start_ts, target_ts)).fetchall()
 
             for p in patches:
-                block = {"search": p["search_block"], "replace": p["replace_block"]}
-                ok, new_content, _ = apply_block_in_memory(content, block, silent=True)
-                if ok: content = new_content
+                chunks = []
+                if p["chunks_json"]:
+                    try:
+                        chunks = json.loads(p["chunks_json"])
+                    except Exception:
+                        pass
+                if not chunks:
+                    chunks = [{"search": p["search_block"], "replace": p["replace_block"]}]
+
+                for block in chunks:
+                    ok, new_content, _ = apply_block_in_memory(content, block, silent=True)
+                    if ok: content = new_content
 
             # 3. Snapshot current state and save reconstructed state as a new transaction
             current_on_disk = vfs.read(filepath) or ""
@@ -110,11 +117,10 @@ def bridge_revert(ctx):
 
             new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
             repo = filepath.split('/')[0] if '/' in filepath else ""
-
             ctx.db.execute('''
-                INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT TO {target['transaction_id']}", content, post_patch_hash, 1, compressed_state, time.time()))
+                INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (new_patch_id, new_tx_id, repo, filepath, f"<<<<<<< REVERT TO {target['transaction_id']}", content, post_patch_hash, 1, compressed_state, time.time(), time.time() + 172800.0))
 
             vfs.save(filepath, content)
             reverted_count += 1

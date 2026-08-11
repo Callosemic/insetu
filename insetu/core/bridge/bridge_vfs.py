@@ -16,10 +16,9 @@ from insetu.core.utils_core import get_sister_repos
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
 from insetu.kernel.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
-
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
-    from insetu.kernel.extension import ExtensionContext
-    ctx = ExtensionContext('bridge', workspace_id)
+    from insetu.core.bridge.engine_bridge import bridge_bp
+    ctx = bridge_bp.get_context(workspace_id)
     raw_text = clean_chevron_meltdown(data.get("text", ""))
     active_files = data.get("active_files", [])
     dry_run = data.get("dry_run", False)

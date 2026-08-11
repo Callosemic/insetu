@@ -122,10 +122,9 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
         # Pass 1: Preserve (checking disk and Git history)
         comments = extract_existing_comments(index_path, repo_path)
-
         # Pass 2: SSOT Read (Strictly query the Topology Ledger)
-        from insetu.kernel.extension import ExtensionContext
-        top_ctx = ExtensionContext('topology', workspace_id)
+        from insetu.core.topology.engine_topology import topology_bp
+        top_ctx = topology_bp.get_context(workspace_id)
         rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
 
         valid_files = []

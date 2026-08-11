@@ -29,12 +29,12 @@ register_schema('vfs_index', {
     }
 })
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
-
 GATHER_SETTINGS_SCHEMA = [
     {
         "id": "max_context_size_kb",
         "label": "Max Context Size (KB)",
         "type": "number",
+        "scope": "workspace",
         "default": 0,
         "description": "Set to 0 to disable chunking. Context files exceeding this limit will be cleanly split into numbered parts."
     }
@@ -131,15 +131,13 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     manifest_entry["meta"]["out_file"] = base_filename
     return manifest_entry
 SYSTEM_BOOT_TIME = time.time()
-
 @hooks.on('topology_resolved')
 def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=None, events=None, **kwargs):
     """Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation."""
     if not events: return
 
-    from insetu.kernel.extension import ExtensionContext
-    w_ctx = ExtensionContext('workers', workspace_id)
-    conn = w_ctx.db
+    from insetu.kernel.db import get_connection
+    conn = get_connection('workers', workspace_id=workspace_id)
     # The delayed compilation job ID. We use a static ID per workspace to coalesce updates.
     job_id = f"cmp_del_{workspace_id}"
 
@@ -168,13 +166,13 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
     """, (job_id, run_at, args_json))
     conn.commit()
 def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=None, **kwargs):
-    from insetu.kernel.extension import ExtensionContext
+    from insetu.kernel.db import get_connection
     ctx = gather_bp.get_context(workspace_id)
 
     # Self-destruct the one-off scheduled job so the metronome doesn't infinitely loop it
-    w_ctx = ExtensionContext('workers', workspace_id)
-    w_ctx.db.execute("DELETE FROM jobs WHERE id=?", (f"cmp_del_{workspace_id}",))
-    w_ctx.db.commit()
+    w_conn = get_connection('workers', workspace_id=workspace_id)
+    w_conn.execute("DELETE FROM jobs WHERE id=?", (f"cmp_del_{workspace_id}",))
+    w_conn.commit()
 
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
@@ -293,7 +291,7 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
 def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Base Workspace Provider: Yields schemas for standard repo contexts and media vaults."""
     from insetu.core.utils_core import get_safe_repo_id
-    from insetu.kernel.extension import ExtensionContext
+    from insetu.core.topology.engine_topology import topology_bp
 
     ctx = gather_bp.get_context(workspace_id)
     cfg = ctx.config
@@ -304,7 +302,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     debug_log_lines = [f"=== GATHER TOPOLOGY RUN {time.time()} ==="]
     target_configs = [c for c in cfg.get("target_repos", []) if not c.get("exclude_from_context") and (not target_repos or c.get("repo_dir") in target_repos)]
 
-    top_ctx = ExtensionContext('topology', workspace_id)
+    top_ctx = topology_bp.get_context(workspace_id)
 
     for config in target_configs:
         repo_dir = config.get("repo_dir")
