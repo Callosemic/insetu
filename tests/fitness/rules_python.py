@@ -20,6 +20,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         if 'id' in dict_keys and isinstance(dict_keys['id'], ast.Constant) and isinstance(dict_keys['id'].value, str):
             setting_id = dict_keys['id'].value.lower()
+
             sensitive_keywords = ['api_key', 'secret', 'password', 'token']
             if any(kw in setting_id for kw in sensitive_keywords):
                 secure_val = dict_keys.get('secure')
@@ -33,18 +34,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         f"Setting field '{setting_id}' contains sensitive keywords but is missing 'secure': True."
                     )
 
-    if 'id' in dict_keys and 'scope' in dict_keys:
-        scope_val = dict_keys['scope']
-        if isinstance(scope_val, ast.Constant) and isinstance(scope_val.value, str):
-            valid_scopes = {'workspace', 'daemon', 'repo'}
-            if scope_val.value not in valid_scopes:
-                report_violation(
-                    "SETTINGS_SCHEMA_SCOPE_VALIDATION",
-                    self.filepath,
-                    node.lineno,
-                    f"Invalid settings scope '{scope_val.value}'. Must be one of {valid_scopes}."
-                )
-    self.generic_visit(node)
+            # Hierarchical Scope Enforcement
+            if 'label' in dict_keys and 'type' in dict_keys:
+                if 'scope' not in dict_keys:
+                    report_violation(
+                        "SETTINGS_SCOPE_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        f"Setting field '{setting_id}' is missing the mandatory 'scope' parameter ('daemon', 'workspace', or 'repo')."
+                    )
+
+        self.generic_visit(node)
 
     def visit_Subscript(self, node):
         if self.filename not in ('extension.py', 'engine_hooks.py'):
@@ -244,6 +244,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
+            if node.module in ('typing', 'typing_extensions'):
+                banned_type_aliases = {'WorkspaceID', 'FilePath', 'TenantPath', 'VFSStorageEngine'}
+                imported = {alias.name for alias in node.names}
+                overlap = banned_type_aliases.intersection(imported)
+                if overlap:
+                    report_violation(
+                        "TYPE_CONTRACT_IMPORT_MANDATE",
+                        self.filepath,
+                        node.lineno,
+                        f"Redundant type alias imports {overlap} detected. Import canonical type contracts from 'insetu.kernel.types' instead."
+                    )
             if node.module in ('insetu.sdk', 'insetu.utils', 'insetu.hooks', 'insetu.workers'):
                 report_violation("DEPRECATED_TIER_IMPORT", self.filepath, node.lineno, f"Extension imports from un-tiered '{node.module}'. Import from 'insetu.core.sdk' or 'insetu.kernel.*' instead.")
             if node.module == 'flask' and any(alias.name == 'Blueprint' for alias in node.names):

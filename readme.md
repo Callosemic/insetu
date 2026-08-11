@@ -161,7 +161,7 @@ Read the long-form essays exploring the philosophy, sociology, and zero-bundler 
 
 Building deterministic AI pipelines, local developer environments, or custom Pydantic guardrails for hardware/software products?
 
-* **Book a 15-minute discovery call:** [Cal.com / Booking Link](https://cal.com/callosemic)
+* **Book a 15-minute discovery call:** [Cal.com / Booking Link](https://cal.com/jrnguyen)
 * **Direct Contact:** `hello@insetu.dev`
 
 ---

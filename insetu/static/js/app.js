@@ -65,26 +65,7 @@ initShortcutRouter(window.ExtensionRegistry, () => {
     return contexts;
 });
 // Default OS Shortcut Registrations
-window.ExtensionRegistry.registerShortcut('global', 'escape', () => {
-    // Components utilizing <insetu-modal> (which wraps <yenvui-modal>) natively handle Escape key teardowns via the HTML5 <dialog> API.
-    // For the global VFS file modal, we ensure its state syncs to closed in the Zustand store.
-    const fsStore = window.inSetu?.stores?.Fs;
-    if (fsStore && fsStore.getState().fileModal?.open) {
-        fsStore.getState().setModal('fileModal', { open: false });
-    }
-});
-window.ExtensionRegistry.registerShortcut('element:textarea', 'tab', (e) => {
-    const el = e.target;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    el.value = el.value.substring(0, start) + "    " + el.value.substring(end);
-    el.selectionStart = el.selectionEnd = start + 4;
-    el.dispatchEvent(new Event('input'));
-});
-// Map Cmd/Ctrl + S contextually depending on which modal is currently visible
-window.ExtensionRegistry.registerShortcut('modal:file-modal', 'ctrl+s', () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false));
-window.ExtensionRegistry.registerShortcut('modal:new-file-modal', 'ctrl+s', () => window.inSetu.ui.saveNewFile && window.inSetu.ui.saveNewFile());
-window.ExtensionRegistry.registerShortcut('modal:config-editor-modal', 'ctrl+s', () => document.getElementById('config-editor-save')?.click());
+
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};

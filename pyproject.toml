@@ -1,12 +1,13 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
 [project]
 name = "insetu"
 version = "0.11.0"
 description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
 readme = "readme.md"
-authors = [{ name = "inSetu Contributors", email = "hello@insetu.io" }]
+authors = [{ name = "inSetu Contributors", email = "hello@insetu.dev" }]
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 classifiers = [
@@ -21,11 +22,12 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Topic :: Software Development :: User Interfaces",
 ]
+
+# Core Substrate & Kernel Dependencies (Required for base OS boot)
 dependencies = [
-    "Flask>=3.0.0",
-    "flask-sock>=0.6.0",
-    "watchdog>=3.0.0",
-    "cryptography>=41.0.0"
+    "Flask>=3.0.0",          # Tier 1 Kernel: REST routing & application engine
+    "cryptography>=41.0.0",  # Tier 1 Kernel: Fernet encryption for secrets.json
+    "watchdog>=3.0.0",      # Tier 1 VFS: Native filesystem event observer
 ]
 
 [project.urls]
@@ -33,19 +35,44 @@ Homepage = "https://github.com/Callosemic/insetu"
 Repository = "https://github.com/Callosemic/insetu.git"
 Documentation = "https://github.com/Callosemic/insetu#readme"
 "Bug Tracker" = "https://github.com/Callosemic/insetu/issues"
+# Opt-in Extension Dependencies (Grouped by feature domain)
 [project.optional-dependencies]
+term = [
+    "flask-sock>=0.6.0",      # engine_term: PTY WebSocket streaming
+]
+freshdesk = [
+    "mistune>=3.0.0",         # engine_freshdesk: Converts Markdown reply bodies to HTML
+]
+research = [
+    "beautifulsoup4>=4.12.0", # engine_ingest / engine_research: HTML scraping
+    "markdownify>=0.11.0",     # engine_ingest: HTML to Markdown conversion
+    "playwright>=1.40.0",     # engine_research: Headless web triage
+]
+format = [
+    "jsbeautifier>=1.14.0",   # engine_format: JS/JSON/CSS code formatting
+    "autopep8>=2.0.0",        # engine_format: Python PEP 8 code formatting
+]
+publish = [
+    # System binary dependencies: pandoc, pdflatex
+]
+update = [
+    "python-semantic-release>=9.0.0", # engine_update: Automated versioning
+]
+
+# Full suite target: `pip install insetu[all]`
 all = [
+    "flask-sock>=0.6.0",
     "mistune>=3.0.0",
     "beautifulsoup4>=4.12.0",
     "markdownify>=0.11.0",
-    "jsbeautifier>=1.14.0",
     "playwright>=1.40.0",
+    "jsbeautifier>=1.14.0",
     "python-semantic-release>=9.0.0"
 ]
 
 [project.scripts]
-# This allows the user to type `insetu serve` from anywhere
 insetu = "insetu.cli:main"
+
 [tool.setuptools]
 include-package-data = true
 
@@ -58,6 +85,7 @@ insetu = [
     "templates/**/*",
     "defaults/**/*"
 ]
+
 [tool.semantic_release]
 version_toml = [
     "pyproject.toml:project.version"
@@ -65,6 +93,7 @@ version_toml = [
 commit_parser = "conventional"
 allow_zero_version = true
 major_on_zero = false
+
 [tool.semantic_release.changelog]
 exclude_commit_patterns = [
     '''(?i)chore(?:\([^\)]*?\))?: .+$''',

@@ -1,5 +1,9 @@
 import functools
+from typing import TYPE_CHECKING, Optional, Dict, Any
 from flask import Blueprint, request, jsonify
+
+if TYPE_CHECKING:
+    from insetu.kernel.types import WorkspaceID, FilePath, VFSStorageEngine, WorkspacePathsDict
 import os
 from insetu.kernel.db import get_connection, register_schema
 from insetu.kernel.utils import extension_auth, load_config
