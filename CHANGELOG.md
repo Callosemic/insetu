@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v0.12.0 (2026-08-11)
+
+### Bug Fixes
+
+- **core**: Enforce topology buffer read consistency and dual-root manifest extraction
+  ([`f18bcef`](https://github.com/Callosemic/insetu/commit/f18bcefbaa0ca35b7346096c0db2b4a44ecdc4b3))
+
+### Features
+
+- **sdk**: Standardize EntityData type contracts, isolate Stage 1 VFS manifest, and add declarative
+  shortcuts
+  ([`b1346f6`](https://github.com/Callosemic/insetu/commit/b1346f640bab5f28a1c821619f350e03ca197ceb))
+
+### Refactoring
+
+- Extract publish extension, deprecate legacy UI zones, and standardize context accessors
+  ([`2f545a0`](https://github.com/Callosemic/insetu/commit/2f545a0fbd44e959dabffabbe6a8004b76c8bcfd))
+
+- **core**: Standardize ExtensionContext accessors, handle multi-chunk reverts, and debounce
+  watchdog VFS observers
+  ([`f70ab4b`](https://github.com/Callosemic/insetu/commit/f70ab4b4eb556dd5243f3ad600a792f6b76fdcce))
+
+- **kernel**: Standardize type contracts, optional dependencies, and settings scope linter
+  ([`fa960f0`](https://github.com/Callosemic/insetu/commit/fa960f08feb77f803542c3e12c3d2a1316eedb1d))
+
+
 ## v0.11.0 (2026-08-10)
 
 ### Features
