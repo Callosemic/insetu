@@ -33,6 +33,7 @@ __depends__ = []
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight repository signatures for the vfs domain."""
+    resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.execute("SELECT repo, count(*) as cnt, max(timestamp) as max_ts FROM topology_ledger GROUP BY repo").fetchall()
     vfs_sigs = {}
@@ -44,6 +45,7 @@ def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs)
 @topology_bp.route('vfs', methods=['GET'])
 def api_topology_vfs_repo(ctx):
     """Surgically fetches the VFS bucket structure for a specific repository."""
+    resolve_topology_buffer(ctx.workspace_id)
     repo = ctx.req.args.get('repo', '').strip()
     conn = ctx.db
     if repo:
@@ -97,6 +99,7 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
 @hooks.on('request_vfs_manifest')
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger."""
+    resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.get_all("topology_ledger")
 
@@ -110,8 +113,10 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         manifest[manifest_key]["files"].append(r['filepath'])
 
     return manifest
+
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
+    resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     if not allowed_repos: return []
     placeholders = ','.join(['?'] * len(allowed_repos))

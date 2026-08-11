@@ -291,7 +291,10 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
 def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
     """Base Workspace Provider: Yields schemas for standard repo contexts and media vaults."""
     from insetu.core.utils_core import get_safe_repo_id
-    from insetu.core.topology.engine_topology import topology_bp
+    from insetu.core.topology.engine_topology import topology_bp, resolve_topology_buffer
+
+    # Read-Consistency Guard: Drain pending events before querying topology_ledger
+    resolve_topology_buffer(workspace_id)
 
     ctx = gather_bp.get_context(workspace_id)
     cfg = ctx.config
@@ -746,6 +749,13 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     if not acquired:
         raise RuntimeError("Compiler lock timeout. A previous compilation or hook is stalled and holding the lock.")
     try:
+        # VFS Barrier: Wait for async physical disk moves/deletes in queue to complete
+        ctx.sync_vfs_barrier()
+
+        # Topology Flush: Drain pending mutation events so topology_ledger reflects disk reality
+        from insetu.core.topology.engine_topology import resolve_topology_buffer
+        resolve_topology_buffer(ctx.workspace_id)
+
         paths = ctx.paths
         manifest_data = ctx.manifest
 

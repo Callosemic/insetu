@@ -223,14 +223,19 @@ def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, i
             if include_types: return []
             return data
         return []
+    ctx_manifest = manifest_data.get("ctx", {}) if isinstance(manifest_data, dict) else {}
+    vfs_manifest = manifest_data.get("vfs", {}) if isinstance(manifest_data, dict) else {}
+
     if target_key:
-        entry = manifest_data.get(target_key)
+        entry = ctx_manifest.get(target_key) or vfs_manifest.get(target_key) or manifest_data.get(target_key)
         if entry is None and ("/" in target_key or "\\" in target_key):
-            entry = manifest_data.get(Path(target_key).name)
+            base_name = Path(target_key).name
+            entry = ctx_manifest.get(base_name) or vfs_manifest.get(base_name) or manifest_data.get(base_name)
         return _extract(entry or {})
 
     all_files = set()
-    for k, v in manifest_data.items():
+    combined = {**vfs_manifest, **ctx_manifest} if (ctx_manifest or vfs_manifest) else manifest_data
+    for k, v in combined.items():
         extracted = _extract(v)
         if extracted:
             if isinstance(k, str) and k.endswith('.txt'):
