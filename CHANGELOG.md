@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.13.0 (2026-08-11)
+
+### Bug Fixes
+
+- **bridge**: Enable granular single-patch deselection in Yomama telemetry view
+  ([`8a4c572`](https://github.com/Callosemic/insetu/commit/8a4c57254ed74a68b7a9bf3f95fb57a98d480b6a))
+
+### Features
+
+- **update**: Add initial PyPI release pipeline, PyPI publishing verification, and VCS release
+  controls
+  ([`b597929`](https://github.com/Callosemic/insetu/commit/b5979292f3cd26d4814bb2caddf6a98b2a38906c))
+
+
 ## v0.12.0 (2026-08-11)
 
 ### Bug Fixes
