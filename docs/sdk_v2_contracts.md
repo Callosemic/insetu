@@ -1,9 +1,7 @@
 # inSetu OS SDK Interface Contracts (V2 Specification)
-
 This contract sheet serves as the absolute single source of truth for the interfaces between the Core OS Substrate and Custom Functional Extensions. Refer strictly to these signatures during feature development to maintain system-wide multi-tenant compliance.
 
 ---
-hello
 
 ## 1. Backend Extension Substrate (`InSetuExtension`)
 Python feature scripts must leverage the unified `InSetuExtension` wrapper to intercept routing contexts safely and isolate multi-tenant data.
@@ -67,7 +65,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`
+* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned. All API methods enforce client-side extension enablement checks against `window.ACTIVE_EXTENSIONS` prior to network dispatch, returning a 403 Forbidden response if the target extension is disabled.
@@ -109,6 +107,15 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         match: (data) => data.filepath.endsWith('.md'),
         emitEvent: (data) => ({ name: 'insetu:ext:action', detail: data })
     }],
+    // Keyboard shortcut bindings
+    shortcuts: [
+        {
+            context: 'global',
+            key: 'ctrl+s',
+            label: 'Save Active File',
+            action: (e) => { ... }
+        }
+    ],
 
     // Mounts Lit components into the App Shell routing framework
     layoutSlots: [{

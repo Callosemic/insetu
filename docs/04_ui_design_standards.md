@@ -1,9 +1,15 @@
 # 04: inSetu UI Design Standards & UX Guardrails
-
 **Identity**: The Architect.
 **Mission**: To define the visual, spatial, and user experience (UX) constraints required to maintain a clean, high-performance, and distraction-free interface across the inSetu Developer OS.
 
 ---
+
+## 0. The yenVUI "House Style" & The Zero-CSS Mandate
+**inSetu is the reference implementation and default consumer of the `sutram`/`yenVUI` presentation chassis.** 
+Because of this relationship, the baseline visual identity of the OS (the "House Style") must be entirely vacuumed down into the `sutram` and `yenvui` vendor packages. 
+
+* **The Zero-CSS Goal**: `inSetu` itself should eventually contain *zero* structural CSS and *zero* random HTML layout `<div>` elements. All visual primitives (cards, inputs, layouts, headers) must be absorbed by `yenVUI`.
+* **The Baseline Ecosystem**: While other downstream applications consuming `sutram` (like the Axoneme Console) may heavily override CSS intent tokens to look entirely different, `inSetu` serves as the naked, default manifestation of the yenVUI design system. If a general visual layout or component is needed in inSetu, it belongs in yenVUI.
 
 ## 1. Spatial Layout & The "Single Scroll" Rule
 The interface must feel like a native application, not a nested web document.

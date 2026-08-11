@@ -52,13 +52,19 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer.
     * VFS Hooks: Uses `vfs_mutated` to instantly sync the UI SQLite index.
-
-### E. Document Formatting (`engine_format.py`)
+### E. Code Formatting (`engine_format.py`)
 * **Status:** Active Extension.
-* **Role:** Document compilation (Pandoc) to PDF, Word, HTML, and JS beautification.
+* **Role:** Source code beautification and formatting (JS, JSON, CSS, HTML, Python).
 * **Dependencies (`__depends__`):** `None`
 * **Injection Surfaces:**
-    * UI Hooks: Injects `zone:modal-file-toolbar` actions.
+    * Polymorphic Cards: Registers `format-code` action.
+
+### P. Document Publishing (`engine_publish.py`)
+* **Status:** Active Extension (Extracted from Format).
+* **Role:** Document compilation (Pandoc) to PDF, Word, HTML.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Ephemeral.
+* **Injection Surfaces:**
     * Broadcasts `pre_compile_document` to intercept bibliography mappings.
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
 * **Status:** Active Extensions (`prompts` upgraded to SDK V2).
@@ -201,15 +207,12 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `compilation_sequence_complete` | `engine_gather` | `cartographer` | Emitted when all background compilation steps in a chain have finished. |
 | `register_manifest_signatures` | `<Micro-Kernel>` | All Extensions | Yields domain-specific manifest signatures (hashes/timestamps) for decentralized delta sync. |
 | `topology_boot_complete` | `engine_topology` | `engine_gather` | Emitted when physical topology disk mapping completes on workspace boot. |
-
 ### 2. Frontend UI Zones (`ExtensionRegistry`)
 | Zone ID | Context / Trigger | Primary Use Case |
 | :--- | :--- | :--- |
 | `zone:tab-changed` | Emitted when the user navigates primary UI tabs. | Allows background extensions (like Tracker or Citations) to execute silent data-fetches only when their UI is actually visible. |
-| `zone:modal-ext-menu` | Emitted when the VFS modal opens a file. | Allows extensions to declaratively push action objects (`{label, icon, onClick}`) into the global extension dropdown menu, eliminating horizontal toolbar clutter. |
 | `zone:file-edit-override` | Emitted right before a file is loaded into the VFS modal. | Allows extensions to hijack the rendering flow (e.g., Tracker redirecting `.tracker/` markdown files into its custom Kanban UI modal instead). |
 | `zone:post-file-save` | Emitted after the VFS successfully flushes to disk. | Triggers reactive background refreshes for dependent extensions (e.g., reloading the Kanban board if a ticket is saved). |
-| `zone:file-card-actions` | Emitted when a file card is rendered in the UI. | Allows extensions to inject contextual action buttons next to the default "View" and "DL" buttons. |
-| `zone:new-file-options` | Emitted inside the New File modal. | Allows extensions to inject custom toggles (e.g., "Add to Library") into the creation UI. |
-| `zone:pre-save-new-file` | Emitted right before a new file is written to disk. | Allows extensions to intercept the payload and inject metadata, frontmatter, or headers into the document. |
+| `zone:vfs-mutated` | Emitted when VFS disk operations settle. | Triggers reactive cache updates across active extensions. |
+| `zone:new-file-options-lit` | Emitted inside the New File modal. | Allows extensions to inject custom toggles (e.g., "Import from URL") into the creation UI. |
 | `zone:post-import-url` | Emitted after the Web Scraper successfully downloads markdown. | Allows extensions to react to ingested content (e.g., auto-checking the "Add to Library" toggle based on URL signatures). |

@@ -58,27 +58,25 @@ window.ExtensionRegistry.registerExtension('ext_name', {
 });
 
 ```
+### 3.1 Declarative Layout Slots & Entity Actions
+Extensions declare their spatial footprint and contextual actions statelessly using the schema registration object:
 
-* **Layout Slots (The Routing Topology):** Extensions declare their UI footprint via the `layoutSlots` array rather than imperatively appending themselves to the DOM.
-* **`slot`**: The target zone (e.g., `primary-navigation`, `sub-navigation`, `global`). Note: Do not use the redundant `slots:` prefix.
-* **`order`**: An integer dictating the left-to-right visual sequence.
-* **`component`**: The custom Web Component tag to mount (e.g., `"insetu-ext-tracker"`). **Omit this** for parent shells (like primary tabs) that only exist to house sub-tabs. **Require this** for actual views or actions that need to paint an interface on the canvas.
+* **Layout Slots (`layoutSlots`):**
+    * **`slot`**: Target layout zone (e.g., `primary-navigation`, `sub-navigation`, `global`).
+    * **`order`**: Integer dictating left-to-right visual sequence.
+    * **`component`**: Custom Web Component tag to mount (e.g., `"insetu-ext-tracker"`). Omit for parent container tabs that only house sub-tabs.
 
-* **Context-Aware Zone Injection:** Core UI files expose specific anchor points mapped via the `uiHooks` object in the schema.
+* **Polymorphic Entity Actions (`entityActions`):** All contextual file, task, and card interactions MUST route through the `entityActions` array using the `EntityData` SSOT contract.
+    * **`filepath` SSOT:** Matchers and callbacks MUST evaluate `data.filepath`. Call `this.utils.normalizeEntityData(data)` to map legacy `data.path` or `data.filename` properties onto `data.filepath`.
+    * **Action Ordering:** Use `order` integers (`< 0`: Quick/Pin actions, `0–49`: Primary actions, `50–99`: Contextual actions, `>= 100`: Fallback actions).
 
-When triggered, the hook passes an \`ExecutionContext\` payload to the callback.
-        * **Defined Zones:** 
-            * `zone:modal-edit-toolbar`: Callback receives `{ filepath, content }`.
-            * `zone:new-file-modal`: Callback receives `{ basePath }`.
-            * `zone:settings-menu`: Callback receives `{ currentConfig, saveConfigFn }`, allowing extensions to mount configuration inputs (e.g., API keys, default behaviors) directly into the OS Settings modal.
-            * `zone:file-edit-override`: Callback receives `filepath`. If the callback returns `true`, the OS aborts opening the standard code editor, allowing the extension to mount a custom modal (e.g., the Kanban UI).
-            * `zone:post-file-save`: Callback receives `filepath`, firing immediately after the OS confirms an atomic disk write.
-* **Action Ordering (The CSS Order Scale):** To prevent a visual "arms race" for the leftmost position on file cards and toolbars, extensions injecting action buttons (e.g., via `zone:file-card-actions`) MUST adhere to the following inline `style="order: X;"` scale:
-    * `< 0`: Quick/Pin actions (e.g., Favorites `order: -1`).
-    * `0` to `49`: Primary Domain actions (e.g., Git Push, Format Document).
-    * `50` to `99`: Secondary/Contextual actions (e.g., Copy Link, Tag).
-    * `>= 100`: Core OS Fallback actions (e.g., Browse, Download).
-* **Extending Extensions:** A parent extension (e.g., `citations`) can register its *own* custom zones via the Registry, allowing child extensions to mount UI natively inside the parent's layout.
+### 3.2 Context-Aware Zone Hooks (`uiHooks`)
+Extensions subscribe to specific UI lifecycle zones via the `uiHooks` dictionary in their schema:
+* `zone:file-edit-override`: Receives `filepath`. Returning `true` overrides the standard editor to open a custom modal (e.g., Kanban or Notes drawer).
+* `zone:post-file-save`: Receives `filepath`, firing immediately after an atomic VFS disk commit.
+* `zone:vfs-mutated`: Receives an array of VFS mutation events for reactive cache updates.
+* `zone:new-file-options-lit`: Renders custom extension toggles inside the New File creation modal.
+* `zone:tab-changed`: Receives `tabId` on navigation to trigger silent data fetches.
 ### 3.1 The Client State Engine (Zustand Slices)
 To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must never mutate or query raw DOM layout strings directly. The client environment manages global state across two core reactive stores:
 * **`AppStore` (store.js):** Coordinates system-wide topologies, configuration schemas, manifest states, active repositories, and extension arrays.

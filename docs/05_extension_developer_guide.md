@@ -135,7 +135,25 @@ Raw `fetch()` calls and manual URL strings are strictly banned. Use the native `
 * **`this.ui`**: UI/Modal orchestrations (`this.ui.openFolderBrowser()`, `this.ui.setGlobalStatus()`).
 * **`this.sys`**: System/Workspace commands (`this.sys.executeWorkspaceMutation()`, `this.sys.switchTab()`).
 * **`this.editor`**: Text editor integration (`this.editor.insertTextAtCursor()`, `this.editor.getEditorContent()`).
-* **`this.utils`**: General utilities (`this.utils.slugify()`, `this.utils.copyRawText()`).
+* **`this.utils`**: General utilities (`this.utils.slugify()`, `this.utils.copyRawText()`, `this.utils.normalizeEntityData(data)`).
+
+### EntityData Standardization Mandate
+When writing `entityActions` matchers, callbacks, or CustomEvent details, always treat `data.filepath` as the absolute Single Source of Truth:
+
+```javascript
+entityActions: [{
+    targetEntity: 'file',
+    id: 'my-action',
+    label: 'Process',
+    match: (data) => data.filepath && data.filepath.endsWith('.py'),
+    onClick: (data) => {
+        const norm = window.inSetu.utils.normalizeEntityData(data);
+        console.log("Operating on SSOT path:", norm.filepath);
+    }
+}]
+
+```
+
 
 ```javascript
 async fetchData() {
@@ -153,6 +171,14 @@ Extensions do not imperatively append themselves to the DOM. They expose a layou
 window.ExtensionRegistry.registerExtension('my_ext', {
     name: "My Extension",
     version: "1.0.0",
+    shortcuts: [
+        {
+            context: 'global',
+            key: 'ctrl+s',
+            label: 'Save Active File',
+            action: (e) => { ... }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
