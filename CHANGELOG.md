@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.13.1 (2026-08-11)
+
+### Bug Fixes
+
+- **update**: Harden PyPI distribution token validation and button state guards
+  ([`58e227a`](https://github.com/Callosemic/insetu/commit/58e227a93813b5386b7c67a9744e13a9deddc869))
+
+
 ## v0.13.0 (2026-08-11)
 
 ### Bug Fixes
