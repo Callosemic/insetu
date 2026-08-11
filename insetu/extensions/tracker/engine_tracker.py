@@ -25,16 +25,16 @@ TRACKER_SCHEMA = {
     }
 }
 TRACKER_SETTINGS_SCHEMA = [
-    {"id": "isolate_context", "label": "Spawn Separate Tracker Context", "type": "boolean", "default": True},
-    {"id": "exclude_from_diffs", "label": "Exclude Tracker from Git Diffs (Sends to Sweepable State)", "type": "boolean", "default": True},
-    {"id": "include_closed", "label": "Include Closed in Context", "type": "select", "options": [{"value": "grace_period", "label": "Grace Period"}, {"value": "all", "label": "All"}, {"value": "none", "label": "None"}], "default": "grace_period"},
-    {"id": "spawn_closed", "label": "Spawn Separate Closed Context", "type": "boolean", "default": False},
-    {"id": "include_archived_in_log", "label": "Include Archived in UI Log & Changelog", "type": "boolean", "default": False},
-    {"id": "grace_period_days", "label": "Grace Period (Days)", "type": "number", "default": 7},
-    {"id": "auto_archive", "label": "Auto-Archive", "type": "boolean", "default": True},
-    {"id": "archive_days", "label": "Archive After (Days)", "type": "number", "default": 30},
-    {"id": "domain_strategy", "label": "Domain Strategy", "type": "select", "options": [{"value": "default", "label": "Default"}, {"value": "repo", "label": "Match Repo Domain"}, {"value": "custom", "label": "Custom Domain"}], "default": "default"},
-    {"id": "domain_custom_value", "label": "Custom Domain Value", "type": "text", "default": ""}
+    {"id": "isolate_context", "label": "Spawn Separate Tracker Context", "type": "boolean", "scope": "workspace", "default": True},
+    {"id": "exclude_from_diffs", "label": "Exclude Tracker from Git Diffs (Sends to Sweepable State)", "type": "boolean", "scope": "workspace", "default": True},
+    {"id": "include_closed", "label": "Include Closed in Context", "type": "select", "scope": "workspace", "options": [{"value": "grace_period", "label": "Grace Period"}, {"value": "all", "label": "All"}, {"value": "none", "label": "None"}], "default": "grace_period"},
+    {"id": "spawn_closed", "label": "Spawn Separate Closed Context", "type": "boolean", "scope": "workspace", "default": False},
+    {"id": "include_archived_in_log", "label": "Include Archived in UI Log & Changelog", "type": "boolean", "scope": "workspace", "default": False},
+    {"id": "grace_period_days", "label": "Grace Period (Days)", "type": "number", "scope": "workspace", "default": 7},
+    {"id": "auto_archive", "label": "Auto-Archive", "type": "boolean", "scope": "workspace", "default": True},
+    {"id": "archive_days", "label": "Archive After (Days)", "type": "number", "scope": "workspace", "default": 30},
+    {"id": "domain_strategy", "label": "Domain Strategy", "type": "select", "scope": "workspace", "options": [{"value": "default", "label": "Default"}, {"value": "repo", "label": "Match Repo Domain"}, {"value": "custom", "label": "Custom Domain"}], "default": "default"},
+    {"id": "domain_custom_value", "label": "Custom Domain Value", "type": "text", "scope": "workspace", "default": ""}
 ]
 tracker_bp = InSetuExtension('tracker', __name__, title="Issue Tracker", description="Markdown-based Kanban issue tracking.", schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
@@ -46,9 +46,8 @@ def _background_archive_stale_tickets(ctx):
 @hooks.on('workspace_boot')
 def schedule_tracker_archiving(workspace_id=None, **kwargs):
     # Schedule background archiving to run silently every 1 hour
-    from insetu.core.sdk import ExtensionContext
-    w_ctx = ExtensionContext('workers', workspace_id)
-    conn = w_ctx.db
+    import insetu.kernel.db as kernel_db
+    conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
     conn.execute("""
         INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
         VALUES (?, 'tracker', 'archive_stale_task', 3600000, 300000, 0, 'pending', '{}')
@@ -58,8 +57,7 @@ def schedule_tracker_archiving(workspace_id=None, **kwargs):
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
 
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
 
     for m in mutations:
         filepath = m.get("filepath", "")
@@ -77,9 +75,8 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
                 ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
-    from insetu.core.sdk import ExtensionContext
     from insetu.core.utils_core import parse_frontmatter
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
     try:
         content = ctx.vfs.read(rel_path)
         if content is None:
@@ -143,9 +140,9 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     except Exception as e:
         print(f"Error parsing ticket {rel_path}: {e}")
 def _sync_disk_to_db(workspace_id=None):
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
-    top_ctx = ExtensionContext('topology', workspace_id)
+    from insetu.core.topology.engine_topology import topology_bp
+    ctx = tracker_bp.get_context(workspace_id)
+    top_ctx = topology_bp.get_context(workspace_id)
     ctx.db.execute("DELETE FROM tracker_tickets")
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
 
@@ -372,14 +369,11 @@ def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
     ctx.jobs.update_progress("Enforcing declarative ticket states...")
     enforce_declarative_tickets(workspace_id=ctx.workspace_id, specific_file=specific_file)
     return "Ticket housekeeping complete."
-
-@hooks.on('topology_boot_complete')
 @hooks.on('topology_boot_complete')
 @hooks.on('force_topology_scan')
 def manual_tracker_housekeeping(workspace_id=None, **kwargs):
     """Hydrates Tracker safely after Topology maps the workspace, or on manual refresh."""
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
     _sync_disk_to_db(workspace_id)
     ctx.jobs.submit("enforce_tickets_task")
 
@@ -389,8 +383,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     If the physical path contradicts the YAML, the YAML wins -> file is moved.
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
-    from insetu.core.sdk import ExtensionContext
-    ctx = ExtensionContext('tracker', workspace_id)
+    from insetu.core.topology.engine_topology import topology_bp
+    ctx = tracker_bp.get_context(workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     cfg = ctx.config
     enforced_count = 0
@@ -407,7 +401,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     if specific_file:
         target_files.append((specific_file.split('/')[0], specific_file))
     else:
-        top_ctx = ExtensionContext('topology', workspace_id)
+        top_ctx = topology_bp.get_context(workspace_id)
         for current_repo in repos:
             rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ? AND filepath LIKE '%.tracker/%.md'", (current_repo,)).fetchall()
             for r in rows:
@@ -754,13 +748,12 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
     except Exception:
         pass
     return changelogs
-
 @hooks.on('tracker_settings_updated')
 def on_tracker_settings_updated(workspace_id=None, **kwargs):
     """Event Bus hook: Rebuilds context payloads immediately when tracker settings are updated."""
     import json
     import uuid
-    from insetu.kernel.workers import submit_immediate_job
+    import insetu.kernel.workers as workers
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
+    workers.submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
     return {"job_id": job_id}

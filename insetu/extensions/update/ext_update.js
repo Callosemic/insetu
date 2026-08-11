@@ -11,7 +11,7 @@ export const UpdateStore = createExtensionStore('Update', {
     hasPyproject: true,
     isClean: true,
     hasRelease: false,
-    repoBuildCommand: 'false',
+    repoBuildCommand: '',
     missingDependencies: [],
     missingBinaries: [],
     eligibleRepos: {},
@@ -146,7 +146,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             hasPyproject: statusData.artifact.has_pyproject !== false,
                             isClean: statusData.artifact.is_clean !== false,
                             hasRelease: statusData.artifact.has_release === true,
-                            repoBuildCommand: statusData.artifact.build_command || 'false'
+                            repoBuildCommand: statusData.artifact.build_command || ''
                         });
                     },
                     onError: (err) => {
@@ -300,7 +300,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.hasPyproject = true;
         this.isClean = true;
         this.hasRelease = false;
-        this.repoBuildCommand = 'false';
+        this.repoBuildCommand = '';
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -321,7 +321,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.hasPyproject = state.hasPyproject !== false;
             this.isClean = state.isClean !== false;
             this.hasRelease = state.hasRelease === true;
-            this.repoBuildCommand = state.repoBuildCommand || 'false';
+            this.repoBuildCommand = state.repoBuildCommand || '';
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
             this.eligibleRepos = state.eligibleRepos || {};
@@ -523,11 +523,11 @@ export class InSetuExtUpdate extends InSetuElement {
                         <div style="display: flex; gap: 8px;">
                             <input type="text" 
                                 style="flex: 1; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;"
-                                .value=${this.repoBuildCommand === 'false' ? '' : this.repoBuildCommand}
+                                .value=${this.repoBuildCommand === 'false' || this.repoBuildCommand === '' ? '' : this.repoBuildCommand}
                                 placeholder="e.g., python -m build (leave blank to skip)"
                                 @keydown=${(e) => {
                                     if (e.key === 'Enter') {
-                                        const newVal = e.target.value.trim() || 'false';
+                                        const newVal = e.target.value.trim();
                                         if (newVal !== this.repoBuildCommand) {
                                             UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
                                         }
@@ -539,7 +539,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                 style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                 .onClick=${async (e) => {
                                     const inputEl = e.target.previousElementSibling;
-                                    const newVal = inputEl ? (inputEl.value.trim() || 'false') : 'false';
+                                    const newVal = inputEl ? inputEl.value.trim() : '';
                                     if (newVal !== this.repoBuildCommand) {
                                         await UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal);
                                     }
@@ -624,11 +624,11 @@ window.ExtensionRegistry.registerExtension('update', {
                 // Check if any mutation happened inside the active target repository
                 const affected = payload.mutations.some(m => m.filepath && (m.filepath.startsWith(repo + '/') || m.filepath === repo));
                 if (affected) {
-                    // Debounce the status check so we don't spam Git on bulk saves
+                    // Debounce the status check heavily to avoid index.lock collisions during automated git workflows
                     if (window._updateExtDebounce) clearTimeout(window._updateExtDebounce);
                     window._updateExtDebounce = setTimeout(() => {
                         UpdateStore.getState().fetchRepoStatus(repo);
-                    }, 500);
+                    }, 3500);
                 }
             }
             return false;

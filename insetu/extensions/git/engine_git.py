@@ -358,13 +358,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
     from insetu.kernel.utils import get_workspace_physics
-    from insetu.core.sdk import ExtensionContext
+    from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
     _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
 
-    top_ctx = ExtensionContext('topology', ctx.workspace_id)
+    top_ctx = topology_bp.get_context(ctx.workspace_id)
 
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")

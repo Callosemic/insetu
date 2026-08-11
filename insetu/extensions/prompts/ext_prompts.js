@@ -217,11 +217,6 @@ window.ExtensionRegistry.registerExtension('prompts', {
                 syncPromptsState();
             }
         },
-        'zone:modal-ext-menu': (data) => {
-            if (data.isMarkdown && data.filepath && isPromptPath(data.filepath)) {
-                data.menuItems.push({ label: 'Embed Prompt', icon: '🧩', onClick: () => InSetuExtPrompts.openPromptEmbedModal() });
-            }
-        },
         'zone:file-fetch-url': (filepath) => {
             if (filepath && isPromptPath(filepath)) {
                 const activeWs = window.inSetu.utils.getActiveWorkspace();

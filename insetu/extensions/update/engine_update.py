@@ -272,9 +272,8 @@ def _background_status_task(ctx, repo):
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     if v_match:
         version = v_match.group(1)
-
-    b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
-    build_command = b_match.group(1) if b_match else "false"
+    b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
+    build_command = b_match.group(1) if b_match else ""
 
     # 2. If configured, let the CLI take precedence (as it resolves Git tags accurately)
     if configured:
@@ -467,7 +466,7 @@ version_toml = [
 ]
 commit_parser = "conventional"
 vcs_release = false
-build_command = "false"
+build_command = ""
 {'allow_zero_version = true\nmajor_on_zero = false' if initial_version.startswith('0.') else ''}
 '''
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging

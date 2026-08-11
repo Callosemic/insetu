@@ -22,12 +22,12 @@ SKILLS_SCHEMA = {
         "metrics_json": "TEXT DEFAULT '{}'"
     }
 }
-
 SKILLS_SETTINGS_SCHEMA = [
     {
         "id": "domains",
         "label": "Practice Domains & Metrics Schema",
         "type": "object",
+        "scope": "workspace",
         "description": "JSON map defining metric tracking schemas and mastery steps for different practice domains.",
         "default": {
             "musical_repertoire": {

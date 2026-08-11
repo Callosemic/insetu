@@ -130,12 +130,12 @@ export class InSetuExtNotesEditor extends InSetuElement {
         editForm: { type: Object }
     };
     static styles = [sharedStyles, css`:host { display: contents; }`];
-
     constructor() {
         super();
         this.filepath = null;
         this.allRepos = [];
         this.editForm = { title: '', repo: 'global', bucket: 'None', tags: '' };
+        this._isDirty = false;
     }
 
     connectedCallback() {
@@ -209,16 +209,12 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
                     ${this.filepath ? html`
                         <insetu-frontmatter-editor
+                            id="fm-editor"
                             .filepath=${this.filepath}
                             .defaultExpanded=${false}
+                            @editor-dirty=${e => { this._isDirty = e.detail.isDirty; this.requestUpdate(); }}
                             @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}
-                            @insetu:editor-delete=${this._deleteNote}
-                            @insetu:editor-raw-edit=${() => {
-                                const fp = this.filepath;
-                                NotesStore.setState({ editNoteFilepath: null });
-                                if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
-                            }}>
+                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
                             <div slot="title-control" style="padding: 0;">
                                 <sutram-textarea 
                                     .value=${this.editForm.title} 
@@ -251,6 +247,19 @@ export class InSetuExtNotesEditor extends InSetuElement {
                         </insetu-frontmatter-editor>
                     ` : ''}
                 </div>
+                ${this.filepath ? html`
+                <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
+                    <button class="btn-sm" style="background: var(--intent-danger); color: white; margin: 0;" @click=${this._deleteNote}>🗑️ Delete</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn-sm" style="background: var(--intent-warning); color: black; margin: 0;" @click=${() => {
+                            const fp = this.filepath;
+                            NotesStore.setState({ editNoteFilepath: null });
+                            if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(fp, true, true);
+                        }}>📝 Raw Edit</button>
+                        ${this._isDirty ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor')._handleSave()}></sutram-async-btn>` : ''}
+                    </div>
+                </div>
+                ` : ''}
             </sutram-modal>
         `;
     }

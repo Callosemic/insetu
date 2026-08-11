@@ -504,6 +504,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._isSaving = false;
         this._isCopying = false;
         this._isDownloading = false;
+        this._isDirtyTracker = false;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -664,21 +665,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
         };
         respond(updatedYaml);
     }
-
     _isDirty() {
-        if (!this._originalTaskSnapshot) return false;
-        const current = KanbanStore.getState().editTaskForm;
-        const orig = this._originalTaskSnapshot;
-        return current.title !== orig.title ||
-                current.tagsRaw !== orig.tagsRaw ||
-                current.bucket !== orig.bucket ||
-                current.desc !== orig.desc ||
-                current.deliveryDate !== orig.deliveryDate ||
-                current.createdAt !== orig.createdAt ||
-                current.closedAt !== orig.closedAt ||
-                current.type !== orig.type ||
-                current.status !== orig.status ||
-                current.repo !== orig.repo;
+        return this._isDirtyTracker;
     }
 
     _handleModalClosing(e) {
@@ -747,15 +735,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
                     ${this._modals?.edit && editTaskForm.filepath ? html`
                         <insetu-frontmatter-editor
+                            id="fm-editor-tracker"
                             .filepath=${editTaskForm.filepath}
                             .defaultExpanded=${false}
+                            @editor-dirty=${e => { this._isDirtyTracker = e.detail.isDirty; this.requestUpdate(); }}
                             @insetu:frontmatter-loaded=${this._onFrontmatterLoaded}
-                            @insetu:request-frontmatter=${this._onRequestFrontmatter}
-                            @insetu:editor-delete=${this._deleteTask}
-                            @insetu:editor-raw-edit=${() => {
-                                KanbanStore.getState().setModal('edit', false);
-                                if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);
-                            }}>
+                            @insetu:request-frontmatter=${this._onRequestFrontmatter}>
 
                             <div slot="title-control" style="padding: 0;">
                                 <sutram-textarea
@@ -787,27 +772,49 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         </insetu-frontmatter-editor>
                     ` : ''}
                 </div>
+                ${this._modals?.edit && editTaskForm.filepath ? html`
+                <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
+                    <button class="btn-sm" style="background: var(--intent-danger); color: white; margin: 0;" @click=${this._deleteTask}>🗑️ Delete</button>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn-sm" style="background: var(--intent-warning); color: black; margin: 0;" @click=${() => {
+                            KanbanStore.getState().setModal('edit', false);
+                            if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(editTaskForm.filepath, true, true);
+                        }}>📝 Raw Edit</button>
+                        ${this._isDirtyTracker ? html`<sutram-async-btn style="margin: 0;" label="💾 Save" intent="success" .onClick=${() => this.shadowRoot.getElementById('fm-editor-tracker')._handleSave()}></sutram-async-btn>` : ''}
+                    </div>
+                </div>
+                ` : ''}
             </sutram-modal>
 `;
     }
 }
 customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
-
-window.ExtensionRegistry.registerShortcut('modal:new-task-modal', 'ctrl+s', () => {
-    const shell = document.querySelector('insetu-app-shell');
-    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-    if (el) el._saveNewTask();
-});
-window.ExtensionRegistry.registerShortcut('modal:edit-task-modal', 'ctrl+s', () => {
-    const shell = document.querySelector('insetu-app-shell');
-    const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-    if (el) el._saveEditTask();
-});
-
 // OS Registration Hook
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
     version: "2.0.0",
+    shortcuts: [
+        {
+            context: 'modal:new-task-modal',
+            key: 'ctrl+s',
+            label: 'Save New Task',
+            action: () => {
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
+                if (el) el._saveNewTask();
+            }
+        },
+        {
+            context: 'modal:edit-task-modal',
+            key: 'ctrl+s',
+            label: 'Save Edited Task',
+            action: () => {
+                const shell = document.querySelector('insetu-app-shell');
+                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
+                if (el && el._saveEditTask) el._saveEditTask();
+            }
+        }
+    ],
     entityActions: [
         {
             targetEntity: 'task',

@@ -669,7 +669,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                                         .entityData=${{ 
                                                                             filepath: baseFile, 
                                                                             chunks: manifestObj.chunks || [baseFile],
-                                                                            showOnly: ['file-copy', 'file-download', 'file-share']
+                                                                            showOnly: ['file-copy', 'file-download', 'file-share', 'file-view-parts']
                                                                         }}>
                                                                     </sutram-entity-actions>
                                                                 `;

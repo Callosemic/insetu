@@ -129,8 +129,8 @@ def sweep_telemetry_worker(ctx, **kwargs):
 @hooks.on('workspace_boot')
 def init_dev_workers(workspace_id=None, **kwargs):
     try:
-        w_ctx = ExtensionContext('workers', workspace_id)
-        conn = w_ctx.db
+        import insetu.kernel.db as kernel_db
+        conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
         conn.execute("""
             INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, next_run_at, status, args_json)
             VALUES ('dev_telemetry_sweeper', 'dev', 'sweep_telemetry', 60000, 0, 'pending', '{}')

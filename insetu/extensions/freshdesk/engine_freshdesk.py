@@ -6,8 +6,8 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 # Declarative schema for settings so users can input credentials via the UI
 FRESHDESK_SETTINGS_SCHEMA = [
-    {"id": "api_key", "label": "Freshdesk API Key", "type": "password", "secure": True, "default": ""},
-    {"id": "domain", "label": "Freshdesk Subdomain", "type": "text", "default": ""}
+    {"id": "api_key", "label": "Freshdesk API Key", "type": "password", "secure": True, "scope": "workspace", "default": ""},
+    {"id": "domain", "label": "Freshdesk Subdomain", "type": "text", "scope": "workspace", "default": ""}
 ]
 DB_SCHEMA = {
     "freshdesk_ignored": {

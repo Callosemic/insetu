@@ -106,11 +106,10 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 should_trigger = True
         if should_trigger:
             import time
-            from insetu.core.sdk import ExtensionContext
+            import insetu.kernel.db as kernel_db
             try:
-                w_ctx = ExtensionContext('workers', workspace_id)
-                w_conn = w_ctx.db
-                # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds  
+                w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
+                # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds      
                 # due to overlapping individual and transaction-level VFS hooks.
                 recent = w_conn.execute("""
                     SELECT id FROM immediate_jobs 
@@ -208,11 +207,10 @@ def delete_rule(ctx):
     return jsonify({"status": "success"})
 @hooks_bp.route('logs', methods=['GET'])
 def get_logs(ctx):
-    from insetu.core.sdk import ExtensionContext
+    import insetu.kernel.db as kernel_db
     import json
     # Use the central workers ledger, not the extension's local DB
-    w_ctx = ExtensionContext('workers', ctx.workspace_id)
-    conn = w_ctx.db
+    conn = kernel_db.get_connection('workers', workspace_id=ctx.workspace_id)
 
     try:
         cursor = conn.execute(

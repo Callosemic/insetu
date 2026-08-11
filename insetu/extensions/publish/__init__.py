@@ -1,0 +1,1 @@
+# Package marker for Document Publishing Extension

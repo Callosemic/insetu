@@ -750,22 +750,6 @@ window.ExtensionRegistry.registerExtension('citations', {
         { slot: "slots:sub-navigation", targetParent: "library", id: "lib-import", label: "Import", order: 3, component: "insetu-ext-citations" }
     ],
     uiHooks: {
-        'zone:modal-ext-menu': (data) => {
-            if (data.isMarkdown) {
-                data.menuItems.push({ label: 'Cite', icon: '📚', onClick: async () => {
-                    CitationStore.setState({ citationModalOpen: true, citationSearchQuery: '' });
-                    try {
-                        const res = await window.inSetu.api.workspace('citations/list');
-                        if (res.ok) {
-                            const data = await res.json();
-                            CitationStore.setState({ citationLibraryCache: data.citations || [] });
-                        }
-                    } catch(e) {}
-                }});
-                data.menuItems.push({ label: 'Sync Refs', icon: '🔄', onClick: () => window.inSetu.events.emit('insetu:citations:sync') });
-            }
-            return false;
-        },
         'zone:tab-changed': (tabId) => {
             if (tabId === 'library') {
                 CitationStore.setState({
