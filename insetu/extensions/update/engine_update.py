@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git

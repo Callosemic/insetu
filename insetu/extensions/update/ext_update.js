@@ -17,7 +17,7 @@ export const UpdateStore = createExtensionStore('Update', {
     repoBuildCommand: '',
     repoVcsRelease: true,
     hasToken: true,
-    hasPypiToken: true,
+    hasPypiToken: false,
     lastReleaseLog: '',
     missingDependencies: [],
     missingBinaries: [],
@@ -188,6 +188,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             repoBuildCommand: statusData.artifact.build_command || '',
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
                             hasToken: statusData.artifact.has_token !== false,
+                            hasPypiToken: statusData.artifact.has_pypi_token === true,
                             repoLoading: false
                         });
                     },
@@ -357,7 +358,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.repoBuildCommand = '';
         this.repoVcsRelease = true;
         this.hasToken = true;
-        this.hasPypiToken = true;
+        this.hasPypiToken = false;
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -384,7 +385,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.repoBuildCommand = state.repoBuildCommand || '';
             this.repoVcsRelease = state.repoVcsRelease !== false;
             this.hasToken = state.hasToken !== false;
-            this.hasPypiToken = state.hasPypiToken !== false;
+            this.hasPypiToken = state.hasPypiToken === true;
             this.lastReleaseLog = state.lastReleaseLog || '';
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
@@ -656,7 +657,6 @@ export class InSetuExtUpdate extends InSetuElement {
                                 </ol>
                             </div>
                         </div>
-
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
                             ${!this.hasRelease || !this.pypiPublished ? html`
@@ -665,15 +665,17 @@ export class InSetuExtUpdate extends InSetuElement {
                                     label="🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI" 
                                     intent="highlight" 
                                     ?disabled=${!this.isClean || !this.hasPypiToken}
+                                    .disabled=${!this.isClean || !this.hasPypiToken}
                                     .onClick=${async () => {
+                                        if (!this.isClean || !this.hasPypiToken) return;
                                         if (confirm(`Publish v${this.repoVersion || '0.1.0'} of ${this.packageName || this.targetRepo} to PyPI?`)) {
                                             await UpdateStore.getState().firstRelease(this.targetRepo);
                                         }
                                     }}>
                                 </sutram-async-btn>
                                 ${!this.hasPypiToken ? html`
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block;">
-                                        ⚠️ API token missing
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
+                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings or set TWINE_PASSWORD/PYPI_TOKEN in environment to enable publishing.
                                     </span>
                                 ` : ''}
                                 <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
@@ -687,11 +689,15 @@ export class InSetuExtUpdate extends InSetuElement {
                                     label="🚀 Step 2: Publish Release" 
                                     intent="highlight" 
                                     ?disabled=${!this.repoConfigured || !this.isClean || !this.hasPypiToken}
-                                    .onClick=${async () => await UpdateStore.getState().previewPublish(this.targetRepo)}>
+                                    .disabled=${!this.repoConfigured || !this.isClean || !this.hasPypiToken}
+                                    .onClick=${async () => {
+                                        if (!this.repoConfigured || !this.isClean || !this.hasPypiToken) return;
+                                        await UpdateStore.getState().previewPublish(this.targetRepo);
+                                    }}>
                                 </sutram-async-btn>
                                 ${!this.hasPypiToken ? html`
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block;">
-                                        ⚠️ API token missing
+                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
+                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings or set TWINE_PASSWORD/PYPI_TOKEN in environment to enable publishing.
                                     </span>
                                 ` : ''}
                                 <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
