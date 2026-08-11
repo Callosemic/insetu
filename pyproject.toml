@@ -78,12 +78,25 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-
 [tool.setuptools.package-data]
+"*" = [
+    "*.js",
+    "*.css",
+    "*.html",
+    "*.json",
+    "*.md",
+    "*.txt"
+]
 insetu = [
     "static/**/*",
     "templates/**/*",
-    "defaults/**/*"
+    "defaults/**/*",
+    "extensions/**/*",
+    "core/**/*",
+    "kernel/**/*"
+]
+"insetu.extensions" = [
+    "**/*"
 ]
 
 [tool.semantic_release]
