@@ -322,6 +322,28 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
     }
+
+    _deselectSpecificPatch(file, patchIdx) {
+        const cells = BridgeStore.getState().cells || [];
+        const activeGroupCells = cells.filter(c => c.file === file && c.active);
+        const targetCell = activeGroupCells[patchIdx];
+        if (targetCell) {
+            const updatedCells = cells.map(c => 
+                c.id === targetCell.id ? { ...c, active: false } : c
+            );
+            BridgeStore.setState({ cells: updatedCells });
+            this.requestUpdate();
+        }
+    }
+
+    _deselectAllFilePatches(file) {
+        const cells = BridgeStore.getState().cells || [];
+        const updatedCells = cells.map(c => 
+            c.file === file ? { ...c, active: false } : c
+        );
+        BridgeStore.setState({ cells: updatedCells });
+        this.requestUpdate();
+    }
     _saveEditModal() {
         const text = this._editContent;
         const fileMatch = text.match(/^<<<<<<< FILE:\s*(.+)$/m);
@@ -406,9 +428,14 @@ export class InSetuExtBridge extends InSetuElement {
         } else if (action === 'force-sync' || action === 'ignore-syntax') {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._getSyncAction(isDryRun, true)();
-        } else if (action === 'deselect-patch') {
+        } else if (action === 'deselect-this-patch') {
             const oldPath = btn.dataset.old;
-            this._handleParentToggle(oldPath);
+            const patchIdx = parseInt(btn.dataset.patchIdx, 10);
+            this._deselectSpecificPatch(oldPath, patchIdx);
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+        } else if (action === 'deselect-all-file-patches' || action === 'deselect-patch') {
+            const oldPath = btn.dataset.old;
+            this._deselectAllFilePatches(oldPath);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deep-search') {
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
@@ -490,8 +517,7 @@ export class InSetuExtBridge extends InSetuElement {
                                                         `)}
                                                     </div>
                                                 ` : ''}
-
-                                                <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                                                <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
                                                     ${p.available_actions?.includes('offer_deep_search') ? html`
                                                         <button data-action="deep-search" class="btn-sm" style="background: var(--intent-highlight);">🔍 Run Deep Search</button>
                                                     ` : ''}
@@ -499,7 +525,10 @@ export class InSetuExtBridge extends InSetuElement {
                                                         <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
-                                                        <button data-action="deselect-patch" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">❌ Deselect Patch</button>
+                                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-patch-idx="${idx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
+                                                            <button data-action="deselect-all-file-patches" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">Deselect All File Patches</button>
+                                                        </div>
                                                     ` : ''}
                                                 </div>
                                             </div>
