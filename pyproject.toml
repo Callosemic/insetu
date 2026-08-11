@@ -87,6 +87,8 @@ insetu = [
 ]
 
 [tool.semantic_release]
+vcs_release = false
+build_command = ""
 version_toml = [
     "pyproject.toml:project.version"
 ]
