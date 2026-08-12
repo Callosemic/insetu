@@ -66,7 +66,7 @@ def save_data(ctx):
     ctx.db.commit()
     return {"status": "success"}
 
-### Asynchronous Background Workers (`@worker`)
+Asynchronous Background Workers (@worker)
 Extensions executing long-running asynchronous background operations (e.g., polling, web scraping, tree sweeping) must declare them via the blueprint-level `@worker` decorator rather than raw standalone functions or unmanaged threads.
 
 Progress must be reported explicitly through the `ctx.jobs.update_progress()` interface; using Python generator `yield` statements for progress reporting is strictly banned.
@@ -132,7 +132,7 @@ Directly assigning `window.addEventListener` inside extensions is highly dangero
 Raw `fetch()` calls and manual URL strings are strictly banned. Use the native `this.api` wrapper. Furthermore, extensions are strictly banned from importing directly from core chassis files (`../app.js`, `../fs.js`, `../store.js`). Use native SDK getters instead (ADR 0024):
 * **`this.ecosystem`**: Auto-hydrated workspace topology (`this.ecosystem.allRepos`, `this.ecosystem.pinnedRepos`, `this.ecosystem.targetConfigs`).
 * **`this.vfs`**: Virtual File System methods (`this.vfs.viewSourceFile()`, `this.vfs.fetchAndCopy()`, `this.vfs.downloadFile()`).
-* **`this.ui`**: UI/Modal orchestrations (`this.ui.openFolderBrowser()`, `this.ui.setGlobalStatus()`).
+* **`this.ui`**: UI/Modal orchestrations (`this.ui.openFolderBrowser()`, `this.ui.setGlobalStatus()`, `this.ui.viewTextBlob()`).
 * **`this.sys`**: System/Workspace commands (`this.sys.executeWorkspaceMutation()`, `this.sys.switchTab()`).
 * **`this.editor`**: Text editor integration (`this.editor.insertTextAtCursor()`, `this.editor.getEditorContent()`).
 * **`this.utils`**: General utilities (`this.utils.slugify()`, `this.utils.copyRawText()`, `this.utils.normalizeEntityData(data)`).
