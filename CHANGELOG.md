@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v0.15.1 (2026-08-12)
+
+### Bug Fixes
+
+- In update extension, clear dist/ before new build
+  ([`cdef22e`](https://github.com/Callosemic/insetu/commit/cdef22eaf792c63c5f3302bcfce6f39014dcb678))
+
+### Code Style
+
+- **extensions**: Standardize entity actions scrolling, remove deprecated modal styles, and enhance
+  release preview captions
+  ([`a101a14`](https://github.com/Callosemic/insetu/commit/a101a14dc958a2d68a154ef307feb46925b2d04d))
+
+### Refactoring
+
+- **ui**: Migrate controls to Sutram primitives, optimize file tree parsing, and standardize action
+  bar scrolling
+  ([`d1f05c9`](https://github.com/Callosemic/insetu/commit/d1f05c9ae658dab566eb45c630ba9a911276258b))
+
+
 ## v0.15.0 (2026-08-12)
 
 ### Bug Fixes
