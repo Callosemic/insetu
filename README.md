@@ -152,9 +152,9 @@ ngrok http 5005
 ## 📚 Architectural Essays & Articles
 
 Read the long-form essays exploring the philosophy, sociology, and zero-bundler architecture behind inSetu:
-* **[The Habitus of the Machine](https://draftpunk.substack.com):** Why modern web frameworks are hostile to LLMs, and how to build a cognitive substrate that works.
-* **[The Lost Joy of the Refresh Button](https://draftpunk.substack.com):** Escaping massive compilation chains and reclaiming visceral developer feedback loops.
-* **[The UX of Resistance](https://draftpunk.substack.com):** Why friction is a feature in AI-assisted coding.
+* **[The Habitus of the Machine](https://draftpunked.substack.com):** Why modern web frameworks are hostile to LLMs, and how to build a cognitive substrate that works.
+* **[The Lost Joy of the Refresh Button](https://draftpunked.substack.com):** Escaping massive compilation chains and reclaiming visceral developer feedback loops.
+* **[The UX of Resistance](https://draftpunked.substack.com):** Why friction is a feature in AI-assisted coding.
 
 ---
 ## 💬 Fractional Consulting & Advisory

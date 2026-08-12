@@ -56,13 +56,6 @@ insetu/
 │   │   ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
 │   │   └── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
-├── extensions/                     # Tier 3 Domain Extensions (Opt-in functionality).
-│   ├── flow/                       # Workflow batch automation and Prompt template executor.
-│   │   └── ext_flow.js             # Workflow builder and execution UI.
-│   ├── tracker/                    # Local offline Kanban board using Markdown-as-Code tickets.
-│   │   └── ext_tracker.js          # [Kanban Board UI & Store]
-│   └── update/                     # Automated Python semantic versioning and PyPI distribution.
-│       └── ext_update.js           # Release preview and publish UI.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -200,12 +193,6 @@ insetu/
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
-├── static/                         # Web server static assets and frontend bundles.
-│   └── js/                         # [Frontend JavaScript Payloads]
-│       └── core/                   # Core frontend SDK and UI components.
-│           └── components/         # Reusable Lit Web Components for the OS.
-│               ├── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
-│               └── ui_primitives.js # Base primitives like job trackers and loading spinners.
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.
