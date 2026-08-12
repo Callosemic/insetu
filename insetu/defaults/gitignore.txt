@@ -6,6 +6,7 @@ workflows/
 *.db
 *.db-journal
 secrets.json
+master_key.txt
 *.env
 
 # OS Files

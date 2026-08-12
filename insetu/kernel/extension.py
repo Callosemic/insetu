@@ -477,11 +477,16 @@ class InSetuExtension:
         def get_settings(ctx):
             repo = ctx.req.args.get('repo')
             return jsonify(ctx.settings.get_all(repo=repo))
-
         @self.route('settings', methods=['POST'])
         def update_settings(ctx):
-            repo = ctx.req.args.get('repo') or (ctx.req.json.get('_repo') if ctx.req.json else None)
-            ctx.settings.update(ctx.req.json or {}, repo=repo)
+            try:
+                repo = ctx.req.args.get('repo') or (ctx.req.json.get('_repo') if ctx.req.json else None)
+                ctx.settings.update(ctx.req.json or {}, repo=repo)
+                ctx.sync_vfs_barrier()
+            except Exception as e:
+                import traceback
+                print(f"Settings Save Error: {traceback.format_exc()}")
+                return jsonify({"status": "error", "error": f"Internal save error: {str(e)}"}), 500
 
             # Emit a strictly scoped event for this specific extension
             results = ctx.emit(f'{self.name}_settings_updated')

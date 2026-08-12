@@ -7,15 +7,34 @@ from insetu.kernel.utils import load_config, save_json_file, get_workspace_physi
 from insetu.kernel.extension import InSetuExtension
 auth_bp = Blueprint('auth', __name__)
 def get_master_key():
+    import os
+    import shutil
     from insetu.kernel.utils import _cwd
     from pathlib import Path
-    key_path = Path(_cwd).joinpath(".insetu", "master_key.txt")
-    if not key_path.exists():
+
+    global_key_path = Path.home().joinpath(".insetu", "master_key.txt")
+    local_key_path = Path(_cwd).joinpath(".insetu", "master_key.txt")
+
+    # Safe Migration: If a legacy local key exists...
+    if local_key_path.exists() and os.path.getsize(local_key_path) > 0:
+        # If no global key exists yet, elevate this local key to be the global key
+        if not global_key_path.exists():
+            global_key_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(local_key_path.as_posix(), global_key_path.as_posix())
+            return global_key_path.read_bytes()
+        else:
+            # A global key already exists. This local key is different.
+            # We MUST keep using the local one here so we don't brick this specific workspace's secrets.
+            return local_key_path.read_bytes()
+
+    # Standard Global Key Generation/Loading
+    if not global_key_path.exists() or os.path.getsize(global_key_path) == 0:
         from cryptography.fernet import Fernet
-        key_path.parent.mkdir(parents=True, exist_ok=True)
+        global_key_path.parent.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
-        key_path.write_bytes(key)
-    return key_path.read_bytes()
+        global_key_path.write_bytes(key)
+
+    return global_key_path.read_bytes()
 
 def encrypt_secret(val: str) -> str:
     if not val: return val
@@ -43,7 +62,7 @@ security_bp = InSetuExtension(
         "scope": "daemon",
         "secure": False,
         "default": get_master_key().decode('utf-8'),
-        "description": "This key encrypts your secrets.json. If you move this workspace to another machine, you must copy this key to .insetu/master_key.txt on the new machine. DO NOT LOSE THIS."
+        "description": "This global key encrypts your secrets.json. It is stored securely in your user home directory (~/.insetu/master_key.txt). If you move this workspace to another machine, you must copy this key to the new machine. DO NOT LOSE THIS."
     }]
 )
 @security_bp.route('settings', methods=['POST'])
@@ -51,10 +70,18 @@ def update_security_settings(ctx):
     data = ctx.req.json or {}
     new_key = data.get("master_fernet_key")
     if new_key:
-        from insetu.kernel.utils import _cwd
+        import os
         from pathlib import Path
-        key_path = Path(_cwd).joinpath(".insetu", "master_key.txt")
-        key_path.write_bytes(new_key.encode('utf-8'))
+        from insetu.kernel.utils import _cwd
+
+        global_key_path = Path.home().joinpath(".insetu", "master_key.txt")
+        local_key_path = Path(_cwd).joinpath(".insetu", "master_key.txt")
+
+        # If a local legacy key exists, update that one to avoid breaking state, otherwise update global
+        target_path = local_key_path if local_key_path.exists() else global_key_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(new_key.encode('utf-8'))
+
     return {"status": "success", "requires_refresh": False}
 
 # Generate a cryptographically sound scrolling runtime session token
