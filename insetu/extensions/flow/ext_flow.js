@@ -410,7 +410,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             ...b, 
                                                             filepath: filename, 
                                                             suppress: ['file-browse', 'file-edit'], 
-                                                            chunks: manifestObj.chunks || [filename]  
+                                                            chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}
                                                         @card-clicked=${() => this.openBatchModal(b)}>
                                                 </insetu-card>

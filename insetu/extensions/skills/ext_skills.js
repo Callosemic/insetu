@@ -144,12 +144,13 @@ export class InSetuExtSkills extends InSetuElement {
             this.formStatus = state.formStatus;
             this.formMetrics = state.formMetrics;
             this.modalMode = state.modalMode;
-
-            if (state.selectedItem && !this._editName) {
+            if (state.selectedItem && (this._lastSelectedFile !== state.selectedItem.filepath)) {
+                this._lastSelectedFile = state.selectedItem.filepath;
                 this._editName = state.selectedItem.name;
                 this._editTags = state.selectedItem.tags || '';
                 this._editGroup = state.selectedItem.group_name || '';
             } else if (!state.selectedItem) {
+                this._lastSelectedFile = null;
                 this._editName = '';
                 this._editTags = '';
                 this._editGroup = '';

@@ -579,7 +579,6 @@ def inbox_disposition(ctx, inbox_id):
             job_id = job_data['job_id']
             conn.execute("UPDATE research_jobs SET status='running' WHERE id=? AND status='completed'", (job_id,))
             conn.commit()
-            from insetu.engine_research import _get_research_intervals
             _, _, s_int, s_jit = _get_research_intervals()
             submit_job(f"research_{job_id}", "research", "scrape_next_link", s_int, json.dumps({"job_id": job_id}), s_jit, workspace_id=workspace_id)
         return jsonify({"status": "success"})

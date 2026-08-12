@@ -96,9 +96,10 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
         if str(delivery_date).lower() == 'null': delivery_date = None
 
         sub_bucket = yaml_data.get('sub_bucket', "None")
-
         tags_raw = yaml_data.get('tags', '[]')
-        if isinstance(tags_raw, str) and tags_raw.startswith('['):
+        if isinstance(tags_raw, list):
+            tags = json.dumps([str(t).strip() for t in tags_raw if str(t).strip()])
+        elif isinstance(tags_raw, str) and tags_raw.startswith('['):
             tags = tags_raw
         else:
             tags = json.dumps([t.strip() for t in str(tags_raw).split(',') if t.strip()])
