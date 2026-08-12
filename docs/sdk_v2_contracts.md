@@ -65,7 +65,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`
+* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned. All API methods enforce client-side extension enablement checks against `window.ACTIVE_EXTENSIONS` prior to network dispatch, returning a 403 Forbidden response if the target extension is disabled.
