@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import shutil
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
@@ -145,8 +146,11 @@ def _background_first_release_task(ctx, repo):
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before issuing the initial release.")
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
-
     if dist_target == "python_pypi":
+        dist_dir = Path(repo_path) / "dist"
+        if dist_dir.exists():
+            shutil.rmtree(dist_dir)
+
         ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
         build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
         log_lines.append(f"=== BUILD STDOUT ===\n{build_res.stdout}\n=== BUILD STDERR ===\n{build_res.stderr}")
@@ -233,11 +237,14 @@ def _background_preview_first_release_task(ctx, repo):
         f"Target Version: v{version_str}"
     ]
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
-
     if dist_target == "python_pypi":
         import sys
         import zipfile
         import subprocess
+
+        dist_dir = Path(repo_path) / "dist"
+        if dist_dir.exists():
+            shutil.rmtree(dist_dir)
 
         ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
         build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
