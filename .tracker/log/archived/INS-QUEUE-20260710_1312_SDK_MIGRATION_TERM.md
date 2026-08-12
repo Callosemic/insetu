@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260710_1312_SDK_MIGRATION_TERM
 title: "SDK V2 Migration: Terminal Extension"
 created_at: 2026-07-10T13:12:00
