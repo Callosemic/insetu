@@ -14,7 +14,7 @@ export const UpdateStore = createExtensionStore('Update', {
     hasRelease: false,
     pypiPublished: false,
     packageName: '',
-    repoBuildCommand: '',
+    repoBuildCommand: 'python -m build',
     repoVcsRelease: true,
     hasToken: true,
     hasPypiToken: false,
@@ -132,7 +132,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             hasRelease: statusData.artifact.has_release === true,
                             pypiPublished: statusData.artifact.pypi_published === true,
                             packageName: statusData.artifact.package_name || '',
-                            repoBuildCommand: statusData.artifact.build_command || '',
+                            repoBuildCommand: statusData.artifact.build_command ?? 'python -m build',
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
                             hasToken: statusData.artifact.has_token !== false,
                             hasPypiToken: statusData.artifact.has_pypi_token === true,
@@ -301,7 +301,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.hasPyproject = true;
         this.isClean = true;
         this.hasRelease = false;
-        this.repoBuildCommand = '';
+        this.repoBuildCommand = 'python -m build';
         this.repoVcsRelease = true;
         this.hasToken = true;
         this.hasPypiToken = false;
@@ -328,7 +328,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.hasRelease = state.hasRelease === true;
             this.pypiPublished = state.pypiPublished === true;
             this.packageName = state.packageName || '';
-            this.repoBuildCommand = state.repoBuildCommand || '';
+            this.repoBuildCommand = state.repoBuildCommand ?? 'python -m build';
             this.repoVcsRelease = state.repoVcsRelease !== false;
             this.hasToken = state.hasToken !== false;
             this.hasPypiToken = state.hasPypiToken === true;
