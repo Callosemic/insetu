@@ -153,6 +153,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     else:
                         patch_tel["status"] = "needs_confirmation"
                         patch_tel["flags"].append("confirm-to-overwrite")
+                        patch_tel["error_message"] = f"File '{resolved_path}' already exists on disk. Confirm to overwrite."
+                        patch_tel["candidates"] = [{"filepath": resolved_path, "score": 1.0, "match_type": "overwrite"}]
                         patch_tel["available_actions"].append("confirm_candidate")
                         telemetry["can_commit"] = False
             # Step b: Direct Path Match

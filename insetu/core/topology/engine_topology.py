@@ -336,10 +336,10 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
         if target_f.name.lower() in (".gitkeep", ".keep"):
             valid_files.add(norm_path)
             continue
-
         ext = target_f.suffix.lower()
+        fname = target_f.name.lower()
         allowed_exts = set(live_cfg.get("include_extensions", []) + config.get("exts", []))
-        if ext in allowed_exts: valid_files.add(norm_path)
+        if ext in allowed_exts or fname in allowed_exts: valid_files.add(norm_path)
 
     for forced_file in config.get("force_include", []):
         if (repo_p / forced_file).exists(): 

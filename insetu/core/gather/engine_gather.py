@@ -990,7 +990,6 @@ def hook_gather_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     for r in rows:
         ctx_sigs[r['filepath']] = r['timestamp']
     return {"ctx": ctx_sigs}
-
 @gather_bp.route('manifest/entry', methods=['GET'])
 def api_gather_manifest_entry(ctx):
     """Surgically fetches a single manifest entry by context path."""
@@ -1000,5 +999,5 @@ def api_gather_manifest_entry(ctx):
     conn = get_connection("vfs_index", workspace_id=ctx.workspace_id)
     row = conn.execute("SELECT filepath, entry_json FROM manifest_ledger WHERE filepath=?", (path,)).fetchone()
     if not row or not row['entry_json']:
-        return jsonify({"path": path, "entry": None}), 404
+        return jsonify({"path": path, "entry": None, "status": "deleted"}), 200
     return jsonify({"path": path, "entry": json.loads(row['entry_json'])})
