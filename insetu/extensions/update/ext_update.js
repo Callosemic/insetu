@@ -133,6 +133,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             isClean: statusData.artifact.is_clean !== false,
                             hasRelease: statusData.artifact.has_release === true,
                             pypiPublished: statusData.artifact.pypi_published === true,
+                            pypiPackageExists: statusData.artifact.pypi_package_exists === true,
                             packageName: statusData.artifact.package_name || '',
                             repoBuildCommand: statusData.artifact.build_command ?? 'python -m build',
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
@@ -294,6 +295,7 @@ export class InSetuExtUpdate extends InSetuElement {
         isClean: { type: Boolean },
         hasRelease: { type: Boolean },
         pypiPublished: { type: Boolean },
+        pypiPackageExists: { type: Boolean },
         packageName: { type: String },
         repoBuildCommand: { type: String },
         repoVcsRelease: { type: Boolean },
@@ -326,6 +328,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.hasPyproject = true;
         this.isClean = true;
         this.hasRelease = false;
+        this.pypiPackageExists = false;
         this.repoBuildCommand = 'python -m build';
         this.repoVcsRelease = true;
         this.hasToken = true;
@@ -355,6 +358,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.isClean = state.isClean !== false;
             this.hasRelease = state.hasRelease === true;
             this.pypiPublished = state.pypiPublished === true;
+            this.pypiPackageExists = state.pypiPackageExists === true;
             this.packageName = state.packageName || '';
             this.repoBuildCommand = state.repoBuildCommand ?? 'python -m build';
             this.repoVcsRelease = state.repoVcsRelease !== false;
@@ -669,7 +673,7 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
-                            ${!this.hasRelease || (!this.pypiPublished && this.distributionTarget === 'python_pypi') ? html`
+                            ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) ? html`
                                 <sutram-async-btn 
                                     style="width: 100%;" 
                                     label="${this.distributionTarget === 'python_pypi' ? `🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI` : `🏷️ Release v${this.repoVersion || '0.1.0'} to VCS`}" 
@@ -686,7 +690,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                         ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
-                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished ? html`
+                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
                                     <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
                                         🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
                                     </div>
@@ -713,7 +717,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                         ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
-                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished ? html`
+                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
                                     <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
                                         🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
                                     </div>

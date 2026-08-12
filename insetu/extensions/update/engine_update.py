@@ -510,8 +510,9 @@ def _background_status_task(ctx, repo):
                 has_release = True
         except subprocess.CalledProcessError:
             pass
-    # 3. Query PyPI JSON API to verify if this version is published on PyPI.org
+    # 3. Query PyPI JSON API to verify if the package exists and if this version is published
     pypi_published = False
+    pypi_package_exists = False
     if version:
         try:
             import urllib.request
@@ -519,11 +520,13 @@ def _background_status_task(ctx, repo):
             req = urllib.request.Request(f"https://pypi.org/pypi/{package_name}/json", headers={'User-Agent': 'inSetu-OS/1.0'})
             with urllib.request.urlopen(req, timeout=3) as response:
                 if response.status == 200:
+                    pypi_package_exists = True
                     pypi_data = json.loads(response.read().decode('utf-8'))
                     releases = pypi_data.get("releases", {})
                     pypi_published = clean_version in releases or f"v{clean_version}" in releases or version in releases
         except Exception:
             pypi_published = False
+            pypi_package_exists = False
 
     return {"message": "Status resolved.", "artifact": {
         "version": version, 
@@ -533,6 +536,7 @@ def _background_status_task(ctx, repo):
         "is_clean": is_clean, 
         "has_release": has_release, 
         "pypi_published": pypi_published,
+        "pypi_package_exists": pypi_package_exists,
         "build_command": build_command,
         "vcs_release": vcs_release,
         "has_pypi_token": has_pypi_token,
