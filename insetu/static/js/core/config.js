@@ -35,7 +35,6 @@ export class InSetuExtConfig extends InSetuElement {
         this._expandedBuckets = {};
         this._repoBackup = null;
     }
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(AppStore, (state) => {
@@ -44,6 +43,9 @@ export class InSetuExtConfig extends InSetuElement {
             } else if (!state.isConfigOpen && this._isOpen) {
                 this._isOpen = false;
             }
+        });
+        this.registerGlobalListener('insetu:config:save', window, () => {
+            if (this._isOpen) this._saveConfig();
         });
     }
 
@@ -99,76 +101,68 @@ export class InSetuExtConfig extends InSetuElement {
                             }}>🗑️ Remove</button>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <select style="padding: 6px; font-size: 0.85rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; width: 250px;"
-                                @change=${(e) => {
-                                    if (e.target.value === 'implicit') {
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <sutram-select 
+                                .value=${isImplicit ? 'implicit' : 'explicit'} 
+                                .options=${[
+                                    { value: 'explicit', label: 'Explicit (Match Prefixes)' },
+                                    { value: 'implicit', label: 'Implicit (Dynamic Folders)' }
+                                ]}
+                                @sutram-input-changed=${(e) => {
+                                    if (e.detail.value === 'implicit') {
                                         this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { dynamic_split_prefix: '.', meta_map: {} };
                                     } else {
                                         this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { title: '', match_prefixes: [] };
                                     }
                                     this.requestUpdate();
-                                }}>
-                                <option value="explicit" ?selected=${!isImplicit}>Explicit (Match Prefixes)</option>
-                                <option value="implicit" ?selected=${isImplicit}>Implicit (Dynamic Folders)</option>
-                            </select>
+                                }} ?flush=${true} style="width: 250px;">
+                            </sutram-select>
                         </div>
                         ${!isImplicit ? html`
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Title</label><input type="text" .value=${b.title || ''} placeholder="Display Name" @input=${(e) => { b.title = e.target.value; this.requestUpdate(); }}></div>
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Domain</label><input type="text" .value=${b.domain || ''} placeholder="Category" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}></div>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                            <sutram-input label="Title" .value=${b.title || ''} placeholder="Display Name" @sutram-input-changed=${(e) => { b.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                            <sutram-input label="Domain" .value=${b.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                         </div>
-                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 2;"><label style="font-size: 0.75rem; color:var(--text-muted);">Description</label><input type="text" .value=${b.description || ''} placeholder="What goes here?" @input=${(e) => { b.description = e.target.value; this.requestUpdate(); }}></div>
-                            <div style="flex: 1;"><label style="font-size: 0.75rem; color:var(--text-muted);">Custom Out File</label><input type="text" .value=${b.out_file || ''} placeholder="out_context.txt" @input=${(e) => { b.out_file = e.target.value; this.requestUpdate(); }}></div>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                            <sutram-input label="Description" .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 2; min-width: 200px;"></sutram-input>
+                            <sutram-input label="Custom Out File" .value=${b.out_file || ''} placeholder="out_context.txt" @sutram-input-changed=${(e) => { b.out_file = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                         </div>
-                        <div>
-                            <label style="font-size: 0.75rem; color:var(--text-muted);">Match Prefixes (comma separated)</label>
-                            <input type="text" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @input=${(e) => { b.match_prefixes = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                        </div>
-                        <div style="margin-top: 5px;">
-                            <label style="font-size: 0.8rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!b.is_catch_all} @change=${(e) => { b.is_catch_all = e.target.checked; this.requestUpdate(); }}> Designate as Catch-All Bucket</label>
-                        </div>
+                        <sutram-input label="Match Prefixes (comma separated)" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @sutram-input-changed=${(e) => { b.match_prefixes = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}></sutram-input>
+                        <sutram-toggle label="Designate as Catch-All Bucket" .checked=${!!b.is_catch_all} @sutram-input-changed=${(e) => { b.is_catch_all = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="margin-top: 5px;"></sutram-toggle>
                     ` : html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                            <div style="flex: 1;">
-                                <label style="font-size: 0.75rem; color:var(--text-muted);">Dynamic Split Prefix</label>
-                                <input type="text" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" @input=${(e) => { b.dynamic_split_prefix = e.target.value; this.requestUpdate(); }}>
-                            </div>
-                            <div style="flex: 1;">
-                                <label style="font-size: 0.75rem; color:var(--text-muted);">Shared Base Domain</label>
-                                <input type="text" .value=${b.domain || ''} placeholder="e.g. Dynamic Modules" @input=${(e) => { b.domain = e.target.value; this.requestUpdate(); }}>
-                            </div>
+                            <sutram-input label="Dynamic Split Prefix" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" @sutram-input-changed=${(e) => { b.dynamic_split_prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                            <sutram-input label="Shared Base Domain" .value=${b.domain || ''} placeholder="e.g. Dynamic Modules" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                         </div>
-                        <div style="border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                                <label style="font-size: 0.75rem; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
-                                <button class="btn-sm" style="background: var(--intent-primary);" @click=${() => {
+                        <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <label style="font-size: 0.85rem; font-weight: bold; color:var(--text-muted);">Meta Map (Folder Overrides)</label>
+                                <button class="btn-sm" style="background: var(--intent-primary); color: white; border: none; font-weight: bold; border-radius: 4px;" @click=${() => {
                                     if (!b.meta_map) b.meta_map = {};
                                     const nextIdx = Object.keys(b.meta_map).filter(k => k.startsWith('new_folder_')).length + 1;
                                     b.meta_map[`new_folder_${nextIdx}`] = { title: '', domain: '' };
                                     this.requestUpdate();
-                                }}>+ Folder Meta</button>
+                                }}>➕ Folder Meta</button>
                             </div>
-                            <div style="display: flex; flex-direction: column; gap: 5px;">
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
                                 ${Object.keys(b.meta_map || {}).map(dirKey => {
                                     const meta = b.meta_map[dirKey];
                                     return html`
-                                        <div style="display: flex; gap: 5px; align-items: center; background: var(--bg); padding: 5px; border-radius: 4px; flex-wrap: wrap; border: 1px solid var(--border);">
-                                            <input type="text" .value=${dirKey} placeholder="Folder Name" style="flex: 1; min-width: 100px;" @change=${(e) => {
-                                                const newKey = e.target.value;
+                                        <div style="display: flex; gap: 8px; align-items: center; background: var(--bg); padding: 8px 10px; border-radius: 6px; flex-wrap: wrap; border: 1px solid var(--border);">
+                                            <sutram-input .value=${dirKey} placeholder="Folder Name" @sutram-input-changed=${(e) => {
+                                                const newKey = e.detail.value;
                                                 if (newKey && newKey !== dirKey && !b.meta_map[newKey]) {
                                                     b.meta_map[newKey] = b.meta_map[dirKey];
                                                     delete b.meta_map[dirKey];
                                                     this.requestUpdate();
                                                 }
-                                            }}>
-                                            <input type="text" .value=${meta.title || ''} placeholder="Title" style="flex: 1; min-width: 100px;" @input=${(e) => { meta.title = e.target.value; this.requestUpdate(); }}>
-                                            <input type="text" .value=${meta.domain || ''} placeholder="Domain" style="flex: 1; min-width: 100px;" @input=${(e) => { meta.domain = e.target.value; this.requestUpdate(); }}>
-                                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1.2rem; padding: 0 5px;" @click=${() => {
+                                            }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                            <sutram-input .value=${meta.title || ''} placeholder="Title" @sutram-input-changed=${(e) => { meta.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                            <sutram-input .value=${meta.domain || ''} placeholder="Domain" @sutram-input-changed=${(e) => { meta.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 120px;"></sutram-input>
+                                            <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; font-size: 1.2rem; padding: 0 8px; flex-shrink: 0; cursor: pointer;" @click=${() => {
                                                 delete b.meta_map[dirKey];
                                                 this.requestUpdate();
-                                            }}>×</button>
+                                            }}>✕</button>
                                         </div>
                                     `;
                                 })}
@@ -240,9 +234,9 @@ export class InSetuExtConfig extends InSetuElement {
                 }}>
                 <div slot="body" style="display: flex; flex-direction: column;">
                     ${repo ? html`
-                    <div style="padding: 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 1.2rem;">📦</span>
-                        <input type="text" .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="font-weight: bold; width: 100%; background: var(--input-bg);" @input=${(e) => { repo.repo_dir = e.target.value; this.requestUpdate(); }}>
+                    <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg);">
+                        <span style="font-size: 1.4rem;">📦</span>
+                        <sutram-input .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
                     <sutram-collapsible 
                         titleText="Repo Settings" 
@@ -251,52 +245,28 @@ export class InSetuExtConfig extends InSetuElement {
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
                         <div style="display: flex; flex-direction: column; gap: 15px;">
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 1; min-width: 150px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Title</label>
-                                    <input type="text" .value=${repo.title || ''} placeholder="Display Title" @input=${(e) => { repo.title = e.target.value; this.requestUpdate(); }}>
-                                </div>
-                                <div style="flex: 1; min-width: 150px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Domain</label>
-                                    <input type="text" .value=${repo.domain || ''} placeholder="Category" @input=${(e) => { repo.domain = e.target.value; this.requestUpdate(); }}>
-                                </div>
-                                <div style="flex: 1; min-width: 150px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Archive Type</label>
-                                    <select style="width: 100%; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => { repo.archive_type = e.target.value; this.requestUpdate(); }}>
-                                        <option value="repo" ?selected=${repo.archive_type === 'repo' || !repo.archive_type}>Standard Repo</option>
-                                        <option value="media-vault" ?selected=${repo.archive_type === 'media-vault'}>Media Vault</option>
-                                        ${(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault') ? html`<option value="${repo.archive_type}" selected>${repo.archive_type}</option>` : ''}
-                                    </select>
-                                </div>
+                                <sutram-input label="Title" .value=${repo.title || ''} placeholder="Display Title" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                                <sutram-input label="Domain" .value=${repo.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { repo.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                                <sutram-select label="Archive Type" .value=${repo.archive_type || 'repo'} .options=${[
+                                    { value: 'repo', label: 'Standard Repo' },
+                                    { value: 'media-vault', label: 'Media Vault' },
+                                    ...(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault' ? [{ value: repo.archive_type, label: repo.archive_type }] : [])
+                                ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-select>
                             </div>
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 1; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Physical Path (Optional Override)</label>
-                                    <input type="text" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @input=${(e) => { repo.physical_path = e.target.value; this.requestUpdate(); }}>
-                                </div>
-                                <div style="flex: 1; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Custom Out File (Optional)</label>
-                                    <input type="text" .value=${repo.out_file || ''} placeholder="custom_context.txt" @input=${(e) => { repo.out_file = e.target.value; this.requestUpdate(); }}>
-                                </div>
+                                <sutram-input label="Physical Path (Optional Override)" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @sutram-input-changed=${(e) => { repo.physical_path = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
+                                <sutram-input label="Custom Out File (Optional)" .value=${repo.out_file || ''} placeholder="custom_context.txt" @sutram-input-changed=${(e) => { repo.out_file = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                             </div>
 
-                            <div>
-                                <label style="font-size: 0.8rem; color: var(--text-muted);">Tracked Extensions (comma separated)</label>
-                                <input type="text" .value=${(repo.exts || []).join(', ')} placeholder=".py, .js, .md" @input=${(e) => { repo.exts = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                            </div>
+                            <sutram-input label="Tracked Extensions (comma separated)" .value=${(repo.exts || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { repo.exts = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <div style="flex: 1; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Directories (comma separated)</label>
-                                    <input type="text" .value=${(repo.repo_ignore_dirs || []).join(', ')} placeholder="node_modules, build" @input=${(e) => { repo.repo_ignore_dirs = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                                </div>
-                                <div style="flex: 1; min-width: 200px;">
-                                    <label style="font-size: 0.8rem; color: var(--text-muted);">Ignore Files (comma separated)</label>
-                                    <input type="text" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @input=${(e) => { repo.repo_ignore_files = e.target.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}>
-                                </div>
+                                <sutram-input label="Ignore Directories (comma separated)" .value=${(repo.repo_ignore_dirs || []).join(', ')} placeholder="node_modules, build" @sutram-input-changed=${(e) => { repo.repo_ignore_dirs = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
+                                <sutram-input label="Ignore Files (comma separated)" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @sutram-input-changed=${(e) => { repo.repo_ignore_files = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                             </div>
-                            <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 10px; background: var(--input-bg); border-radius: 4px; border: 1px solid var(--border);">
-                                <label style="font-size: 0.85rem; color: var(--text); cursor: pointer;"><input type="checkbox" .checked=${!!repo.exclude_from_context} @change=${(e) => { repo.exclude_from_context = e.target.checked; this.requestUpdate(); }}> Exclude from Context Compilation</label>
+                            <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center;">
+                                <sutram-toggle label="Exclude from Context Compilation" .checked=${!!repo.exclude_from_context} @sutram-input-changed=${(e) => { repo.exclude_from_context = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
                                 ${(() => {
                                     const templates = [];
                                     if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
@@ -429,18 +399,12 @@ export class InSetuExtConfig extends InSetuElement {
                 ?flush=${true}
                 @sutram-modal-closed=${() => { this._isOpen = false; AppStore.setState({ isConfigOpen: false }); }}>
                 <div slot="body">${bodyContent}</div>
-
-                <button slot="footer" style="background: var(--intent-primary); color: white;" @click=${this.saveConfig}>
-                    💾 Save & Remap Disk
-                </button>
+                <sutram-async-btn slot="footer" label="💾 Save & Remap Disk" intent="primary" .onClick=${this._saveConfig.bind(this)}></sutram-async-btn>
             </sutram-modal>
         `;
     }
 
-    async saveConfig(e) {
-        const btn = e.target;
-        const origText = btn.innerText;
-        btn.innerText = '⏳ Saving...';
+    async _saveConfig() {
         try {
             // Config saves utilize explicit multi-tenant URL path boundaries
             const res = await window.inSetu.api.workspace('system/config', {
@@ -451,13 +415,11 @@ export class InSetuExtConfig extends InSetuElement {
 
             if (res.ok) {
                 const data = await res.json();
-                btn.innerText = '⏳ Re-indexing...';
                 if (window.inSetu.sys.executeSystemCompile) {
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Re-indexing...", null);
                     await window.inSetu.sys.executeSystemCompile(null, true);
                 }
                 if (data.requires_reboot) {
-                    btn.innerText = '⏳ Rebooting...';
-
                     // Declarative UI State Transition
                     AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
 
@@ -470,8 +432,10 @@ export class InSetuExtConfig extends InSetuElement {
                             if (ping.ok) window.location.reload();
                         } catch(err) {}
                     }, 1000);
+
+                    // Stall the promise so the async button remains in the loading state through reboot
+                    await new Promise(() => {});
                 } else {
-                    btn.innerText = '⏳ Refreshing UI...';
                     this._isOpen = false;
                     AppStore.setState({ isConfigOpen: false });
 
@@ -480,16 +444,13 @@ export class InSetuExtConfig extends InSetuElement {
                     } else {
                         window.location.reload();
                     }
-                    btn.innerText = origText;
                 }
             } else {
                 const data = await res.json();
-                alert("Failed to save: " + data.error);
-                if (btn) btn.innerText = origText;
+                throw new Error(data.error || "Unknown Server Error");
             }
         } catch (e) {
-            alert("Network error: " + e.message);
-            if (btn) btn.innerText = origText;
+            throw new Error(e.message || "Network error");
         }
     }
 }
@@ -511,12 +472,7 @@ window.ExtensionRegistry.registerExtension('config', {
             context: 'modal:config-editor-modal',
             key: 'ctrl+s',
             label: 'Save Workspace Config',
-            action: () => {
-                const cfgEl = document.getElementById('insetu-config-root');
-                if (cfgEl && cfgEl.saveConfig) {
-                    cfgEl.saveConfig({ target: { innerText: '💾 Save & Remap Disk' }});
-                }
-            }
+            action: () => window.dispatchEvent(new Event('insetu:config:save'))
         }
     ],
     entityActions: [

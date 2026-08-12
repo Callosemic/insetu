@@ -1519,7 +1519,7 @@ export class InSetuVFSModals extends InSetuElement {
                 </div>
                 <sutram-async-btn slot="footer" label="🚚 Move File" intent="primary" .onClick=${executeMove}></sutram-async-btn>
             </sutram-modal>
-            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} ?flush=${true} style="--modal-backdrop: transparent; --modal-backdrop-filter: none;" titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
+            <sutram-modal ?open=${m.newFile?.open} ?fullscreen=${true} ?flush=${true} titleText="Create New Workspace File" @sutram-modal-closed=${() => FsStore.getState().setModal('newFile', { open: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%;">
                     <div style="padding: 10px 20px; display: flex; flex-direction: column; gap: 6px; background: var(--input-bg); border-bottom: 1px solid var(--border); flex-shrink: 0;">
                         <div style="font-size: 0.85rem; color: var(--text-muted); word-break: break-all;">
@@ -1617,7 +1617,7 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
-<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:'))} style="${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? '--modal-backdrop: transparent; --modal-backdrop-filter: none;' : ''}" @sutram-modal-closed=${closeBrowseModal}>
+<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:'))} @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
             <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">

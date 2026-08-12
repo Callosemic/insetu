@@ -191,7 +191,6 @@ export class InSetuSystemSettings extends InSetuElement {
                 ?open=${this.modalOpen} 
                 ?fullscreen=${true} 
                 titleText="OS Settings Hub" 
-                style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
                 @sutram-modal-closed=${() => this.modalOpen = false}>
 
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: hidden;">
@@ -206,12 +205,11 @@ export class InSetuSystemSettings extends InSetuElement {
                             🧩 Extensions
                         </button>
                     </div>
-
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
                         ${this.activeTab === 'system' ? html`
                             ${renderBtn('⚙️', 'System Preferences', () => this._openGenericSettings('core_system'))}
-                            ${renderBtn('🗃️', 'Add / Remove Workspaces', () => { this.modalOpen = false; AppStore.setState({ isWorkspaceEditorOpen: true }); })}
-                            ${renderBtn('📂', 'Configure Current Workspace', () => { this.modalOpen = false; AppStore.setState({ isConfigOpen: true }); })}
+                            ${renderBtn('🗃️', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
+                            ${renderBtn('📂', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
                             ${renderBtn('🧩', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
                         ` : ''}
 
@@ -233,7 +231,6 @@ export class InSetuSystemSettings extends InSetuElement {
                     </sutram-entity-actions>
                 </div>
             </sutram-modal>
-
             <sutram-modal 
                 ?open=${this.manageExtOpen} 
                 titleText="Manage Workspace Extensions" 
@@ -245,18 +242,25 @@ export class InSetuSystemSettings extends InSetuElement {
                         const isConfig = ext.id === 'config';
                         const isChecked = (this._sysConfigForm.extensions || []).includes(ext.id) || isConfig;
                         return html`
-                            <div style="display: flex; align-items: center; gap: 8px; background: var(--input-bg); padding: 12px; border: 1px solid var(--border); border-radius: 6px;">
-                                <input type="checkbox" id="ext_chk_${ext.id}" style="transform: scale(1.2); cursor: pointer;" .checked=${isChecked} ?disabled=${isConfig} @change=${(e) => {
+                            <div style="display: flex; align-items: flex-start; gap: 12px; background: var(--input-bg); padding: 12px 15px; border: 1px solid var(--border); border-radius: 6px;">
+                                <sutram-toggle .checked=${isChecked} ?disabled=${isConfig} @sutram-input-changed=${(e) => {
                                     const current = this._sysConfigForm.extensions || [];
-                                    const newExts = e.target.checked 
+                                    const newExts = e.detail.value 
                                         ? (current.includes(ext.id) ? current : [...current, ext.id])
                                         : current.filter(x => x !== ext.id);
                                     this._sysConfigForm = { ...this._sysConfigForm, extensions: newExts };
                                     this.requestUpdate();
-                                }}>
-                                <label for="ext_chk_${ext.id}" style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; cursor: pointer; font-weight: bold; flex: 1; margin: 0;">
-                                    ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
-                                </label>
+                                }} ?flush=${true} style="margin-top: 2px;"></sutram-toggle>
+                                <div style="display: flex; flex-direction: column; gap: 2px; flex: 1;">
+                                    <span style="font-size: 0.95rem; color: ${isConfig ? 'var(--text-muted)' : 'var(--text)'}; font-weight: bold; margin: 0;">
+                                        ${ext.title} <span style="font-weight: normal; color: var(--text-muted); font-size: 0.8rem;">(${ext.id})</span>
+                                    </span>
+                                    ${ext.description ? html`
+                                        <span style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.3;">
+                                            ${ext.description}
+                                        </span>
+                                    ` : ''}
+                                </div>
                             </div>
                         `;
                     })}
@@ -410,18 +414,23 @@ export class InSetuWorkspaceEditor extends InSetuElement {
             <sutram-modal ?open=${this.open} ?fullscreen=${true} titleText="🗃️ Add / Remove Workspaces" @sutram-modal-closed=${(e) => { if (e.target !== e.currentTarget) return; this.open = false; AppStore.setState({ isWorkspaceEditorOpen: false }); }}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 20px; flex: 1; min-height: 0; overflow-y: auto;">
                     <form @submit=${this._handleCreateWorkspace} style="display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; background: transparent; border: none; box-shadow: none;">
-                        <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Unique Name / ID</label>
-                            <input type="text" id="new-ws-id" placeholder="e.g. guitar_academy" .value=${this._newWsId} @input=${e => this._newWsId = e.target.value} required style="width: 100%; margin: 0;">
-                        </div>
+                        <sutram-input label="Workspace Unique Name / ID" placeholder="e.g. guitar_academy" .value=${this._newWsId} @sutram-input-changed=${e => this._newWsId = e.detail.value} ?flush=${true}></sutram-input>
+
                         <div>
                             <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Workspace Root Directory Path</label>
-                            <div style="display: flex; gap: 8px;">
-                                <input type="text" id="new-ws-root" placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @input=${e => this._newWsRoot = e.target.value} required style="flex: 1; margin: 0;">
-                                <button type="button" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px;" @click=${this._openHostBrowser}>...</button>
+                            <div style="display: flex; gap: 8px; align-items: flex-start;">
+                                <sutram-input placeholder="e.g. ~/Documents/GuitarRepertoire" .value=${this._newWsRoot} @sutram-input-changed=${e => this._newWsRoot = e.detail.value} ?flush=${true} style="flex: 1; margin: 0;"></sutram-input>
+                                <button type="button" class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 8px 14px; height: 38px;" @click=${this._openHostBrowser}>...</button>
                             </div>
                         </div>
-                        <button type="submit" style="background: var(--intent-success); font-weight: bold; width: 100%; padding: 12px; margin: 0; font-size: 0.9rem; border-radius: 4px;">➕ Provision & Mount Isolated Workspace</button>
+                        <sutram-async-btn btntype="submit" label="➕ Provision & Mount Isolated Workspace" intent="success" style="width: 100%; display: block;" .onClick=${(e) => {
+                            if (!this._newWsId || !this._newWsRoot) {
+                                e.preventDefault();
+                                alert("Workspace ID and Root Path are required.");
+                                throw new Error("Validation failed");
+                            }
+                            return this._handleCreateWorkspace(e);
+                        }}></sutram-async-btn>
                     </form>
                     <sutram-modal ?open=${this._showHostBrowser} ?fullscreen=${true} titleText="📁 Select Local System Directory" @sutram-modal-closed=${() => this._showHostBrowser = false}>
                         <div slot="body" style="display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto;">

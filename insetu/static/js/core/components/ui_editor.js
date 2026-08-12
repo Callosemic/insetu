@@ -466,7 +466,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                     <div class="action-bar-scroll">
                         <slot name="action-bar-extra"></slot>
                         <sutram-entity-actions 
-                            style="flex-wrap: nowrap; display: flex;"
+                            ?scrollable=${true}
                             .entityType=${'file'} 
                             .entityData=${{ 
                                 filepath: this.filepath, 

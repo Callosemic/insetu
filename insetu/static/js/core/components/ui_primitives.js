@@ -129,20 +129,6 @@ export class InSetuBlobViewer extends InSetuElement {
     static properties = { blobState: { type: Object } };
     static styles = [sharedStyles, css`
         :host { display: contents; }
-        .action-bar-scroll {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex: 1;
-            min-width: 0;
-            overflow-x: auto;
-            scrollbar-width: none;
-            flex-wrap: nowrap;
-            white-space: nowrap;
-            width: 100%;
-            justify-content: flex-end;
-        }
-        .action-bar-scroll::-webkit-scrollbar { display: none; }
     `];
 
     constructor() {
@@ -174,10 +160,10 @@ export class InSetuBlobViewer extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%;">
                     <textarea readonly style="flex: 1; width: 100%; height: 100%; padding: 15px; box-sizing: border-box; background: var(--bg); color: var(--text); border: none; font-family: monospace; font-size: 0.85rem; resize: none;" .value=${this.blobState.content}></textarea>
                 </div>
-
-                <div slot="footer" class="action-bar-scroll">
+                <div slot="footer" style="width: 100%; display: flex; justify-content: flex-end;">
                     <sutram-entity-actions 
-                        style="flex-wrap: nowrap; display: flex;"
+                        ?scrollable=${true}
+                        style="justify-content: flex-end;"
                         .entityType=${'text_blob'} 
                         .entityData=${{ 
                             textContent: this.blobState.content,

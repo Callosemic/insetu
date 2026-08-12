@@ -21,7 +21,6 @@ export class InSetuFileTree extends LitElement {
         :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
         .tree-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; }
     `];
-
 constructor() {
         super();
         this.files = [];
@@ -33,13 +32,24 @@ constructor() {
         this.enableSearch = false;
         this.searchPlaceholder = 'Search...';
         this._searchQuery = '';
+        this._cachedTree = null;
 }
-    _buildTree() {
-        const filteredFiles = (this.enableSearch && this._searchQuery)
-            ? window.inSetu.utils.fuzzyFilterObjects(this.files, this._searchQuery)
-            : this.files;
-        const mappedFiles = filteredFiles.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
-        return buildFileTree(mappedFiles);
+
+    willUpdate(changedProperties) {
+        if (changedProperties.has('files') || changedProperties.has('stripPrefix')) {
+            this._cachedTree = null;
+        }
+    }
+
+    _getTree() {
+        if (!this._cachedTree) {
+            const prefix = this.stripPrefix;
+            const mappedFiles = prefix 
+                ? this.files.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
+                : this.files;
+            this._cachedTree = buildFileTree(mappedFiles);
+        }
+        return this._cachedTree;
     }
     
     _setPath(newPath) {
@@ -65,9 +75,12 @@ constructor() {
         // Short-circuit the hierarchical tree generation if we are actively searching
         if (isSearching) {
             const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(this.files, this._searchQuery);
-            flatResults = filteredFiles.map(f => this.stripPrefix ? f.replace(new RegExp('^' + this.stripPrefix), '') : f);
+            const prefix = this.stripPrefix;
+            flatResults = prefix 
+                ? filteredFiles.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
+                : filteredFiles;
         } else {
-            const tree = this._buildTree();
+            const tree = this._getTree();
             current = tree;
             const validPath = [];
             for (const p of (this.currentPath || [])) {
