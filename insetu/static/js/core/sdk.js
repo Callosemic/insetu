@@ -210,7 +210,7 @@ export class InSetuElement extends SutramElement {
     onWorkspaceChanged(newWorkspaceId) {}
 }
 // Safely initialize nested global namespaces individually
-export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer']);
+export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer', 'core_text_blobs']);
 
 window.inSetu = window.inSetu || {};
 window.inSetu.CORE_MODULES = CORE_MODULES;
@@ -457,3 +457,68 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
     });
     return Array.from(allFiles);
 };
+
+window.ExtensionRegistry.registerExtension('core_text_blobs', {
+    name: "Core Text Blob Actions",
+    version: "1.0.0",
+    entityActions: [
+        {
+            targetEntity: 'text_blob',
+            id: 'blob-copy',
+            label: 'Copy',
+            icon: '📋',
+            intent: 'neutral',
+            order: 10,
+            onClick: async (data) => {
+                if (data.textContent && window.inSetu.utils) {
+                    await window.inSetu.utils.copyRawText(data.textContent);
+                    if (window.inSetu.ui) window.inSetu.ui.setGlobalStatus("✅ Copied to clipboard", 2000);
+                }
+            }
+        },
+        {
+            targetEntity: 'text_blob',
+            id: 'blob-save-vfs',
+            label: 'Save to VFS',
+            icon: '💾',
+            intent: 'neutral',
+            order: 20,
+            onClick: (data) => {
+                if (data.textContent && window.inSetu.ui && window.inSetu.ui.openFolderBrowser) {
+                    window.inSetu.ui.openFolderBrowser(async (selectedPath) => {
+                        if (selectedPath === undefined || selectedPath === null) return; // User cancelled
+
+                        const filename = data.suggestedFilename || ('blob_' + Date.now() + '.txt');
+                        const filepath = selectedPath ? (selectedPath + '/' + filename) : filename;
+
+                        if (window.inSetu.sys) {
+                            await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath, content: data.textContent });
+                            if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ Saved to ' + filepath, 3000);
+                        }
+                    });
+                }
+            }
+        },
+        {
+            targetEntity: 'text_blob',
+            id: 'blob-download',
+            label: 'Download',
+            icon: '⬇️',
+            intent: 'neutral',
+            order: 30,
+            onClick: (data) => {
+                if (data.textContent) {
+                    const filename = data.suggestedFilename || `blob_${Date.now()}.txt`;
+                    const blob = new Blob([data.textContent], { type: 'text/plain;charset=utf-8' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    if (window.inSetu.ui) window.inSetu.ui.setGlobalStatus(`✅ Downloaded ${filename}`, 3000);
+                }
+            }
+        }
+    ]
+});

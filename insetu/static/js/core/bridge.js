@@ -417,7 +417,9 @@ export class InSetuExtBridge extends InSetuElement {
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
-            if (this.vfs && this.vfs.openVirtualFile) this.vfs.openVirtualFile('Diff_Analysis.diff', decodedDiff);
+            if (this.ui && this.ui.viewTextBlob) {
+                this.ui.viewTextBlob('Syntax Error Diff', decodedDiff, `Syntax_Diff_${Date.now()}.diff`);
+            }
         } else if (action === 'copy-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             this.utils.copyRawText(decodedDiff);

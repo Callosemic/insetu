@@ -125,6 +125,77 @@ export class InSetConfigBanner extends InSetuElement {
     }
 }
 customElements.define('insetu-config-banner', InSetConfigBanner);
+export class InSetuBlobViewer extends InSetuElement {
+    static properties = { blobState: { type: Object } };
+    static styles = [sharedStyles, css`
+        :host { display: contents; }
+        .action-bar-scroll {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+            width: 100%;
+            justify-content: flex-end;
+        }
+        .action-bar-scroll::-webkit-scrollbar { display: none; }
+    `];
+
+    constructor() {
+        super();
+        this.blobState = { open: false, title: '', content: '', suggestedFilename: '' };
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.App, state => {
+            this.blobState = state.blobViewer || { open: false, title: '', content: '', suggestedFilename: '' };
+        });
+        window.inSetu.ui = window.inSetu.ui || {};
+        window.inSetu.ui.viewTextBlob = (title, content, suggestedFilename = '') => {
+            window.inSetu.stores.App.setState({
+                blobViewer: { open: true, title, content, suggestedFilename }
+            });
+        };
+    }
+    render() {
+        return html`
+            <sutram-modal 
+                ?open=${this.blobState.open} 
+                ?fullscreen=${true}
+                ?flush=${true}
+                titleText=${this.blobState.title || "Text Viewer"}
+                @sutram-modal-closed=${() => window.inSetu.stores.App.setState({ blobViewer: { ...this.blobState, open: false } })}>
+
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%;">
+                    <textarea readonly style="flex: 1; width: 100%; height: 100%; padding: 15px; box-sizing: border-box; background: var(--bg); color: var(--text); border: none; font-family: monospace; font-size: 0.85rem; resize: none;" .value=${this.blobState.content}></textarea>
+                </div>
+
+                <div slot="footer" class="action-bar-scroll">
+                    <sutram-entity-actions 
+                        style="flex-wrap: nowrap; display: flex;"
+                        .entityType=${'text_blob'} 
+                        .entityData=${{ 
+                            textContent: this.blobState.content,
+                            suggestedFilename: this.blobState.suggestedFilename || ('export_' + Date.now() + '.txt')
+                        }}>
+                    </sutram-entity-actions>
+                </div>
+            </sutram-modal>
+        `;
+    }
+}
+customElements.define('insetu-blob-viewer', InSetuBlobViewer);
+if (!document.getElementById('insetu-blob-viewer-root')) {
+    const blobRoot = document.createElement('insetu-blob-viewer');
+    blobRoot.id = 'insetu-blob-viewer-root';
+    document.body.appendChild(blobRoot);
+}
+
 // --- LEGACY INSETU COMPATIBILITY ALIASES ---
 // Maps legacy <insetu-*> tags directly to Sutram primitives to prevent 
 // template crashes in un-migrated views without polluting Sutram.

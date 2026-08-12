@@ -33,6 +33,7 @@ export const AppStore = createExtensionStore('App', {
     globalBrowsePath: [],
     currentBrowsePath: [],
     browserConfig: { mode: 'view', callback: null },
+    blobViewer: { open: false, title: '', content: '', suggestedFilename: '' },
     allRepos: [],
     targetConfigs: [],
     pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
