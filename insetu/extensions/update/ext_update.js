@@ -27,39 +27,10 @@ export const UpdateStore = createExtensionStore('Update', {
     previewChangelog: '',
     previewTab: 'changelog',
     previewActionType: 'bump',
-    firstRelease: async (repo) => {
+
+    _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab) => {
         if (!repo) return;
-        const res = await window.inSetu.api.post('update/first_release', { repo });
-        if (res.status === 202) {
-            const data = await res.json();
-            return new Promise((resolve, reject) => {
-                window.inSetu.utils.pollJob(data.job_id, {
-                    onProgress: (msg) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                    },
-                    onComplete: (statusData) => {
-                        const output = statusData.artifact?.output || statusData.message;
-                        UpdateStore.setState({ lastReleaseLog: output });
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
-                        UpdateStore.getState().fetchRepoStatus(repo);
-                        UpdateStore.getState().fetchEligibleRepos();
-                        resolve();
-                    },
-                    onError: (err) => {
-                        const logText = `❌ First Release Error:\n\n${err.message}`;
-                        UpdateStore.setState({ lastReleaseLog: logText });
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`❌ First release failed. See log below.`, 5000, true);
-                        reject(err);
-                    }
-                });
-            });
-        } else {
-            throw new Error("Failed to start first release");
-        }
-    },
-    previewBump: async (repo) => {
-        if (!repo) return;
-        const res = await window.inSetu.api.post('update/preview_bump', { repo });
+        const res = await window.inSetu.api.post(endpoint, { repo });
         if (res.status === 202) {
             const data = await res.json();
             return new Promise((resolve, reject) => {
@@ -70,11 +41,11 @@ export const UpdateStore = createExtensionStore('Update', {
                     onComplete: (statusData) => {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Preview ready.`, 2000);
                         UpdateStore.setState({ 
-                            previewOutput: statusData.artifact.output || 'No changes to release.',
-                            previewChangelog: statusData.artifact.changelog || 'No changelog notes generated.',
-                            previewActionType: 'bump',
+                            previewOutput: statusData.artifact.output || defaultOutput,
+                            previewChangelog: statusData.artifact.changelog || defaultChangelog,
+                            previewActionType: actionType,
                             previewModalOpen: true,
-                            previewTab: 'changelog'
+                            previewTab: tab
                         });
                         resolve();
                     },
@@ -85,39 +56,17 @@ export const UpdateStore = createExtensionStore('Update', {
                 });
             });
         } else {
-            throw new Error("Failed to start preview");
+            throw new Error(`Failed to start preview for ${actionType}`);
         }
     },
+    previewFirstRelease: async (repo) => {
+        return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_first_release', 'first_release', 'No changes to release.', 'N/A (Initial Release Phase)', 'full');
+    },
+    previewBump: async (repo) => {
+        return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_bump', 'bump', 'No changes to release.', 'No changelog notes generated.', 'changelog');
+    },
     previewPublish: async (repo) => {
-        if (!repo) return;
-        const res = await window.inSetu.api.post('update/preview_publish', { repo });
-        if (res.status === 202) {
-            const data = await res.json();
-            return new Promise((resolve, reject) => {
-                window.inSetu.utils.pollJob(data.job_id, {
-                    onProgress: (msg) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                    },
-                    onComplete: (statusData) => {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Publish preview ready.`, 2000);
-                        UpdateStore.setState({ 
-                            previewOutput: statusData.artifact.output || 'No publish operations required.',
-                            previewChangelog: 'N/A (Publish Phase)',
-                            previewActionType: 'publish',
-                            previewModalOpen: true,
-                            previewTab: 'full'
-                        });
-                        resolve();
-                    },
-                    onError: (err) => {
-                        alert(`Preview Error: ${err.message}`);
-                        reject(err);
-                    }
-                });
-            });
-        } else {
-            throw new Error("Failed to start preview");
-        }
+        return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_publish', 'publish', 'No publish operations required.', 'N/A (Publish Phase)', 'full');
     },
     fetchEligibleRepos: async () => {
         try {
@@ -173,10 +122,8 @@ export const UpdateStore = createExtensionStore('Update', {
             const res = await window.inSetu.api.post('update/status', { repo });
             if (res.status === 202) {
                 const data = await res.json();
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: (statusData) => {
-                        if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                         UpdateStore.setState({ 
                             repoVersion: statusData.artifact.version, 
                             repoConfigured: statusData.artifact.configured,
@@ -193,7 +140,6 @@ export const UpdateStore = createExtensionStore('Update', {
                         });
                     },
                     onError: (err) => {
-                        if (window.inSetu.utils.getActiveWorkspace() !== activeWs) return;
                         console.error("Status check failed:", err.message);
                         UpdateStore.setState({ repoLoading: false });
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
@@ -432,37 +378,36 @@ export class InSetuExtUpdate extends InSetuElement {
         UpdateStore.getState().fetchEligibleRepos();
         UpdateStore.getState().checkDependencies();
     }
-    _getBumpAction() {
-        return this.api.bindJobAction('bump', { repo: this.targetRepo }, {
+    _getReleaseAction(endpoint, successMessage, isFirstRelease = false) {
+        return this.api.bindJobAction(endpoint, { repo: this.targetRepo }, {
             onProgress: (msg) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                this.setStatus(`⏳ ${msg}`, null);
             },
             onComplete: (statusData) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Bump complete.`, 2000);
-                console.log("Bump Output:\n", statusData.artifact?.output || statusData.message);
+                const output = statusData.artifact?.output || statusData.message;
+                if (isFirstRelease) {
+                    UpdateStore.setState({ lastReleaseLog: output });
+                    this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
+                    UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                    UpdateStore.getState().fetchEligibleRepos();
+                } else {
+                    this.setStatus(`✅ ${successMessage} complete.`, 2000);
+                }
+                console.log(`${successMessage} Output:\n`, output);
             },
             onError: (err) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`❌ Bump failed: ${err.message}`, 5000, true);
-                console.error("Bump Error:\n", err);
+                if (isFirstRelease) {
+                    const logText = `❌ First Release Error:\n\n${err.message}`;
+                    UpdateStore.setState({ lastReleaseLog: logText });
+                    this.setStatus(`❌ First release failed. See log below.`, 5000, true);
+                } else {
+                    this.setStatus(`❌ ${successMessage} failed: ${err.message}`, 5000, true);
+                }
+                console.error(`${successMessage} Error:\n`, err);
             }
         });
     }
 
-    _getPublishAction() {
-        return this.api.bindJobAction('publish', { repo: this.targetRepo }, {
-            onProgress: (msg) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null);
-            },
-            onComplete: (statusData) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`✅ Publish complete.`, 2000);
-                console.log("Publish Output:\n", statusData.artifact?.output || statusData.message);
-            },
-            onError: (err) => {
-                if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`❌ Publish failed: ${err.message}`, 5000, true);
-                console.error("Publish Error:\n", err);
-            }
-        });
-    }
     render() {
         return html`
             <div style="display: flex; flex-direction: column; height: 100%;">
@@ -492,19 +437,25 @@ export class InSetuExtUpdate extends InSetuElement {
                 </div>
                 <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
                     <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Target Repository:</label>
-                    <select style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"
-                        .value=${this.targetRepo}
-                        @change=${e => UpdateStore.setState({ targetRepo: e.target.value })}>
-                        ${(() => {
-                            const withToml = this.allRepos.filter(r => this.eligibleRepos[r]);
-                            const withoutToml = this.allRepos.filter(r => !this.eligibleRepos[r]);
-                            return html`
-                                ${withToml.map(r => html`<option value="${r}" ?selected=${this.targetRepo === r}>${r}</option>`)}
-                                ${withToml.length > 0 && withoutToml.length > 0 ? html`<option disabled>──────────</option>` : ''}
-                                ${withoutToml.map(r => html`<option value="${r}" ?selected=${this.targetRepo === r}>${r}</option>`)}
-                            `;
-                        })()}
-                    </select>
+                    ${(() => {
+                        const withToml = this.allRepos.filter(r => this.eligibleRepos[r]);
+                        const withoutToml = this.allRepos.filter(r => !this.eligibleRepos[r]);
+                        const options = [
+                            ...withToml.map(r => ({ value: r, label: r })),
+                            ...(withToml.length > 0 && withoutToml.length > 0 ? [{ value: '---', label: '──────────' }] : []),
+                            ...withoutToml.map(r => ({ value: r, label: r }))
+                        ];
+                        return html`
+                            <sutram-select 
+                                style="flex: 1; margin-bottom: 0;"
+                                .value=${this.targetRepo}
+                                .options=${options}
+                                @sutram-input-changed=${e => {
+                                    if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
+                                }}>
+                            </sutram-select>
+                        `;
+                    })()}
                 </div>
                 <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -608,27 +559,22 @@ export class InSetuExtUpdate extends InSetuElement {
                                     }}>
                                 <span style="font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
                             </label>
-
                             ${this.repoBuildCommand ? html`
                                 <div style="display: flex; gap: 8px; margin-left: 24px; margin-top: 4px;">
-                                    <input type="text" 
-                                        style="flex: 1; padding: 8px; border-radius: 4px; background: var(--bg); color: var(--text); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 0.85rem;"
+                                    <sutram-input 
+                                        style="flex: 1; margin-bottom: 0; --bg-input: var(--bg);"
                                         .value=${this.repoBuildCommand}
                                         placeholder="e.g., python -m build"
-                                        @keydown=${(e) => {
-                                            if (e.key === 'Enter') {
-                                                const newVal = e.target.value.trim();
-                                                UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal, this.repoVcsRelease);
-                                            }
+                                        @sutram-input-changed=${(e) => {
+                                            UpdateStore.setState({ repoBuildCommand: e.detail.value });
                                         }}>
+                                    </sutram-input>
                                     <sutram-async-btn 
                                         label="💾 Save" 
                                         intent="success" 
                                         style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
-                                        .onClick=${async (e) => {
-                                            const inputEl = e.target.previousElementSibling;
-                                            const newVal = inputEl ? inputEl.value.trim() : '';
-                                            await UpdateStore.getState().updateTomlConfig(this.targetRepo, newVal, this.repoVcsRelease);
+                                        .onClick=${async () => {
+                                            await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease);
                                         }}>
                                     </sutram-async-btn>
                                 </div>
@@ -668,9 +614,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     .disabled=${!this.isClean || !this.hasPypiToken}
                                     .onClick=${async () => {
                                         if (!this.isClean || !this.hasPypiToken) return;
-                                        if (confirm(`Publish v${this.repoVersion || '0.1.0'} of ${this.packageName || this.targetRepo} to PyPI?`)) {
-                                            await UpdateStore.getState().firstRelease(this.targetRepo);
-                                        }
+                                        await UpdateStore.getState().previewFirstRelease(this.targetRepo);
                                     }}>
                                 </sutram-async-btn>
                                 ${!this.hasPypiToken ? html`
@@ -755,9 +699,14 @@ export class InSetuExtUpdate extends InSetuElement {
                     ${this.previewActionType === 'log_view' ? '❌ Close' : '❌ Cancel'}
                 </button>
                 ${this.previewActionType !== 'log_view' ? html`
-                    <sutram-async-btn slot="footer" label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : '⚡ Confirm & Execute Bump'}" intent="success" .onClick=${async () => {
+                    <sutram-async-btn slot="footer" label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : (this.previewActionType === 'first_release' ? '⚡ Confirm & Initial Release' : '⚡ Confirm & Execute Bump')}" intent="success" .onClick=${async () => {
                         UpdateStore.setState({ previewModalOpen: false });
-                        const action = this.previewActionType === 'publish' ? this._getPublishAction() : this._getBumpAction();
+                        let endpoint = 'bump';
+                        let msg = 'Bump';
+                        if (this.previewActionType === 'publish') { endpoint = 'publish'; msg = 'Publish'; }
+                        else if (this.previewActionType === 'first_release') { endpoint = 'first_release'; msg = 'First Release'; }
+
+                        const action = this._getReleaseAction(endpoint, msg, this.previewActionType === 'first_release');
                         await action();
                     }}></sutram-async-btn>
                 ` : ''}
@@ -788,10 +737,12 @@ window.ExtensionRegistry.registerExtension('update', {
                 const affected = payload.mutations.some(m => m.filepath && (m.filepath.startsWith(repo + '/') || m.filepath === repo));
                 if (affected) {
                     // Debounce the status check heavily to avoid index.lock collisions during automated git workflows
-                    if (window._updateExtDebounce) clearTimeout(window._updateExtDebounce);
-                    window._updateExtDebounce = setTimeout(() => {
-                        UpdateStore.getState().fetchRepoStatus(repo);
-                    }, 3500);
+                    if (!window._debouncedRepoStatusUpdate) {
+                        window._debouncedRepoStatusUpdate = window.ExtensionRegistry.utils.debounce((r) => {
+                            UpdateStore.getState().fetchRepoStatus(r);
+                        }, 3500);
+                    }
+                    window._debouncedRepoStatusUpdate(repo);
                 }
             }
             return false;
