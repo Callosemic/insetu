@@ -257,41 +257,37 @@ function updateManifestState(oldPath, newPath = null) {
     const normOldPath = cleanPath(oldPath);
     const normNewPath = cleanPath(newPath);
 
+    const _replacePathInArray = (arr) => {
+        let mutated = false;
+        for (let i = arr.length - 1; i >= 0; i--) {
+            const f = cleanPath(arr[i]);
+            if (f === normOldPath) {
+                arr.splice(i, 1);
+                if (normNewPath && !arr.includes(normNewPath)) arr.push(normNewPath);
+                mutated = true;
+            } else if (f.startsWith(normOldPath + '/')) {
+                const suffix = f.substring(normOldPath.length);
+                arr.splice(i, 1);
+                if (normNewPath) {
+                    const newChildPath = normNewPath + suffix;
+                    if (!arr.includes(newChildPath)) arr.push(newChildPath);
+                }
+                mutated = true;
+            }
+        }
+        return mutated;
+    };
+
     if (normOldPath) {
         // Stage 1 Isolation: Optimistically mutate Stage 1 VFS manifest only.
-        // Stage 2 CTX manifests are downstream artifacts recompiled asynchronously.
         ['vfs'].forEach(manifestKey => {
             Object.keys(newManifest[manifestKey]).forEach(key => {
                 const obj = newManifest[manifestKey][key];
                 if (obj.files) {
                     let newFiles = [...obj.files];
-                    let fileChanged = false;
-
-                    for (let i = newFiles.length - 1; i >= 0; i--) {
-                        const f = cleanPath(newFiles[i]);
-                        if (f === normOldPath) {
-                            newFiles.splice(i, 1);
-                            if (normNewPath && !newFiles.includes(normNewPath)) {
-                                newFiles.push(normNewPath);
-                            }
-                            fileChanged = true;
-                            changed = true;
-                        } else if (f.startsWith(normOldPath + '/')) {
-                            const suffix = f.substring(normOldPath.length);
-                            newFiles.splice(i, 1);
-                            if (normNewPath) {
-                                const newChildPath = normNewPath + suffix;
-                                if (!newFiles.includes(newChildPath)) {
-                                    newFiles.push(newChildPath);
-                                }
-                            }
-                            fileChanged = true;
-                            changed = true;
-                        }
-                    }
-
-                    if (fileChanged) {
+                    if (_replacePathInArray(newFiles)) {
                         newManifest[manifestKey][key] = { ...obj, files: newFiles };
+                        changed = true;
                     }
                 }
             });
@@ -330,30 +326,10 @@ function updateManifestState(oldPath, newPath = null) {
     if (changed) {
         AppStore.setState({ manifest: newManifest || { vfs: {}, ctx: {} } });
     }
-
     if (FsStore.getState().modals.browser?.open) {
         const mState = FsStore.getState().modals.browser;
         let updatedManifest = [...mState.manifest];
-        let browserChanged = false;
-
-        for (let i = updatedManifest.length - 1; i >= 0; i--) {
-            const f = cleanPath(updatedManifest[i]);
-            if (f === normOldPath) {
-                updatedManifest.splice(i, 1);
-                if (normNewPath && !updatedManifest.includes(normNewPath)) updatedManifest.push(normNewPath);
-                browserChanged = true;
-            } else if (f.startsWith(normOldPath + '/')) {
-                const suffix = f.substring(normOldPath.length);
-                updatedManifest.splice(i, 1);
-                if (normNewPath) {
-                    const newChildPath = normNewPath + suffix;
-                    if (!updatedManifest.includes(newChildPath)) updatedManifest.push(newChildPath);
-                }
-                browserChanged = true;
-            }
-        }
-
-        if (browserChanged) {
+        if (_replacePathInArray(updatedManifest)) {
             FsStore.getState().setModal('browser', { manifest: updatedManifest });
         }
     }
@@ -371,15 +347,7 @@ async function saveModalFile(autoSave = false) {
         silent: autoSave,
         onSuccess: () => {
             FsStore.setState({ fileModal: { ...state, originalContent: content, content } });
-
-            updateManifestState(null, state.filename);
-
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: state.filename, operation: 'save' }] });
-
-            // File modifications can drastically alter chunk boundaries; force a resync
-            if (window.inSetu.sys.executeSystemCompile) {
-                window.inSetu.sys.executeSystemCompile();
-            }
+            refreshActiveFileViews(null, state.filename);
         }
     });
 }
@@ -450,15 +418,7 @@ export async function deleteEmptyFolder(dirPath) {
             const parts = dirPath.split('/');
             parts.pop();
             AppStore.setState({ globalBrowsePath: parts });
-
-            updateManifestState(dirPath, null);
-
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: dirPath, operation: 'delete' }] });
-
-            // Ensure the deletion is accurately reflected by the backend Cartographer
-            if (window.inSetu.sys.executeSystemCompile) {
-                window.inSetu.sys.executeSystemCompile();
-            }
+            refreshActiveFileViews(dirPath, null);
         }
     });
 }
@@ -546,6 +506,7 @@ export const getGlobalManifest = () => {
     const targetConfigs = state.targetConfigs || [];
     const validPrefixes = targetConfigs.map(cfg => cfg.repo_dir ? cfg.repo_dir + '/' : '');
 
+    // Query Stage 1 (vfs) EXCLUSIVELY for physical workspace files
     const vfsManifest = state.manifest?.vfs || {};
 
     const allFiles = Array.from(new Set([
@@ -986,15 +947,7 @@ async function saveNewFile() {
         loadingText: 'Saving...',
         onSuccess: async () => {
             FsStore.getState().setModal('newFile', { open: false });
-
-            updateManifestState(null, filepath);
-
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
-
-            // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
-            if (window.inSetu.sys.executeSystemCompile) {
-                window.inSetu.sys.executeSystemCompile();
-            }
+            refreshActiveFileViews(null, filepath);
         }
 });
 }
@@ -1060,15 +1013,7 @@ async function saveNewFolder() {
                 }
             }
             FsStore.getState().setModal('newFolder', { open: false });
-
-            updateManifestState(null, filepath);
-
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: filepath, operation: 'save' }] });
-
-            // Trigger a definitive proactive ledger flush to surgically compile Gather payloads immediately
-            if (window.inSetu.sys.executeSystemCompile) {
-                window.inSetu.sys.executeSystemCompile();
-            }
+            refreshActiveFileViews(null, filepath);
         }
     });
 }
@@ -1343,50 +1288,17 @@ export class InSetuFileModal extends InSetuElement {
     }
 }
 customElements.define('insetu-file-modal', InSetuFileModal);
-export function extractManifestFiles(manifestData, targetKey = null) {
-    if (!manifestData) return [];
-    const ctxManifest = manifestData.ctx || {};
-    const vfsManifest = manifestData.vfs || {};
-
-    const extract = (data) => {
-        if (Array.isArray(data)) return data;
-        if (typeof data === 'object' && data !== null) {
-            return data.chunks || data.files || [];
-        }
-        return [];
-    };
-
-    if (targetKey) {
-        let entry = ctxManifest[targetKey] || vfsManifest[targetKey];
-        if (!entry && (targetKey.includes('/') || targetKey.includes('\\'))) {
-            const name = targetKey.split('/').pop();
-            entry = ctxManifest[name] || vfsManifest[name];
-        }
-        if (!entry) return [targetKey];
-        return extract(entry);
-    }
-
-    const allFiles = new Set();
-    [ctxManifest, vfsManifest].forEach(subManifest => {
-        Object.entries(subManifest).forEach(([k, v]) => {
-            if (typeof k === 'string' && k.endsWith('.txt')) allFiles.add(k);
-            extract(v).forEach(f => {
-                if (typeof f === 'string') allFiles.add(f);
-            });
-        });
-    });
-    return Array.from(allFiles);
-}
+export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
 
 export function getChunks(filepath) {
     if (!filepath) return [];
     const basename = filepath.split('/').pop();
     const manifest = AppStore.getState().manifest || {};
-    return extractManifestFiles(manifest, basename);
+    const isContext = filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt');
+    return extractManifestFiles(manifest, basename, isContext ? 'ctx' : 'vfs');
 }
 
 window.inSetu.utils = window.inSetu.utils || {};
-window.inSetu.utils.extractManifestFiles = extractManifestFiles;
 
 // Window Bindings
 window.inSetu.vfs = window.inSetu.vfs || {};

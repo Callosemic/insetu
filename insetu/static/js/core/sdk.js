@@ -423,8 +423,7 @@ window.inSetu.utils.normalizeEntityData = function(data) {
         filepath: rawPath
     };
 };
-
-window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null) {
+window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = null, domain = 'auto') {
     if (!manifestData) return [];
     const ctxManifest = manifestData.ctx || {};
     const vfsManifest = manifestData.vfs || {};
@@ -438,18 +437,19 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
     };
 
     if (targetKey) {
-        let entry = ctxManifest[targetKey] || vfsManifest[targetKey] || manifestData[targetKey];
+        let entry = (domain === 'ctx') ? ctxManifest[targetKey] : (domain === 'vfs' ? vfsManifest[targetKey] : (ctxManifest[targetKey] || vfsManifest[targetKey] || manifestData[targetKey]));
         if (!entry && (targetKey.includes('/') || targetKey.includes('\\'))) {
             const name = targetKey.split('/').pop();
-            entry = ctxManifest[name] || vfsManifest[name] || manifestData[name];
+            entry = (domain === 'ctx') ? ctxManifest[name] : (domain === 'vfs' ? vfsManifest[name] : (ctxManifest[name] || vfsManifest[name] || manifestData[name]));
         }
         if (!entry) return [targetKey];
         return extract(entry);
     }
 
+    // Explicit partition isolation: query vfs OR ctx depending on domain intent
+    const targetPartition = (domain === 'ctx') ? ctxManifest : (domain === 'vfs' ? vfsManifest : (manifestData.vfs || manifestData.ctx ? vfsManifest : manifestData));
     const allFiles = new Set();
-    const combined = (manifestData.ctx || manifestData.vfs) ? { ...vfsManifest, ...ctxManifest } : manifestData;
-    Object.entries(combined).forEach(([k, v]) => {
+    Object.entries(targetPartition).forEach(([k, v]) => {
         if (typeof k === 'string' && k.endsWith('.txt')) allFiles.add(k);
         extract(v).forEach(f => {
             if (typeof f === 'string') allFiles.add(f);
