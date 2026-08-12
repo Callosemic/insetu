@@ -673,8 +673,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
-                            ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) ? html`
-                                <sutram-async-btn 
+                            ${!this.hasRelease || (!this.pypiPackageExists && this.distributionTarget === 'python_pypi') ? html`
+                                <sutram-async-btn  
                                     style="width: 100%;" 
                                     label="${this.distributionTarget === 'python_pypi' ? `🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI` : `🏷️ Release v${this.repoVersion || '0.1.0'} to VCS`}" 
                                     intent="highlight" 
