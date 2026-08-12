@@ -444,10 +444,10 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
         // Clean up trailing separators
         const changelog = changelogParts.join('').trim().replace(/---$/, '').trim();
 
-        if (this.vfs && this.vfs.openVirtualFile) {
-            this.vfs.openVirtualFile("Historical_Changelog.md", changelog);
+        if (this.ui && this.ui.viewTextBlob) {
+            this.ui.viewTextBlob("Historical Changelog", changelog, `Historical_Changelog_${Date.now()}.md`);
         } else {
-            alert("Virtual file viewer is not available.");
+            alert("Text viewer not available.");
         }
     }
 }
@@ -481,7 +481,6 @@ export class InSetuExtTrackerActions extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-tracker-actions', InSetuExtTrackerActions);
-
 export class InSetuExtTrackerModals extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
@@ -784,6 +783,26 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                 </div>
                 ` : ''}
+            </sutram-modal>
+
+            <!-- Changelog Modal -->
+            <sutram-modal 
+                ?open=${this._modals?.changelog} 
+                ?fullscreen=${true}
+                titleText="Historical Changelog"
+                @sutram-modal-closed=${() => KanbanStore.getState().setModal('changelog', false)}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; align-items: center; justify-content: flex-end;">
+                        <sutram-entity-actions 
+                            .entityType=${'text_blob'} 
+                            .entityData=${{ 
+                                textContent: this.changelogText,
+                                suggestedFilename: `Historical_Changelog_${Date.now()}.md`
+                            }}>
+                        </sutram-entity-actions>
+                    </div>
+                    <textarea readonly style="flex: 1; width: 100%; min-height: 300px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; resize: none;" .value=${this.changelogText}></textarea>
+                </div>
             </sutram-modal>
 `;
     }

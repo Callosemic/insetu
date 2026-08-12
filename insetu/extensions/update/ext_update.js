@@ -731,7 +731,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">
                         ${this.previewActionType === 'log_view' ? 'Execution log output for the release action.' : 'This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed to the repository.'}
                     </p>
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; align-items: center;">
                         ${this.previewActionType !== 'log_view' ? html`
                             <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
                                 @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
@@ -742,6 +742,16 @@ export class InSetuExtUpdate extends InSetuElement {
                             @click=${() => UpdateStore.setState({ previewTab: 'full' })}>
                             📋 Complete Report
                         </button>
+
+                        <div style="flex: 1;"></div>
+
+                        <sutram-entity-actions 
+                            .entityType=${'text_blob'} 
+                            .entityData=${{ 
+                                textContent: this.previewTab === 'changelog' && this.previewActionType !== 'log_view' ? this.previewChangelog : this.previewOutput,
+                                suggestedFilename: `release_log_${Date.now()}.txt`
+                            }}>
+                        </sutram-entity-actions>
                     </div>
                     ${this.previewTab === 'changelog' && this.previewActionType !== 'log_view' ? html`
                         <div class="output-box" style="margin-top: 0;">${this.previewChangelog}</div>
