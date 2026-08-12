@@ -530,7 +530,8 @@ window.addEventListener('sutram-settings-save', async (e) => {
             window.dispatchEvent(new Event(`insetu-${extName}-settings-changed`));
             if (window.inSetu?.sys?.executeSystemCompile) window.inSetu.sys.executeSystemCompile(null, true);
         } else {
-            alert("Failed to save settings.");
+            const errData = await res.json().catch(() => ({}));
+            alert("Failed to save settings: " + (errData.error || res.statusText || "Unknown Server Error"));
             btn.innerText = origText;
         }
     } catch(err) {
