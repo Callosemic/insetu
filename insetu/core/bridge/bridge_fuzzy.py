@@ -55,8 +55,6 @@ def is_effectively_identical(lines_a, lines_b):
             return False
 
     return True
-
-
 def find_block_anchor(file_lines, block_lines):
     """
     Abstracted 100% contiguous block search engine.
@@ -67,11 +65,13 @@ def find_block_anchor(file_lines, block_lines):
     non_empty_indices = [idx for idx, l in enumerate(block_lines) if l.strip() and l.strip().upper() != "{{UNTIL}}"]
     if not non_empty_indices:
         return None
-
     baseline_s_idx = non_empty_indices[0]
     last_content_s_idx = non_empty_indices[-1]
 
-    for i in range(len(file_lines)):
+    # Yomama Search Anchor Heuristic
+    # Explicit X+1 Backtracking: Always resume searching from the next line if a deep match fails.
+    i = 0
+    while i < len(file_lines):
         match_meta = {"last_content_f_idx": -1}
         def match_from(f_idx, s_idx):
             local_baseline_f_idx = -1
@@ -118,7 +118,6 @@ def find_block_anchor(file_lines, block_lines):
                     if s_idx == baseline_s_idx: local_baseline_f_idx = f_idx
                     f_idx += 1; s_idx += 1
             return True, f_idx - i, local_baseline_f_idx
-
         ok, span, b_f_idx = match_from(i, 0)
         if ok:
             return {
@@ -129,6 +128,9 @@ def find_block_anchor(file_lines, block_lines):
                 "baseline_s_idx": baseline_s_idx,
                 "last_content_s_idx": last_content_s_idx
             }
+
+        # Explicit backtracking: If the block fails at X, always resume searching at X+1
+        i += 1
     return None
 
 
