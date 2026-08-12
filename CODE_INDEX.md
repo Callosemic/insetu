@@ -7,6 +7,10 @@ insetu/
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
 ├── CODE_INDEX.md                   # Topological map of the inSetu repository (this file).
+├── README.md                       # [comment required]
+├── dist/                           # [comment required]
+│   ├── insetu-0.14.0-py3-none-any.whl # [comment required]
+│   └── insetu-0.14.0.tar.gz        # [comment required]
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
 │   ├── 01_engineering_standards.md # Engineering standards and audit guardrails.
@@ -191,8 +195,14 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
+├── insetu.egg-info/                # [comment required]
+│   ├── PKG-INFO                    # [comment required]
+│   ├── SOURCES.txt                 # [comment required]
+│   ├── dependency_links.txt        # [comment required]
+│   ├── entry_points.txt            # [comment required]
+│   ├── requires.txt                # [comment required]
+│   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
-├── readme.md                       # Open-source landing page and architectural documentation.
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.

@@ -6,14 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "insetu"
 version = "0.14.0"
 description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
-readme = "readme.md"
+readme = "README.md"
 authors = [{ name = "inSetu Contributors", email = "hello@insetu.dev" }]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -79,9 +78,9 @@ insetu = "insetu.cli:main"
 
 [tool.setuptools]
 include-package-data = true
-
 [tool.setuptools.packages.find]
 where = ["."]
+exclude = ["*__pycache__*"]
 [tool.setuptools.package-data]
 "*" = [
     "*.js",
