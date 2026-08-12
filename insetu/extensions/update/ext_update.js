@@ -399,6 +399,12 @@ export class InSetuExtUpdate extends InSetuElement {
         }
         UpdateStore.getState().checkDependencies();
         UpdateStore.getState().fetchEligibleRepos();
+
+        this.registerGlobalListener('git-diffs-refreshed', window, () => {
+            if (this.targetRepo) {
+                UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+            }
+        });
     }
     onWorkspaceChanged(newWorkspaceId) {
         if (this.targetRepo) {
@@ -470,8 +476,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     <h3 style="margin: 0; color: var(--text);">Semantic Update</h3>
                     <span style="font-size: 0.85rem; color: var(--text-muted);">Automated semantic versioning and package distribution pipeline.</span>
                 </div>
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 5px;">
-                    <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Target Repository:</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
                     ${(() => {
                         const withToml = this.allRepos.filter(r => this.eligibleRepos[r]);
                         const withoutToml = this.allRepos.filter(r => !this.eligibleRepos[r]);
@@ -486,7 +491,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         if (Object.keys(this.eligibleRepos).length === 0) {
                             return html`
                                 <sutram-select 
-                                    style="flex: 1; margin-bottom: 0;"
+                                    label="Target Repository"
+                                    style="margin-bottom: 0;"
                                     .value=${this.targetRepo}
                                     .options=${options}
                                     @sutram-input-changed=${e => {
@@ -497,7 +503,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         } else {
                             return html`
                                 <sutram-select 
-                                    style="flex: 1; margin-bottom: 0;"
+                                    label="Target Repository"
+                                    style="margin-bottom: 0;"
                                     .value=${this.targetRepo}
                                     .options=${options}
                                     @sutram-input-changed=${e => {
@@ -507,11 +514,9 @@ export class InSetuExtUpdate extends InSetuElement {
                             `;
                         }
                     })()}
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-                    <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Distribution Target:</label>
                     <sutram-select 
-                        style="flex: 1; margin-bottom: 0;"
+                        label="Distribution Target"
+                        style="margin-bottom: 0;"
                         .value=${this.distributionTarget}
                         .options=${[
                             { value: 'python_pypi', label: 'Python (PyPI + VCS)' },
@@ -601,16 +606,16 @@ export class InSetuExtUpdate extends InSetuElement {
                         </button>
                     ` : ''}
                 </div>
-                ${!this.repoLoading && this.repoConfigured && this.isClean ? html`
+                ${!this.repoLoading && this.repoConfigured ? html`
                     <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 12px;">
                         <div style="display: flex; flex-direction: column; gap: 4px;">
-                            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer;">
-                                <input type="checkbox" .checked=${this.repoVcsRelease}
-                                    @change=${(e) => {
-                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.target.checked);
-                                    }}>
-                                <span style="font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
-                            </label>
+                            <div style="display: flex; align-items: center; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'};">
+                                <sutram-toggle .checked=${this.repoVcsRelease} ?disabled=${!this.isClean} ?flush=${true}
+                                    @sutram-input-changed=${(e) => {
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.detail.value);
+                                    }}></sutram-toggle>
+                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
+                            </div>
                             ${this.repoVcsRelease && !this.hasToken ? html`
                                 <div style="color: var(--intent-warning); font-size: 0.75rem; margin-left: 24px;">
                                     ⚠️ No GitHub API token detected in secrets or environment. Local tag/push will succeed, but API release card creation will fail.
@@ -618,20 +623,21 @@ export class InSetuExtUpdate extends InSetuElement {
                             ` : ''}
                         </div>
                         <div style="display: flex; flex-direction: column; gap: 6px;">
-                            <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; cursor: pointer;">
-                                <input type="checkbox" .checked=${!!this.repoBuildCommand}
-                                    @change=${(e) => {
-                                        const enabled = e.target.checked;
+                            <div style="display: flex; align-items: center; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'};">
+                                <sutram-toggle .checked=${!!this.repoBuildCommand} ?disabled=${!this.isClean} ?flush=${true}
+                                    @sutram-input-changed=${(e) => {
+                                        const enabled = e.detail.value;
                                         const cmd = enabled ? (this.repoBuildCommand || 'python -m build') : '';
                                         UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease);
-                                    }}>
-                                <span style="font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
-                            </label>
+                                    }}></sutram-toggle>
+                                <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
+                            </div>
                             ${this.repoBuildCommand ? html`
-                                <div style="display: flex; gap: 8px; margin-left: 24px; margin-top: 4px;">
+                                <div style="display: flex; gap: 8px; margin-left: 24px; margin-top: 4px; opacity: ${!this.isClean ? '0.6' : '1'};">
                                     <sutram-input 
                                         style="flex: 1; margin-bottom: 0; --bg-input: var(--bg);"
                                         .value=${this.repoBuildCommand}
+                                        ?disabled=${!this.isClean}
                                         placeholder="e.g., python -m build"
                                         @sutram-input-changed=${(e) => {
                                             UpdateStore.setState({ repoBuildCommand: e.detail.value });
@@ -640,6 +646,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     <sutram-async-btn 
                                         label="💾 Save" 
                                         intent="success" 
+                                        ?disabled=${!this.isClean}
                                         style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                         .onClick=${async () => {
                                             await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease);
@@ -673,8 +680,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
-                            ${!this.hasRelease || (!this.pypiPackageExists && this.distributionTarget === 'python_pypi') ? html`
-                                <sutram-async-btn  
+                            ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) ? html`
+                                <sutram-async-btn 
                                     style="width: 100%;" 
                                     label="${this.distributionTarget === 'python_pypi' ? `🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI` : `🏷️ Release v${this.repoVersion || '0.1.0'} to VCS`}" 
                                     intent="highlight" 
@@ -685,21 +692,6 @@ export class InSetuExtUpdate extends InSetuElement {
                                         await UpdateStore.getState().previewFirstRelease(this.targetRepo);
                                     }}>
                                 </sutram-async-btn>
-                                ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
-                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
-                                    </span>
-                                ` : ''}
-                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
-                                    <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
-                                        🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
-                                    </div>
-                                ` : ''}
-                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
-                                    ${this.distributionTarget === 'python_pypi' 
-                                        ? `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.` 
-                                        : `Initial release pipeline: establishes v${this.repoVersion || '0.1.0'} Git baseline tags.`}
-                                </div>
                             ` : html`
                                 <sutram-async-btn 
                                     style="width: 100%;" 
@@ -712,24 +704,28 @@ export class InSetuExtUpdate extends InSetuElement {
                                         await UpdateStore.getState().previewPublish(this.targetRepo);
                                     }}>
                                 </sutram-async-btn>
-                                ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
-                                    <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
-                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
-                                    </span>
-                                ` : ''}
-                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
-                                    <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
-                                        🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
-                                    </div>
-                                ` : ''}
-                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
-                                    <strong>Phase 2 (External Distribution):</strong>
-                                    <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
-                                        ${this.distributionTarget === 'python_pypi' ? html`<li>Uploads compiled package files to PyPI.</li>` : ''}
-                                        ${this.distributionTarget !== 'disabled' ? html`<li>Mints the official GitHub Release card UI with notes.</li>` : html`<li>External distribution is disabled in settings.</li>`}
-                                    </ol>
-                                </div>
                             `}
+                            ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
+                                <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
+                                    ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
+                                </span>
+                            ` : ''}
+                            ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished && ((Date.now() / 1000) - this.lastPublishTime < 3600) ? html`
+                                <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
+                                    🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
+                                </div>
+                            ` : ''}
+                            <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
+                                ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) 
+                                    ? (this.distributionTarget === 'python_pypi' 
+                                        ? `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.` 
+                                        : `Initial release pipeline: establishes v${this.repoVersion || '0.1.0'} Git baseline tags.`)
+                                    : html`<strong>Phase 2 (External Distribution):</strong>
+                                        <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
+                                            ${this.distributionTarget === 'python_pypi' ? html`<li>Uploads compiled package files to PyPI.</li>` : ''}
+                                            ${this.distributionTarget !== 'disabled' ? html`<li>Mints the official GitHub Release card UI with notes.</li>` : html`<li>External distribution is disabled in settings.</li>`}
+                                        </ol>`}
+                            </div>
                         </div>
                     </div>
                 ` : ''}
@@ -827,24 +823,6 @@ window.ExtensionRegistry.registerExtension('update', {
                 if (repo) UpdateStore.getState().fetchRepoStatus(repo);
                 UpdateStore.getState().fetchEligibleRepos();
             }
-        },
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const repo = UpdateStore.getState().targetRepo;
-            if (repo) {
-                // Check if any mutation happened inside the active target repository
-                const affected = payload.mutations.some(m => m.filepath && (m.filepath.startsWith(repo + '/') || m.filepath === repo));
-                if (affected) {
-                    // Debounce the status check heavily to avoid index.lock collisions during automated git workflows
-                    if (!window._debouncedRepoStatusUpdate) {
-                        window._debouncedRepoStatusUpdate = window.ExtensionRegistry.utils.debounce((r) => {
-                            UpdateStore.getState().fetchRepoStatus(r);
-                        }, 3500);
-                    }
-                    window._debouncedRepoStatusUpdate(repo);
-                }
-            }
-            return false;
         }
     }
 });

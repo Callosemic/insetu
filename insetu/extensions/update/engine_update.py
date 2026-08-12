@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import shutil
+import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
@@ -126,8 +127,44 @@ def _background_bump_task(ctx, repo):
         ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
         ctx.jobs.submit("publish_task", repo=repo)
         output += "\n\nAuto-publish workflow triggered."
-
     return {"message": "Version bumped successfully.", "artifact": {"output": output}}
+
+def _build_and_validate_distribution(ctx, repo_path):
+    import sys, zipfile, shutil
+    from pathlib import Path
+
+    dist_dir = Path(repo_path) / "dist"
+    if dist_dir.exists():
+        shutil.rmtree(dist_dir)
+
+    log_lines = []
+    ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
+    build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
+    log_lines.append(f"=== BUILD STDOUT ===\n{build_res.stdout}\n=== BUILD STDERR ===\n{build_res.stderr}")
+    if build_res.returncode != 0:
+        raise RuntimeError(f"Build failed:\n{build_res.stderr or build_res.stdout}")
+
+    ctx.jobs.update_progress("Validating package data in wheel distribution...")
+    wheels = list(dist_dir.glob("*.whl"))
+    if not wheels:
+        raise RuntimeError("No .whl package found in dist/ after build.")
+
+    latest_wheel = max(wheels, key=lambda p: p.stat().st_mtime)
+    with zipfile.ZipFile(latest_wheel, 'r') as z:
+        archived_files = z.namelist()
+        has_package_payload = any(not f.endswith('/') and '.dist-info/' not in f and '.data/' not in f for f in archived_files)
+        if not has_package_payload:
+            raise RuntimeError(f"Package validation failed: No active code or asset payload found in {latest_wheel.name}.")
+    log_lines.append(f"=== WHEEL VALIDATION ===\nVerified package payload present in {latest_wheel.name}")
+
+    ctx.jobs.update_progress("Running twine check on distribution artifacts...")
+    twine_check = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False)
+    log_lines.append(f"=== TWINE CHECK STDOUT ===\n{twine_check.stdout}\n=== TWINE CHECK STDERR ===\n{twine_check.stderr}")
+    if twine_check.returncode != 0:
+        raise RuntimeError(f"Twine validation failed:\n{twine_check.stderr or twine_check.stdout}")
+
+    return log_lines
+
 @update_bp.worker("first_release_task")
 def _background_first_release_task(ctx, repo):
     """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
@@ -147,35 +184,7 @@ def _background_first_release_task(ctx, repo):
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before issuing the initial release.")
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     if dist_target == "python_pypi":
-        dist_dir = Path(repo_path) / "dist"
-        if dist_dir.exists():
-            shutil.rmtree(dist_dir)
-
-        ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
-        build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
-        log_lines.append(f"=== BUILD STDOUT ===\n{build_res.stdout}\n=== BUILD STDERR ===\n{build_res.stderr}")
-        if build_res.returncode != 0:
-            raise RuntimeError(f"Build failed:\n{build_res.stderr or build_res.stdout}")
-
-        ctx.jobs.update_progress("Validating package data in wheel distribution...")
-        dist_dir = Path(repo_path) / "dist"
-        wheels = list(dist_dir.glob("*.whl"))
-        if not wheels:
-            raise RuntimeError("No .whl package found in dist/ after build.")
-        latest_wheel = max(wheels, key=lambda p: p.stat().st_mtime)
-        with zipfile.ZipFile(latest_wheel, 'r') as z:
-            archived_files = z.namelist()
-            # Agnostic check: Ensure the archive contains valid non-metadata payload files
-            has_package_payload = any(not f.endswith('/') and '.dist-info/' not in f and '.data/' not in f for f in archived_files)
-            if not has_package_payload:
-                raise RuntimeError(f"Package validation failed: No active code or asset payload found in {latest_wheel.name}.")
-        log_lines.append(f"=== WHEEL VALIDATION ===\nVerified package payload present in {latest_wheel.name}")
-
-        ctx.jobs.update_progress("Running twine check on distribution artifacts...")
-        twine_check = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False)
-        log_lines.append(f"=== TWINE CHECK STDOUT ===\n{twine_check.stdout}\n=== TWINE CHECK STDERR ===\n{twine_check.stderr}")
-        if twine_check.returncode != 0:
-            raise RuntimeError(f"Twine validation failed:\n{twine_check.stderr or twine_check.stdout}")
+        log_lines.extend(_build_and_validate_distribution(ctx, repo_path))
 
         ctx.jobs.update_progress("Uploading initial release to PyPI...")
         env = os.environ.copy()
@@ -192,8 +201,7 @@ def _background_first_release_task(ctx, repo):
         log_lines.append(f"=== BUILD & UPLOAD [SKIPPED] ===\nDistribution target is set to '{dist_target}'.")
 
     ctx.jobs.update_progress("Tagging initial release in Git...")
-    pyproject_file = Path(repo_path) / "pyproject.toml"
-    content = pyproject_file.read_text(encoding='utf-8')
+    content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
     import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
@@ -224,13 +232,11 @@ def _background_preview_first_release_task(ctx, repo):
         raise ValueError(f"Target repository path not found: {repo}")
 
     ctx.jobs.update_progress("Evaluating dry-run initial release...")
-
     status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before previewing an initial release.")
 
-    pyproject_file = Path(repo_path) / "pyproject.toml"
-    content = pyproject_file.read_text(encoding='utf-8') if pyproject_file.exists() else ""
+    content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
     import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
@@ -241,39 +247,7 @@ def _background_preview_first_release_task(ctx, repo):
     ]
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     if dist_target == "python_pypi":
-        import sys
-        import zipfile
-        import subprocess
-
-        dist_dir = Path(repo_path) / "dist"
-        if dist_dir.exists():
-            shutil.rmtree(dist_dir)
-
-        ctx.jobs.update_progress("Building distribution artifacts (sdist & wheel)...")
-        build_res = subprocess.run([sys.executable, "-m", "build"], cwd=repo_path, capture_output=True, text=True, check=False)
-        log_lines.append(f"=== BUILD STDOUT ===\n{build_res.stdout}\n=== BUILD STDERR ===\n{build_res.stderr}")
-        if build_res.returncode != 0:
-            raise RuntimeError(f"Build failed:\n{build_res.stderr or build_res.stdout}")
-
-        ctx.jobs.update_progress("Validating package data in wheel distribution...")
-        dist_dir = Path(repo_path) / "dist"
-        wheels = list(dist_dir.glob("*.whl"))
-        if not wheels:
-            raise RuntimeError("No .whl package found in dist/ after build.")
-        latest_wheel = max(wheels, key=lambda p: p.stat().st_mtime)
-        with zipfile.ZipFile(latest_wheel, 'r') as z:
-            archived_files = z.namelist()
-            has_package_payload = any(not f.endswith('/') and '.dist-info/' not in f and '.data/' not in f for f in archived_files)
-            if not has_package_payload:
-                raise RuntimeError(f"Package validation failed: No active code or asset payload found in {latest_wheel.name}.")
-        log_lines.append(f"=== WHEEL VALIDATION ===\nVerified package payload present in {latest_wheel.name}")
-
-        ctx.jobs.update_progress("Running twine check on distribution artifacts...")
-        twine_check = subprocess.run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False)
-        log_lines.append(f"=== TWINE CHECK STDOUT ===\n{twine_check.stdout}\n=== TWINE CHECK STDERR ===\n{twine_check.stderr}")
-        if twine_check.returncode != 0:
-            raise RuntimeError(f"Twine validation failed:\n{twine_check.stderr or twine_check.stdout}")
-
+        log_lines.extend(_build_and_validate_distribution(ctx, repo_path))
         log_lines.append(f"\n=== NEXT STEPS [SKIPPED IN PREVIEW] ===\n- Upload release v{version_str} to PyPI via twine\n- Tag Git with baseline v{version_str}\n- Push tags to origin")
     elif dist_target == "vcs_only":
         log_lines.append(f"\n=== NEXT STEPS [SKIPPED IN PREVIEW] ===\n- Tag Git with baseline v{version_str}\n- Push tags to origin")
@@ -524,7 +498,8 @@ def _background_status_task(ctx, repo):
                     pypi_data = json.loads(response.read().decode('utf-8'))
                     releases = pypi_data.get("releases", {})
                     pypi_published = clean_version in releases or f"v{clean_version}" in releases or version in releases
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ [Semantic Update] PyPI validation ping failed for '{package_name}': {e}")
             pypi_published = False
             pypi_package_exists = False
 
