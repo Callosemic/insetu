@@ -113,7 +113,6 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
         manifest[manifest_key]["files"].append(r['filepath'])
 
     return manifest
-
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
     resolve_topology_buffer(workspace_id)
@@ -122,6 +121,21 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(Path(r['filepath']).name, r['filepath']) for r in rows]
+
+def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
+    """SSOT accessor to retrieve ledger paths and format them cleanly for downstream modules."""
+    resolve_topology_buffer(workspace_id)
+    ctx = topology_bp.get_context(workspace_id)
+    rows = ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
+
+    result = []
+    for r in rows:
+        fp = r['filepath']
+        if strip_prefix and fp.startswith(f"{repo_dir}/"):
+            result.append(fp[len(repo_dir)+1:])
+        else:
+            result.append(fp)
+    return result
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """

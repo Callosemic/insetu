@@ -256,7 +256,7 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
     md_files = set()
     manifest = ctx.manifest
-    for filepath in extract_manifest_files(manifest):
+    for filepath in extract_manifest_files(manifest, domain='vfs'):
         if filepath.lower().endswith('.md'):
             md_files.add(filepath)
     results = []
@@ -316,18 +316,9 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         if not os.path.exists(repo_path): 
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
-
         # Pull strictly from the SSOT Topology Ledger, avoiding disk I/O
-        rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
-
-        # Strip the repo prefix to match the expected relative formatting
-        final_list = []
-        for r in rows:
-            fp = r['filepath']
-            if fp.startswith(f"{repo_dir}/"):
-                final_list.append(fp[len(repo_dir)+1:])
-            else:
-                final_list.append(fp)
+        from insetu.core.topology.engine_topology import get_topology_files_for_repo
+        final_list = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
         debug_log_lines.append(f"\n[REPO] {repo_dir} (Path: {repo_path})")
         debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")

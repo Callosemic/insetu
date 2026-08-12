@@ -283,4 +283,10 @@ def apply_block_in_memory(content, block, silent=False):
                 # Snap to the discrete grid: round the tier FIRST, then multiply by the physical step
                 target_indent = max(0, actual_base_indent + (int(round(nesting_levels)) * file_step))
         new_replace_lines.append((" " * target_indent) + r_line.lstrip())
-    return True, "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:]), "success"
+
+    final_content = "\n".join(file_lines[:match_idx] + new_replace_lines + file_lines[match_idx + actual_span:])
+    if final_content == content:
+        if not silent: print("  └─ [ℹ️] Idempotency: Patch resulted in no changes to the file. Skipping chunk.")
+        return True, content, "idempotent"
+
+    return True, final_content, "success"

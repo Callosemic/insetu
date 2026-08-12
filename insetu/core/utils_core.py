@@ -209,8 +209,7 @@ def evaluate_circuit_breaker(touched_count, total_count, threshold=0.5):
     if not total_count or total_count <= 0:
         return False
     return (touched_count / total_count) > threshold
-
-def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, include_types=None):
+def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclude_types=None, include_types=None):
     def _extract(data):
         if isinstance(data, dict):
             item_type = data.get("meta", {}).get("type", "unknown")
@@ -227,15 +226,16 @@ def extract_manifest_files(manifest_data, target_key=None, exclude_types=None, i
     vfs_manifest = manifest_data.get("vfs", {}) if isinstance(manifest_data, dict) else {}
 
     if target_key:
-        entry = ctx_manifest.get(target_key) or vfs_manifest.get(target_key) or manifest_data.get(target_key)
+        entry = ctx_manifest.get(target_key) if domain == 'ctx' else (vfs_manifest.get(target_key) if domain == 'vfs' else (ctx_manifest.get(target_key) or vfs_manifest.get(target_key) or manifest_data.get(target_key)))
         if entry is None and ("/" in target_key or "\\" in target_key):
             base_name = Path(target_key).name
-            entry = ctx_manifest.get(base_name) or vfs_manifest.get(base_name) or manifest_data.get(base_name)
+            entry = ctx_manifest.get(base_name) if domain == 'ctx' else (vfs_manifest.get(base_name) if domain == 'vfs' else (ctx_manifest.get(base_name) or vfs_manifest.get(base_name) or manifest_data.get(base_name)))
         return _extract(entry or {})
 
     all_files = set()
-    combined = {**vfs_manifest, **ctx_manifest} if (ctx_manifest or vfs_manifest) else manifest_data
-    for k, v in combined.items():
+    target_partition = ctx_manifest if domain == 'ctx' else (vfs_manifest if domain == 'vfs' else (vfs_manifest if (manifest_data.get('vfs') or manifest_data.get('ctx')) else manifest_data))
+
+    for k, v in target_partition.items():
         extracted = _extract(v)
         if extracted:
             if isinstance(k, str) and k.endswith('.txt'):
@@ -399,9 +399,16 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
 def sanitize_workspace_config(cfg):
     cfg.pop("_settings_schemas", None)
     valid_repos = []
+    seen_dirs = set()
     for repo in (cfg.get("target_repos") or []):
         if not repo or not repo.get("repo_dir"):
             continue
+
+        r_dir = repo.get("repo_dir")
+        if r_dir in seen_dirs:
+            continue
+        seen_dirs.add(r_dir)
+
         valid_buckets = []
         for b in (repo.get("sub_buckets") or []):
             if not b or b.get("is_system"):

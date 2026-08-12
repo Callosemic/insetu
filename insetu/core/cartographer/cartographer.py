@@ -123,17 +123,8 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         # Pass 1: Preserve (checking disk and Git history)
         comments = extract_existing_comments(index_path, repo_path)
         # Pass 2: SSOT Read (Strictly query the Topology Ledger)
-        from insetu.core.topology.engine_topology import topology_bp
-        top_ctx = topology_bp.get_context(workspace_id)
-        rows = top_ctx.db.execute("SELECT filepath FROM topology_ledger WHERE repo = ?", (repo_dir,)).fetchall()
-
-        valid_files = []
-        for r in rows:
-            fp = r['filepath']
-            if fp.startswith(f"{repo_dir}/"):
-                valid_files.append(fp[len(repo_dir)+1:])
-            else:
-                valid_files.append(fp)
+        from insetu.core.topology.engine_topology import get_topology_files_for_repo
+        valid_files = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
         if not valid_files:
             continue
