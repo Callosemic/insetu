@@ -515,11 +515,13 @@ def _background_status_task(ctx, repo):
     if version:
         try:
             import urllib.request
+            clean_version = version.lstrip('v')
             req = urllib.request.Request(f"https://pypi.org/pypi/{package_name}/json", headers={'User-Agent': 'inSetu-OS/1.0'})
             with urllib.request.urlopen(req, timeout=3) as response:
                 if response.status == 200:
                     pypi_data = json.loads(response.read().decode('utf-8'))
-                    pypi_published = version in pypi_data.get("releases", {})
+                    releases = pypi_data.get("releases", {})
+                    pypi_published = clean_version in releases or f"v{clean_version}" in releases or version in releases
         except Exception:
             pypi_published = False
 
