@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-TODO-20260703_1300_TIER2_CONFIG_EDITOR
 title: "Feature: Upgrade Config Editor for Tier 2 Global Settings and Secure Credential Vaulting"
 created_at: 2026-07-03T13:00:00
