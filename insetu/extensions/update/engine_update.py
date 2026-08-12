@@ -200,7 +200,6 @@ def _background_first_release_task(ctx, repo):
 
     tag_res = execute_git(repo_path, ['tag', '-a', f'v{version_str}', '-m', f'v{version_str} initial release baseline'], check=False)
     log_lines.append(f"=== GIT TAG ===\n{tag_res.stdout}")
-
     if dist_target != "disabled":
         push_res = execute_git(repo_path, ['push', 'origin', f'v{version_str}'], check=False)
         log_lines.append(f"=== GIT PUSH ===\n{push_res.stdout} {push_res.stderr}")
@@ -208,6 +207,10 @@ def _background_first_release_task(ctx, repo):
     else:
         log_lines.append(f"=== GIT PUSH [SKIPPED] ===\nTarget is 'disabled'. Local tag only.")
         msg_suffix = "tagged locally (VCS push disabled)"
+
+    import time
+    if dist_target == "python_pypi":
+        ctx.store.set(f"update_{repo}.json", "last_publish_time", time.time())
 
     full_output = "\n\n".join(log_lines)
     return {"message": f"Successfully {msg_suffix}!", "artifact": {"version": version_str, "output": full_output}}
@@ -310,7 +313,6 @@ def _background_publish_task(ctx, repo):
         env["TWINE_USERNAME"] = "__token__"
 
     cmd = ['semantic-release', 'publish']
-
     try:
         res = subprocess.run(
             cmd, 
@@ -320,6 +322,10 @@ def _background_publish_task(ctx, repo):
             check=True,
             env=env
         )
+
+        import time
+        if dist_target == "python_pypi":
+            ctx.store.set(f"update_{repo}.json", "last_publish_time", time.time())
 
         return {"message": "Package distributed successfully.", "artifact": {"output": res.stdout.strip()}}
 
@@ -529,7 +535,8 @@ def _background_status_task(ctx, repo):
         "vcs_release": vcs_release,
         "has_pypi_token": has_pypi_token,
         "has_token": has_token,
-        "distribution_target": dist_target
+        "distribution_target": dist_target,
+        "last_publish_time": ctx.store.get(f"update_{repo}.json", "last_publish_time", 0.0)
     }}
 
 @update_bp.worker("update_toml_config_task")

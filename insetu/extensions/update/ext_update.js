@@ -29,6 +29,7 @@ export const UpdateStore = createExtensionStore('Update', {
     previewActionType: 'bump',
     previewCaption: '',
     distributionTarget: 'python_pypi',
+    lastPublishTime: 0,
 
     _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption) => {
         if (!repo) return;
@@ -138,6 +139,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             hasToken: statusData.artifact.has_token !== false,
                             hasPypiToken: statusData.artifact.has_pypi_token === true,
                             distributionTarget: statusData.artifact.distribution_target || 'python_pypi',
+                            lastPublishTime: statusData.artifact.last_publish_time || 0,
                             repoLoading: false
                         });
                     },
@@ -308,7 +310,8 @@ export class InSetuExtUpdate extends InSetuElement {
         previewChangelog: { type: String },
         previewTab: { type: String },
         previewActionType: { type: String },
-        previewCaption: { type: String }
+        previewCaption: { type: String },
+        lastPublishTime: { type: Number }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
@@ -338,6 +341,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.previewTab = 'changelog';
         this.previewActionType = 'bump';
         this.previewCaption = '';
+        this.lastPublishTime = 0;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -367,6 +371,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.previewTab = state.previewTab || 'changelog';
             this.previewActionType = state.previewActionType || 'bump';
             this.previewCaption = state.previewCaption || '';
+            this.lastPublishTime = state.lastPublishTime || 0;
             this.requestUpdate();
 
             // Fetch status when the selected repo changes
@@ -681,7 +686,12 @@ export class InSetuExtUpdate extends InSetuElement {
                                         ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
-                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished ? html`
+                                    <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
+                                        🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
+                                    </div>
+                                ` : ''}
+                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
                                     ${this.distributionTarget === 'python_pypi' 
                                         ? `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.` 
                                         : `Initial release pipeline: establishes v${this.repoVersion || '0.1.0'} Git baseline tags.`}
@@ -703,7 +713,12 @@ export class InSetuExtUpdate extends InSetuElement {
                                         ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
-                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                                ${this.lastPublishTime > 0 && this.distributionTarget === 'python_pypi' && !this.pypiPublished ? html`
+                                    <div style="font-size: 0.75rem; color: var(--intent-highlight); font-weight: bold; text-align: left; line-height: 1.3; background: var(--bg); padding: 8px 10px; border-radius: 4px; border: 1px solid var(--intent-highlight); margin-top: 2px;">
+                                        🕒 Publish dispatched <strong>${this.utils.timeAgo(this.lastPublishTime * 1000)}</strong>. PyPI indexing may take several minutes before it reflects here.
+                                    </div>
+                                ` : ''}
+                                <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
                                     <strong>Phase 2 (External Distribution):</strong>
                                     <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
                                         ${this.distributionTarget === 'python_pypi' ? html`<li>Uploads compiled package files to PyPI.</li>` : ''}
