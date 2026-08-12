@@ -27,6 +27,7 @@ export const UpdateStore = createExtensionStore('Update', {
     previewChangelog: '',
     previewTab: 'changelog',
     previewActionType: 'bump',
+    distributionTarget: 'python_pypi',
 
     _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab) => {
         if (!repo) return;
@@ -78,18 +79,16 @@ export const UpdateStore = createExtensionStore('Update', {
                 const currentRepo = UpdateStore.getState().targetRepo;
                 const allRepos = window.inSetu.stores.App.getState().allRepos || [];
                 const withToml = allRepos.filter(r => eligibility[r]);
-
                 let nextRepo = currentRepo;
 
-                if (!currentRepo && withToml.length > 0) {
-                    nextRepo = withToml[0];
-                } else if (currentRepo && !eligibility[currentRepo] && withToml.length > 0) {
-                    nextRepo = withToml[0];
+                // Auto-select the first versioned repository to keep the visually reordered dropdown in sync.
+                // If the current repo is unversioned, snap to the versioned one. The user can still manually re-select the unversioned repo later.
+                if (!currentRepo || !allRepos.includes(currentRepo) || (!eligibility[currentRepo] && withToml.length > 0)) {
+                    nextRepo = withToml.length > 0 ? withToml[0] : (allRepos.length > 0 ? allRepos[0] : '');
                 }
 
-                // Batch the state update so the UI evaluates the new repository and the new dropdown sorting simultaneously
                 const updates = { eligibleRepos: eligibility };
-                if (nextRepo && nextRepo !== currentRepo) {
+                if (nextRepo !== currentRepo) {
                     updates.targetRepo = nextRepo;
                 }
                 UpdateStore.setState(updates);
@@ -136,6 +135,7 @@ export const UpdateStore = createExtensionStore('Update', {
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
                             hasToken: statusData.artifact.has_token !== false,
                             hasPypiToken: statusData.artifact.has_pypi_token === true,
+                            distributionTarget: statusData.artifact.distribution_target || 'python_pypi',
                             repoLoading: false
                         });
                     },
@@ -208,6 +208,24 @@ export const UpdateStore = createExtensionStore('Update', {
             throw e;
         }
     },
+    changeDistributionTarget: async (repo, target) => {
+        if (!repo) return;
+        try {
+            const res = await window.inSetu.api.post(`update/settings?repo=${encodeURIComponent(repo)}`, {
+                distribution_target: target
+            });
+            if (res.ok) {
+                UpdateStore.setState({ distributionTarget: target });
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`✅ Distribution target updated.`, 2000);
+                }
+            } else {
+                throw new Error("Failed to save setting.");
+            }
+        } catch(e) {
+            alert(`Error saving setting: ${e.message}`);
+        }
+    },
     forceVersion: async (repo, version) => {
         if (!repo || !version) return;
         try {
@@ -277,6 +295,7 @@ export class InSetuExtUpdate extends InSetuElement {
         repoVcsRelease: { type: Boolean },
         hasToken: { type: Boolean },
         hasPypiToken: { type: Boolean },
+        distributionTarget: { type: String },
         lastReleaseLog: { type: String },
         allRepos: { type: Array },
         missingDependencies: { type: Array },
@@ -305,6 +324,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.repoVcsRelease = true;
         this.hasToken = true;
         this.hasPypiToken = false;
+        this.distributionTarget = 'python_pypi';
         this.allRepos = [];
         this.missingDependencies = [];
         this.missingBinaries = [];
@@ -332,6 +352,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.repoVcsRelease = state.repoVcsRelease !== false;
             this.hasToken = state.hasToken !== false;
             this.hasPypiToken = state.hasPypiToken === true;
+            this.distributionTarget = state.distributionTarget || 'python_pypi';
             this.lastReleaseLog = state.lastReleaseLog || '';
             this.missingDependencies = state.missingDependencies || [];
             this.missingBinaries = state.missingBinaries || [];
@@ -445,17 +466,50 @@ export class InSetuExtUpdate extends InSetuElement {
                             ...(withToml.length > 0 && withoutToml.length > 0 ? [{ value: '---', label: '──────────' }] : []),
                             ...withoutToml.map(r => ({ value: r, label: r }))
                         ];
-                        return html`
-                            <sutram-select 
-                                style="flex: 1; margin-bottom: 0;"
-                                .value=${this.targetRepo}
-                                .options=${options}
-                                @sutram-input-changed=${e => {
-                                    if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
-                                }}>
-                            </sutram-select>
-                        `;
+
+                        // Force a complete component remount when the eligibility matrix hydrates
+                        // by serving physically distinct template references to the Lit engine.
+                        if (Object.keys(this.eligibleRepos).length === 0) {
+                            return html`
+                                <sutram-select 
+                                    style="flex: 1; margin-bottom: 0;"
+                                    .value=${this.targetRepo}
+                                    .options=${options}
+                                    @sutram-input-changed=${e => {
+                                        if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
+                                    }}>
+                                </sutram-select>
+                            `;
+                        } else {
+                            return html`
+                                <sutram-select 
+                                    style="flex: 1; margin-bottom: 0;"
+                                    .value=${this.targetRepo}
+                                    .options=${options}
+                                    @sutram-input-changed=${e => {
+                                        if (e.detail.value !== '---') UpdateStore.setState({ targetRepo: e.detail.value });
+                                    }}>
+                                </sutram-select>
+                            `;
+                        }
                     })()}
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+                    <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Distribution Target:</label>
+                    <sutram-select 
+                        style="flex: 1; margin-bottom: 0;"
+                        .value=${this.distributionTarget}
+                        .options=${[
+                            { value: 'python_pypi', label: 'Python (PyPI + VCS)' },
+                            { value: 'vcs_only', label: 'VCS Only (Git Tag & GitHub Release)' },
+                            { value: 'disabled', label: 'Disabled (Version Bump Only)' }
+                        ]}
+                        @sutram-input-changed=${e => {
+                            if (this.targetRepo) {
+                                UpdateStore.getState().changeDistributionTarget(this.targetRepo, e.detail.value);
+                            }
+                        }}>
+                    </sutram-select>
                 </div>
                 <div style="padding: 15px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px;">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -605,50 +659,50 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
-                            ${!this.hasRelease || !this.pypiPublished ? html`
+                            ${!this.hasRelease || (!this.pypiPublished && this.distributionTarget === 'python_pypi') ? html`
                                 <sutram-async-btn 
                                     style="width: 100%;" 
-                                    label="🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI" 
+                                    label="${this.distributionTarget === 'python_pypi' ? `🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI` : `🏷️ Release v${this.repoVersion || '0.1.0'} to VCS`}" 
                                     intent="highlight" 
-                                    ?disabled=${!this.isClean || !this.hasPypiToken}
-                                    .disabled=${!this.isClean || !this.hasPypiToken}
+                                    ?disabled=${!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)}
+                                    .disabled=${!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)}
                                     .onClick=${async () => {
-                                        if (!this.isClean || !this.hasPypiToken) return;
+                                        if (!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)) return;
                                         await UpdateStore.getState().previewFirstRelease(this.targetRepo);
                                     }}>
                                 </sutram-async-btn>
-                                ${!this.hasPypiToken ? html`
+                                ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
                                     <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
-                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings or set TWINE_PASSWORD/PYPI_TOKEN in environment to enable publishing.
+                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
                                 <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
-                                    ${!this.pypiPublished && this.hasRelease 
-                                        ? `Git release tag v${this.repoVersion || '0.1.0'} exists, but package '${this.packageName || this.targetRepo}' is not published on PyPI.org yet. Click above to build wheels and upload.` 
-                                        : `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.`}
+                                    ${this.distributionTarget === 'python_pypi' 
+                                        ? `Initial release pipeline: validates package assets, builds wheels, uploads to PyPI, and establishes v${this.repoVersion || '0.1.0'} baseline.` 
+                                        : `Initial release pipeline: establishes v${this.repoVersion || '0.1.0'} Git baseline tags.`}
                                 </div>
                             ` : html`
                                 <sutram-async-btn 
                                     style="width: 100%;" 
-                                    label="🚀 Step 2: Publish Release" 
+                                    label="${this.distributionTarget === 'python_pypi' ? '🚀 Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? '🚫 Publishing Disabled' : '🚀 Step 2: Push VCS Release')}" 
                                     intent="highlight" 
-                                    ?disabled=${!this.repoConfigured || !this.isClean || !this.hasPypiToken}
-                                    .disabled=${!this.repoConfigured || !this.isClean || !this.hasPypiToken}
+                                    ?disabled=${!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled'}
+                                    .disabled=${!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled'}
                                     .onClick=${async () => {
-                                        if (!this.repoConfigured || !this.isClean || !this.hasPypiToken) return;
+                                        if (!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled') return;
                                         await UpdateStore.getState().previewPublish(this.targetRepo);
                                     }}>
                                 </sutram-async-btn>
-                                ${!this.hasPypiToken ? html`
+                                ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
                                     <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
-                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings or set TWINE_PASSWORD/PYPI_TOKEN in environment to enable publishing.
+                                        ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
                                     </span>
                                 ` : ''}
                                 <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
                                     <strong>Phase 2 (External Distribution):</strong>
                                     <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
-                                        <li>Uploads compiled package files (<code>.whl</code> / <code>.tar.gz</code>) to PyPI.</li>
-                                        <li>Mints the official GitHub Release card UI with notes and attached binaries via API.</li>
+                                        ${this.distributionTarget === 'python_pypi' ? html`<li>Uploads compiled package files to PyPI.</li>` : ''}
+                                        ${this.distributionTarget !== 'disabled' ? html`<li>Mints the official GitHub Release card UI with notes.</li>` : html`<li>External distribution is disabled in settings.</li>`}
                                     </ol>
                                 </div>
                             `}
@@ -729,6 +783,13 @@ window.ExtensionRegistry.registerExtension('update', {
         }
     ],
     uiHooks: {
+        'zone:subtab-changed': (data) => {
+            if (data.parentId === 'ctrl' && data.subId === 'update') {
+                const repo = UpdateStore.getState().targetRepo;
+                if (repo) UpdateStore.getState().fetchRepoStatus(repo);
+                UpdateStore.getState().fetchEligibleRepos();
+            }
+        },
         'zone:vfs-mutated': (payload) => {
             if (!payload || !payload.mutations) return false;
             const repo = UpdateStore.getState().targetRepo;
