@@ -15,7 +15,7 @@ Furthermore, running disk scans during Gather boot initialization triggered redu
    - `engine_gather.py` yields `ctx` signatures formatted as `path -> timestamp`.
 2. **System Deltas REST Gateway**:
    - Exposed `/api/system/deltas` in `routes_system.py` returning the kernel's aggregated signature delta payload.
-   - Exposed surgical fetch endpoints `/api/topology/vfs` and `/api/gather/manifest/entry` to allow the client to rehydrate changed sub-trees/entries on demand.
+   - Exposed surgical fetch endpoints `/api/topology/vfs` and `/api/gather/manifest/entry` (returning HTTP 200 with `status: "deleted"` for tombstoned entries) to allow the client to rehydrate changed sub-trees/entries on demand.
 3. **Topology-Owned Boot Sequence**:
    - `engine_topology.py` subscribes to `@hooks.on('workspace_boot')` to execute `boot_scan_task` and emit `topology_boot_complete`.
    - `engine_gather.py` listens to `@hooks.on('topology_boot_complete')` to trigger context compilation with `force_full="compile_only"`, eliminating double disk walks.
