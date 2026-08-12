@@ -281,13 +281,15 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
     });
     return _basePoller(jobId, safeOptions);
 };
-
 // Restore UI State on Load
 let bootCurrentStep = 0;
 let bootTotalSteps = 8;
+let bootHighestPercent = 0;
 function updateBootProgress(statusMsg) {
     bootCurrentStep++;
-    const percent = Math.min(100, Math.round((bootCurrentStep / bootTotalSteps) * 100));
+    let percent = Math.min(100, Math.round((bootCurrentStep / bootTotalSteps) * 100));
+    bootHighestPercent = Math.max(bootHighestPercent, percent);
+    percent = bootHighestPercent;
 
     const fillBar = document.getElementById('retro-bar-fill');
     const statusEl = document.getElementById('retro-status-msg');
