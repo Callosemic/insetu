@@ -52,6 +52,9 @@ insetu/
 │   │   ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
 │   │   └── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
+├── extensions/                     # Tier 3 Domain Extensions (Opt-in functionality).
+│   └── update/                     # Automated Python semantic versioning and PyPI distribution.
+│       └── ext_update.js           # Release preview and publish UI.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
