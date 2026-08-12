@@ -1,7 +1,9 @@
-# Virtual Environments
+# Virtual Environments & Environment Variables
 .venv/
 venv/
 env/
+*.env
+.env.*
 
 # Python Cache & Build Artifacts
 __pycache__/

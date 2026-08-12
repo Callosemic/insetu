@@ -223,6 +223,10 @@ async function checkManifestVersion() {
                         }
                         localCtxSignatures[path] = ts;
                         manifestUpdated = true;
+                    } else if (entryRes.status === 404) {
+                        delete currentManifest.ctx[path];
+                        delete localCtxSignatures[path];
+                        manifestUpdated = true;
                     }
                 }
             }

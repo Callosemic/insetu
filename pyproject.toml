@@ -75,12 +75,12 @@ all = [
 
 [project.scripts]
 insetu = "insetu.cli:main"
-
 [tool.setuptools]
 include-package-data = true
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["*__pycache__*"]
+include = ["insetu", "insetu.*"]
+exclude = ["*__pycache__*", "tests", "tests.*", "docs", "docs.*"]
 [tool.setuptools.package-data]
 "*" = [
     "*.js",
