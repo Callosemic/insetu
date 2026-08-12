@@ -665,6 +665,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                                 const manifestObj = manifestCtx[baseFile] || {};
                                                                 return html`
                                                                     <sutram-entity-actions 
+                                                                        ?scrollable=${true}
                                                                         .entityType=${'file'} 
                                                                         .entityData=${{ 
                                                                             filepath: baseFile, 

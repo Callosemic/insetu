@@ -794,6 +794,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
                     <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; align-items: center; justify-content: flex-end;">
                         <sutram-entity-actions 
+                            ?scrollable=${true}
+                            style="justify-content: flex-end;"
                             .entityType=${'text_blob'} 
                             .entityData=${{ 
                                 textContent: this.changelogText,

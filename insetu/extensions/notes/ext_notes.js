@@ -203,7 +203,6 @@ export class InSetuExtNotesEditor extends InSetuElement {
                 titleText="📝 ${this.filepath || ''}"
                 ?fullscreen=${true}
                 ?flush=${true}
-                style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
                 @sutram-modal-closed=${() => NotesStore.setState({ editNoteFilepath: null })}>
 
                 <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
