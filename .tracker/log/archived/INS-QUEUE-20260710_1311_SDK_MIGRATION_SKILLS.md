@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260710_1311_SDK_MIGRATION_SKILLS
 title: "SDK V2 Migration: Skills Extension"
 created_at: 2026-07-10T13:11:00

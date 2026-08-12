@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260710_1308_SDK_MIGRATION_CITATIONS
 title: "SDK V2 Migration: Citations Extension"
 created_at: 2026-07-10T13:08:00
