@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.14.0 (2026-08-11)
+
+### Bug Fixes
+
+- **app-shell**: Enforce monotonic boot progress calculation
+  ([`67c251a`](https://github.com/Callosemic/insetu/commit/67c251ab06229cbed3e75ea1719c0782246888cf))
+
+- **bridge**: Enforce explicit X+1 backtracking in fuzzy search anchor matching
+  ([`4713c55`](https://github.com/Callosemic/insetu/commit/4713c55375ac1f89d1b3ab3dc7396e1d2079a1e9))
+
+### Features
+
+- **update**: Add initial release dry-run preview and modernize Sutram UI controls
+  ([`db613ec`](https://github.com/Callosemic/insetu/commit/db613ec46797ed957ee22c8ae458aaf07dad3f29))
+
+
 ## v0.13.2 (2026-08-11)
 
 ### Bug Fixes
