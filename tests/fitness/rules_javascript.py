@@ -53,6 +53,7 @@ def check_javascript_files():
     sutram_form_control_pattern = re.compile(r'<(?:input|select|textarea)\b(?!.*type=["\'](?:checkbox|radio|file)["\'])')
     legacy_refresh_pattern = re.compile(r'\bon(?:Sub)?NavReselected\s*\(')
     unmanaged_document_input_listener_pattern = re.compile(r"document\.addEventListener\(\s*['\"](input|change)['\"]")
+    open_virtual_file_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs|vfs)\.openVirtualFile\s*\(')
 
     for root, _, files in os.walk(FRONTEND_DIR):
         for file in files:
@@ -245,3 +246,5 @@ def check_javascript_files():
                         report_violation("LEGACY_FORCE_REFRESH_HOOK_BAN", filepath, line_num, "Deprecated 'zone:force-refresh' UI hook detected. Migrate to native onForceRefresh() class lifecycle method on InSetuElement.")
                     if unmanaged_document_input_listener_pattern.search(line):
                         report_violation("UNMANAGED_FORM_INPUT_LISTENER_BAN", filepath, line_num, "Direct DOM input/change listener on 'document' detected. Form input management must route through Sutram web component lifecycles (<sutram-input>, <sutram-textarea>).")
+                    if open_virtual_file_pattern.search(line):
+                        report_violation("VIEW_TEXT_BLOB_MANDATE", filepath, line_num, "Deprecated vfs.openVirtualFile detected. Migrate to this.ui.viewTextBlob(title, content, suggestedFilename) or window.inSetu.ui.viewTextBlob instead.")

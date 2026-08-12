@@ -57,6 +57,8 @@ insetu/
 │   │   └── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
 ├── extensions/                     # Tier 3 Domain Extensions (Opt-in functionality).
+│   ├── tracker/                    # Local offline Kanban board using Markdown-as-Code tickets.
+│   │   └── ext_tracker.js          # [Kanban Board UI & Store]
 │   └── update/                     # Automated Python semantic versioning and PyPI distribution.
 │       └── ext_update.js           # Release preview and publish UI.
 ├── insetu/                         # Python application package.
@@ -203,6 +205,14 @@ insetu/
 │   ├── requires.txt                # [comment required]
 │   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
+├── static/                         # Web server static assets and frontend bundles.
+│   └── js/                         # [Frontend JavaScript Payloads]
+│       └── core/                   # Core frontend SDK and UI components.
+│           ├── bridge.js           # [Sync Bridge Payload UI]
+│           ├── components/         # Reusable Lit Web Components for the OS.
+│           │   └── ui_primitives.js # Base primitives like job trackers and loading spinners.
+│           ├── sdk.js              # The InSetuElement base class and Zustand store factory.
+│           └── store.js            # [Zustand Unified Data Flow (UDF) Store]
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.
