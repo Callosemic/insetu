@@ -382,7 +382,7 @@ export class InSetuExtConfig extends InSetuElement {
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <div style="flex: 1; min-width: 200px;">
-                                    <sutram-input label="Global Allowed Extensions" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.configForm = { ...this.configForm, include_extensions: arr }; }}></sutram-input>
+                                    <sutram-input label="Global Allowed Extensions" .value=${(this.configForm.include_extensions || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { const arr = e.detail.value.split(',').map(s => s.trim()).filter(s => s !== null && s !== undefined); this.configForm = { ...this.configForm, include_extensions: arr }; }}></sutram-input>
                                     <span style="font-size: 0.7rem; color: var(--text-muted); opacity: 0.8; display: block; margin-top: -12px; margin-bottom: 8px;">Merged with repo-specific extensions across all repos.</span>
                                 </div>
                                 <div style="flex: 1; min-width: 200px;">

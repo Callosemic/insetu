@@ -125,13 +125,17 @@ export const BridgeStore = createExtensionStore('Bridge', {
     removeCell: (id) => {
         BridgeStore.setState(state => ({ cells: state.cells.filter(c => c.id !== id) }));
     },
-    clearPayload: () => BridgeStore.setState({ 
-        cells: [], 
-        activeBridgeJobId: null,
-        viewMode: 'input',
-        consoleOutput: 'Ready...',
-        telemetry: null
-    }),
+    clearPayload: () => {
+        const bridgeEl = document.querySelector('insetu-ext-bridge');
+        if (bridgeEl) bridgeEl._confirmedCandidates = {};
+        BridgeStore.setState({ 
+            cells: [], 
+            activeBridgeJobId: null,
+            viewMode: 'input',
+            consoleOutput: 'Ready...',
+            telemetry: null
+        });
+    },
     setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
     setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out }),
     setTelemetry: (tel) => BridgeStore.setState({ telemetry: tel }),
@@ -368,6 +372,7 @@ export class InSetuExtBridge extends InSetuElement {
                 active_files: activeFiles,
                 dry_run: dryRunActive,
                 pinned_repos: Array.from(this.ecosystem.pinnedRepos),
+                confirmed_candidates: this._confirmedCandidates || {},
                 ...overridePayload
             }, {
                 interval: 250,
@@ -413,8 +418,15 @@ export class InSetuExtBridge extends InSetuElement {
             const newPath = btn.dataset.new;
             const cells = BridgeStore.getState().cells;
             const target = cells.find(c => c.file === oldPath);
-            if (target) BridgeStore.getState().updateGroupFile(oldPath, newPath);
-            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+            if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(oldPath, newPath);
+
+            this._confirmedCandidates = this._confirmedCandidates || {};
+            this._confirmedCandidates[oldPath] = newPath;
+            this._confirmedCandidates[newPath] = newPath;
+
+            this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, {
+                confirmed_candidates: this._confirmedCandidates
+            })();
         } else if (action === 'view-diff') {
             const decodedDiff = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.b64), c => c.charCodeAt(0)));
             if (this.ui && this.ui.viewTextBlob) {
@@ -508,15 +520,17 @@ export class InSetuExtBridge extends InSetuElement {
                                                         <button data-action="view-diff" data-b64="${p.syntax_error}" class="btn-sm" style="background: var(--intent-danger);">👁️ View Syntax Error Diff</button>
                                                     </div>
                                                 ` : ''}
-
                                                 ${p.candidates && p.candidates.length > 0 ? html`
                                                     <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 5px;">
-                                                        ${p.candidates.map(c => html`
-                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
-                                                                <span style="font-family: monospace;">${c.filepath} (Score: ${c.score})</span>
-                                                                <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" class="btn-sm" style="background: var(--intent-primary);">Confirm Match</button>
-                                                            </div>
-                                                        `)}
+                                                        ${p.candidates.map(c => {
+                                                            const btnLabel = p.flags?.includes('confirm-to-overwrite') || c.match_type === 'overwrite' ? 'Confirm Overwrite' : 'Confirm Match';
+                                                            return html`
+                                                                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border: 1px solid var(--border); border-radius: 4px;">
+                                                                    <span style="font-family: monospace;">${c.filepath} ${c.score ? `(Score: ${c.score})` : ''}</span>
+                                                                    <button data-action="confirm-candidate" data-old="${p.original_file}" data-new="${c.filepath}" class="btn-sm" style="background: var(--intent-primary);">${btnLabel}</button>
+                                                                </div>
+                                                            `;
+                                                        })}
                                                     </div>
                                                 ` : ''}
                                                 <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
