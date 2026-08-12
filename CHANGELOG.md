@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.13.2 (2026-08-11)
+
+### Bug Fixes
+
+- **security**: Implement global master key migration and settings error handling
+  ([`ff679ec`](https://github.com/Callosemic/insetu/commit/ff679ec5b5baf864b253bd6971fb9df2b5f7fbcc))
+
+- **ui**: Surface detailed server error messages on settings save failure
+  ([`8ebc6fc`](https://github.com/Callosemic/insetu/commit/8ebc6fc10bb80989105d49fadc9a145c060b4456))
+
+
 ## v0.13.1 (2026-08-11)
 
 ### Bug Fixes
