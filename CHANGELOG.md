@@ -2,6 +2,54 @@
 
 <!-- version list -->
 
+## v0.15.0 (2026-08-12)
+
+### Bug Fixes
+
+- Persist bridge candidate path confirmations and refine config extension input parsing
+  ([`fa09c6b`](https://github.com/Callosemic/insetu/commit/fa09c6b68f24511a1d1b52fabaea228d96dba3b0))
+
+- **core**: Enrich bridge overwrite telemetry, soft-delete manifest entries, and support exact
+  filename topology inclusions
+  ([`12e2ac0`](https://github.com/Callosemic/insetu/commit/12e2ac0a2c1152f64243fc909c21ecad0bd135b1))
+
+- **extensions**: Refine extension manifest extraction, YAML tag parsing, and component reactivity
+  ([`6781b3d`](https://github.com/Callosemic/insetu/commit/6781b3dca97365ec43eec5aafc0918990ab5cc47))
+
+- **manifest**: Handle 404 deleted context entries in manifest sync and refine build package
+  excludes
+  ([`1c09004`](https://github.com/Callosemic/insetu/commit/1c09004f6c8a11f90a074ea53c754472709b2416))
+
+- **update**: Default repository build command to python -m build
+  ([`53f8633`](https://github.com/Callosemic/insetu/commit/53f8633e434d4f6d36d334e2a8068598f3b86d89))
+
+### Features
+
+- Add semantic update distribution targets and dropdown auto-sync
+  ([`2d683d0`](https://github.com/Callosemic/insetu/commit/2d683d06873107d18cb213c37e11cff5931da0fe))
+
+- Add semantic update distribution targets and dropdown sync
+  ([`678266e`](https://github.com/Callosemic/insetu/commit/678266edde1edb29be3c154b8981eb8a719a58a3))
+
+- **client**: Implement InSetuBlobViewer modal, core_text_blobs entity actions, and Sync Bridge diff
+  viewer integration
+  ([`d6f9c06`](https://github.com/Callosemic/insetu/commit/d6f9c060f272d9d9f90e817238ff3aeb686e29b5))
+
+- **ui**: Adopt text blob viewer and entity actions across tracker and update extensions
+  ([`3318dee`](https://github.com/Callosemic/insetu/commit/3318dee935944acc7853a448fd80fb5ba34a0f5a))
+
+- **ui**: Enforce VIEW_TEXT_BLOB_MANDATE linter rule and update architectural mappings
+  ([`4182582`](https://github.com/Callosemic/insetu/commit/4182582d01762cff871ab743fa17e6a833beaa6c))
+
+### Refactoring
+
+- Extract topology ledger repo accessor and refine bridge idempotency
+  ([`9a33da3`](https://github.com/Callosemic/insetu/commit/9a33da3bddcd38017627633c99547d2449c56600))
+
+- **vfs**: Centralize manifest domain extraction and DRY file view refreshes
+  ([`b65ad58`](https://github.com/Callosemic/insetu/commit/b65ad58d53eb99521c2ac154fb7ee8a1b80c66b4))
+
+
 ## v0.14.0 (2026-08-11)
 
 ### Bug Fixes
