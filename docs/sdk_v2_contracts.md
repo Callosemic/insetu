@@ -131,11 +131,10 @@ window.ExtensionRegistry.registerExtension('my_ext', {
     // Extends workspace configuration cards with domain-specific controls
     repoConfigOptions: [{ id: 'my-repo-opt', order: 10, component: ({ repo, updateCallback }) => { ... } }],
     bucketConfigOptions: [{ id: 'my-bucket-opt', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }],
-
-    // Binds background listeners or menu injections
+    // [DEPRECATED - ADR 0041] Legacy zone hooks (use customEditors, layoutSlots, or window.inSetu.events instead)
     uiHooks: {
-        'zone:post-file-save': (filepath) => { /* React to VFS saves */ },
-        'zone:modal-ext-menu': (data) => { /* Inject into the file editor dropdown */ }
+        'zone:post-file-save': (filepath) => { /* Deprecated: Use window.inSetu.events */ },
+        'zone:modal-ext-menu': (data) => { /* Deprecated: Use layoutSlots */ }
     }
 });
 

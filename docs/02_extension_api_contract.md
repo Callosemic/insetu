@@ -75,14 +75,19 @@ Extensions declare their spatial footprint and contextual actions statelessly us
 * **Polymorphic Entity Actions (`entityActions`):** All contextual file, task, and card interactions MUST route through the `entityActions` array using the `EntityData` SSOT contract.
     * **`filepath` SSOT:** Matchers and callbacks MUST evaluate `data.filepath`. Call `this.utils.normalizeEntityData(data)` to map legacy `data.path` or `data.filename` properties onto `data.filepath`.
     * **Action Ordering:** Use `order` integers (`< 0`: Quick/Pin actions, `0–49`: Primary actions, `50–99`: Contextual actions, `>= 100`: Fallback actions).
+### 3.2 Context-Aware Zone Hooks (`uiHooks`) [DEPRECATED - ADR 0041]
+> **Deprecation Warning (ADR 0041):** `uiHooks` and `zone:*` string hook specifiers are permanently deprecated. Do not use string-based DOM zone hooks for new extension development.
+>
+> * Use the `customEditors` declarative array for custom file matchers and modal overrides (replacing `zone:file-edit-override`).
+> * Use expanded `layoutSlots` (e.g. `slot: "modal:new-file:actions"`) for modal and action slot mounting.
+> * Use native `InSetuElement` class lifecycle handlers (`onForceRefresh()`, `onWorkspaceChanged()`) or the Typed Event Bus (`window.inSetu.events`) for behavioral events.
 
-### 3.2 Context-Aware Zone Hooks (`uiHooks`)
-Extensions subscribe to specific UI lifecycle zones via the `uiHooks` dictionary in their schema:
-* `zone:file-edit-override`: Receives `filepath`. Returning `true` overrides the standard editor to open a custom modal (e.g., Kanban or Notes drawer).
-* `zone:post-file-save`: Receives `filepath`, firing immediately after an atomic VFS disk commit.
-* `zone:vfs-mutated`: Receives an array of VFS mutation events for reactive cache updates.
-* `zone:new-file-options-lit`: Renders custom extension toggles inside the New File creation modal.
-* `zone:tab-changed`: Receives `tabId` on navigation to trigger silent data fetches.
+Legacy zone hook behaviors (preserved for historical reference):
+* `zone:file-edit-override`: (Superseded by `customEditors`).
+* `zone:post-file-save`: (Superseded by `window.inSetu.events` / `vfs_mutated`).
+* `zone:vfs-mutated`: (Superseded by `InSetuElement.prototype.onForceRefresh()` / event bus).
+* `zone:new-file-options-lit`: (Superseded by `layoutSlots`).
+* `zone:tab-changed`: (Superseded by `InSetuElement.prototype.onForceRefresh()` / `onTabVisible()`).
 ### 3.1 The Client State Engine (Zustand Slices)
 To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must never mutate or query raw DOM layout strings directly. The client environment manages global state across two core reactive stores:
 * **`AppStore` (store.js):** Coordinates system-wide topologies, configuration schemas, manifest states, active repositories, and extension arrays.
