@@ -71,9 +71,11 @@ def _run_term_stream(ws, workspace_id):
 
     # Fork a new PTY natively
     master_fd, slave_fd = pty.openpty()
-
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
+    # Inject a self-destructing PROMPT_COMMAND trap to overwrite the host's ~/.bashrc 
+    # right before the first render, then vanish so Python venvs can safely modify PS1 later.
+    env["PROMPT_COMMAND"] = "export PS1='\w ❯ '; unset PROMPT_COMMAND"
     try:
         p = subprocess.Popen(
             ["bash", "-l"],
