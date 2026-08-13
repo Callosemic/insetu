@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "closed"
+status: "logged"
 id: INS-QUEUE-20260713_0204_SDK_DEBT_SWEEP
 title: "Sweep V2 SDK Guardrail Violations & Technical Debt"
 created_at: 0000-00-00T00:00:00
