@@ -874,6 +874,40 @@ window.ExtensionRegistry.registerExtension('git', {
             }
         }
     ],
+    repoConfigOptions: [
+        {
+            id: 'git-repo-exclude',
+            order: 20,
+            component: ({ repo, updateCallback }) => html`
+                <sutram-toggle 
+                    label="Exclude from Git Diffs" 
+                    .checked=${!!repo.exclude_from_diffs} 
+                    ?flush=${true}
+                    @sutram-input-changed=${(e) => { 
+                        repo.exclude_from_diffs = e.detail.value; 
+                        updateCallback(); 
+                    }}>
+                </sutram-toggle>
+            `
+        }
+    ],
+    bucketConfigOptions: [
+        {
+            id: 'git-exclude',
+            order: 20,
+            component: ({ bucket, updateCallback }) => html`
+                <sutram-toggle 
+                    label="Exclude from Git Diffs" 
+                    .checked=${!!bucket.exclude_from_diffs} 
+                    ?flush=${true}
+                    @sutram-input-changed=${(e) => { 
+                        bucket.exclude_from_diffs = e.detail.value; 
+                        updateCallback(); 
+                    }}>
+                </sutram-toggle>
+            `
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:primary-navigation",

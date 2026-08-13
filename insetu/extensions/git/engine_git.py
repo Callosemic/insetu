@@ -165,17 +165,16 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
                     b, module = resolve_file_bucket(rel_to_repo, sub_buckets)
                     if b and b.get("exclude_from_diffs"): continue
-
                     if b and module:
                         b_id = f"{module}_diffs.txt"
                         b_title = b.get("meta_map", {}).get(module, {}).get("title", module.replace('_', ' ').title())
                         b_domain = b.get("meta_map", {}).get(module, {}).get("domain", b.get("domain", config.get("domain", "Workspaces")))
                     elif b:
-                        b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
+                        b_id = f"{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
                         b_title = b.get("title", b.get("id", "bucket").replace('_', ' ').title())
                         b_domain = b.get("domain", config.get("domain", "Workspaces"))
                     else:
-                        b_id = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+                        b_id = f"{safe_r_dir}_diffs.txt"
                         b_title = config.get("title", safe_r_dir.replace('_', ' ').title())
                         b_domain = config.get("domain", "Workspaces")
 
@@ -184,7 +183,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         bucket_meta[b_id] = {"title": b_title, "domain": b_domain}
                     bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
-                out_filename = config.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt")
+                out_filename = f"{safe_r_dir}_diffs.txt"
                 filtered_files = []
                 for rel_to_repo, status, orig_filepath in changed_files:
                     if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
@@ -526,11 +525,11 @@ def _background_git_push(ctx, repo, message, diff_file):
                     if b and module:
                         b_id = f"{module}_diffs.txt"
                     elif b:
-                        b_id = b.get("out_file", f"{safe_r_dir}_{b.get('id', 'bucket')}_context.txt").replace("_context.txt", "_diffs.txt")
+                        b_id = f"{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
                     else:
-                        b_id = repo_cfg.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt") if repo_cfg else f"{safe_r_dir}_diffs.txt"
+                        b_id = f"{safe_r_dir}_diffs.txt"
                 else:
-                    b_id = repo_cfg.get("out_file", f"{safe_r_dir}_context.txt").replace("_context.txt", "_diffs.txt") if repo_cfg else f"{safe_r_dir}_diffs.txt"
+                    b_id = f"{safe_r_dir}_diffs.txt"
 
                 # Only stage the file if it maps to the exact bucket the user clicked
                 if b_id == target_diff_name:

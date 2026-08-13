@@ -184,12 +184,9 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
     exclude_from_diffs = tracker_cfg.get("exclude_from_diffs", True)
     include_closed = tracker_cfg.get("include_closed", "grace_period")
     spawn_closed = tracker_cfg.get("spawn_closed", False)
-
     for repo_cfg in cfg.get("target_repos", []):
         if "sub_buckets" not in repo_cfg:
             repo_cfg["sub_buckets"] = []
-        if "repo_ignore_dirs" not in repo_cfg:
-            repo_cfg["repo_ignore_dirs"] = []
         safe_r_dir = get_safe_repo_id(repo_cfg.get("repo_dir", ""))
 
         domain = "Tracker Issues"
@@ -213,14 +210,12 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
             main_prefixes.extend(log_prefixes)
         # Clear existing dynamic sub-buckets to apply new logic
         repo_cfg["sub_buckets"] = [b for b in repo_cfg["sub_buckets"] if b.get("id") not in ("tracker", "tracker_closed", "tracker_omitted")]
-
         if isolate_context:
             repo_cfg["sub_buckets"].insert(0, {
                 "id": "tracker",
                 "title": f"ISSUE TRACKER ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": domain,
                 "match_prefixes": main_prefixes,
-                "out_file": f"{safe_r_dir}_tracker_context.txt",
                 "exclude_from_diffs": exclude_from_diffs,
                 "is_system": True
             })
@@ -232,7 +227,6 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                     "title": f"CLOSED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
                     "domain": "Closed and Logged Work",
                     "match_prefixes": closed_prefixes + log_prefixes,
-                    "out_file": f"{safe_r_dir}_tracker_closed_context.txt",
                     "exclude_from_diffs": exclude_from_diffs,
                     "is_system": True
                 })
@@ -244,7 +238,6 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                 "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": "Hidden Context",
                 "match_prefixes": [".tracker/"],
-                "out_file": f"{safe_r_dir}_tracker_omitted_context.txt",
                 "exclude_from_diffs": True,
                 "is_system": True
             })
@@ -255,7 +248,6 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
                 "title": f"OMITTED TICKETS ({repo_cfg.get('repo_dir', '').upper()})",
                 "domain": "Hidden Context",
                 "match_prefixes": closed_prefixes + log_prefixes,
-                "out_file": f"{safe_r_dir}_tracker_omitted_context.txt",
                 "exclude_from_diffs": True,
                 "is_system": True
             })
