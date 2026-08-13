@@ -384,9 +384,12 @@ export class InSetuExtBridge extends InSetuElement {
                         const tel = statusData.artifact;
                         BridgeStore.setState({ telemetry: tel, consoleOutput: '' });
                         if (tel.can_commit && tel.mode === 'live') {
-                            const savedFiles = BridgeStore.getState().getActiveFiles();
+                            // Extract the true OS-resolved paths from the telemetry payload
+                            const safePatches = tel.patches || [];
+                            const resolvedFiles = Array.from(new Set(safePatches.map(p => p.resolved_file).filter(Boolean)));
+
                             BridgeStore.setState({ cells: [] });
-                            const mutations = savedFiles.map(f => ({ filepath: f, operation: 'save' }));
+                            const mutations = resolvedFiles.map(f => ({ filepath: f, operation: 'save' }));
                             window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
 
                             // Reactivity: Auto-refresh the ledger UI after a commit

@@ -94,9 +94,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
     static properties = {
         value: { type: String },
         readOnly: { type: Boolean },
-        language: { type: String },
-        _customExtensions: { type: Array },
-        _mdLinksEnabled: { type: Boolean }
+        language: { type: String }
     };
     static styles = [
         sharedStyles,
@@ -110,105 +108,6 @@ export class InSetuMarkdownEditor extends InSetuElement {
         this.value = '';
         this.readOnly = false;
         this.language = 'markdown';
-        this._customExtensions = [];
-        this._mdLinksEnabled = true;
-        this._settingsListener = this._handleSettingsChange.bind(this);
-        this._linkPluginBase = null;
-        this._checkboxPluginBase = null;
-    }
-
-    connectedCallback() {
-        super.connectedCallback();
-        window.addEventListener('insetu-editor-settings-changed', this._settingsListener);
-        this._buildExtensions();
-        this._fetchSettings();
-    }
-
-    async _fetchSettings() {
-        try {
-            const res = await window.inSetu.api.workspace('editor/settings');
-            if (res.ok) {
-                const data = await res.json();
-                this._mdLinksEnabled = data.insetu_md_links !== false;
-                this._updateCustomExtensions();
-            }
-        } catch(e) {}
-    }
-
-    disconnectedCallback() {
-        super.disconnectedCallback();
-        window.removeEventListener('insetu-editor-settings-changed', this._settingsListener);
-    }
-    _handleSettingsChange() {
-        this._fetchSettings();
-    }
-
-    async _buildExtensions() {
-        const [
-            { EditorView },
-            { hoverTooltip }
-        ] = await Promise.all([
-            import('https://esm.sh/@codemirror/view'),
-            import('https://esm.sh/@codemirror/view')
-        ]);
-
-        this._linkPluginBase = hoverTooltip((view, pos, side) => {
-            let { from, to, text } = view.state.doc.lineAt(pos);
-            let match;
-            const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-            while ((match = linkRegex.exec(text)) !== null) {
-                let start = from + match.index;
-                let end = start + match[0].length;
-                if (pos >= start && pos <= end) {
-                    const url = match[2];
-                    return {
-                        pos: start,
-                        end,
-                        above: true,
-                        create(view) {
-                            let dom = document.createElement("div");
-                            dom.className = "wiki-link-popup";
-                            dom.innerHTML = '<a href="' + url + '" target="_blank" rel="noopener noreferrer" onclick="window.open(\\\'' + url + '\\\', \\\'_blank\\\', \\\'noopener,noreferrer\\\'); return false;" style="color: var(--intent-primary); font-weight: bold; text-decoration: none; font-size: 1.05rem; display: flex; align-items: center; gap: 12px; padding: 6px 4px;">Go ↗ <span style="color: var(--text-muted); font-size: 0.9rem; font-weight: normal; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + url + '</span></a>';
-                            return { dom };
-                        }
-                    };
-                }
-            }
-            return null;
-        });
-
-        this._checkboxPluginBase = EditorView.domEventHandlers({
-            mousedown(e, view) {
-                const pos = view.posAtCoords({x: e.clientX, y: e.clientY});
-                if (pos === null) return false;
-                const line = view.state.doc.lineAt(pos);
-                const match = /^\s*-\s*\[([ xX])\]/.exec(line.text);
-                if (match) {
-                    const boxStart = line.from + match[0].indexOf('[');
-                    const boxEnd = line.from + match[0].indexOf(']') + 1;
-                    if (pos >= boxStart && pos <= boxEnd) {
-                        e.preventDefault();
-                        const isChecked = match[1] !== ' ';
-                        const char = isChecked ? ' ' : 'x';
-                        view.dispatch({
-                            changes: { from: boxStart + 1, to: boxEnd - 1, insert: char }
-                        });
-                        return true;
-                    }
-                }
-                return false;
-            }
-        });
-
-        this._updateCustomExtensions();
-    }
-    _updateCustomExtensions() {
-        if (!this._linkPluginBase || !this._checkboxPluginBase) return;
-
-        const exts = [this._checkboxPluginBase];
-        if (this._mdLinksEnabled) exts.push(this._linkPluginBase);
-
-        this._customExtensions = [...exts];
     }
 
     _handleEditorChange(e) {
@@ -220,19 +119,20 @@ export class InSetuMarkdownEditor extends InSetuElement {
         }));
         this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     }
+
     insertAtCursor(text) {
         const editor = this.shadowRoot.querySelector('sutram-editor');
         if (editor && editor.insertAtCursor) {
             editor.insertAtCursor(text);
         }
     }
+
     render() {
         return html`
             <sutram-editor 
                 .value=${this.value}
                 .language=${this.language}
                 .readOnly=${this.readOnly}
-                .customExtensions=${this._customExtensions}
                 @editor-changed=${this._handleEditorChange}>
             </sutram-editor>
         `;
