@@ -52,6 +52,12 @@ window.ExtensionRegistry.registerExtension('ext_name', {
         { slot: "primary-navigation", id: "my_tab", label: "My Tab", order: 5 },
         { slot: "sub-navigation", targetParent: "my_tab", id: "my_subtab", label: "Sub Tab", order: 1, component: "insetu-ext-component" }
     ],
+    repoConfigOptions: [
+        { id: 'ext-repo-option', order: 10, component: ({ repo, updateCallback }) => { ... } }
+    ],
+    bucketConfigOptions: [
+        { id: 'ext-bucket-option', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }
+    ],
     settingsActions: [
         { id: 'config_id', label: 'Settings Label', icon: '⚙️', onClick: () => { ... } }
     ]

@@ -2,11 +2,13 @@
 This contract sheet serves as the absolute single source of truth for the interfaces between the Core OS Substrate and Custom Functional Extensions. Refer strictly to these signatures during feature development to maintain system-wide multi-tenant compliance.
 
 ---
-
 ## 1. Backend Extension Substrate (`InSetuExtension`)
 Python feature scripts must leverage the unified `InSetuExtension` wrapper to intercept routing contexts safely and isolate multi-tenant data.
-1.1 Declarative Instantiation
+
+### 1.1 Declarative Instantiation
 Extensions define their SQLite requirements and UI settings schemas upon initialization.
+
+```python
 from insetu.sdk import InSetuExtension
 
 my_ext_bp = InSetuExtension(
@@ -116,7 +118,6 @@ window.ExtensionRegistry.registerExtension('my_ext', {
             action: (e) => { ... }
         }
     ],
-
     // Mounts Lit components into the App Shell routing framework
     layoutSlots: [{
         slot: "slots:sub-navigation",
@@ -126,6 +127,10 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         order: 10,
         component: "insetu-ext-component" // Exclude 'component' if defining a parent container tab
     }],
+
+    // Extends workspace configuration cards with domain-specific controls
+    repoConfigOptions: [{ id: 'my-repo-opt', order: 10, component: ({ repo, updateCallback }) => { ... } }],
+    bucketConfigOptions: [{ id: 'my-bucket-opt', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }],
 
     // Binds background listeners or menu injections
     uiHooks: {

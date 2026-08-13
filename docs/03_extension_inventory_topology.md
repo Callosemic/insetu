@@ -27,7 +27,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Polymorphic Cards: Registers `git-push` and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
     * Core Hooks: `@hooks.on('compile_contexts')` to trigger JIT background diff asset compilation.
-    * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`).
+    * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
 ### B. Citations (`engine_citations.py`)
 * **Status:** Active Extension (Upgraded to SDK V2).
 * **Role:** Manages the academic reference library, bibliography parsing, and citation generation.
