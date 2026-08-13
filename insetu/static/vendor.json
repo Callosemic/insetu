@@ -5,18 +5,78 @@
             "version": "3.1.0",
             "range": ">=3.0.0 && <4.0.0"
         },
-        "@codemirror/view": {
-            "path": "vendor/codemirror/view.js",
+        "codemirror-core": {
+            "path": "vendor/codemirror/codemirror-core.js",
             "version": "6.0.0",
             "range": ">=6.0.0 && <7.0.0"
         },
         "@codemirror/state": {
-            "path": "vendor/codemirror/state.js",
+            "path": "vendor/codemirror/codemirror-core.js",
             "version": "6.0.0",
             "range": ">=6.0.0 && <7.0.0"
         },
-        "@codemirror/merge": {
-            "path": "vendor/codemirror/merge.js",
+        "@codemirror/view": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/language": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/autocomplete": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/commands": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lint": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "codemirror": {
+            "path": "vendor/codemirror/codemirror-core.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-markdown": {
+            "path": "vendor/codemirror/lang-markdown.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-python": {
+            "path": "vendor/codemirror/lang-python.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-javascript": {
+            "path": "vendor/codemirror/lang-javascript.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-json": {
+            "path": "vendor/codemirror/lang-json.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-yaml": {
+            "path": "vendor/codemirror/lang-yaml.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-html": {
+            "path": "vendor/codemirror/lang-html.js",
+            "version": "6.0.0",
+            "range": ">=6.0.0 && <7.0.0"
+        },
+        "@codemirror/lang-css": {
+            "path": "vendor/codemirror/lang-css.js",
             "version": "6.0.0",
             "range": ">=6.0.0 && <7.0.0"
         }

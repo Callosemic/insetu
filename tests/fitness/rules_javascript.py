@@ -41,7 +41,7 @@ def check_javascript_files():
     banned_localstorage_tab_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_(?:tab|subtab)")
     direct_execute_ui_hook_pattern = re.compile(r"(?:ExtensionRegistry|window\.ExtensionRegistry)\.executeUIHook\(")
     dom_content_loaded_registration_pattern = re.compile(r'DOMContentLoaded[\'"]\s*,\s*(?:\(\)\s*=>|function\s*\(\)\s*)\s*\{[\s\S]*?ExtensionRegistry\.registerExtension')
-    banned_cdn_import_pattern = re.compile(r'from\s+[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
+    banned_cdn_import_pattern = re.compile(r'(?:from\s+|import\(\s*)[\'"]https?://(esm\.sh|cdn\.jsdelivr\.net|unpkg\.com)')
     banned_yenvui_tag_pattern = re.compile(r'\byenvui-')
     sutram_subdir_pattern = re.compile(r'from\s+[\'"][^\'"]*vendor/sutram/(?!js/)[^\'"]*[\'"]')
     raw_dialog_pattern = re.compile(r'<dialog\b')

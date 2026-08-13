@@ -198,6 +198,11 @@ insetu/
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
+├── scripts/                        # Build, vendorization, and utility shell scripts.
+│   ├── .gitkeep                    # Git folder retention.
+│   └── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+├── static/                         # Web server static assets and frontend bundles.
+│   └── vendor.json                 # Map of core third-party UI dependencies (Lit, CodeMirror).
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.
