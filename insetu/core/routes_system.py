@@ -418,6 +418,40 @@ def api_workspaces():
 
         # Stateless UDF: Session state managed by client
     return jsonify({"status": "success", "message": f"Validated workspace {new_active}"})
+@system_bp.route('/api/system/config/test_bucketing', methods=['POST'])
+@system_bp.route('/api/<workspace_id>/system/config/test_bucketing', methods=['POST'])
+def api_system_config_test_bucketing(workspace_id=None):
+    if not workspace_id: workspace_id = sniff_tenant_id()
+    data = request.json or {}
+    repo_cfg = data.get("repo_cfg", {})
+
+    from insetu.kernel.utils import get_workspace_physics
+    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    repo_dir = repo_cfg.get("repo_dir")
+    if not repo_dir:
+        return jsonify({"error": "repo_dir missing"}), 400
+
+    physical_path = repo_cfg.get("physical_path")
+    repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root).joinpath(repo_dir).resolve()
+
+    if not repo_path.exists():
+        return jsonify({"error": f"Path not found: {repo_path}"}), 404
+
+    from insetu.core.topology.engine_topology import get_valid_workspace_files, resolve_file_bucket
+    valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, workspace_id)
+
+    sub_buckets = repo_cfg.get("sub_buckets", [])
+    buckets_map = {}
+
+    for f in valid_files:
+        b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
+        bucket_id = module if (b and module) else (b.get("id") if b else "main")
+
+        if bucket_id not in buckets_map:
+            buckets_map[bucket_id] = []
+        buckets_map[bucket_id].append(f)
+
+    return jsonify({"status": "success", "buckets": buckets_map})
 
 @system_bp.route('/api/system/fs/list_local', methods=['GET'])
 def api_list_local_host_dirs():

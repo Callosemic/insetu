@@ -123,19 +123,28 @@ def start_filesystem_observer(workspace_ids):
         _, ws_root, _ = get_workspace_physics(ws_id)
         global_ignore = set(cfg.get("ignore_dirs", []))
         global_patterns = cfg.get("ignore_patterns", [])
-
         for repo_cfg in cfg.get("target_repos", []):
             r_dir = repo_cfg.get("repo_dir")
             if not r_dir: continue
             p_path = repo_cfg.get("physical_path")
             target_path = os.path.abspath(os.path.expanduser(p_path)) if p_path else Path(ws_root).joinpath(r_dir).resolve().as_posix()
             if os.path.exists(target_path):
+                if repo_cfg.get("repo_ignore_dirs") is not None:
+                    ignore_dirs = set(repo_cfg.get("repo_ignore_dirs"))
+                else:
+                    ignore_dirs = set(global_ignore)
+
+                if repo_cfg.get("repo_ignore_patterns") is not None:
+                    ignore_patterns = repo_cfg.get("repo_ignore_patterns")
+                else:
+                    ignore_patterns = list(global_patterns)
+
                 handler = FileSystemObserver(
                     workspace_id=ws_id,
                     repo_dir=r_dir,
                     target_path=target_path,
-                    ignore_dirs=global_ignore.union(repo_cfg.get("repo_ignore_dirs", [])),
-                    ignore_patterns=global_patterns + repo_cfg.get("repo_ignore_patterns", [])
+                    ignore_dirs=ignore_dirs,
+                    ignore_patterns=ignore_patterns
                 )
                 observer.schedule(handler, target_path, recursive=True)
                 has_watches = True
@@ -417,6 +426,7 @@ def sanitize_workspace_config(cfg):
                 if not b.get("id"):
                     title = b.get("title", "").strip()
                     b["id"] = slugify(title) if title else "untitled_bucket"
+            b.pop("is_catch_all", None)
             valid_buckets.append(b)
         repo["sub_buckets"] = valid_buckets
         valid_repos.append(repo)

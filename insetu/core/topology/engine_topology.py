@@ -85,10 +85,9 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
         sub_buckets = repo_cfg.get("sub_buckets", [])
 
         conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
-
         for f in valid_files:
             b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
-            bucket_id = module if (b and module) else (b.get("id") if b else "default_catch_all")
+            bucket_id = module if (b and module) else (b.get("id") if b else "main")
             filepath = f"{repo_dir}/{f}"
             conn.execute(
                 "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
@@ -205,12 +204,23 @@ def resolve_topology_buffer(workspace_id):
 
             is_ignored = False
             rel_to_repo = filepath[len(repo_dir)+1:] if filepath.startswith(f"{repo_dir}/") else filepath
-
             if repo_cfg:
                 live_cfg = ctx.config
-                ignore_dirs = set(live_cfg.get("ignore_dirs", [])).union(repo_cfg.get("repo_ignore_dirs", []))
-                ignore_files = set(live_cfg.get("ignore_files", [])).union(repo_cfg.get("repo_ignore_files", []))
-                ignore_patterns = live_cfg.get("ignore_patterns", []) + repo_cfg.get("repo_ignore_patterns", [])
+
+                if repo_cfg.get("repo_ignore_dirs") is not None:
+                    ignore_dirs = set(repo_cfg.get("repo_ignore_dirs"))
+                else:
+                    ignore_dirs = set(live_cfg.get("ignore_dirs", []))
+
+                if repo_cfg.get("repo_ignore_files") is not None:
+                    ignore_files = set(repo_cfg.get("repo_ignore_files"))
+                else:
+                    ignore_files = set(live_cfg.get("ignore_files", []))
+
+                if repo_cfg.get("repo_ignore_patterns") is not None:
+                    ignore_patterns = repo_cfg.get("repo_ignore_patterns")
+                else:
+                    ignore_patterns = live_cfg.get("ignore_patterns", [])
 
                 filename = Path(filepath).name.lower()
 
@@ -226,13 +236,12 @@ def resolve_topology_buffer(workspace_id):
 
             sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
             b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=repo_dir)
-
             if b and module:
                 bucket_id = module
             elif b:
                 bucket_id = b.get("id") or "main"
             else:
-                bucket_id = "default_catch_all"
+                bucket_id = "main"
 
             conn.execute(
                 "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
@@ -280,7 +289,6 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
         return {"message": "No topology events to resolve."}
 
     return {"message": f"Topology settled. Resolved {len(events)} events."}
-
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
     import subprocess
@@ -288,13 +296,22 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
     from insetu.kernel.utils import load_config
 
     live_cfg = load_config(workspace_id)
-    global_ignore_dirs = set(live_cfg.get("ignore_dirs", []))
-    global_ignore_files = set(live_cfg.get("ignore_files", []))
-    global_ignore_patterns = live_cfg.get("ignore_patterns", [])
 
-    ignore_dirs = global_ignore_dirs.union(config.get("repo_ignore_dirs", []))
-    ignore_files = global_ignore_files.union(config.get("repo_ignore_files", []))
-    ignore_patterns = global_ignore_patterns + config.get("repo_ignore_patterns", [])
+    if config.get("repo_ignore_dirs") is not None:
+        ignore_dirs = set(config.get("repo_ignore_dirs"))
+    else:
+        ignore_dirs = set(live_cfg.get("ignore_dirs", []))
+
+    if config.get("repo_ignore_files") is not None:
+        ignore_files = set(config.get("repo_ignore_files"))
+    else:
+        ignore_files = set(live_cfg.get("ignore_files", []))
+
+    if config.get("repo_ignore_patterns") is not None:
+        ignore_patterns = config.get("repo_ignore_patterns")
+    else:
+        ignore_patterns = live_cfg.get("ignore_patterns", [])
+
     archive_type = config.get("archive_type", "repo")
 
     if archive_type == "repo":
@@ -346,13 +363,17 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
 
         if repo_p.name == '.insetu' and (norm_path.startswith('data/') or '/data/' in norm_path):
             continue
-
         if target_f.name.lower() in (".gitkeep", ".keep"):
             valid_files.add(norm_path)
             continue
         ext = target_f.suffix.lower()
         fname = target_f.name.lower()
-        allowed_exts = set(live_cfg.get("include_extensions", []) + config.get("exts", []))
+
+        if config.get("exts") is not None:
+            allowed_exts = set(config.get("exts"))
+        else:
+            allowed_exts = set(live_cfg.get("include_extensions", []))
+
         if ext in allowed_exts or fname in allowed_exts: valid_files.add(norm_path)
 
     for forced_file in config.get("force_include", []):

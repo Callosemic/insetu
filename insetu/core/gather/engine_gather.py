@@ -372,22 +372,23 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     if b_id in buckets:
                         buckets[b_id]["files"].append(filepath)
                 else:
-                    if "default_catch_all" not in buckets:
-                        buckets["default_catch_all"] = {
+                    if "main" not in buckets:
+                        buckets["main"] = {
                             "files": [], "cfg": {
-                                "id": "default_catch_all", "title": config.get("title", repo_dir), 
-                                "domain": config.get("domain", "Workspaces"), 
-                                "out_file": config.get("out_file", f"{safe_r_dir}_context.txt")
+                                "id": "main", "title": config.get("title", repo_dir.replace('-', ' ').title()), 
+                                "domain": config.get("domain", "Workspaces"),
+                                "exclude_from_context": config.get("exclude_from_context", False)
                             }
                         }
-                    buckets["default_catch_all"]["files"].append(filepath)
+                    buckets["main"]["files"].append(filepath)
         else:
-            out_filename = config.get("out_file", f"{safe_r_dir}_context.txt")
-            buckets[out_filename] = {
+            out_filename = f"{safe_r_dir}_context.txt"
+            buckets["main"] = {
                 "files": final_list,
                 "cfg": {
                     "id": "main", "title": config.get("title", repo_dir.replace('-', ' ').title()),
-                    "domain": config.get("domain", "Workspaces"), "out_file": out_filename
+                    "domain": config.get("domain", "Workspaces"),
+                    "exclude_from_context": config.get("exclude_from_context", False)
                 }
             }
         def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path, current_repo_dir):
@@ -420,17 +421,18 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                             tb, tm = resolve_file_bucket(rel, sub_buckets, repo_dir=current_repo_dir)
                             if tb and tm and tm == b_id: is_dirty = True; break
                             elif tb and tb.get('id') == b_id: is_dirty = True; break
-                            elif not tb and b_id == "default_catch_all": is_dirty = True; break
+                            elif not tb and b_id == "main": is_dirty = True; break
                         else:
                             is_dirty = True; break
                 if is_dirty:
                     return _gen()
                 return None
             return _gen, _recall
-
         for b_id, data in buckets.items():
             if not data["files"]: continue
-            safe_out = data["cfg"].get("out_file", f"{safe_r_dir}_{b_id}_context.txt")
+            if data["cfg"].get("exclude_from_context"): continue
+
+            safe_out = f"{safe_r_dir}_context.txt" if b_id == "main" else f"{safe_r_dir}_{b_id}_context.txt"
             b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
             b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
             b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
