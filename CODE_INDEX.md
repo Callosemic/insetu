@@ -1,16 +1,16 @@
-# Core Code Code Index
+# inSetu Kernel Code Index
 
 This index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.
 
 ```text
 insetu/
-├── .gitignore                      # [comment required]
+├── .gitignore                      # Defines intentionally untracked files and volatile state to ignore.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
 ├── CODE_INDEX.md                   # Topological map of the inSetu repository (this file).
-├── LICENSE                         # [comment required]
-├── NOTICE                          # [comment required]
-├── README.md                       # [comment required]
+├── LICENSE                         # Apache License 2.0 open-source distribution terms.
+├── NOTICE                          # Third-party dependency attributions and bundled software notices.
+├── README.md                       # Primary project overview, architecture, and installation guide.
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
 │   ├── 01_engineering_standards.md # Engineering standards and audit guardrails.
@@ -54,7 +54,12 @@ insetu/
 │   │   ├── 0038-decoupled-topology-engine-partitioned-manifest-two-stage-slew-limiting.md # Stage 1 (VFS) and Stage 2 (CTX) slew limiters.
 │   │   ├── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
 │   │   ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
-│   │   └── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
+│   │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
+│   │   └── archived/               # [comment required]
+│   │       ├── 0001-insetu-genesis-and-extension-architecture.md # [comment required]
+│   │       ├── 0003-stateless-multi-tenant-routing.md # [comment required]
+│   │       ├── 0005-transport-shell-decoupling.md # [comment required]
+│   │       └── 0012-extension-subdirectory-extraction.md # [comment required]
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.

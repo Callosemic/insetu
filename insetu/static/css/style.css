@@ -84,6 +84,7 @@ box-sizing: border-box; border-radius: 0; box-shadow: none; flex-direction: colu
 .sticky-header { flex-shrink: 0; padding: 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: flex; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
+textarea::placeholder, input[type="text"]::placeholder, input::placeholder { color: var(--text-muted); opacity: 0.5; }
 textarea { height: 250px; margin-top: 10px; }
 pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; letter-spacing: 0.3px; }
 

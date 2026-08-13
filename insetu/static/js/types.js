@@ -37,4 +37,6 @@
  * @property {Object[]} [entityActions] - Array of polymorphic entity action configurations.
  * @property {Object[]} [layoutSlots] - Array of UI slot mount declarations.
  * @property {Object[]} [customEditors] - Array of file pattern editor matchers.
+ * @property {Object[]} [repoConfigOptions] - Declarative configuration components for Bucket 0.
+ * @property {Object[]} [bucketConfigOptions] - Declarative configuration components for Sub-Buckets.
  */
