@@ -372,6 +372,40 @@ customElements.define('insetu-ext-gather', InSetuExtGather);
 window.ExtensionRegistry.registerExtension('gather', {
     name: "Context Gatherer",
     version: "2.0.0",
+    repoConfigOptions: [
+        {
+            id: 'gather-repo-exclude',
+            order: 10,
+            component: ({ repo, updateCallback }) => html`
+                <sutram-toggle 
+                    label="Exclude from Context Compilation" 
+                    .checked=${!!repo.exclude_from_context} 
+                    ?flush=${true}
+                    @sutram-input-changed=${(e) => { 
+                        repo.exclude_from_context = e.detail.value; 
+                        updateCallback(); 
+                    }}>
+                </sutram-toggle>
+            `
+        }
+    ],
+    bucketConfigOptions: [
+        {
+            id: 'gather-exclude',
+            order: 10,
+            component: ({ bucket, updateCallback }) => html`
+                <sutram-toggle 
+                    label="Exclude from Context Compilation" 
+                    .checked=${!!bucket.exclude_from_context} 
+                    ?flush=${true}
+                    @sutram-input-changed=${(e) => { 
+                        bucket.exclude_from_context = e.detail.value; 
+                        updateCallback(); 
+                    }}>
+                </sutram-toggle>
+            `
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",

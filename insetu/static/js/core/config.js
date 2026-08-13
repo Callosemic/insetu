@@ -20,6 +20,44 @@ export class InSetuExtConfig extends InSetuElement {
     };
 
     static styles = [sharedStyles];
+    _renderOverrideToggle(repo, key, label, globalFallback) {
+        const isOverridden = repo[key] !== undefined && repo[key] !== null;
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; background: var(--bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <sutram-toggle 
+                        label="Override ${label}" 
+                        .checked=${isOverridden}
+                        @sutram-input-changed=${(e) => {
+                            if (e.detail.value) {
+                                repo[key] = [];
+                            } else {
+                                delete repo[key];
+                            }
+                            this.requestUpdate();
+                        }}
+                        ?flush=${true}>
+                    </sutram-toggle>
+                </div>
+                ${isOverridden ? html`
+                    <sutram-input 
+                        label="${label} (comma separated)" 
+                        .value=${(repo[key] || []).join(', ')} 
+                        placeholder="Override values..." 
+                        @sutram-input-changed=${(e) => { 
+                            repo[key] = e.detail.value.split(',').map(s => s.trim()).filter(s => s); 
+                            this.requestUpdate(); 
+                        }} 
+                        ?flush=${true}>
+                    </sutram-input>
+                ` : html`
+                    <div style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">
+                        Inheriting: ${globalFallback.length > 0 ? globalFallback.join(', ') : 'None'}
+                    </div>
+                `}
+            </div>
+        `;
+    }
 
     constructor() {
         super();
@@ -55,6 +93,51 @@ export class InSetuExtConfig extends InSetuElement {
 
     disconnectedCallback() {
         super.disconnectedCallback();
+    }
+    async _testRepoBucketing(repoIdx, filterBucketId = null) {
+        const repo = this.configForm.target_repos[repoIdx];
+        try {
+            const res = await window.inSetu.api.workspace('system/config/test_bucketing', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repo_cfg: repo })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                let text = `Dry Run: Repository Bucketing for '${repo.repo_dir}'\n=======================================================\n\n`;
+
+                if (filterBucketId) {
+                    const files = data.buckets[filterBucketId] || [];
+                    text = `Dry Run: Bucket '${filterBucketId}' in '${repo.repo_dir}'\n=======================================================\n\n`;
+                    if (files.length === 0) {
+                        text += "No files matched this bucket based on your current configuration.";
+                    } else {
+                        text += `Total Matches: ${files.length}\n-------------------------------------------------------\n`;
+                        text += files.map(f => `  - ${f}`).join('\n');
+                    }
+                } else {
+                    if (Object.keys(data.buckets).length === 0) {
+                        text += "No files matched or repository is empty.";
+                    } else {
+                        Object.entries(data.buckets).forEach(([bucketId, files]) => {
+                            text += `[Bucket: ${bucketId}] (${files.length} files)\n`;
+                            text += `-------------------------------------------------------\n`;
+                            text += files.map(f => `  - ${f}`).join('\n');
+                            text += `\n\n`;
+                        });
+                    }
+                }
+
+                if (window.inSetu.ui && window.inSetu.ui.viewTextBlob) {
+                    window.inSetu.ui.viewTextBlob(`Test Bucketing: ${filterBucketId || repo.repo_dir}`, text, `test_bucketing_${repo.repo_dir}.txt`);
+                }
+            } else {
+                const err = await res.json();
+                alert("Error testing bucketing: " + err.error);
+            }
+        } catch (e) {
+            alert("Network error: " + e.message);
+        }
     }
 
     async openModal() {
@@ -92,7 +175,14 @@ export class InSetuExtConfig extends InSetuElement {
                         this._expandedBuckets = { ...this._expandedBuckets, [bIdx]: e.detail.open };
                         this.requestUpdate();
                     }}>
-                    <div slot="actions">
+                    <div slot="actions" style="display: flex; gap: 8px;">
+                        ${!isImplicit ? html`
+                            <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
+                                @click=${(e) => {
+                                    e.stopPropagation();
+                                    this._testRepoBucketing(rIdx, b.id || 'untitled_bucket');
+                                }}>🧪 Test</button>
+                        ` : ''}
                         <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
                             @click=${(e) => {
                                 e.stopPropagation();
@@ -124,11 +214,9 @@ export class InSetuExtConfig extends InSetuElement {
                             <sutram-input label="Domain" .value=${b.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                         </div>
                         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                            <sutram-input label="Description" .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 2; min-width: 200px;"></sutram-input>
-                            <sutram-input label="Custom Out File" .value=${b.out_file || ''} placeholder="out_context.txt" @sutram-input-changed=${(e) => { b.out_file = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                            <sutram-input label="Description" .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                         </div>
                         <sutram-input label="Match Prefixes (comma separated)" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @sutram-input-changed=${(e) => { b.match_prefixes = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}></sutram-input>
-                        <sutram-toggle label="Designate as Catch-All Bucket" .checked=${!!b.is_catch_all} @sutram-input-changed=${(e) => { b.is_catch_all = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="margin-top: 5px;"></sutram-toggle>
                     ` : html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                             <sutram-input label="Dynamic Split Prefix" .value=${b.dynamic_split_prefix || ''} placeholder="e.g. . or docs/" @sutram-input-changed=${(e) => { b.dynamic_split_prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
@@ -169,6 +257,26 @@ export class InSetuExtConfig extends InSetuElement {
                             </div>
                         </div>
                     `}
+                    <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); align-items: center; margin-top: 10px;">
+                        ${(() => {
+                            const templates = [];
+                            if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+                                window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
+                                    if (!window.inSetu.isCore(extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) return;
+                                    if (manifest.bucketConfigOptions) {
+                                        manifest.bucketConfigOptions
+                                            .sort((a, b) => (a.order || 50) - (b.order || 50))
+                                            .forEach(opt => {
+                                                if (opt.component) {
+                                                    templates.push(opt.component({ bucket: b, repoDir: repo.repo_dir, updateCallback: () => this.requestUpdate() }));
+                                                }
+                                            });
+                                    }
+                                });
+                            }
+                            return templates;
+                        })()}
+                    </div>
                     </div>
                 </sutram-collapsible>
             `;
@@ -239,11 +347,18 @@ export class InSetuExtConfig extends InSetuElement {
                         <sutram-input .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
                     <sutram-collapsible 
-                        titleText="Repo Settings" 
+                        titleText="Bucket 0 (Base Pipeline)" 
                         intent="primary"
                         .open=${this._repoSettingsExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoSettingsExpanded = e.detail.open; }}>
+                        <div slot="actions" style="display: flex; gap: 8px;">
+                            <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
+                                e.stopPropagation();
+                                this._testRepoBucketing(idx);
+                            }}>🧪 Test All Buckets</button>
+                        </div>
                         <div style="display: flex; flex-direction: column; gap: 15px;">
+                            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 0;">Files not captured by explicit sub-buckets automatically fall into this baseline group.</p>
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <sutram-input label="Title" .value=${repo.title || ''} placeholder="Display Title" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                                 <sutram-input label="Domain" .value=${repo.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { repo.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
@@ -253,27 +368,40 @@ export class InSetuExtConfig extends InSetuElement {
                                     ...(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault' ? [{ value: repo.archive_type, label: repo.archive_type }] : [])
                                 ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-select>
                             </div>
-
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <sutram-input label="Physical Path (Optional Override)" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @sutram-input-changed=${(e) => { repo.physical_path = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
-                                <sutram-input label="Custom Out File (Optional)" .value=${repo.out_file || ''} placeholder="custom_context.txt" @sutram-input-changed=${(e) => { repo.out_file = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                             </div>
+                            ${this._renderOverrideToggle(repo, 'exts', 'Tracked Extensions', (this.configForm.include_extensions || []))}
+                            ${this._renderOverrideToggle(repo, 'repo_ignore_dirs', 'Ignore Directories', (this.configForm.ignore_dirs || []))}
+                            ${this._renderOverrideToggle(repo, 'repo_ignore_files', 'Ignore Files', (this.configForm.ignore_files || []))}
+                            ${this._renderOverrideToggle(repo, 'repo_ignore_patterns', 'Ignore Patterns', (this.configForm.ignore_patterns || []))}
 
-                            <sutram-input label="Tracked Extensions (comma separated)" .value=${(repo.exts || []).join(', ')} placeholder=".py, .js, .md" @sutram-input-changed=${(e) => { repo.exts = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
+                            <sutram-input label="Ignore Exceptions (comma separated prefixes)" .value=${(repo.ignore_exceptions || []).join(', ')} placeholder="docs/archived/, .tracker/" @sutram-input-changed=${(e) => { repo.ignore_exceptions = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true}></sutram-input>
 
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <sutram-input label="Ignore Directories (comma separated)" .value=${(repo.repo_ignore_dirs || []).join(', ')} placeholder="node_modules, build" @sutram-input-changed=${(e) => { repo.repo_ignore_dirs = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
-                                <sutram-input label="Ignore Files (comma separated)" .value=${(repo.repo_ignore_files || []).join(', ')} placeholder="package-lock.json" @sutram-input-changed=${(e) => { repo.repo_ignore_files = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
+                                <sutram-input label="Force Include Files (comma separated)" .value=${(repo.force_include || []).join(', ')} placeholder="docs/todos.md" @sutram-input-changed=${(e) => { repo.force_include = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
+                                <sutram-input label="Managed Dirs (Cartographer Labels)" .value=${(repo.repo_managed_dirs || []).join(', ')} placeholder="adrs, standups" @sutram-input-changed=${(e) => { repo.repo_managed_dirs = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                             </div>
+
+                            <sutram-input label="Path Prefix (Virtual Root Restriction)" .value=${repo.prefix || ''} placeholder="src/frontend/" @sutram-input-changed=${(e) => { repo.prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
+
                             <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center;">
-                                <sutram-toggle label="Exclude from Context Compilation" .checked=${!!repo.exclude_from_context} @sutram-input-changed=${(e) => { repo.exclude_from_context = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
+                                <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
                                 ${(() => {
                                     const templates = [];
-                                    if (window.ExtensionRegistry?.uiHooks && window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
-                                        for (let cb of window.ExtensionRegistry.uiHooks['zone:repo-config-options']) {
-                                            const res = cb({ repo, updateCallback: () => this.requestUpdate() });
-                                            if (res) templates.push(res);
-                                        }
+                                    if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
+                                        window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
+                                            if (!window.inSetu.isCore(extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) return;
+                                            if (manifest.repoConfigOptions) {
+                                                manifest.repoConfigOptions
+                                                    .sort((a, b) => (a.order || 50) - (b.order || 50))
+                                                    .forEach(opt => {
+                                                        if (opt.component) {
+                                                            templates.push(opt.component({ repo, updateCallback: () => this.requestUpdate() }));
+                                                        }
+                                                    });
+                                            }
+                                        });
                                     }
                                     return templates;
                                 })()}
@@ -286,7 +414,7 @@ export class InSetuExtConfig extends InSetuElement {
                         ?flush=${true}
                         .open=${this._repoBucketsExpanded}
                         @sutram-collapsible-toggled=${(e) => { if (e.target === e.currentTarget) this._repoBucketsExpanded = e.detail.open; }}>
-                        <div slot="actions">
+                        <div slot="actions" style="display: flex; gap: 8px;">
                             <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
                                 if (!repo.sub_buckets) repo.sub_buckets = [];
