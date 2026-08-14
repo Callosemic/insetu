@@ -6,15 +6,11 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 from insetu.kernel.utils import get_all_workspace_ids
-
 try:
     from flask_sock import Sock
     HAS_SOCK = True
 except ImportError:
     HAS_SOCK = False
-    class Sock:
-        def route(self, *args, **kwargs):
-            return lambda f: f
     print("⚠️  [Terminal] flask-sock is not installed. Terminal connections will drop. Run: pip install flask-sock")
 
 # Cross-platform PTY support check
@@ -27,13 +23,16 @@ try:
     SUPPORT_PTY = True
 except ImportError:
     SUPPORT_PTY = False
+
 TERM_SETTINGS_SCHEMA = []
 term_bp = InSetuExtension('term', __name__, title="Terminal Interface", description="Native terminal emulator.", settings_schema=TERM_SETTINGS_SCHEMA)
 __depends__ = []
-
-sock = Sock()
+__external_depends__ = ["flask-sock"]
 if HAS_SOCK:
+    sock = Sock()
     term_bp.sock = sock
+else:
+    sock = None
 
 def set_winsize(fd, row, col, xpix=0, ypix=0):
     """Native IOCTL system call to resize the PTY grid."""
@@ -43,19 +42,28 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except Exception:
         pass
-@sock.route('/api/<workspace_id>/term/stream')
-def term_stream(ws, workspace_id):
-    """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
-    try:
-        _run_term_stream(ws, workspace_id)
-    except Exception as e:
-        import traceback
-        err = traceback.format_exc().replace('\n', '\r\n')
+
+@term_bp.route('status', methods=['GET'])
+def term_status(ctx):
+    return jsonify({
+        "has_sock": HAS_SOCK,
+        "support_pty": SUPPORT_PTY
+    })
+
+if HAS_SOCK:
+    @sock.route('/api/<workspace_id>/term/stream')
+    def term_stream(ws, workspace_id):
+        """Native full-duplex PTY WebSocket pipeline, removing the WSGI proxy sandwich."""
         try:
-            ws.send(f"\r\n\x1b[31m[Fatal Terminal Error]\r\n{err}\x1b[0m\r\n")
-            ws.close()
-        except:
-            pass
+            _run_term_stream(ws, workspace_id)
+        except Exception as e:
+            import traceback
+            err = traceback.format_exc().replace('\n', '\r\n')
+            try:
+                ws.send(f"\r\n\x1b[31m[Fatal Terminal Error]\r\n{err}\x1b[0m\r\n")
+                ws.close()
+            except:
+                pass
 def _run_term_stream(ws, workspace_id):
     from insetu.kernel.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
@@ -68,14 +76,15 @@ def _run_term_stream(ws, workspace_id):
 
     ctx = term_bp.get_context(workspace_id)
     ws_root = ctx.paths['workspace_root']
-
     # Fork a new PTY natively
     master_fd, slave_fd = pty.openpty()
     env = os.environ.copy()
     env["TERM"] = "xterm-256color"
-    # Inject a self-destructing PROMPT_COMMAND trap to overwrite the host's ~/.bashrc 
-    # right before the first render, then vanish so Python venvs can safely modify PS1 later.
-    env["PROMPT_COMMAND"] = "export PS1='\w ❯ '; unset PROMPT_COMMAND"
+    # Silence Apple's macOS zsh deprecation warning
+    env["BASH_SILENCE_DEPRECATION_WARNING"] = "1"
+    # First-boot capture: Records original OS default PS1 once, then converts it to \w ❯
+    # Preserves dynamic additions (.venv, git branches, conda) added later.
+    env["PROMPT_COMMAND"] = 'if [ -z "$_INSETU_ORIG_PS1" ]; then _INSETU_ORIG_PS1="$PS1"; PS1="\\w ❯ "; elif [ "$PS1" = "$_INSETU_ORIG_PS1" ]; then PS1="\\w ❯ "; fi'
     try:
         p = subprocess.Popen(
             ["bash", "-l"],

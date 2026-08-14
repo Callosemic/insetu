@@ -10,6 +10,10 @@ window.inSetu.stores.Terminal = TerminalStore;
 export class InSetuExtTerm extends InSetuElement {
     static get extensionName() { return 'term'; }
     get extName() { return 'term'; }
+    static properties = {
+        _hasSock: { type: Boolean },
+        _supportPty: { type: Boolean }
+    };
     static styles = css`
         :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
         #terminal-container { flex: 1; overflow: hidden; width: 100%; height: 100%; }
@@ -20,8 +24,12 @@ export class InSetuExtTerm extends InSetuElement {
         this._term = null;
         this._fitAddon = null;
         this._ws = null;
+        this._hasSock = true;
+        this._supportPty = true;
     }
     connectedCallback() {
+        super.connectedCallback();
+        this._checkStatus();
         super.connectedCallback();
         window.addEventListener('resize', this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
@@ -91,6 +99,16 @@ export class InSetuExtTerm extends InSetuElement {
             this._term.dispose();
             this._term = null;
         }
+    }
+    async _checkStatus() {
+        try {
+            const res = await this.api.get('status');
+            if (res.ok) {
+                const data = await res.json();
+                this._hasSock = data.has_sock;
+                this._supportPty = data.support_pty;
+            }
+        } catch (e) {}
     }
     onWorkspaceChanged(newWorkspaceId) {
         clearTimeout(this._initTimer);
@@ -254,6 +272,15 @@ export class InSetuExtTerm extends InSetuElement {
         }
     }
     render() {
+        if (!this._hasSock) {
+            return html`
+                <div style="padding: 20px; background: var(--input-bg); border: 1px solid var(--intent-warning); border-radius: 6px; color: var(--text); margin: 20px;">
+                    <h3 style="margin-top: 0; color: var(--intent-warning);">⚠️ Missing Backend Dependency</h3>
+                    <p>The Terminal extension requires <code>flask-sock</code> for WebSocket PTY streaming.</p>
+                    <p style="font-family: var(--font-mono); background: var(--bg); padding: 10px; border-radius: 4px;">pip install insetu[term]</p>
+                </div>
+            `;
+        }
         return html`
             <link rel="stylesheet" href="/static/extensions/term/vendor/xterm.css" />
             <div id="terminal-container"></div>
