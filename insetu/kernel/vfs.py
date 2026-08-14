@@ -42,7 +42,7 @@ def _vfs_commit_worker():
                             (filepath, 'deleted', time.time())
                         )
                         db_conn.commit()
-                    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger}])
+                    hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger}])
                 elif action == "move":
                     dest_path = data.get("dest_path")
                     from insetu.kernel.utils import resolve_sandbox_path
@@ -70,7 +70,7 @@ def _vfs_commit_worker():
                             (dest_path, 'added', time.time())
                         )
                         db_conn.commit()
-                    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[
+                    hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
                         {"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger},
                         {"filepath": dest_path, "operation": "save", "ignore_ledger": ignore_ledger}
                     ])
@@ -183,10 +183,9 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
         overrides = hooks.emit('vfs_resolve_path', filepath=delete_source, workspace_id=workspace_id)
         from insetu.kernel.utils import resolve_sandbox_path
         old_abs_path = next((r for r in overrides if r), None) or resolve_sandbox_path(delete_source, workspace_id)
-        
         if os.path.exists(old_abs_path) and os.path.abspath(old_abs_path) != os.path.abspath(resolved_path):
             os.remove(old_abs_path)
-            hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": delete_source, "operation": "delete", "ignore_ledger": ignore_ledger}])
+            hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": delete_source, "operation": "delete", "ignore_ledger": ignore_ledger}])
             try:
                 parent_dir = Path(old_abs_path).parent.as_posix()
                 while parent_dir and os.path.isdir(parent_dir) and not os.listdir(parent_dir):
@@ -201,7 +200,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                 )
                 db_conn.commit()
 
-    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "save", "ignore_ledger": ignore_ledger}])
+    hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "save", "ignore_ledger": ignore_ledger}])
 class VFSTransaction:
     """Provides atomic-style batching and async queue dispatch for file mutations."""
     def __init__(self, workspace_id):
@@ -257,7 +256,7 @@ class VFSTransaction:
             try:
                 from insetu.kernel.hooks import hooks
                 mutations = [{"filepath": f[0], "operation": "save", "ignore_ledger": bool((f[2] or {}).get("is_absolute_artifact") or (f[2] or {}).get("ignore_ledger"))} for f in self._buffer]
-                hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=mutations)
+                hooks.emit('vfs_mutated', workspace_id=self.workspace_id, mutations=mutations)
             except Exception:
                 pass
 

@@ -138,7 +138,7 @@ def scaffold_profiles(cwd):
     # Scaffold the default config
     target_config = Path(base_dir).joinpath("config.json").as_posix()
     if not os.path.exists(target_config):
-        src_config = Path(defaults_dir).joinpath("config.json").as_posix()
+        src_config = Path(defaults_dir).joinpath("config_json.txt").as_posix()
         if os.path.exists(src_config):
             shutil.copy(src_config, target_config)
 
@@ -151,7 +151,7 @@ def scaffold_profiles(cwd):
     # Scaffold the Tier 1 OS config locally
     target_sys = Path(base_dir).joinpath("system.json").as_posix()
     if not os.path.exists(target_sys):
-        src_sys = Path(defaults_dir).joinpath("system.json").as_posix()
+        src_sys = Path(defaults_dir).joinpath("system_json.txt").as_posix()
         if os.path.exists(src_sys):
             shutil.copy(src_sys, target_sys)
             

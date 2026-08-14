@@ -91,10 +91,11 @@ insetu/
 │   │   └── utils_core.py           # [Workspace Physics & Universal Utils]
 │   ├── defaults/                   # Base templates for workspace scaffolding.
 │   │   ├── .gitkeep                # Git folder retention.
+│   │   ├── config_json.txt         # [comment required]
 │   │   ├── engine_template_py.txt  # Boilerplate Python engine template for new extensions.
 │   │   ├── ext_template_js.txt     # Boilerplate Lit component template for new extensions.
 │   │   ├── gitignore.txt           # Base .gitignore to protect local SQLite DBs and secrets.
-│   │   └── system.json             # Base daemon configuration template.
+│   │   └── system_json.txt         # [comment required]
 │   ├── extensions/                 # Tier 3 Domain Extensions (Opt-in functionality).
 │   │   ├── __init__.py             # Module initialization.
 │   │   ├── citations/              # CSL-JSON Academic Reference Library.
@@ -201,8 +202,6 @@ insetu/
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
 │   └── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
-├── static/                         # Web server static assets and frontend bundles.
-│   └── vendor.json                 # Map of core third-party UI dependencies (Lit, CodeMirror).
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.

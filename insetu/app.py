@@ -177,9 +177,8 @@ def load_workspace_extensions():
 
                 if blueprint.name not in app.blueprints:
                     app.register_blueprint(blueprint)
-
             # Wire up native WebSockets natively via flask-sock if the module provides it
-            if hasattr(mod, 'sock'):
+            if getattr(mod, 'sock', None) is not None:
                 mod.sock.init_app(app)
 
             print(f"🔌 Module Mounted Successfully: [{ext}]")

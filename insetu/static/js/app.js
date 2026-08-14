@@ -50,17 +50,29 @@ initShortcutRouter(window.ExtensionRegistry, () => {
         const activeSub = activeSubTabs[activeTab];
         if (activeSub) contexts.unshift('subtab:' + activeSub);
     }
-
-    // 2. Active Element
-    if (document.activeElement && document.activeElement !== document.body) {
-        const tag = document.activeElement.tagName.toLowerCase();
+    // 2. Active Element (Piercing Shadow DOM)
+    let activeEl = document.activeElement;
+    while (activeEl && activeEl.shadowRoot && activeEl.shadowRoot.activeElement) {
+        activeEl = activeEl.shadowRoot.activeElement;
+    }
+    if (activeEl && activeEl !== document.body) {
+        const tag = activeEl.tagName.toLowerCase();
         contexts.unshift('element:' + tag);
-        if (document.activeElement.id) contexts.unshift('element-id:' + document.activeElement.id);
+        if (activeEl.id) contexts.unshift('element-id:' + activeEl.id);
     }
 
     // 3. Active Modal (Highest Priority)
-    const activeModal = Array.from(document.querySelectorAll('.fullscreen-modal')).find(m => window.getComputedStyle(m).display === 'block');
-    if (activeModal) contexts.unshift('modal:' + activeModal.id);
+    const openModals = Array.from(document.querySelectorAll('yenvui-modal[open], sutram-modal[open], insetu-file-modal, dialog[open]'));
+    openModals.forEach(m => {
+        if (m.tagName.toLowerCase() === 'insetu-file-modal') {
+            const state = window.inSetu?.stores?.Fs?.getState()?.fileModal;
+            if (state && state.open) {
+                contexts.unshift('modal:file-modal');
+            }
+        } else if (m.id) {
+            contexts.unshift('modal:' + m.id);
+        }
+    });
 
     return contexts;
 });
