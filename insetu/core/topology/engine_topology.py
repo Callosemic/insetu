@@ -223,13 +223,20 @@ def resolve_topology_buffer(workspace_id):
                     ignore_patterns = live_cfg.get("ignore_patterns", [])
 
                 filename = Path(filepath).name.lower()
-
                 if filename in ignore_files:
                     is_ignored = True
                 elif any(pattern in rel_to_repo for pattern in ignore_patterns):
                     is_ignored = True
                 elif set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs):
                     is_ignored = True
+                else:
+                    ext = Path(filepath).suffix.lower()
+                    if repo_cfg.get("exts") is not None:
+                        allowed_exts = set(repo_cfg.get("exts"))
+                    else:
+                        allowed_exts = set(live_cfg.get("include_extensions", []))
+                    if ext not in allowed_exts and filename not in allowed_exts:
+                        is_ignored = True
 
             if is_ignored:
                 continue

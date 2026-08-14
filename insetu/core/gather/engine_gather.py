@@ -292,9 +292,14 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     """Base Workspace Provider: Yields schemas for standard repo contexts and media vaults."""
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.topology.engine_topology import topology_bp, resolve_topology_buffer
-
     # Read-Consistency Guard: Drain pending events before querying topology_ledger
-    resolve_topology_buffer(workspace_id)
+    drained = resolve_topology_buffer(workspace_id)
+    if drained and isinstance(ledger_events, list):
+        seen_paths = {e['filepath'] for e in ledger_events}
+        for de in drained:
+            if de['filepath'] not in seen_paths:
+                ledger_events.append(de)
+                seen_paths.add(de['filepath'])
 
     ctx = gather_bp.get_context(workspace_id)
     cfg = ctx.config
@@ -744,10 +749,40 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     try:
         # VFS Barrier: Wait for async physical disk moves/deletes in queue to complete
         ctx.sync_vfs_barrier()
-
         # Topology Flush: Drain pending mutation events so topology_ledger reflects disk reality
         from insetu.core.topology.engine_topology import resolve_topology_buffer
-        resolve_topology_buffer(ctx.workspace_id)
+        drained_events = resolve_topology_buffer(ctx.workspace_id)
+
+        if ledger_events is None:
+            ledger_events = []
+
+        seen_paths = {e['filepath'] for e in ledger_events}
+        for de in drained_events:
+            if de['filepath'] not in seen_paths:
+                ledger_events.append(de)
+                seen_paths.add(de['filepath'])
+
+        # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
+        # This prevents manual UI compilations from missing events and stops ghost re-compilations.
+        from insetu.kernel.db import get_connection
+        w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
+        delayed_job_id = f"cmp_del_{ctx.workspace_id}"
+        delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status='pending'", (delayed_job_id,)).fetchone()
+
+        if delayed_job and delayed_job['args_json']:
+            try:
+                import json
+                delayed_args = json.loads(delayed_job['args_json'])
+                for de in delayed_args.get('ledger_events', []):
+                    if de['filepath'] not in seen_paths:
+                        ledger_events.append(de)
+                        seen_paths.add(de['filepath'])
+            except Exception:
+                pass
+
+        # Purge the delayed job (whether it was trapped, or just respawned by the resolve_topology_buffer hook above)
+        w_conn.execute("DELETE FROM jobs WHERE id=?", (delayed_job_id,))
+        w_conn.commit()
 
         paths = ctx.paths
         manifest_data = ctx.manifest
@@ -758,22 +793,15 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             needs_full_compile = False
         else:
             needs_full_compile = force_full or not manifest_data
+
         ctx.jobs.update_progress("Running pre-compile hooks...")
         try:
             ctx.emit('pre_compile', is_full_sweep=needs_full_compile, forced_repos=forced_repos)
-            # Removed VFS barrier: The 12-second slew limiter guarantees file edits have already settled.
-            # This prevents arbitrary VFS queue deadlocks from stalling the context compiler.
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
+
         if not needs_full_compile and not forced_repos:
             try:
-                # Proactive Ledger Flush: If manual UI refresh, request Topology to resolve its pending buffer
-                if ledger_events is None:
-                    try:
-                        from insetu.core.topology.engine_topology import resolve_topology_buffer
-                        ledger_events = resolve_topology_buffer(ctx.workspace_id)
-                    except Exception:
-                        pass
 
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing

@@ -172,14 +172,13 @@ def api_fs_upload(workspace_id):
             file.save(resolved_path)
             uploaded_paths.append(filepath)
             mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
-
             # Trigger VFS Event Ledger sync
             db_conn.execute(
                     "INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
                     (filepath, 'modified' if not is_new else 'added', time.time())
             )
 
-    hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
+    hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
     db_conn.commit()
 
     if not uploaded_paths:
