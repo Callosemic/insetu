@@ -10,7 +10,7 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`insetu/static/vendor/sutram/` (Sutram Presentation Kernel):** Tier 0 micro-kernel managing UI app shell layout (`sutram-app-shell`), Zustand store factories (`createSutramStore`), background job polling (`createJobPoller`), hierarchical shortcut routing (`initShortcutRouter`), and shared styles.
 * **`insetu/core/topology/engine_topology.py` (The Topology Engine):** Single Source of Truth for physical file existence (`topology_ledger`) and bucket routing, hosting Stage 1 Slew Limiting (`topology_event_buffer`).
 * **`insetu/core/gather/engine_gather.py` (The RAG Compiler):** Blindly compiles virtual contexts and physical directories based on the configuration matrix, hosting background compilation workers and submission endpoints.
-* **`insetu/core/editor/engine_editor.py` (The Editor Engine):** Core extension managing global code and text editor preferences (`EDITOR_SCHEMA`).
+* **`insetu/core/editor/engine_editor.py` (The Editor Engine):** Core extension managing global code and text editor preferences (`EDITOR_SCHEMA`) and per-file preferences (`file_preferences` SQLite schema).
 * **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
@@ -86,8 +86,8 @@ These are fully built and compliant extensions currently operating within the sy
 * **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
 ### I. Terminal Interface (`engine_term.py`)
 * **Status:** Active Extension (Fully Graduated to SDK V2).
-* **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js.
-* **Dependencies (`__depends__`):** `None`
+* **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js. Exposes `status` endpoint for runtime dependency check.
+* **Dependencies (`__depends__`):** `None` (`__external_depends__`: `["flask-sock"]`)
 * **Data Containment:** Ephemeral stream contexts.
 * **Injection Surfaces:**
     * UI Hooks: Primary Navigation Tab injection.
