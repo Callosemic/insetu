@@ -694,6 +694,7 @@ window.ExtensionRegistry.registerExtension('files', {
     version: "2.0.0",
     shortcuts: [
         {
+            id: 'file-modal-close',
             context: 'global',
             key: 'escape',
             label: 'Close File Modal',
@@ -706,12 +707,14 @@ window.ExtensionRegistry.registerExtension('files', {
             }
         },
         {
+            id: 'file-modal-save',
             context: 'modal:file-modal',
             key: 'ctrl+s',
             label: 'Save Active File',
             action: () => window.inSetu.ui.saveModalFile && window.inSetu.ui.saveModalFile(false)
         },
         {
+            id: 'new-file-modal-save',
             context: 'modal:new-file-modal',
             key: 'ctrl+s',
             label: 'Save New File',
@@ -1158,7 +1161,9 @@ export function openVirtualFile(filename, content) {
 }
 export class InSetuFileModal extends InSetuElement {
     static properties = {
-        fileModal: { type: Object }
+        fileModal: { type: Object },
+        _writingMode: { type: Boolean },
+        _editorFocused: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         .fs-modal-container { 
@@ -1167,7 +1172,59 @@ export class InSetuFileModal extends InSetuElement {
             background: transparent; overflow: hidden;
         }
         .fs-modal-container::backdrop { background: transparent; }
-        .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
+        .fullscreen-wrapper { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); position: relative; }
+
+        /* Prose Mode Absolute Positioning & Fade */
+        .fullscreen-wrapper.is-prose .top-bars-wrapper,
+        .fullscreen-wrapper.is-prose .modal-footer {
+            position: absolute;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+        }
+        .fullscreen-wrapper.is-prose .top-bars-wrapper { top: 0; }
+        .fullscreen-wrapper.is-prose .modal-footer { bottom: 0; }
+
+        .fullscreen-wrapper.is-prose.is-focused .top-bars-wrapper,
+        .fullscreen-wrapper.is-prose.is-focused .modal-footer {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        .zen-reveal-btn {
+            position: absolute;
+            bottom: 12px;
+            right: 20px;
+            z-index: 101;
+            background: var(--intent-primary);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 44px;
+            height: 44px;
+            font-size: 1.2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.3s ease, visibility 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .fullscreen-wrapper.is-prose.is-focused .zen-reveal-btn {
+            opacity: 0.5;
+            visibility: visible;
+            pointer-events: auto;
+        }
+
+        .fullscreen-wrapper.is-prose.is-focused .zen-reveal-btn:hover {
+            opacity: 1;
+        }
+
         insetu-async-btn { flex: 1; display: block; --btn-padding: 12px; --btn-border-radius: 6px; }
         :host-context([data-theme="e-ink"]) .btn-back {
             background: #ffffff !important;
@@ -1179,6 +1236,9 @@ export class InSetuFileModal extends InSetuElement {
     constructor() {
         super();
         this.fileModal = {};
+        this._writingMode = false;
+        this._activeFileForPref = null;
+        this._editorFocused = false;
     }
 
     connectedCallback() {
@@ -1190,13 +1250,55 @@ export class InSetuFileModal extends InSetuElement {
     get isDirty() {
         return this.fileModal.isFS && this.fileModal.content !== this.fileModal.originalContent;
     }
-
     updated(changedProperties) {
         super.updated(changedProperties);
         const dialog = this.shadowRoot.querySelector('dialog');
         if (dialog) {
             if (this.fileModal.open && !dialog.open) dialog.showModal();
             else if (!this.fileModal.open && dialog.open) dialog.close();
+        }
+
+        if (this.fileModal?.open && this.fileModal.filename !== this._activeFileForPref) {
+            this._activeFileForPref = this.fileModal.filename;
+            this._loadPreference(this.fileModal.filename);
+        }
+    }
+
+    async _loadPreference(filename) {
+        if (!filename) return;
+        try {
+            const res = await window.inSetu.api.workspace(`editor/preference?file=${encodeURIComponent(filename)}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.writing_mode !== undefined && data.writing_mode !== null) {
+                    this._writingMode = !!data.writing_mode;
+                    return;
+                }
+            }
+        } catch (e) {}
+
+        if (this.fileModal?.isMarkdown && this.fileModal.content) {
+            const { meta } = window.inSetu.utils.parseFrontmatter(this.fileModal.content);
+            const docType = (meta.doctype || meta.type || '').toLowerCase();
+            const proseTypes = ['prose', 'essay', 'article', 'draft', 'spec', 'story', 'novel'];
+            this._writingMode = proseTypes.includes(docType) || meta.writing_mode === 'true' || meta.writing_mode === true;
+        } else {
+            this._writingMode = false;
+        }
+    }
+
+    async _toggleProseMode() {
+        this._writingMode = !this._writingMode;
+        if (this.fileModal?.filename) {
+            try {
+                await window.inSetu.api.post('editor/preference', {
+                    filepath: this.fileModal.filename,
+                    writing_mode: this._writingMode,
+                    doc_type: this._writingMode ? 'prose' : null
+                });
+            } catch (e) {
+                console.warn("Failed to persist editor preference to ledger", e);
+            }
         }
     }
 
@@ -1211,13 +1313,31 @@ export class InSetuFileModal extends InSetuElement {
         }
         return html`
             <dialog class="fs-modal-container" @cancel=${(e) => { e.preventDefault(); closeFileModal(); }}>
-                <div class="fullscreen-wrapper">
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
-                        <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; unicode-bidi: plaintext; color: var(--text);" title="${m.filename}">${m.filename}</h3>
-                        <button @click=${() => closeFileModal()} class="btn-sm btn-back" style="background: #64748b; margin: 0; color: white;">Back</button>
-                    </div>
-                    ${m.isFS ? html`
-                        <div style="display: flex; gap: 10px; margin: 0; padding: 10px 20px 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); border-radius: 0; align-items: center; flex-shrink: 0;">
+                <div class="fullscreen-wrapper ${this._writingMode ? 'is-prose' : ''} ${this._editorFocused ? 'is-focused' : ''}"
+                    @mousemove=${(e) => {
+                        if (this._writingMode && this._editorFocused) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            if (e.clientY < rect.top + 60 || e.clientY > rect.bottom - 60) {
+                                this._editorFocused = false;
+                            }
+                        }
+                    }}
+                    @touchstart=${(e) => {
+                        if (this._writingMode && this._editorFocused) {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const touchY = e.touches[0].clientY;
+                            if (touchY < rect.top + 60 || touchY > rect.bottom - 60) {
+                                this._editorFocused = false;
+                            }
+                        }
+                    }}>
+                    <div class="top-bars-wrapper" @mouseenter=${() => this._editorFocused = false}>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px 0 20px; background: var(--input-bg); border-bottom: none; flex-shrink: 0;">
+                            <h3 style="margin: 0; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; direction: rtl; text-align: left; unicode-bidi: plaintext; color: var(--text);" title="${m.filename}">${m.filename}</h3>
+                            <button @click=${() => closeFileModal()} class="btn-sm btn-back" style="background: #64748b; margin: 0; color: white;">Back</button>
+                        </div>
+                        ${m.isFS ? html`
+                            <div style="display: flex; gap: 10px; margin: 0; padding: 10px 20px 12px 20px; background: var(--input-bg); border-bottom: 1px solid var(--border); border-radius: 0; align-items: center; flex-shrink: 0;">
                             <sutram-dropdown align="left" .items=${[
                                 { label: 'Rename', icon: '✏️', onClick: renameModalFile },
                                 { label: 'Move', icon: '🚚', onClick: openMoveModal },
@@ -1226,9 +1346,9 @@ export class InSetuFileModal extends InSetuElement {
                             ]}>
                                 <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📁 File ▾</button>
                             </sutram-dropdown>
-
                             <sutram-dropdown align="left" .items=${[
                                 { label: 'Insert Link', icon: '🔗', onClick: openLinkModal },
+                                ...(m.isMarkdown ? [{ label: this._writingMode ? 'Standard Code View' : 'Prose Mode', icon: this._writingMode ? '💻' : '✍️', onClick: () => this._toggleProseMode() }] : []),
                                 ...(m.isMarkdown || m.ext === 'txt' ? [{ label: 'Clean AI Tags', icon: '🧹', onClick: cleanModalFile }] : [])
                             ]}>
                                 <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
@@ -1247,13 +1367,20 @@ export class InSetuFileModal extends InSetuElement {
                             <button @click=${() => loadFullModalText()} class="btn-sm" style="background: #000; color: #f59e0b; margin: 0; border: 1px solid #000;">Show All</button>
                         </div>
                     ` : ''}
+                    </div>
 
-                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);">
+                    <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);"
+                        @focusin=${() => this._editorFocused = true}
+                        @focusout=${(e) => {
+                            if (!this.shadowRoot.activeElement) this._editorFocused = false;
+                        }}
+                        @click=${() => this._editorFocused = true}>
                         ${m.isSupportedEditor ? html`
                             <insetu-markdown-editor 
                                 .value=${m.content} 
                                 .language=${m.codeMode} 
                                 .readOnly=${shouldBeReadOnly}
+                                ?writingMode=${this._writingMode}
                                 @content-changed=${(e) => FsStore.setState(s => ({ fileModal: { ...s.fileModal, content: e.detail.value } }))}>
                             </insetu-markdown-editor>
                         ` : html`
@@ -1265,7 +1392,7 @@ export class InSetuFileModal extends InSetuElement {
                             </textarea>
                         `}
                     </div>
-                    <div class="modal-footer" style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
+                    <div class="modal-footer" @mouseenter=${() => this._editorFocused = false} style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
                         <sutram-entity-actions 
                             .entityType=${'file'} 
                             .entityData=${{ 
@@ -1277,13 +1404,13 @@ export class InSetuFileModal extends InSetuElement {
                                 fromModal: true
                             }}>
                         </sutram-entity-actions>
-
                         ${this.isDirty ? html`
-                            <sutram-async-btn label="💾 Save" intent="warning" .onClick=${() => saveModalFile(false)}></sutram-async-btn>
-                        ` : ''}
+                                <sutram-async-btn label="💾 Save" intent="warning" .onClick=${() => saveModalFile(false)}></sutram-async-btn>
+                            ` : ''}
+                        </div>
+                        <button class="zen-reveal-btn" @click=${() => this._editorFocused = false} title="Show Menus">☰</button>
                     </div>
-                </div>
-            </dialog>
+                </dialog>
         `;
     }
 }

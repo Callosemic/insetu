@@ -332,7 +332,8 @@ window.ExtensionRegistry.registerExtension = function(extName, config) {
 
     if (config.shortcuts) {
         config.shortcuts.forEach(s => {
-            window.ExtensionRegistry.registerShortcut(s.context, s.key, s.action);
+            s.id = s.id || `${extName}:${slugify(s.label || 'shortcut')}`;
+            window.ExtensionRegistry.registerShortcut(s.context, s.key, s.action, { id: s.id, extName, label: s.label });
         });
     }
 

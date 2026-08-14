@@ -94,7 +94,8 @@ export class InSetuMarkdownEditor extends InSetuElement {
     static properties = {
         value: { type: String },
         readOnly: { type: Boolean },
-        language: { type: String }
+        language: { type: String },
+        writingMode: { type: Boolean }
     };
     static styles = [
         sharedStyles,
@@ -108,6 +109,7 @@ export class InSetuMarkdownEditor extends InSetuElement {
         this.value = '';
         this.readOnly = false;
         this.language = 'markdown';
+        this.writingMode = false;
     }
 
     _handleEditorChange(e) {
@@ -126,13 +128,13 @@ export class InSetuMarkdownEditor extends InSetuElement {
             editor.insertAtCursor(text);
         }
     }
-
     render() {
         return html`
             <sutram-editor 
                 .value=${this.value}
                 .language=${this.language}
                 .readOnly=${this.readOnly}
+                ?writingMode=${this.writingMode}
                 @editor-changed=${this._handleEditorChange}>
             </sutram-editor>
         `;
@@ -149,7 +151,8 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         _yamlData: { type: Object },
         _loading: { type: Boolean },
         _isDirty: { type: Boolean },
-        _metadataExpanded: { type: Boolean }
+        _metadataExpanded: { type: Boolean },
+        _writingMode: { type: Boolean }
     };
     static styles = [
         sharedStyles,
@@ -247,6 +250,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         this._originalYaml = '';
         this.defaultExpanded = false;
         this._metadataExpanded = false;
+        this._writingMode = false;
     }
 
     updated(changedProperties) {
@@ -265,6 +269,9 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 const text = await res.text();
                 const { meta, content } = window.inSetu.utils.parseFrontmatter(text);
                 this._yamlData = meta;
+                const docType = (meta.doctype || meta.type || '').toLowerCase();
+                const proseDocTypes = ['prose', 'essay', 'article', 'draft', 'spec', 'story', 'novel'];
+                this._writingMode = proseDocTypes.includes(docType) || meta.writing_mode === 'true' || meta.writing_mode === true;
                 this._content = content.replace(/^\s+/, ''); // Strip leading newlines to keep it clean
                 this._originalContent = this._content.trim();
                 this._metadataExpanded = this.defaultExpanded;
@@ -375,6 +382,20 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
+                    <button class="meta-btn ${this._writingMode ? 'active' : ''}"
+                        @click=${() => {
+                            this._writingMode = !this._writingMode;
+                            if (this._writingMode) {
+                                this._yamlData = { ...this._yamlData, doctype: 'prose' };
+                            } else {
+                                const { doctype, writing_mode, ...rest } = this._yamlData;
+                                this._yamlData = rest;
+                            }
+                            this._checkDirty();
+                        }}
+                        title="Toggle Writing Mode">
+                        ✍️<span class="meta-btn-text"> Writing Mode</span>
+                    </button>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">
@@ -399,12 +420,12 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                         </slot>
                     </div>
                 ` : ''}
-
                 <!-- Core Markdown / CodeMirror Canvas -->
                 <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
                     <insetu-markdown-editor 
                         .value=${this._content}
                         language="markdown"
+                        ?writingMode=${this._writingMode}
                         @content-changed=${e => {
                             this._content = e.detail.value;
                             this._checkDirty();
@@ -425,6 +446,7 @@ if (window.ExtensionRegistry) {
         version: "2.0.0",
         shortcuts: [
             {
+                id: 'editor-indent-tab',
                 context: 'element:textarea',
                 key: 'tab',
                 label: 'Indent (4 Spaces)',
@@ -435,6 +457,18 @@ if (window.ExtensionRegistry) {
                     el.value = el.value.substring(0, start) + "    " + el.value.substring(end);
                     el.selectionStart = el.selectionEnd = start + 4;
                     el.dispatchEvent(new Event('input'));
+                }
+            },
+            {
+                id: 'editor-save-frontmatter',
+                context: 'global',
+                key: 'ctrl+s',
+                label: 'Save Active Frontmatter Document',
+                action: () => {
+                    const activeEditor = document.querySelector('insetu-frontmatter-editor');
+                    if (activeEditor && activeEditor._isDirty) {
+                        activeEditor._handleSave();
+                    }
                 }
             }
         ]
