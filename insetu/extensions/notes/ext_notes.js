@@ -74,9 +74,19 @@ export class InSetuExtNotesModals extends InSetuElement {
         this.newNoteModalOpen = false;
         this.noteForm = {};
     }
-
     connectedCallback() {
         super.connectedCallback();
+
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const currentEdit = NotesStore.getState().editNoteFilepath;
+            if (currentEdit) {
+                const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
+                if (deleted) NotesStore.setState({ editNoteFilepath: null });
+            }
+        });
+
         this.subscribe(NotesStore, state => {
             this.newNoteModalOpen = state.newNoteModalOpen;
             this.noteForm = state.noteForm;
@@ -277,9 +287,6 @@ export class InSetuExtNotes extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .notes-body { flex: 1; overflow-y: auto; padding: 20px; }
-        .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; }
-        :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
     `];
 
     constructor() {
@@ -290,9 +297,16 @@ export class InSetuExtNotes extends InSetuElement {
         this.pinnedRepos = new Set(['ALL']);
         this.allRepos = [];
     }
-
     connectedCallback() {
         super.connectedCallback();
+
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/notes/'));
+            if (touchedNote) NotesStore.getState().fetchNotes();
+        });
+
         this.subscribe(NotesStore, state => {
             this.notes = state.notes || [];
             this.loading = state.loading;
@@ -336,7 +350,7 @@ export class InSetuExtNotes extends InSetuElement {
                     @repo-filter-changed=${(e) => NotesStore.setState({ pinnedRepos: new Set(e.detail.activeRepos) })}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div class="notes-body">
+            <div style="flex: 1; overflow-y: auto; padding: 20px;">
                 ${this.loading ? html`<insetu-spinner text="Loading notes..."></insetu-spinner>` : ''}
 
                 <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -410,26 +424,12 @@ window.ExtensionRegistry.registerExtension('notes', {
             order: 4
         }
     ],
-    uiHooks: {
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/notes/'));
-            if (touchedNote) NotesStore.getState().fetchNotes();
-
-            // If the currently edited note was deleted or moved, close the editor safely
-            const currentEdit = NotesStore.getState().editNoteFilepath;
-            if (currentEdit) {
-                const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
-                if (deleted) NotesStore.setState({ editNoteFilepath: null });
-            }
-            return false;
-        },
-        'zone:file-edit-override': (filepath) => {
-            if (filepath && filepath.includes('.insetu/notes/')) {
+    customEditors: [
+        {
+            match: (filepath) => filepath && filepath.includes('.insetu/notes/'),
+            onOpen: (filepath) => {
                 NotesStore.setState({ editNoteFilepath: filepath });
-                return true; // Intercepts the raw VFS modal and routes to the bespoke Drawer
             }
-            return false;
         }
-    }
+    ]
 });

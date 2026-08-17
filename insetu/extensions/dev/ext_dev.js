@@ -41,6 +41,27 @@ export class InSetuExtDevDash extends InSetuElement {
                 this.fetchMetrics();
             }
         });
+        this.registerGlobalListener('sutram-route-changed', window, (e) => {
+            if (e.detail.tab === 'dev' && (!e.detail.subTabs['dev'] || e.detail.subTabs['dev'] === 'dash')) {
+                DevStore.setState({ forceRefreshTick: Date.now() });
+            }
+        });
+
+        this.registerGlobalListener('zone:soft-refresh', window, () => {
+            DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
+        });
+
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const activeTab = window.inSetu.stores.App?.getState()?.activeTab;
+            if (activeTab === 'dev') {
+                if (window._devDashRefreshTimer) clearTimeout(window._devDashRefreshTimer);
+                window._devDashRefreshTimer = setTimeout(() => {
+                    DevStore.setState({ forceRefreshTick: Date.now() });
+                }, 2000);
+            }
+        });
 
         this.fetchMetrics();
     }
@@ -187,31 +208,4 @@ window.ExtensionRegistry.registerExtension('dev', {
             component: "insetu-ext-dev-dash"
         }
     ],
-    uiHooks: {
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'dev') {
-                DevStore.setState({ forceRefreshTick: Date.now() });
-            }
-        },
-        'zone:subtab-changed': (data) => {
-            if ((data.parentId === 'dev' && data.subId === 'dash') || data.subId === 'dash') {
-                DevStore.setState({ forceRefreshTick: Date.now() });
-            }
-        },
-        'zone:soft-refresh': () => {
-            DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
-            return false;
-        },
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const activeTab = window.inSetu.stores.App.getState().activeTab;
-            if (activeTab === 'dev') {
-                if (window._devDashRefreshTimer) clearTimeout(window._devDashRefreshTimer);
-                window._devDashRefreshTimer = setTimeout(() => {
-                    DevStore.setState({ forceRefreshTick: Date.now() });
-                }, 2000);
-            }
-            return false;
-        }
-    }
 });

@@ -8,8 +8,13 @@ export const KanbanStore = createExtensionStore('Kanban', {
     pinnedBuckets: new Set(["ALL"]),
     tagsExpanded: false,
     modals: { new: false, edit: false },
-    newTaskForm: { repo: '', type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '' },
-    editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '' },
+    settingsModalOpen: false,
+    settings: {},
+    systemSchemas: [],
+    customViews: [],
+    parentTabs: [],
+    newTaskForm: { repo: '', tier: 3, type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '', parentId: '', dependsOn: [], priority: '', size: '' },
+    editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '', parentId: '', dependsOn: [], priority: '', size: '', tier: 3 },
     setNewTaskField: (field, value) => KanbanStore.setState((state) => {
         const updatedForm = { ...state.newTaskForm };
         updatedForm[field] = value;
@@ -28,6 +33,87 @@ export const KanbanStore = createExtensionStore('Kanban', {
         if (res.ok) {
             const data = await res.json();
             KanbanStore.setState({ tasks: data.tasks || [] });
+            if (data.hydrating && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⏳ Hydrating tracker cache...", 3000);
+            }
+        }
+    },
+    fetchSettings: async () => {
+        if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
+        try {
+            const [res, sysRes] = await Promise.allSettled([
+                window.inSetu.api.workspace('tracker/settings?t=' + Date.now()),
+                window.inSetu.api.workspace('tracker/system_schemas?t=' + Date.now())
+            ]);
+
+            let newSettings = KanbanStore.getState().settings || {};
+            let newSchemas = KanbanStore.getState().systemSchemas || [];
+
+            if (res.status === 'fulfilled' && res.value.ok) {
+                newSettings = await res.value.json();
+            }
+            if (sysRes.status === 'fulfilled' && sysRes.value.ok) {
+                const sysData = await sysRes.value.json();
+                newSchemas = sysData.system_schemas || [];
+            }
+
+            KanbanStore.setState({ settings: newSettings, systemSchemas: newSchemas });
+
+            if (res.status === 'fulfilled' && res.value.ok) {
+                const customViews = newSettings.global_views || [];
+                const parentTabs = newSettings.parent_tabs || [{ id: 'tasks', label: 'Tasks' }];
+
+                const existingViewsStr = JSON.stringify(KanbanStore.getState().customViews || []);
+                const newViewsStr = JSON.stringify(customViews);
+                const existingParentsStr = JSON.stringify(KanbanStore.getState().parentTabs || []);
+                const newParentsStr = JSON.stringify(parentTabs);
+
+                KanbanStore.setState({ customViews, parentTabs });
+                // Only recompile the DOM layout if the user actually modified their tabs in the settings
+                if (existingViewsStr !== newViewsStr || existingParentsStr !== newParentsStr) {
+                    // Dynamically update the ExtensionRegistry layoutSlots
+                    const registry = window.ExtensionRegistry;
+                    if (registry) {
+                        const manifest = registry.getExtension('tracker');
+                        if (manifest) {
+                            // Clear old slots owned by tracker, retaining only globals
+                            manifest.layoutSlots = manifest.layoutSlots.filter(s => s.slot === 'slots:global');
+
+                            parentTabs.forEach((pt, idx) => {
+                                manifest.layoutSlots.push({
+                                    slot: "slots:primary-navigation",
+                                    id: pt.id,
+                                    label: pt.label,
+                                    order: 3 + idx
+                                });
+                            });
+
+                            // Inject new slots with dynamic parent tab support
+                            customViews.forEach((view, idx) => {
+                                const parentTab = view.target_parent || view.parent_tab || "tasks";
+                                manifest.layoutSlots.push({
+                                    slot: "slots:sub-navigation",
+                                    targetParent: parentTab,
+                                    id: view.id,
+                                    label: view.label,
+                                    order: idx + 1,
+                                    component: "insetu-ext-tracker"
+                                });
+                                manifest.layoutSlots.push({
+                                    slot: "slots:sub-navigation-actions",
+                                    targetParent: parentTab,
+                                    targetSub: view.id,
+                                    order: idx + 1,
+                                    component: "insetu-ext-tracker-actions"
+                                });
+                            });
+                            registry.compileLayout();
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch tracker settings:", e);
         }
     },
     transitionTask: async (task, newStatus, newType = null) => {
@@ -51,16 +137,6 @@ export const KanbanStore = createExtensionStore('Kanban', {
     }
 }, ['pinnedTags', 'pinnedBuckets']);
 window.inSetu.stores.Kanban = KanbanStore;
-// UI Hooks for real-time reactivity
-if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-    window.ExtensionRegistry.registerUIHook('zone:vfs-mutated', (payload) => {
-        if (!payload || !payload.mutations) return;
-        const touchedTracker = payload.mutations.some(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
-        if (touchedTracker) KanbanStore.getState().fetchTasks();
-    });
-}
-
-window.addEventListener('insetu:tracker:load-board', () => KanbanStore.getState().fetchTasks());
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../core/shared_styles.js';
 export class InSetuExtTracker extends InSetuElement {
@@ -68,60 +144,23 @@ export class InSetuExtTracker extends InSetuElement {
     get extName() { return 'tracker'; }
     static properties = {
         tasks: { type: Array },
+        customViews: { type: Array },
+        settings: { type: Object },
         pinnedTags: { type: Object },
         pinnedBuckets: { type: Object },
         activeTab: { type: String },
         searchQuery: { type: String },
         _reposExpanded: { type: Boolean },
         _bucketsExpanded: { type: Boolean },
-        _tagsExpanded: { type: Boolean }
+        _tagsExpanded: { type: Boolean },
+        _logExpanded: { type: Object }
     };
 static styles = [
-sharedStyles,
-css`
-    :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-    .tracker-body { flex: 1; overflow-y: auto; padding: 20px; }
-
-    .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; display: inline-block; }
-    :host-context([data-theme="e-ink"]) .task-tag { background: #ffffff !important; color: #000000 !important; border: 1px dashed #000000 !important; opacity: 1 !important; }
-    :host-context([data-theme="light"]) .task-tag { background: #e2e8f0; color: #0f172a; }
-    .board-columns { display: flex; gap: 15px; }
-    .column { flex: 1; min-width: 250px; background: var(--input-bg); padding: 10px; border-radius: 6px; }
-    .column h3 { margin-top: 0; font-size: 1.1rem; }
-
-    @container (max-width: 800px) {
-        .board-columns { flex-direction: column; gap: 25px; }
-        .column { background: transparent; padding: 0; }
-        .column h3 { 
-            font-size: 1.2rem; 
-            border-bottom: 1px solid var(--border); 
-            padding-bottom: 5px; 
-            margin-bottom: 15px; 
-        }
-    }
-    .editor-wrapper {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        overflow: hidden;
-    }
-    .editor-wrapper insetu-markdown-editor {
-        flex: 1;
-        background: var(--bg);
-    }
-
-    /* Metadata Input Hardening */
-    select, input[type="date"] {
-        background: var(--input-bg) !important;
-        color: var(--text) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 4px !important;
-        box-sizing: border-box;
-    }
-`
+    sharedStyles,
+    css`
+        :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
+        .tracker-body { flex: 1; overflow-y: auto; padding: 20px; }
+    `
 ];
 constructor() {
         super();
@@ -133,56 +172,107 @@ constructor() {
         this._reposExpanded = true;
         this._bucketsExpanded = true;
         this._tagsExpanded = true;
+        this._logExpanded = { closed: true, logged: true, archived: false };
 }
     connectedCallback() {
         super.connectedCallback();
         const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
-        this.activeTab = ['todos', 'bugs', 'queue', 'log'].includes(parsedTab) ? parsedTab : 'todos';
+        this.activeTab = parsedTab || 'todos';
 
         if (typeof KanbanStore !== 'undefined' && KanbanStore) {
             this.subscribe(KanbanStore, (state) => {
                 this.tasks = state?.tasks || [];
+                this.customViews = state?.customViews || [];
+                this.settings = state?.settings || {};
                 this.pinnedTags = state?.pinnedTags || new Set(['ALL']);
                 this.pinnedBuckets = state?.pinnedBuckets || new Set(['ALL']);
                 this.requestUpdate();
             });
             const kState = KanbanStore.getState ? KanbanStore.getState() : {};
             this.tasks = kState?.tasks || [];
+            this.customViews = kState?.customViews || [];
+            this.settings = kState?.settings || {};
             this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
             this.pinnedBuckets = kState?.pinnedBuckets || new Set(['ALL']);
         }
-
         this.registerGlobalListener('insetu:tracker:generate-changelog', window, (e) => {
             if (this.activeTab === 'log') {
                 this._generateHistoricalChangelog(e.detail.allRepos);
             }
         });
-
+        this.registerGlobalListener('insetu:tracker:load-board', window, () => {
+            KanbanStore.getState().fetchTasks();
+        });
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const touchedTracker = payload.mutations.some(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
+            if (touchedTracker) KanbanStore.getState().fetchTasks();
+        });
         if (KanbanStore?.getState?.()?.fetchTasks) {
             KanbanStore.getState().fetchTasks();
+            KanbanStore.getState().fetchSettings();
         }
+
+        this.registerGlobalListener('sutram-route-changed', window, (e) => {
+            if (e.detail.tab === 'tasks') {
+                KanbanStore.getState().fetchTasks();
+                KanbanStore.getState().fetchSettings();
+            }
+        });
     }
     onWorkspaceChanged(newWorkspaceId) {
         KanbanStore.getState().fetchTasks();
+        KanbanStore.getState().fetchSettings();
     }
     onForceRefresh() {
         KanbanStore.setState({ tasks: [] });
         KanbanStore.getState().fetchTasks();
+        KanbanStore.getState().fetchSettings();
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
     }
 
+    updated(changedProperties) {
+        super.updated(changedProperties);
+        if (changedProperties.has('tasks')) {
+            this._childMapCache = null;
+        }
+    }
+
+    _getChildTasksMap() {
+        if (!this._childMapCache) {
+            this._childMapCache = this.tasks.reduce((acc, t) => {
+                if (t.parentId) {
+                    if (!acc[t.parentId]) acc[t.parentId] = [];
+                    acc[t.parentId].push(t);
+                }
+                return acc;
+            }, {});
+        }
+        return this._childMapCache;
+    }
+
+    _getResolvedTierLabel(repo, tierNumber) {
+        const globalLabels = this.settings?.hierarchy_labels || {};
+        const repoLabels = this.settings?.[repo]?.hierarchy_labels || {};
+        const activeLabels = { ...globalLabels, ...repoLabels };
+        return activeLabels[`tier_${tierNumber}`] || `Tier ${tierNumber}`;
+    }
     _renderTaskCard(t) {
         const dateStr = this.utils.formatDate(t.timestamp);
         const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
-        const statusStr = (t.status !== 'closed') ? ` | ${t.status.charAt(0).toUpperCase() + t.status.slice(1)}` : '';
-        const descText = `${t.repo}${bucketStr}${statusStr} | ${dateStr}`;
+        const descText = `${t.repo}${bucketStr} | ${dateStr}`;
+
+        // Child Completion Check for Tier 1 & 2 Parents
+        const childTasks = this._getChildTasksMap()[t.id] || [];
+        const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
 
         const intentColor = t.isBug ? 'var(--intent-danger)' : (t.isQueue ? 'var(--intent-highlight)' : 'var(--intent-success)');
-        const icon = t.isBug ? '🐛' : (t.isQueue ? '🔬' : '✨');
+        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (t.isBug ? '🐛' : '✨'));
         const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
+
         return html`
             <insetu-card
                 data-task-id=${t.id}
@@ -194,22 +284,73 @@ constructor() {
                 entityType="file:task"
                 .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
                 @card-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}>
-
                 <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
-                    ${t.deliveryDate ? html`
-                        <span class="task-tag" style="background: ${isOverdue ? 'var(--intent-danger)' : 'var(--input-bg)'}; color: ${isOverdue ? 'var(--bg)' : 'var(--text)'}; border: 1px solid var(--border);">
-                            📅 Due: ${t.deliveryDate}
-                        </span>
+                    ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
+                    ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
+
+                    ${allKidsDone && t.status !== 'closed' ? html`
+                        <sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>
                     ` : ''}
-                    ${t.tags && t.tags.length > 0 ? t.tags.map(tag => html`<span class="task-tag">#${tag}</span>`) : ''}
+
+                    ${t.dependsOn && t.dependsOn.length > 0 ? t.dependsOn.map(dep => html`
+                        <sutram-tag intent="warning">🔗 ${dep}</sutram-tag>
+                    `) : ''}
+                    ${t.deliveryDate ? html`
+                        <sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>
+                    ` : ''}
                 </div>
             </insetu-card>
         `;
     }
-    _renderColumns(type, filteredTasks) {
-        const typeFilter = t => type === 'todos' ?
-        t.isTodo : type === 'bugs' ? t.isBug : t.isQueue;
+    _renderStackedView(targetTier, filteredTasks, filters) {
+        const typeFilter = t => {
+            if (!filters) return true;
+            let matchType = true;
+            if (filters.ticket_types) {
+                const allowed = filters.ticket_types.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                matchType = allowed.length === 0 || allowed.includes((t.ticket_type || '').toLowerCase());
+            }
+            let matchStatus = true;
+            if (filters.statuses) {
+                const allowed = filters.statuses.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                matchStatus = allowed.length === 0 || allowed.includes((t.status || '').toLowerCase());
+            }
+            return matchType && matchStatus;
+        };
+        const parentCards = filteredTasks.filter(t => t.tier === targetTier && typeFilter(t));
 
+        if (parentCards.length === 0) {
+            return html`<sutram-empty-state text="No items found for this tier."></sutram-empty-state>`;
+        }
+
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 15px;">
+                ${parentCards.map(parent => {
+                    const childTasks = this.tasks.filter(t => t.parentId === parent.id || (t.dependsOn && t.dependsOn.includes(`${parent.repo}::${parent.id}`)));
+                    const closedCount = childTasks.filter(t => ['closed', 'archived', 'logged'].includes(t.status)).length;
+                    const tierLabel = this._getResolvedTierLabel(parent.repo, targetTier);
+
+                    return html`
+                        <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                            <insetu-card
+                                .titleText=${parent.title}
+                                .descriptionText=${`${closedCount}/${childTasks.length} Completed | Status: ${parent.status}`}
+                                .detailPrefix=${`[${parent.repo}] ${tierLabel}: `}
+                                .detailText=${parent.filepath}
+                                icon=${targetTier === 1 ? '🎯' : '📦'}
+                                intentColor="var(--intent-primary)"
+                                entityType="file:task"
+                                .entityData=${{ ...parent, isFS: true, suppressCopy: true, suppressDownload: true }}
+                                @card-clicked=${() => this.vfs.viewSourceFile(parent.filepath, true)}>
+                            </insetu-card>
+                            ${childTasks.map(child => this._renderTaskCard(child))}
+                        </sutram-card-group>
+                    `;
+                })}
+            </div>
+        `;
+    }
+    _renderColumns(filters, filteredTasks) {
         // Deadline Precedence with FIFO Fallback Sorting Engine
         const sortChronological = (a, b) => {
             if (a.deliveryDate && b.deliveryDate) {
@@ -220,57 +361,80 @@ constructor() {
             return a.timestamp.localeCompare(b.timestamp); // Fallback to Oldest-First FIFO
         };
 
-        const openTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'open').sort(sortChronological);
-        const activeTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'active').sort(sortChronological);
-        const closedTasks = filteredTasks.filter(t => typeFilter(t) && t.status === 'closed').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+        const openTasks = filteredTasks.filter(t => t.status === 'open').sort(sortChronological);
+        const activeTasks = filteredTasks.filter(t => t.status === 'active').sort(sortChronological);
+        const closedTasks = filteredTasks.filter(t => t.status === 'closed').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 
-        if (type === 'queue') {
+        if (filters && filters.ticket_types && filters.ticket_types.includes('queue')) {
             return html`
-                <div class="board-columns">
-                    <div class="column">
-                        <h3>Open (Research Queue)</h3>
+                <sutram-board>
+                    <sutram-column titleText="Open (Research Queue)">
                         ${openTasks.map(t => this._renderTaskCard(t))}
-                    </div>
-                    <div class="column">
-                        <h3 style="color: var(--intent-success);">Closed (Resolved)</h3>
+                    </sutram-column>
+                    <sutram-column titleText="Closed (Resolved)" intentColor="var(--intent-success)">
                         ${closedTasks.map(t => this._renderTaskCard(t))}
-                    </div>
-                </div>
+                    </sutram-column>
+                </sutram-board>
             `;
         }
         return html`
-            <div class="board-columns">
-                <div class="column">
-                    <h3>Active</h3>
+            <sutram-board>
+                <sutram-column titleText="Active">
                     ${activeTasks.map(t => this._renderTaskCard(t))}
-                </div>
-                <div class="column">
-                    <h3>Open</h3>
+                </sutram-column>
+                <sutram-column titleText="Open">
                     ${openTasks.map(t => this._renderTaskCard(t))}
-                </div>
-                <div class="column">
-                    <h3 style="color: var(--intent-success);">Closed</h3>
+                </sutram-column>
+                <sutram-column titleText="Closed" intentColor="var(--intent-success)">
                     ${closedTasks.map(t => this._renderTaskCard(t))}
-                </div>
-            </div>
+                </sutram-column>
+            </sutram-board>
         `;
     }
-
     _renderLog(filteredTasks) {
-        const recentlyClosed = filteredTasks.filter(t => t.status === 'closed' || t.status === 'logged').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
-const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
+        const sortDesc = (a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp);
+        const closed = filteredTasks.filter(t => t.status === 'closed').sort(sortDesc);
+        const logged = filteredTasks.filter(t => t.status === 'logged').sort(sortDesc);
+        const archived = filteredTasks.filter(t => t.status === 'archived').sort(sortDesc);
 
+        const toggleLog = (key, open) => {
+            this._logExpanded = { ...this._logExpanded, [key]: open };
+            this.requestUpdate();
+        };
         return html`
-            <h4 class="category-heading" style="margin-top: 10px; margin-bottom: 10px;">Recently Closed</h4>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px; font-style: italic;">(logs not yet archived)</p>
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 25px;">
-                ${recentlyClosed.map(t => this._renderTaskCard(t))}
-            </div>
+            <div style="display: flex; flex-direction: column; gap: 0;">
+                <sutram-collapsible 
+                    titleText="Closed" 
+                    intent="success" 
+                    .open=${this._logExpanded?.closed !== false}
+                    @sutram-collapsible-toggled=${(e) => toggleLog('closed', e.detail.open)}>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Recently resolved tickets in their grace period)</p>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        ${closed.length > 0 ? closed.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No closed tickets in grace period.</span>`}
+                    </div>
+                </sutram-collapsible>
 
-            <h4 class="category-heading" style="margin-top: 20px; margin-bottom: 10px;">Archived Tickets</h4>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">(Historical context preserved on disk)</p>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                ${archived.map(t => this._renderTaskCard(t))}
+                <sutram-collapsible 
+                    titleText="Logged" 
+                    intent="warning" 
+                    .open=${this._logExpanded?.logged !== false}
+                    @sutram-collapsible-toggled=${(e) => toggleLog('logged', e.detail.open)}>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Swept to the log directory, awaiting archive)</p>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        ${logged.length > 0 ? logged.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No logged tickets.</span>`}
+                    </div>
+                </sutram-collapsible>
+
+                <sutram-collapsible 
+                    titleText="Archived" 
+                    intent="neutral" 
+                    .open=${this._logExpanded?.archived === true}
+                    @sutram-collapsible-toggled=${(e) => toggleLog('archived', e.detail.open)}>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">(Historical context permanently preserved on disk)</p>
+                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                        ${archived.length > 0 ? archived.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No archived tickets fetched. Ensure "Include Archived in UI Log" is enabled in settings.</span>`}
+                    </div>
+                </sutram-collapsible>
             </div>
         `;
     }
@@ -299,11 +463,43 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
             }
             return matchesRepo && matchesTag && matchesBucket;
         });
-        const textFilteredTasks = this.searchQuery 
-            ? window.inSetu.utils.fuzzyFilterObjects(filteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
-            : filteredTasks;
-
         const hasFilters = !this.ecosystem.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
+        const currentView = (this.customViews || []).find(v => v.id === this.activeTab);
+        let viewScopedTasks = filteredTasks;
+        if (currentView) {
+            viewScopedTasks = viewScopedTasks.filter(t => {
+                // 1. Schema Scope
+                if (currentView.target_schema) {
+                    const repoSchema = (this.settings.kanban_repo_map || {})[t.repo] || 'agile_basic';
+                    if (repoSchema !== currentView.target_schema) return false;
+                }
+
+                // Stacked views only apply tier and type filters to the PARENTS, not the overall list.
+                // Child tasks need to be rendered regardless of the view's tier scope.
+                if (currentView.layout === 'stacked') return true;
+
+                // 2. Tier Scope (All other views)
+                if (currentView.target_tier && t.tier !== currentView.target_tier) return false;
+
+                // 3. Type & Status Filters (Bypassed for Log view)
+                if (currentView.layout !== 'log' && currentView.filters) {
+                    if (currentView.filters.ticket_types) {
+                        const allowed = currentView.filters.ticket_types.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                        if (allowed.length > 0 && !allowed.includes((t.ticket_type || '').toLowerCase())) return false;
+                    }
+                    if (currentView.filters.statuses) {
+                        const allowed = currentView.filters.statuses.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                        if (allowed.length > 0 && !allowed.includes((t.status || '').toLowerCase())) return false;
+                    }
+                }
+                return true;
+            });
+        }
+
+        const textFilteredTasks = this.searchQuery 
+            ? window.inSetu.utils.fuzzyFilterObjects(viewScopedTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
+            : viewScopedTasks;
+
         return html`
             <sutram-toolbar
                 searchPlaceholder="🔍 Fuzzy search tickets..."
@@ -322,7 +518,7 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                             .repos=${this._reposExpanded ? this.ecosystem.allRepos : Array.from(this.ecosystem.pinnedRepos).filter(r => r !== 'ALL')}
                             .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
                             @repo-filter-changed=${(e) => {
-                                window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos));
+                                AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos));
                                 KanbanStore.setState({ pinnedBuckets: new Set(['ALL']) });
                             }}>
                         </insetu-repo-filter>
@@ -391,12 +587,17 @@ const archived = filteredTasks.filter(t => t.status === 'archived').sort((a, b) 
                         ` : ''}
                 </div>
             </sutram-toolbar>
-
-            <div class="tracker-body">
-                ${this.activeTab === 'todos' ? this._renderColumns('todos', textFilteredTasks) : ''}
-                ${this.activeTab === 'bugs' ? this._renderColumns('bugs', textFilteredTasks) : ''}
-                ${this.activeTab === 'queue' ? this._renderColumns('queue', textFilteredTasks) : ''}
-                ${this.activeTab === 'log' ? this._renderLog(textFilteredTasks) : ''}
+            <div class="tracker-body" style="${currentView?.layout === 'log' ? 'padding: 0;' : ''}">
+                ${(() => {
+                    if (!currentView) return '';
+                    if (currentView.layout === 'log') {
+                        return this._renderLog(textFilteredTasks);
+                    } else if (currentView.layout === 'stacked') {
+                        return this._renderStackedView(currentView.target_tier, textFilteredTasks, currentView.filters);
+                    } else {
+                        return this._renderColumns(currentView.filters, textFilteredTasks);
+                    }
+                })()}
             </div>
         `;
     }
@@ -458,7 +659,7 @@ export class InSetuExtTrackerActions extends InSetuElement {
     get _menuItems() {
         const activeSubTab = this.dataset.subId || 'todos';
         const items = [];
-        if (['todos', 'bugs', 'queue'].includes(activeSubTab)) {
+        if (activeSubTab !== 'log') {
             items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
                 this.dispatch('insetu:tracker:open-new-task', { activeTab: activeSubTab });
             } });
@@ -490,7 +691,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _yamlExpanded: { type: Boolean },
         _isSaving: { type: Boolean },
         _isCopying: { type: Boolean },
-        _isDownloading: { type: Boolean }
+        _isDownloading: { type: Boolean },
+        _pickerOpen: { type: Boolean },
+        _pickerMode: { type: String },
+        _pickerForm: { type: String },
+        _pickerSearchQuery: { type: String },
+        _pickerRepoFilter: { type: String }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -504,6 +710,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._isCopying = false;
         this._isDownloading = false;
         this._isDirtyTracker = false;
+        this._pickerOpen = false;
+        this._pickerMode = 'parentId';
+        this._pickerForm = 'new';
+        this._pickerSearchQuery = '';
+        this._pickerRepoFilter = 'ALL';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -518,12 +729,25 @@ export class InSetuExtTrackerModals extends InSetuElement {
             this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
             this._modals = kState?.modals || { new: false, edit: false };
         }
-
         this.registerGlobalListener('insetu:tracker:open-new-task', window, (e) => {
             this._openNewTaskModal(e.detail.activeTab);
         });
         this.registerGlobalListener('insetu:tracker:open-edit-task', window, (e) => {
             this._openEditTaskModal(e.detail.filepath);
+        });
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const currentEdit = KanbanStore.getState().editTaskForm?.filepath;
+            if (currentEdit && KanbanStore.getState().modals.edit) {
+                const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
+                if (deleted) KanbanStore.getState().setModal('edit', false);
+            }
+        });
+        this.registerGlobalListener('insetu:tracker:save-new-task', window, () => this._saveNewTask());
+        this.registerGlobalListener('insetu:tracker:save-edit-task', window, () => {
+            const fm = this.shadowRoot.getElementById('fm-editor-tracker');
+            if (fm && typeof fm._handleSave === 'function') fm._handleSave();
         });
     }
     _getBucketsForRepo(repoDir) {
@@ -535,17 +759,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
     }
     _openNewTaskModal(activeTab) {
         const state = KanbanStore.getState();
-        const isBugs = activeTab === 'bugs';
-        const isQueue = activeTab === 'queue';
-        const defaultType = isBugs ? 'bug' : (isQueue ? 'queue' : 'todo');
         const prePopulatedTags = Array.from(this.pinnedTags || []).filter(t => t !== 'ALL');
         const defaultTagsStr = prePopulatedTags.join(', ');
-        state.setNewTaskField('type', defaultType);
-        state.setNewTaskField('tags', defaultTagsStr);
-        state.setNewTaskField('title', '');
-        state.setNewTaskField('desc', '');
-        state.setNewTaskField('status', 'open');
-        state.setNewTaskField('deliveryDate', '');
 
         let targetRepo = this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : '';
         if (this.ecosystem.pinnedRepos.size === 1 && !this.ecosystem.pinnedRepos.has('ALL')) {
@@ -554,7 +769,54 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 targetRepo = pinnedRepo;
             }
         }
+        const settings = state.settings || {};
+        const schemaId = (settings.kanban_repo_map || {})[targetRepo] || 'agile_basic';
+        const allSchemas = [...(state.systemSchemas || []), ...(settings.kanban_profiles || [])];
+        const schema = allSchemas.find(p => p.id === schemaId) || {};
+        const getTierTypes = (t) => (schema[`t${t}_types`] || '').split(',').map(s => s.trim()).filter(Boolean);
+        const t1Types = getTierTypes(1);
+        const t2Types = getTierTypes(2);
+        const t3Types = getTierTypes(3);
+
+        let defaultTier = 3;
+        let defaultType = t3Types.length > 0 ? t3Types[0] : 'todo';
+
+        const customViews = state.customViews || [];
+        const activeView = customViews.find(v => v.id === activeTab);
+
+        if (activeView) {
+            // 1. Inherit from strict tier targeting
+            if (activeView.target_tier) {
+                defaultTier = activeView.target_tier;
+                const tierTypes = getTierTypes(defaultTier);
+                if (tierTypes.length > 0) defaultType = tierTypes[0];
+            }
+
+            // 2. Inherit from strict type filtering (overrides tier defaults)
+            if (activeView.filters && activeView.filters.ticket_types) {
+                const allowedTypes = activeView.filters.ticket_types.split(',').map(s => s.trim()).filter(Boolean);
+                if (allowedTypes.length === 1) {
+                    defaultType = allowedTypes[0];
+                    // Reverse-infer the tier to keep the UI dropdowns in sync
+                    if (t1Types.includes(defaultType)) defaultTier = 1;
+                    else if (t2Types.includes(defaultType)) defaultTier = 2;
+                    else if (t3Types.includes(defaultType)) defaultTier = 3;
+                }
+            }
+        } else {
+            // Fallback for hardcoded routing
+            if (activeTab === 'bugs' && t3Types.includes('bug')) defaultType = 'bug';
+            if (activeTab === 'queue' && t3Types.includes('queue')) defaultType = 'queue';
+        }
+
         state.setNewTaskField('repo', targetRepo);
+        state.setNewTaskField('tier', defaultTier);
+        state.setNewTaskField('type', defaultType);
+        state.setNewTaskField('tags', defaultTagsStr);
+        state.setNewTaskField('title', '');
+        state.setNewTaskField('desc', '');
+        state.setNewTaskField('status', 'open');
+        state.setNewTaskField('deliveryDate', '');
 
         // Smart Bucket Resolution from active bucket filters
         let targetBucket = 'None';
@@ -580,16 +842,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
         state.setModal('new', true);
     }
-
     async _saveNewTask() {
-        const { repo, type, status, title, tags, desc, bucket, deliveryDate } = KanbanStore.getState().newTaskForm;
+        const { repo, type, status, title, tags, desc, bucket, deliveryDate, parentId, dependsOn, priority, size } = KanbanStore.getState().newTaskForm;
         const sub_bucket = bucket || 'None';
 
-        if (!title || !desc) {
-            throw new Error("Title and Description are required.");
+        if (!title) {
+            alert("Title is required.");
+            throw new Error("Title is required.");
         }
         await this.api.postJson('new', {
-            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate
+            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate,
+            parent_id: parentId, depends_on: (dependsOn || []).join(', '), priority, size
         });
         KanbanStore.getState().setModal('new', false);
         KanbanStore.getState().fetchTasks();
@@ -614,10 +877,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
             const arr = rawTags.startsWith('[') ? rawTags.replace(/^\[|\]$/g, '').split(',') : rawTags.split(',');
             return arr.map(t => t.trim().replace(/['"]/g, '')).filter(t => t);
         })();
-
         const parsedDesc = content.startsWith('## Description') ? content.replace(/^## Description\n+/, '') : content;
-
+        const dependsArr = (() => {
+            try {
+                const parsed = JSON.parse(yaml.depends_on);
+                return Array.isArray(parsed) ? parsed : (yaml.depends_on ? yaml.depends_on.split(',').map(s=>s.trim()).filter(Boolean) : []);
+            } catch(err) { return yaml.depends_on ? yaml.depends_on.split(',').map(s=>s.trim()).filter(Boolean) : []; }
+        })();
         const state = KanbanStore.getState();
+        const existingTask = state.tasks.find(t => t.filepath === filepath);
+        state.setEditTaskField('tier', existingTask ? existingTask.tier : 3);
         state.setEditTaskField('title', yaml.title || defaultTitle);
         state.setEditTaskField('tagsRaw', cleanTags.join(', '));
         state.setEditTaskField('bucket', yaml.sub_bucket || 'None');
@@ -628,6 +897,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setEditTaskField('type', yaml.type || inferredType);
         state.setEditTaskField('status', yaml.status || inferredStatus);
         state.setEditTaskField('repo', yaml.repo || repo);
+        state.setEditTaskField('parentId', yaml.parent_id || yaml.parent || '');
+        state.setEditTaskField('dependsOn', dependsArr);
+        state.setEditTaskField('priority', String(yaml.priority || '').toUpperCase());
+        state.setEditTaskField('size', String(yaml.size || '').toUpperCase());
         state.setEditTaskField('origYaml', JSON.stringify(yaml));
         this._originalTaskSnapshot = {
             title: yaml.title || defaultTitle,
@@ -642,13 +915,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
             repo: yaml.repo || repo
         };
     }
-
     _onRequestFrontmatter(e) {
         const { respond, currentYaml } = e.detail;
         const form = KanbanStore.getState().editTaskForm;
         const tagsArr = form.tagsRaw.split(',').map(t => t.trim()).filter(t => t);
         const ticketId = form.filepath.split('/').pop().replace('.md', '');
-
+        const dependsArr = form.dependsOn || [];
         const updatedYaml = {
             ...currentYaml,
             repo: form.repo,
@@ -660,8 +932,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
             closed_at: form.closedAt || null,
             sub_bucket: form.bucket,
             tags: JSON.stringify(tagsArr),
-            delivery_date: form.deliveryDate || null
+            delivery_date: form.deliveryDate || null,
+            parent_id: form.parentId || null,
+            depends_on: JSON.stringify(dependsArr),
         };
+        if (form.priority) updatedYaml.priority = form.priority; else delete updatedYaml.priority;
+        if (form.size) updatedYaml.size = form.size; else delete updatedYaml.size;
         respond(updatedYaml);
     }
     _isDirty() {
@@ -703,17 +979,77 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
                 @sutram-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
+                <div slot="body" style="display: contents;">
                     <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None' } })) })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
+                        ${(() => {
+                            const settings = KanbanStore.getState().settings || {};
+                            const schemaId = (settings.kanban_repo_map || {})[selectedRepoNew] || 'agile_basic';
+                            const allSchemas = [...(KanbanStore.getState().systemSchemas || []), ...(settings.kanban_profiles || [])];
+                            const schema = allSchemas.find(p => p.id === schemaId) || {};
+
+                            const getTierTypes = (t) => (schema[`t${t}_types`] || '').split(',').map(s => s.trim()).filter(Boolean);
+                            const t1Types = getTierTypes(1);
+                            const t2Types = getTierTypes(2);
+                            const t3Types = getTierTypes(3);
+
+                            const tierOptions = [];
+                            if (t1Types.length > 0) tierOptions.push({value: 1, label: schema.t1_label || 'Tier 1'});
+                            if (t2Types.length > 0) tierOptions.push({value: 2, label: schema.t2_label || 'Tier 2'});
+                            if (t3Types.length > 0) tierOptions.push({value: 3, label: schema.t3_label || 'Tier 3'});
+
+                            const currentTierTypes = getTierTypes(newTaskForm.tier || 3);
+                            const typeOptions = currentTierTypes.map(t => ({value: t, label: t.charAt(0).toUpperCase() + t.slice(1)}));
+
+                            return html`
+                                ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => {
+                                    // Re-evaluate schema on repo change
+                                    const newSchemaId = (KanbanStore.getState().settings?.kanban_repo_map || {})[KanbanStore.getState().newTaskForm.repo] || 'agile_basic';
+                                    const newSchema = (KanbanStore.getState().settings?.kanban_profiles || []).find(p => p.id === newSchemaId) || {};
+                                    const newT3Types = (newSchema.t3_types || '').split(',').map(s => s.trim()).filter(Boolean);
+                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'todo' } }));
+                                } })}
+                                ${bucketsNew.length > 0 ? bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] }) : ''}
+                                ${tierOptions.length > 0 ? bindStoreInput(KanbanStore, 'newTaskForm.tier', newTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
+                                    const types = getTierTypes(val);
+                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, type: types.length > 0 ? types[0] : 'todo' } }));
+                                }}) : ''}
+                                ${typeOptions.length > 1 ? bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions }) : ''}
+                            `;
+                        })()}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { label: 'Sub-Bucket Mapping', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.priority', newTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.size', newTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.deliveryDate', newTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
                     </div>
                     <div class="meta-grid" style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px; flex: 1; min-height: 0;">
                         ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { label: 'Ticket Title', placeholder: 'e.g., Fix schema registry timeout', style: 'font-weight: bold;', flush: true })}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { label: 'Tags (comma-separated tokens)', placeholder: 'Architecture, Offline, Service-Worker, Epic', flush: true })}
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; align-items: start;">
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <sutram-label text="Parent ID"></sutram-label>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    ${newTaskForm.parentId ? html`
+                                        <sutram-tag intent="primary">
+                                            <span>${newTaskForm.parentId}</span>
+                                            <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, parentId: '' } }))}>×</span>
+                                        </sutram-tag>
+                                    ` : ''}
+                                    <sutram-async-btn label="🔗 Pick Parent" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('parentId', 'new')}></sutram-async-btn>
+                                </div>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                <sutram-label text="Dependencies"></sutram-label>
+                                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                    ${(newTaskForm.dependsOn || []).map(dep => html`
+                                        <sutram-tag intent="warning">
+                                            <span>${dep}</span>
+                                            <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'new')}>×</span>
+                                        </sutram-tag>
+                                    `)}
+                                    <sutram-async-btn label="🔗 Add Dep" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('dependsOn', 'new')}></sutram-async-btn>
+                                </div>
+                            </div>
+                        </div>
                         ${bindStoreInput(KanbanStore, 'newTaskForm.desc', newTaskForm.desc, { label: 'Description', type: 'textarea', placeholder: 'Markdown description...', style: 'flex: 1; min-height: 150px;', flush: true })}
                     </div>
                 </div>
@@ -731,7 +1067,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 @sutram-modal-closing=${this._handleModalClosing}
                 @sutram-modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
 
-                <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                <div slot="body" style="display: contents;">
                     ${this._modals?.edit && editTaskForm.filepath ? html`
                         <insetu-frontmatter-editor
                             id="fm-editor-tracker"
@@ -756,16 +1092,74 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                     }}>
                                 </sutram-textarea>
                             </div>
-                            <div slot="metadata-controls" class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px 15px; margin: 0;">
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None' } })) })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: [{value: 'todo', label: 'To-Do (Task)'}, {value: 'bug', label: 'Bug'}, {value: 'queue', label: 'Queue (Research)'}] })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket Mapping', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
-                                ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
-                                <div style="grid-column: 1 / -1; margin-top: 2px;">
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated tokens)', placeholder: 'Architecture, Offline, Service-Worker, Epic', flush: true })}
+                            <div slot="metadata-controls" style="display: flex; flex-direction: column; gap: 12px; margin: 0; max-height: 40vh; overflow-y: auto; overflow-x: hidden; padding-right: 5px;">
+                                <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
+                                    ${(() => {
+                                        const settings = KanbanStore.getState().settings || {};
+                                        const schemaId = (settings.kanban_repo_map || {})[activeRepoEdit] || 'agile_basic';
+                                        const allSchemas = [...(KanbanStore.getState().systemSchemas || []), ...(settings.kanban_profiles || [])];
+                                        const schema = allSchemas.find(p => p.id === schemaId) || {};
+
+                                        const getTierTypes = (t) => (schema[`t${t}_types`] || '').split(',').map(s => s.trim()).filter(Boolean);
+                                        const t1Types = getTierTypes(1);
+                                        const t2Types = getTierTypes(2);
+
+                                        const tierOptions = [];
+                                        if (t1Types.length > 0) tierOptions.push({value: 1, label: schema.t1_label || 'Tier 1'});
+                                        if (t2Types.length > 0) tierOptions.push({value: 2, label: schema.t2_label || 'Tier 2'});
+                                        tierOptions.push({value: 3, label: schema.t3_label || 'Tier 3'});
+
+                                        const currentTierTypes = getTierTypes(editTaskForm.tier || 3);
+                                        const typeOptions = currentTierTypes.map(t => ({value: t, label: t.charAt(0).toUpperCase() + t.slice(1)}));
+
+                                        return html`
+                                            ${bindStoreInput(KanbanStore, 'editTaskForm.repo', editTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => {
+                                                const newSchemaId = (KanbanStore.getState().settings?.kanban_repo_map || {})[KanbanStore.getState().editTaskForm.repo] || 'agile_basic';
+                                                const newSchema = allSchemas.find(p => p.id === newSchemaId) || {};
+                                                const newT3Types = (newSchema.t3_types || '').split(',').map(s => s.trim()).filter(Boolean);
+                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'todo' } }));
+                                            } })}
+                                            ${bucketsEdit.length > 0 ? bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] }) : ''}
+                                            ${tierOptions.length > 1 ? bindStoreInput(KanbanStore, 'editTaskForm.tier', editTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
+                                                const types = getTierTypes(val);
+                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: types.length > 0 ? types[0] : 'todo' } }));
+                                            }}) : ''}
+                                            ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions })}
+                                        `;
+                                    })()}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.priority', editTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.size', editTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.deliveryDate', editTaskForm.deliveryDate, { label: 'Delivery Deadline', type: 'date', flush: true })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
+                                </div>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; align-items: start; padding-top: 12px; border-top: 1px solid var(--border);">
+                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                        <sutram-label text="Parent ID"></sutram-label>
+                                        <div style="display: flex; gap: 8px; align-items: center;">
+                                            ${editTaskForm.parentId ? html`
+                                                <sutram-tag intent="primary">
+                                                    <span>${editTaskForm.parentId}</span>
+                                                    <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, parentId: '' } }))}>×</span>
+                                                </sutram-tag>
+                                            ` : ''}
+                                            <sutram-async-btn label="🔗 Pick Parent" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('parentId', 'edit')}></sutram-async-btn>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                        <sutram-label text="Dependencies"></sutram-label>
+                                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                            ${(editTaskForm.dependsOn || []).map(dep => html`
+                                                <sutram-tag intent="warning">
+                                                    <span>${dep}</span>
+                                                    <span style="cursor: pointer; font-size: 1rem; margin-left: 6px;" @click=${() => this._removeDependency(dep, 'edit')}>×</span>
+                                                </sutram-tag>
+                                            `)}
+                                            <sutram-async-btn label="🔗 Add Dep" intent="neutral" style="--btn-padding: 6px 10px; --btn-font-size: 0.8rem;" .onClick=${() => this._openPicker('dependsOn', 'edit')}></sutram-async-btn>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </insetu-frontmatter-editor>
@@ -773,7 +1167,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 ${this._modals?.edit && editTaskForm.filepath ? html`
                 <div slot="footer" style="display: flex; justify-content: space-between; width: 100%;">
-                    <button class="btn-sm" style="background: var(--intent-danger); color: white; margin: 0;" @click=${this._deleteTask}>🗑️ Delete</button>
+                    <sutram-async-btn style="margin: 0; --btn-padding: 8px 14px;" label="🗑️ Delete" intent="danger" .onClick=${async () => await this._deleteTask()}></sutram-async-btn>
                     <div style="display: flex; gap: 10px;">
                         <button class="btn-sm" style="background: var(--intent-warning); color: black; margin: 0;" @click=${() => {
                             KanbanStore.getState().setModal('edit', false);
@@ -785,55 +1179,669 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ` : ''}
             </sutram-modal>
 
-            <!-- Changelog Modal -->
+            <!-- Ticket Selection Modal for Parent / Dependency Pickers -->
             <sutram-modal 
-                ?open=${this._modals?.changelog} 
-                ?fullscreen=${true}
-                titleText="Historical Changelog"
-                @sutram-modal-closed=${() => KanbanStore.getState().setModal('changelog', false)}>
-                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
-                    <div style="display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; align-items: center; justify-content: flex-end;">
-                        <sutram-entity-actions 
-                            ?scrollable=${true}
-                            style="justify-content: flex-end;"
-                            .entityType=${'text_blob'} 
-                            .entityData=${{ 
-                                textContent: this.changelogText,
-                                suggestedFilename: `Historical_Changelog_${Date.now()}.md`
-                            }}>
-                        </sutram-entity-actions>
+                ?open=${this._pickerOpen}  
+                maxWidth="650px"
+                titleText=${this._pickerMode === 'parentId' ? '🔗 Select Parent Ticket' : '🔗 Select Dependency Ticket'}
+                @sutram-modal-closed=${() => this._pickerOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 10px; max-height: 60vh;">
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <sutram-select 
+                            label="Filter Repo Scope"
+                            .value=${this._pickerRepoFilter}
+                            .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.ecosystem.allRepos.map(r => ({ value: r, label: r }))]}
+                            @sutram-input-changed=${e => this._pickerRepoFilter = e.detail.value}
+                            style="flex: 1; margin: 0;">
+                        </sutram-select>
+                        <sutram-input 
+                            label="Fuzzy Search" 
+                            placeholder="Type ID, title, tags, or bucket..." 
+                            .value=${this._pickerSearchQuery} 
+                            @sutram-input-changed=${e => this._pickerSearchQuery = e.detail.value}
+                            style="flex: 2; margin: 0;">
+                        </sutram-input>
                     </div>
-                    <textarea readonly style="flex: 1; width: 100%; min-height: 300px; padding: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; resize: none;" .value=${this.changelogText}></textarea>
+                    <div style="display: flex; flex-direction: column; gap: 8px; flex: 1; overflow-y: auto; padding-right: 5px;">
+                        ${(() => {
+                            const state = KanbanStore.getState();
+                            const activeForm = this._pickerForm === 'new' ? state.newTaskForm : state.editTaskForm;
+                            const currentRepo = activeForm.repo || this.ecosystem.allRepos[0] || '';
+                            const currentFilepath = activeForm.filepath;
+                            const currentTier = activeForm.tier || (state.tasks.find(t => t.filepath === currentFilepath)?.tier) || 3;
+
+                            let candidates = state.tasks.filter(t => {
+                                if (currentFilepath && t.filepath === currentFilepath) return false;
+                                if (this._pickerRepoFilter !== 'ALL' && t.repo !== this._pickerRepoFilter) return false;
+
+                                // Constrain parents strictly to higher tiers (lower integer values)
+                                if (this._pickerMode === 'parentId' && t.tier >= currentTier) return false;
+
+                                return true;
+                            });
+
+                            if (this._pickerSearchQuery) {
+                                candidates = this.utils.fuzzyFilterObjects(candidates, this._pickerSearchQuery, t => `${t.id} ${t.title} ${t.repo} ${t.subBucket || ''} ${(t.tags || []).join(' ')}`);
+                            }
+
+                            const displayed = candidates.slice(0, 40);
+
+                            if (displayed.length === 0) {
+                                return html`<span style="color: var(--text-muted); font-style: italic; padding: 15px;">No matching candidates found.</span>`;
+                            }
+                            return displayed.map(t => {
+                                const targetString = t.repo === currentRepo ? t.id : `${t.repo}::${t.id}`;
+                                const detailStr = `Repo: ${t.repo} | Tier ${t.tier} | Bucket: ${t.subBucket || 'None'} ${(t.tags && t.tags.length > 0) ? `| Tags: #${t.tags.join(' #')}` : ''}`;
+                                return html`
+                                    <sutram-card 
+                                        ?compact=${true}
+                                        .titleText=${targetString + ' - ' + t.title}
+                                        .detailText=${detailStr}
+                                        icon="📄"
+                                        intentColor="var(--intent-primary)"
+                                        @click=${() => this._selectPickerItem(targetString)}>
+                                        <div slot="actions">
+                                            <sutram-async-btn label="Select" intent="primary" style="--btn-padding: 6px 12px; --btn-font-size: 0.8rem;" .onClick=${() => this._selectPickerItem(targetString)}></sutram-async-btn>
+                                        </div>
+                                    </sutram-card>
+                                `;
+                            });
+                        })()}
+                    </div>
                 </div>
             </sutram-modal>
 `;
     }
+
+    _openPicker(mode, formType) {
+        this._pickerMode = mode;
+        this._pickerForm = formType;
+        this._pickerSearchQuery = '';
+        this._pickerRepoFilter = 'ALL';
+        this._pickerOpen = true;
+        this.requestUpdate();
+    }
+    _selectPickerItem(targetString) {
+        const state = KanbanStore.getState();
+        if (this._pickerForm === 'new') {
+            if (this._pickerMode === 'parentId') {
+                state.setNewTaskField('parentId', targetString);
+            } else {
+                const currentArr = state.newTaskForm.dependsOn || [];
+                if (!currentArr.includes(targetString)) {
+                    state.setNewTaskField('dependsOn', [...currentArr, targetString]);
+                }
+            }
+        } else {
+            if (this._pickerMode === 'parentId') {
+                state.setEditTaskField('parentId', targetString);
+            } else {
+                const currentArr = state.editTaskForm.dependsOn || [];
+                if (!currentArr.includes(targetString)) {
+                    state.setEditTaskField('dependsOn', [...currentArr, targetString]);
+                }
+            }
+        }
+        this._pickerOpen = false;
+        this.requestUpdate();
+    }
+
+    _removeDependency(depId, formType) {
+        const state = KanbanStore.getState();
+        const currentArr = formType === 'new' ? (state.newTaskForm.dependsOn || []) : (state.editTaskForm.dependsOn || []);
+        const updatedArr = currentArr.filter(d => d !== depId);
+        if (formType === 'new') {
+            state.setNewTaskField('dependsOn', updatedArr);
+        } else {
+            state.setEditTaskField('dependsOn', updatedArr);
+        }
+        this.requestUpdate();
+    }
 }
 customElements.define('insetu-ext-tracker-modals', InSetuExtTrackerModals);
 // OS Registration Hook
+export class InSetuExtTrackerSettings extends InSetuElement {
+    static styles = [sharedStyles, css`
+        :host { display: contents; }
+    `];
+
+    static properties = {
+        settingsModalOpen: { type: Boolean },
+        isMigrating: { type: Boolean },
+        activeSettingsTab: { type: String },
+        allRepos: { type: Array },
+        repoMap: { type: Object },
+        customSchemas: { type: Array },
+        selectedSchemaId: { type: String },
+        schemaFormData: { type: Object },
+        globalViews: { type: Array },
+        parentTabs: { type: Array }
+    };
+
+    constructor() {
+        super();
+        this.settingsModalOpen = false;
+        this.isMigrating = false;
+        this.activeSettingsTab = 'schemas';
+        this.allRepos = [];
+        this.repoMap = {};
+        this.customSchemas = [];
+        this.selectedSchemaId = 'agile_basic';
+        this.schemaFormData = null;
+        this.globalViews = [];
+        this.parentTabs = [];
+        this._originalSchemas = [];
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(AppStore, state => {
+            this.allRepos = state.allRepos || [];
+        });
+        this.subscribe(KanbanStore, state => {
+            this.isMigrating = state.settings?.tracker_is_migrating === true || state.settings?.tracker_is_migrating === 'true';
+            if (state.settingsModalOpen !== this.settingsModalOpen) {
+                this.settingsModalOpen = state.settingsModalOpen || false;
+                if (this.settingsModalOpen) {
+                    this.allRepos = AppStore.getState().allRepos || [];
+                    this._loadGlobalData();
+                }
+            }
+        });
+        this.allRepos = AppStore.getState().allRepos || [];
+    }
+    _loadGlobalData() {
+        const globalSettings = KanbanStore.getState().settings || {};
+        const rawSchemas = globalSettings.kanban_profiles || [];
+        // Fetch the dynamic SSOT from the backend
+        const SYSTEM_SCHEMAS = KanbanStore.getState().systemSchemas || [];
+
+        // Safely merge System Schemas with the user's Custom Schemas
+        const customProfiles = this.utils.clone(rawSchemas).filter(s => !s.isSystem);
+        this.customSchemas = [...SYSTEM_SCHEMAS, ...customProfiles];
+
+        this._originalSchemas = this.utils.clone(this.customSchemas);
+        const rawViews = globalSettings.global_views || [];
+        this.globalViews = this.utils.clone(rawViews).map(v => ({ ...v, _uuid: v._uuid || crypto.randomUUID() }));
+        const rawParentTabs = globalSettings.parent_tabs || [{ id: 'tasks', label: 'Tasks' }];
+        this.parentTabs = this.utils.clone(rawParentTabs).map(t => ({ ...t, _uuid: t._uuid || crypto.randomUUID() }));
+
+        this.repoMap = this.utils.clone(globalSettings.kanban_repo_map || {});
+        this.allRepos.forEach(repo => {
+            if (!this.repoMap[repo]) this.repoMap[repo] = 'agile_basic';
+        });
+
+        this._onSelectSchema({ detail: { value: 'agile_basic' }});
+    }
+    _onSelectSchema(e) {
+        this.selectedSchemaId = e.detail.value;
+        const schema = this.customSchemas.find(s => s.id === this.selectedSchemaId);
+        this.schemaFormData = schema ? this.utils.clone(schema) : null;
+        this.requestUpdate();
+    }
+
+    _createNewSchema() {
+        const newId = 'custom_' + Date.now();
+        const newSchema = {
+            id: newId,
+            name: 'New Custom Schema',
+            isSystem: false,
+            t1_label: 'Epics', t1_types: 'epic',
+            t2_label: 'Sprints', t2_types: 'sprint',
+            t3_label: 'Tasks', t3_types: 'todo, bug, queue'
+        };
+        this.customSchemas.push(newSchema);
+        this.selectedSchemaId = newId;
+        this.schemaFormData = this.utils.clone(newSchema);
+        this.requestUpdate();
+    }
+    _updateSchemaForm(field, value) {
+        if (this.schemaFormData.isSystem) return;
+        this.schemaFormData = { ...this.schemaFormData, [field]: value };
+        const idx = this.customSchemas.findIndex(s => s.id === this.selectedSchemaId);
+        if (idx !== -1) {
+            const updatedSchemas = [...this.customSchemas];
+            updatedSchemas[idx] = { ...updatedSchemas[idx], [field]: value };
+            this.customSchemas = updatedSchemas;
+        }
+        this.requestUpdate();
+    }
+
+    _deleteSchema() {
+        if (this.schemaFormData.isSystem) return;
+        this.customSchemas = this.customSchemas.filter(s => s.id !== this.selectedSchemaId);
+
+        const newRepoMap = { ...this.repoMap };
+        Object.keys(newRepoMap).forEach(repo => {
+            if (newRepoMap[repo] === this.selectedSchemaId) {
+                newRepoMap[repo] = 'agile_basic';
+            }
+        });
+        this.repoMap = newRepoMap;
+
+        this.selectedSchemaId = 'agile_basic';
+        this._onSelectSchema({ detail: { value: 'agile_basic' }});
+    }
+    _addParentTab() {
+        this.parentTabs = [...this.parentTabs, {
+            _uuid: crypto.randomUUID(),
+            id: 'new_tab',
+            label: 'New Tab'
+        }];
+    }
+
+    _removeParentTab(index) {
+        const updatedTabs = [...this.parentTabs];
+        updatedTabs.splice(index, 1);
+        this.parentTabs = updatedTabs;
+    }
+    _getTypesForScope(schemaId, tier) {
+        const types = new Set();
+        this.customSchemas.forEach(s => {
+            if (schemaId && s.id !== schemaId) return;
+            if (!tier || tier === 1) (s.t1_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+            if (!tier || tier === 2) (s.t2_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+            if (!tier || tier === 3) (s.t3_types || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean).forEach(t => types.add(t));
+        });
+        return Array.from(types).sort();
+    }
+    _updateParentTab(index, field, value) {
+        const updatedTabs = [...this.parentTabs];
+        const oldId = updatedTabs[index].id;
+
+        updatedTabs[index] = { ...updatedTabs[index], [field]: value };
+
+        if (field === 'label') {
+            updatedTabs[index].id = this.utils.slugify(value) || `tab_${Date.now()}`;
+        }
+
+        const newId = updatedTabs[index].id;
+
+        // Cascade ID updates to linked global views to prevent orphaning
+        if (oldId && newId && oldId !== newId) {
+            this.globalViews = this.globalViews.map(v => {
+                const currentParent = v.target_parent || 'tasks';
+                return currentParent === oldId ? { ...v, target_parent: newId } : v;
+            });
+        }
+
+        this.parentTabs = updatedTabs;
+    }
+    _addGlobalView() {
+        const defaultParent = this.parentTabs.length > 0 ? this.parentTabs[0].id : 'tasks';
+        this.globalViews = [...this.globalViews, {
+            _uuid: crypto.randomUUID(),
+            id: 'new_view',
+            label: '📄 New View',
+            target_parent: defaultParent,
+            target_schema: '',
+            target_tier: 3,
+            layout: 'columns',
+            filters: { ticket_types: '', statuses: '' }
+        }];
+    }
+
+    _removeGlobalView(index) {
+        const updatedViews = [...this.globalViews];
+        updatedViews.splice(index, 1);
+        this.globalViews = updatedViews;
+    }
+    _updateGlobalView(index, field, value) {
+        const updatedViews = [...this.globalViews];
+        updatedViews[index] = { ...updatedViews[index], [field]: value };
+        if (field === 'label') {
+            updatedViews[index].id = this.utils.slugify(value) || `view_${Date.now()}`;
+        }
+        this.globalViews = updatedViews;
+    }
+
+    _updateGlobalViewFilter(index, field, value) {
+        const updatedViews = [...this.globalViews];
+        updatedViews[index] = { 
+            ...updatedViews[index], 
+            filters: { ...(updatedViews[index].filters || {}), [field]: value }
+        };
+        this.globalViews = updatedViews;
+    }
+
+    async saveSettings() {
+        const renames = [];
+
+        this.customSchemas.forEach(schema => {
+            const orig = this._originalSchemas.find(s => s.id === schema.id);
+            if (orig) {
+                const processTier = (oldStr, newStr) => {
+                    const oldArr = (oldStr || '').split(',').map(s => s.trim()).filter(Boolean);
+                    const newArr = (newStr || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (oldArr.length === newArr.length) {
+                        for (let i = 0; i < oldArr.length; i++) {
+                            if (oldArr[i] !== newArr[i]) {
+                                const affectedRepos = this.allRepos.filter(r => this.repoMap[r] === schema.id);
+                                affectedRepos.forEach(repo => {
+                                    renames.push({ old: oldArr[i], new: newArr[i], repo: repo });
+                                });
+                            }
+                        }
+                    }
+                };
+                processTier(orig.t1_types, schema.t1_types);
+                processTier(orig.t2_types, schema.t2_types);
+                processTier(orig.t3_types, schema.t3_types);
+            }
+        });
+        const cleanViews = this.globalViews.map(v => {
+            const clean = { ...v };
+            delete clean._uuid;
+            return clean;
+        });
+        const cleanParentTabs = this.parentTabs.map(t => {
+            const clean = { ...t };
+            delete clean._uuid;
+            return clean;
+        });
+        // Strip out system schemas before writing to the physical database
+        const profilesToSave = this.customSchemas.filter(s => !s.isSystem);
+
+        const res = await this.api.post(`vocab_settings`, {
+            kanban_profiles: profilesToSave,
+            kanban_repo_map: this.repoMap,
+            global_views: cleanViews,
+            parent_tabs: cleanParentTabs,
+            renames: renames 
+        });
+
+        if (res.status === 202) {
+            const data = await res.json();
+            window.inSetu.utils.pollJob(data.job_id, {
+                onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg}`, null); },
+                onComplete: () => {
+                    KanbanStore.getState().fetchSettings();
+                    KanbanStore.setState({ settingsModalOpen: false });
+                    window.inSetu.stores.Toast.getState().addToast(`Migration complete. Schemas and views applied successfully.`);
+                }
+            });
+        } else {
+            KanbanStore.getState().fetchSettings();
+            KanbanStore.setState({ settingsModalOpen: false });
+            window.inSetu.stores.Toast.getState().addToast(`Tracker schemas and views applied successfully.`);
+        }
+    }
+    render() {
+        const allSchemas = this.customSchemas;
+        const modalBody = this.isMigrating ? html`
+            <div style="display: flex; flex-direction: column; gap: 15px; padding: 30px; margin: 20px; align-items: center; justify-content: center; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px;">
+                <sutram-spinner text="Harmonizing semantic vocabulary across workspace..."></sutram-spinner>
+                <p style="font-size: 0.85rem; color: var(--text-muted); text-align: center; margin-top: 15px;">
+                    The system is safely migrating your Markdown files. This panel is locked to prevent race conditions.
+                </p>
+            </div>
+        ` : html`
+            <div style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+
+                <yenvui-tabs 
+                    variant="sub"
+                    .tabs=${[
+                        { id: 'schemas', label: '📋 Repository Schemas' },
+                        { id: 'views', label: '👀 Global Tabs & Views' }
+                    ]}
+                    .activeTab=${this.activeSettingsTab}
+                    @yenvui-tab-selected=${(e) => this.activeSettingsTab = e.detail.tabId}>
+
+                    <div slot="schemas" style="display: flex; flex-direction: column; overflow-y: auto;">
+                        <sutram-collapsible titleText="Assign Schemas" intent="neutral" ?open=${true}>
+                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">Assign a Kanban template to each repository.</p>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                ${this.allRepos.map(repo => html`
+                                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
+                                        <span style="font-weight: bold; color: var(--text);">📁 ${repo}</span>
+                                        <sutram-select 
+                                            .value=${this.repoMap[repo] || 'agile_basic'} 
+                                            .options=${allSchemas.map(s => ({value: s.id, label: s.name}))}
+                                            @sutram-input-changed=${e => { this.repoMap = {...this.repoMap, [repo]: e.detail.value}; this.requestUpdate(); }}
+                                            ?flush=${true}
+                                            style="min-width: 250px;">
+                                        </sutram-select>
+                                    </div>
+                                `)}
+                            </div>
+                        </sutram-collapsible>
+
+                        <sutram-collapsible titleText="Define Schemas" intent="neutral" ?open=${true}>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
+                                <sutram-select 
+                                    label="Select Schema to View/Edit"
+                                    .value=${this.selectedSchemaId}
+                                    .options=${allSchemas.map(s => ({value: s.id, label: s.name}))}
+                                    @sutram-input-changed=${this._onSelectSchema}
+                                    ?flush=${true}
+                                    style="flex: 1; max-width: 300px; margin-bottom: 0;">
+                                </sutram-select>
+                                <sutram-async-btn label="➕ New Custom Schema" intent="success" .onClick=${() => this._createNewSchema()} style="margin: 0;"></sutram-async-btn>
+                            </div>
+
+                            ${this.schemaFormData ? html`
+                            <div style="display: flex; flex-direction: column; gap: 15px; background: var(--bg); padding: 15px; border-radius: 6px; border: 1px solid var(--border); margin-top: 5px;">
+                                ${!this.schemaFormData.isSystem ? html`
+                                    <sutram-input label="Custom Schema Name" .value=${this.schemaFormData.name} @sutram-input-changed=${e => this._updateSchemaForm('name', e.detail.value)}></sutram-input>
+                                ` : html`
+                                    <div style="font-size: 0.85rem; color: var(--intent-warning); font-style: italic; font-weight: bold;">⚠️ This is a system default schema. It is read-only. Create a custom schema to modify values.</div>
+                                `}
+
+                                <h4 style="margin: 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">UI Tier Labels</h4>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+                                    <sutram-input label="Tier 1 (Top Level)" .value=${this.schemaFormData.t1_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t1_label', e.detail.value)}></sutram-input>
+                                    <sutram-input label="Tier 2 (Middle Level)" .value=${this.schemaFormData.t2_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t2_label', e.detail.value)}></sutram-input>
+                                    <sutram-input label="Tier 3 (Base Tasks)" .value=${this.schemaFormData.t3_label} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t3_label', e.detail.value)}></sutram-input>
+                                </div>
+
+                                <h4 style="margin: 0; color: var(--intent-primary); border-top: 1px solid var(--border); padding-top: 15px;">Semantic Types</h4>
+                                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Comma separated domains mapping tickets to tiers (e.g. "todo, bug").</p>
+                                <div style="display: flex; flex-direction: column; gap: 10px;">
+                                    <sutram-input label="Tier 1 Types" .value=${this.schemaFormData.t1_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t1_types', e.detail.value)}></sutram-input>
+                                    <sutram-input label="Tier 2 Types" .value=${this.schemaFormData.t2_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t2_types', e.detail.value)}></sutram-input>
+                                    <sutram-input label="Tier 3 Types" .value=${this.schemaFormData.t3_types} ?disabled=${this.schemaFormData.isSystem} @sutram-input-changed=${e => this._updateSchemaForm('t3_types', e.detail.value)}></sutram-input>
+                                </div>
+                                ${!this.schemaFormData.isSystem ? html`
+                                    <div style="display: flex; justify-content: flex-end; margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
+                                        <sutram-async-btn label="🗑️ Delete Custom Schema" intent="danger" .onClick=${() => this._deleteSchema()}></sutram-async-btn>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        ` : ''}
+                        </sutram-collapsible>
+                    </div>
+                    <div slot="views" style="display: flex; flex-direction: column; overflow-y: auto;">
+                        <sutram-collapsible titleText="Parent Tabs" intent="neutral" ?open=${true}>
+                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 15px;">Define the parent tabs to be used by Tracker. If existing, Tracker sub-tabs will be appended. Otherwise, tabs will be built as defined.</p>
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                ${this.parentTabs.map((t, i) => html`
+                                    <div style="display: flex; gap: 10px; align-items: center;">
+                                        <sutram-input label="Tab Label" .value=${t.label} @sutram-input-changed=${e => this._updateParentTab(i, 'label', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
+                                        <sutram-input label="Tab ID" .value=${t.id} @sutram-input-changed=${e => this._updateParentTab(i, 'id', e.detail.value)} style="flex: 1;" ?flush=${true}></sutram-input>
+                                        <button class="btn-sm" style="background: var(--intent-danger); margin: 0; margin-top: 18px;" @click=${() => this._removeParentTab(i)}>✕</button>
+                                    </div>
+                                `)}
+                                <div style="display: flex; justify-content: flex-start; margin-top: 5px;">
+                                    <sutram-async-btn label="➕ Add Parent Tab" intent="neutral" .onClick=${() => this._addParentTab()}></sutram-async-btn>
+                                </div>
+                            </div>
+                        </sutram-collapsible>
+                        <sutram-collapsible titleText="Sub-Tabs (View filters)" intent="neutral" ?open=${true}>
+                        <div style="margin-bottom: 15px;">
+                            <p style="margin: 0; font-size: 0.85rem; color: var(--text-muted);">Define the sub-navigation tabs that filter the kanban boards across your entire workspace.</p>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 12px;">
+                            ${this.globalViews.map((v, i) => html`
+                                <div style="display: flex; flex-direction: column; gap: 12px; background: var(--input-bg); padding: 15px; border: 1px solid var(--border); border-radius: 6px;">
+                                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;">
+                                        <sutram-input label="Tab Label" .value=${v.label} @sutram-input-changed=${(e) => this._updateGlobalView(i, 'label', e.detail.value)} ?flush=${true}></sutram-input>
+                                        <sutram-input label="Tab ID" .value=${v.id} ?disabled=${true} ?flush=${true}></sutram-input>
+                                        <sutram-select 
+                                            label="Parent Tab"
+                                            style="margin: 0; --bg-input: var(--bg);"
+                                            .value=${v.target_parent || 'tasks'} 
+                                            .options=${this.parentTabs.map(pt => ({value: pt.id, label: pt.label}))}
+                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_parent', e.detail.value)}>
+                                        </sutram-select>
+                                        <sutram-select 
+                                            label="Layout Type"
+                                            style="margin: 0;"
+                                            .value=${v.layout} 
+                                            .options=${[
+                                                {value: 'columns', label: 'Board (Columns)'},
+                                                {value: 'stacked', label: 'List (Stacked)'},
+                                                {value: 'log', label: 'History (Log)'}
+                                            ]}
+                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'layout', e.detail.value)}>
+                                        </sutram-select>
+                                        <sutram-select 
+                                            label="Scope By Schema"
+                                            style="margin: 0;"
+                                            .value=${v.target_schema || ''} 
+                                            .options=${[
+                                                {value: '', label: 'Any Schema'},
+                                                ...this.customSchemas.map(s => ({value: s.id, label: s.name}))
+                                            ]}
+                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_schema', e.detail.value)}>
+                                        </sutram-select>
+                                        ${(() => {
+                                            const activeSchema = this.customSchemas.find(s => s.id === v.target_schema) || this.customSchemas.find(s => s.id === 'agile_basic') || this.customSchemas[0] || {};
+                                            return html`
+                                                <sutram-select 
+                                                    label="Scope By Tier"
+                                                    style="margin: 0;"
+                                                    .value=${String(v.target_tier || '')} 
+                                                    .options=${[
+                                                        {value: '', label: 'Any'},
+                                                        {value: '1', label: 'Tier 1 (' + (activeSchema.t1_label || 'Top') + ')'},
+                                                        {value: '2', label: 'Tier 2 (' + (activeSchema.t2_label || 'Middle') + ')'},
+                                                        {value: '3', label: 'Tier 3 (' + (activeSchema.t3_label || 'Base') + ')'}
+                                                    ]}
+                                                    @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_tier', e.detail.value ? parseInt(e.detail.value, 10) : null)}>
+                                                </sutram-select>
+                                            `;
+                                        })()}
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 5px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                                        ${(() => {
+                                            if (v.layout === 'log') {
+                                                return html`
+                                                    <div style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
+                                                        <span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">
+                                                            ℹ️ This is a special view for observing closed, logged, and archived tickets. It inherits your schema and tier scope, but status and type filters are managed automatically.
+                                                        </span>
+                                                    </div>
+                                                `;
+                                            }
+
+                                            const availableTypes = this._getTypesForScope(v.target_schema, v.target_tier);
+                                            const currentTypes = v.filters?.ticket_types === 'NONE' ? [] : (v.filters?.ticket_types ? v.filters.ticket_types.split(',').map(s=>s.trim()) : availableTypes);
+
+                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived'];
+                                            const currentStatuses = v.filters?.statuses === 'NONE' ? [] : (v.filters?.statuses ? v.filters.statuses.split(',').map(s=>s.trim()) : allStatuses);
+
+                                            return html`
+                                                ${availableTypes.length > 1 ? html`
+                                                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                        <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Type</label>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                                            ${availableTypes.map(type => {
+                                                                const isChecked = currentTypes.includes(type);
+                                                                return html`<sutram-toggle label=${type} .checked=${isChecked} @sutram-input-changed=${(e) => {
+                                                                    let newSelected = [...currentTypes];
+                                                                    if (e.detail.value) {
+                                                                        if (!newSelected.includes(type)) newSelected.push(type);
+                                                                    } else {
+                                                                        newSelected = newSelected.filter(t => t !== type);
+                                                                    }
+                                                                    if (newSelected.length === availableTypes.length) this._updateGlobalViewFilter(i, 'ticket_types', '');
+                                                                    else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'ticket_types', 'NONE');
+                                                                    else this._updateGlobalViewFilter(i, 'ticket_types', newSelected.join(', '));
+                                                                }} ?flush=${true}></sutram-toggle>`;
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ` : ''}
+                                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                    <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Filter by Status</label>
+                                                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                                        ${allStatuses.map(status => {
+                                                            const isChecked = currentStatuses.includes(status);
+                                                            return html`<sutram-toggle label=${status} .checked=${isChecked} @sutram-input-changed=${(e) => {
+                                                                let newSelected = [...currentStatuses];
+                                                                if (e.detail.value) {
+                                                                    if (!newSelected.includes(status)) newSelected.push(status);
+                                                                } else {
+                                                                    newSelected = newSelected.filter(t => t !== status);
+                                                                }
+                                                                if (newSelected.length === allStatuses.length) this._updateGlobalViewFilter(i, 'statuses', '');
+                                                                else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'statuses', 'NONE');
+                                                                else this._updateGlobalViewFilter(i, 'statuses', newSelected.join(', '));
+                                                            }} ?flush=${true}></sutram-toggle>`;
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            `;
+                                        })()}
+                                    </div>
+                                    <div style="display: flex; justify-content: flex-end; margin-top: 5px;">
+                                        <sutram-async-btn label="🗑️ Remove View" intent="danger" .onClick=${() => this._removeGlobalView(i)}></sutram-async-btn>
+                                    </div>
+                                </div>
+                            `)}
+                        </div>
+                        <div style="display: flex; justify-content: flex-start; margin-top: 15px;">
+                            <sutram-async-btn label="➕ Add Global View" intent="primary" style="margin: 0;" .onClick=${() => this._addGlobalView()}></sutram-async-btn>
+                        </div>
+                    </sutram-collapsible>
+                </div>
+                </yenvui-tabs>
+        </div>
+        `;
+
+        return html`
+            <sutram-modal ?open=${this.settingsModalOpen} ?fullscreen=${true} ?flush=${true} titleText="Kanban Configuration" @sutram-modal-closed=${() => KanbanStore.setState({ settingsModalOpen: false })}>
+                <div slot="body" style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
+                    ${modalBody}
+                </div>
+                <sutram-async-btn slot="footer" label="💾 Save Settings" intent="primary" .onClick=${() => this.saveSettings()} ?disabled=${this.isMigrating}></sutram-async-btn>
+            </sutram-modal>
+        `;
+    }
+}
+customElements.define('insetu-ext-tracker-settings', InSetuExtTrackerSettings);
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
     version: "2.0.0",
+    settingsActions: [
+        {
+            id: 'tracker_domain_vocab',
+            label: 'Kanban Structure Template',
+            icon: '🏷️',
+            onClick: async () => {
+                const state = KanbanStore.getState();
+                if (!state.systemSchemas || state.systemSchemas.length === 0) {
+                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Loading schemas...", null);
+                    await state.fetchSettings();
+                    if (window.inSetu?.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("", 10);
+                }
+                KanbanStore.setState({ settingsModalOpen: true });
+            }
+        }
+    ],
     shortcuts: [
         {
             context: 'modal:new-task-modal',
             key: 'ctrl+s',
             label: 'Save New Task',
-            action: () => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-                if (el) el._saveNewTask();
-            }
+            action: () => window.dispatchEvent(new CustomEvent('insetu:tracker:save-new-task'))
         },
         {
             context: 'modal:edit-task-modal',
             key: 'ctrl+s',
             label: 'Save Edited Task',
-            action: () => {
-                const shell = document.querySelector('insetu-app-shell');
-                const el = shell ? shell.shadowRoot.querySelector('insetu-ext-tracker-modals') : document.querySelector('insetu-ext-tracker-modals');
-                if (el && el._saveEditTask) el._saveEditTask();
-            }
+            action: () => window.dispatchEvent(new CustomEvent('insetu:tracker:save-edit-task'))
         }
     ],
     entityActions: [
@@ -904,6 +1912,10 @@ window.ExtensionRegistry.registerExtension('tracker', {
             component: "insetu-ext-tracker-modals"
         },
         {
+            slot: "slots:global",
+            component: "insetu-ext-tracker-settings"
+        },
+        {
             slot: "slots:primary-navigation",
             id: "tasks",
             label: "Tasks",
@@ -970,31 +1982,16 @@ window.ExtensionRegistry.registerExtension('tracker', {
             order: 4
         }
     ],
-    uiHooks: {
-        'zone:file-edit-override': (filepath) => {
-            if (filepath.includes('.tracker/')) {
-                window.inSetu.stores.Fs.setState(s => ({ fileModal: { ...s.fileModal, open: false } }));
+    customEditors: [
+        {
+            match: (filepath) => filepath && filepath.includes('.tracker/'),
+            onOpen: (filepath) => {
+                if (window.inSetu.ui && window.inSetu.ui.closeFileModal) window.inSetu.ui.closeFileModal(true);
                 AppStore.getState().setActiveRoute('tasks', 'todos');
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
-                return true;
             }
-            return false;
-        },
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'tasks') {
-                KanbanStore.getState().fetchTasks();
-            }
-        },
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const currentEdit = KanbanStore.getState().editTaskForm?.filepath;
-            if (currentEdit && KanbanStore.getState().modals.edit) {
-                const deleted = payload.mutations.find(m => m.filepath === currentEdit && m.operation === 'delete');
-                if (deleted) KanbanStore.getState().setModal('edit', false);
-            }
-            return false;
         }
-    }
+    ]
 });
 
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---

@@ -53,14 +53,10 @@ export class InSetuExtHooks extends InSetuElement {
         allRepos: { type: Array },
         targetConfigs: { type: Array }
     };
-
     static styles = [
         sharedStyles,
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-            .hooks-body { flex: 1; overflow-y: auto; padding: 20px; }
-            .rule-card { background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 12px; }
-            .cmd-box { font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--border); padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; margin-top: 8px; }
         `
     ];
     constructor() {
@@ -174,10 +170,9 @@ export class InSetuExtHooks extends InSetuElement {
     async executeRule(ruleId) {
         try { await this._getExecuteRuleAction(ruleId)(); } catch(e) {}
     }
-
     render() {
         return html`
-            <div class="hooks-body">
+            <div style="flex: 1; overflow-y: auto; padding: 20px;">
                 <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px;">
                     <h3 style="margin: 0; color: var(--text);">Automation Rules</h3>
                     <span style="font-size: 0.85rem; color: var(--text-muted);">Trigger local commands automatically when repositories or buckets update.</span>
@@ -197,7 +192,7 @@ export class InSetuExtHooks extends InSetuElement {
                             .entityData=${rule}
                             style="opacity: ${rule.enabled ? '1' : '0.6'}; display: block;">
 
-                            <div class="cmd-box" style="margin-top: 5px;"><b>THEN:</b> ${rule.command}</div>
+                            <div style="font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--border); padding: 8px 12px; border-radius: 4px; font-size: 0.85rem; color: var(--intent-primary); word-break: break-all; margin-top: 5px;"><b>THEN:</b> ${rule.command}</div>
                         </insetu-card>
                     `)}
                 </div>

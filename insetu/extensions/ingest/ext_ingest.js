@@ -14,6 +14,18 @@ export const IngestStore = createExtensionStore('Ingest', {
 });
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 window.inSetu.stores.Ingest = IngestStore;
+export class InSetuExtIngestActions extends InSetuElement {
+    static styles = [sharedStyles];
+    render() {
+        return html`
+            <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
+                <button @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-ext-ingest-actions', InSetuExtIngestActions);
+
 export class InSetuExtIngestModals extends InSetuElement {
     static get extensionName() { return 'ingest'; }
     static properties = {
@@ -119,15 +131,10 @@ window.ExtensionRegistry.registerExtension('ingest', {
         {
             slot: "slots:global",
             component: "insetu-ext-ingest-modals"
+        },
+        {
+            slot: "modal:new-file:actions",
+            component: "insetu-ext-ingest-actions"
         }
-    ],
-    uiHooks: {
-        'zone:new-file-options-lit': () => {
-            return html`
-                <div style="display: flex; gap: 10px; margin-bottom: 10px; padding: 8px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; align-items: center;">
-                    <button @click=${(e) => { e.preventDefault(); IngestStore.setState({ ingestModalOpen: true, ingestError: null, ingestStatus: null }); }} class="btn-sm" style="background: var(--intent-primary); margin: 0;">🌐 Import from URL</button>
-                </div>
-            `;
-        }
-    }
+    ]
 });

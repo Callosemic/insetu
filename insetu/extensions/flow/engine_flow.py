@@ -56,11 +56,13 @@ def _register_flow_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "flow",
         "worker_name": "compile_workflows_task"
     }]
-
 @flow_bp.worker("compile_workflows_task")
 def _background_compile_workflows(ctx, **kwargs):
     ctx.jobs.update_progress("Packing active workflows...")
     if "flow" not in ctx.config.get("extensions", []): return
+
+    # Ensure all preceding VFS writes (such as newly generated gather context parts) settle on disk
+    ctx.sync_vfs_barrier()
 
     context_batches = ctx.store.get("workflows.json", "context_batches", [])
     if not context_batches: return {"message": "No active workflows to pack."}
@@ -99,9 +101,6 @@ def _background_compile_workflows(ctx, **kwargs):
                 else:
                     expanded_includes.append(inc)
         for inc in expanded_includes:
-            is_system_uri = inc.startswith("ctx://")
-
-            # DATABASE READ IS NOW ACCURATE DUE TO SEQUENTIAL EXECUTION
             responses = ctx.emit('resolve_payload_chunks', uri=inc)
             chunks = next((r for r in responses if r), [inc])
 
@@ -109,7 +108,8 @@ def _background_compile_workflows(ctx, **kwargs):
                 safe_chunk_base = Path(chunk_identifier).name
                 display_name = f"{Path(inc).parent.as_posix()}/{safe_chunk_base}" if (chunk_identifier != inc and "/" in inc) else chunk_identifier
                 try:
-                    content = ctx.vfs.read(chunk_identifier, is_absolute_artifact=is_system_uri)
+                    # Let the Kernel VFS handle artifact detection and path resolution natively
+                    content = ctx.vfs.read(chunk_identifier, is_absolute_artifact=False)
                     if content is not None:
                         text_blocks.append(f"--- {display_name} ---\n{content}\n\n")
                         resolved_files.append(display_name)
@@ -160,14 +160,8 @@ def _background_compile_workflows(ctx, **kwargs):
                 current_manifest[k] = v
         ctx.save_manifest(manifest_deltas, is_full_compile=False)
         ctx.sync_vfs_barrier()
-    if os.path.exists(ctx.paths["gather_dir"]):
-        for ws_rel_path in ctx.vfs.walk(ctx.paths["gather_dir"], exts=['.txt']):
-            f_basename = Path(ctx.resolve_path(ws_rel_path)).name
-            if f_basename not in expected_flow_artifacts:
-                try:
-                    ctx.vfs.save(ws_rel_path, "", data={"action": "delete"})
-                except Exception:
-                    pass
+    from insetu.core.utils_core import vacuum_manifest_artifacts
+    vacuum_manifest_artifacts(ctx, ctx.paths["gather_dir"], expected_flow_artifacts)
 
     return {"message": "Workflows compiled successfully."}
 @flow_bp.route('batches', methods=['GET'])

@@ -62,7 +62,6 @@ export class InSetuExtFlow extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .flow-body { flex: 1; overflow-y: auto; padding: 0; }
     `];
     constructor() {
         super();
@@ -114,6 +113,33 @@ export class InSetuExtFlow extends InSetuElement {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
+
+        this.registerGlobalListener('sutram-route-changed', window, (e) => {
+            if (e.detail.tab === 'context' && e.detail.subTabs['context'] === 'flow') {
+                FlowStore.getState().fetchBatches();
+            }
+        });
+
+        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
+            if (promptTouched) {
+                window.dispatchEvent(new CustomEvent('insetu:flow:refresh-prompt'));
+            }
+            const contextOrDiffTouched = payload.mutations.some(m => m.filepath && (
+                m.filepath.includes('diffs/') || 
+                m.filepath.includes('contexts/') || 
+                m.filepath.includes('workflows/') ||
+                m.filepath.endsWith('_diffs.txt') ||
+                m.filepath.endsWith('_context.txt')
+            ));
+            if (contextOrDiffTouched) {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
+                FlowStore.getState().fetchBatches();
+            }
+        });
+
         const as = AppStore.getState ? AppStore.getState() : {};
         this.pinnedRepos = as.pinnedRepos || new Set(['ALL']);
         this.allRepos = as.allRepos || [];
@@ -353,7 +379,7 @@ export class InSetuExtFlow extends InSetuElement {
                         </div>
                     </div>
                 </sutram-toolbar>
-            <div class="flow-body">
+            <div style="flex: 1; overflow-y: auto; padding: 0;">
         ${this.loading ? html`<insetu-spinner text="Loading batches..."></insetu-spinner>` : ''}
                     <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
                         ${this.batches.length === 0 ? html`<div style="padding: 20px;"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
@@ -768,33 +794,4 @@ window.ExtensionRegistry.registerExtension('flow', {
             order: 2
         }
     ],
-    uiHooks: {
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'context') {
-                const activeSub = AppStore.getState().activeSubTabs['context'];
-                if (activeSub === 'flow') {
-                    FlowStore.getState().fetchBatches();
-                }
-            }
-        },
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
-            if (promptTouched) {
-                window.dispatchEvent(new CustomEvent('insetu:flow:refresh-prompt'));
-            }
-            const contextOrDiffTouched = payload.mutations.some(m => m.filepath && (
-                m.filepath.includes('diffs/') || 
-                m.filepath.includes('contexts/') || 
-                m.filepath.includes('workflows/') ||
-                m.filepath.endsWith('_diffs.txt') ||
-                m.filepath.endsWith('_context.txt')
-            ));
-            if (contextOrDiffTouched) {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
-                FlowStore.getState().fetchBatches();
-            }
-            return false;
-        }
-    }
 });

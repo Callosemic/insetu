@@ -34,7 +34,6 @@ export class InSetuExtPrompts extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; }
-        .prompts-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; }
     `];
     constructor() {
         super();
@@ -101,9 +100,9 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     render() {
         return html`
-            <div class="prompts-body" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0;" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 20px;">Loading prompts...</div>` : html`
-                    <insetu-file-tree  
+                    <insetu-file-tree    
                         style="flex: 1;"
                         .files=${this.prompts} 
                         stripPrefix=".insetu/prompts/"
@@ -197,55 +196,52 @@ window.ExtensionRegistry.registerExtension('prompts', {
             component: "insetu-ext-prompts-actions",
             order: 3
         }
-    ],
-    uiHooks: {
-        'zone:context-metadata': (fileName) => {
-            if (fileName === 'prompts_context.txt') return {
-                cat: "Prompts & State",
-                desc: "The Master Ingestion Prompt and CLI templates.",
-                displayName: 'prompts_context.txt'
-            };
-            return null;
-        },
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'context' && data.subId === 'prompts') {
-                syncPromptsState();
-            }
-        },
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'context') {
-                syncPromptsState();
-            }
-        },
-        'zone:file-fetch-url': (filepath) => {
-            if (filepath && isPromptPath(filepath)) {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                return `/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(filepath);
-            }
-            return null;
-        },
-        'zone:global-manifest-files': () => {
-            const rawPrompts = PromptsStore.getState().prompts || [];
-            if (rawPrompts.length === 0) return ['.insetu/prompts/.gitkeep'];
-            return rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`);
-        },
-        'zone:global-manifest-whitelist': () => {
-            return ['.insetu/prompts/'];
-        },
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
-            // The VFS operates on an async background queue. Delay the read request 
-            // slightly so the backend has time to physically flush the deletion to disk.
-            if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
-            return false;
-        },
-        'zone:soft-refresh': () => {
-            syncPromptsState();
-            return false;
-        }
+    ]
+});
+window.addEventListener('zone:context-metadata', (e) => {
+    if (e.detail === 'prompts_context.txt') {
+        e.inSetuResponses.push({
+            cat: "Prompts & State",
+            desc: "The Master Ingestion Prompt and CLI templates.",
+            displayName: 'prompts_context.txt'
+        });
     }
 });
+
+window.addEventListener('sutram-route-changed', (e) => {
+    if (e.detail.tab === 'context') {
+        syncPromptsState();
+    }
+});
+
+window.addEventListener('zone:file-fetch-url', (e) => {
+    if (e.detail && isPromptPath(e.detail)) {
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        e.inSetuResponses.push(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(e.detail));
+    }
+});
+
+window.addEventListener('zone:global-manifest-files', (e) => {
+    const rawPrompts = PromptsStore.getState().prompts || [];
+    if (rawPrompts.length === 0) e.inSetuResponses.push(['.insetu/prompts/.gitkeep']);
+    else e.inSetuResponses.push(rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`));
+});
+
+window.addEventListener('zone:global-manifest-whitelist', (e) => {
+    e.inSetuResponses.push(['.insetu/prompts/']);
+});
+
+window.addEventListener('zone:vfs-mutated', (e) => {
+    const payload = e.detail;
+    if (!payload || !payload.mutations) return;
+    const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
+    if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
+});
+
+window.addEventListener('zone:soft-refresh', () => {
+    syncPromptsState();
+});
+
 async function syncPromptsState() {
     if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
     try {

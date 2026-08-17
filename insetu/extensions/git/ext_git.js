@@ -86,7 +86,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-        .git-body { flex: 1; overflow-y: auto; padding: 0; }
     `];
     constructor() {
         super();
@@ -369,7 +368,7 @@ disconnectedCallback() {
                     @repo-filter-changed=${(e) => window.inSetu.stores.Gather.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div class="git-body">
+            <div style="flex: 1; overflow-y: auto; padding: 0;">
             ${this.activeDiffJobId ? html`<div class="spinner" style="display: block; padding: 20px;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px; padding: 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
             <div style="display: flex; flex-direction: column;">
@@ -933,26 +932,23 @@ window.ExtensionRegistry.registerExtension('git', {
         }
     ]
 });
-if (window.inSetu.extensions.Registry && window.inSetu.extensions.Registry.registerUIHook) {
-    window.inSetu.extensions.Registry.registerUIHook('zone:vfs-mutated', (payload) => {
-        if (!payload || !payload.mutations) return false;
-        let reposChanged = false;
-        const { dirtyDiffRepos } = GitStore.getState();
-        const newDirty = new Set(dirtyDiffRepos);
+window.addEventListener('zone:vfs-mutated', (e) => {
+    const payload = e.detail;
+    if (!payload || !payload.mutations) return;
+    let reposChanged = false;
+    const { dirtyDiffRepos } = GitStore.getState();
+    const newDirty = new Set(dirtyDiffRepos);
 
-        payload.mutations.forEach(m => {
-            if (!m.filepath) return;
-            const repo = m.filepath.split('/')[0];
-            if (repo) {
-                newDirty.add(repo);
-                reposChanged = true;
-            }
-        });
-
-        if (reposChanged) {
-            GitStore.setState({ dirtyDiffRepos: newDirty });
+    payload.mutations.forEach(m => {
+        if (!m.filepath) return;
+        const repo = m.filepath.split('/')[0];
+        if (repo) {
+            newDirty.add(repo);
+            reposChanged = true;
         }
     });
 
-}
-// Legacy zone:file-card-actions hook for git removed in favor of entityActions
+    if (reposChanged) {
+        GitStore.setState({ dirtyDiffRepos: newDirty });
+    }
+});
