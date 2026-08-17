@@ -216,6 +216,15 @@ class VFSTransaction:
             self._buffer.append((filepath, content, data))
         else:
             execute_vfs_save(self.workspace_id, filepath, content, data)
+
+    def delete(self, filepath, data=None):
+        """Ergonomic wrapper for queuing an atomic VFS deletion."""
+        data = data or {}
+        data["action"] = "delete"
+        if self._in_transaction:
+            self._buffer.append((filepath, "", data))
+        else:
+            execute_vfs_save(self.workspace_id, filepath, "", data)
     def read(self, filepath, is_absolute_artifact=False):
         """Safely resolves and reads a file's contents, returning None if missing."""
         from pathlib import Path

@@ -193,6 +193,7 @@ class SettingsManager:
 
         _MUTATED_CONFIG_CACHE.clear()
         _MUTATED_CONFIG_MTIME.clear()
+        self._sync_vfs_barrier()
 
     def get_all(self, repo=None):
         result = {}
@@ -261,10 +262,20 @@ class SettingsManager:
         if 'workspace' in dirty: save_json_file(ws_path, buffers['workspace'], self.workspace_id)
         if 'repo' in dirty: save_json_file(repo_path, buffers['repo'], self.workspace_id)
         if 'secure' in dirty: save_json_file(secrets_path, buffers['secure'], self.workspace_id)
-
         if dirty:
             _MUTATED_CONFIG_CACHE.clear()
             _MUTATED_CONFIG_MTIME.clear()
+            self._sync_vfs_barrier()
+
+    def _sync_vfs_barrier(self):
+        """Internal barrier to guarantee read-after-write consistency for settings."""
+        from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
+        import time
+        while _VFS_WRITE_QUEUE.unfinished_tasks > 0:
+            if _VFS_SHUTDOWN_SIGNAL.is_set():
+                break
+            time.sleep(0.1)
+
 class StoreManager:
     def __init__(self, workspace_id):
         self.workspace_id = workspace_id
@@ -482,21 +493,23 @@ class InSetuExtension:
             try:
                 repo = ctx.req.args.get('repo') or (ctx.req.json.get('_repo') if ctx.req.json else None)
                 ctx.settings.update(ctx.req.json or {}, repo=repo)
-                ctx.sync_vfs_barrier()
             except Exception as e:
                 import traceback
                 print(f"Settings Save Error: {traceback.format_exc()}")
                 return jsonify({"status": "error", "error": f"Internal save error: {str(e)}"}), 500
-
             # Emit a strictly scoped event for this specific extension
             results = ctx.emit(f'{self.name}_settings_updated')
 
             job_id = None
+            requires_refresh = False
             for res in results:
-                if isinstance(res, dict) and "job_id" in res:
-                    job_id = res["job_id"]
+                if isinstance(res, dict):
+                    if "job_id" in res:
+                        job_id = res["job_id"]
+                    if res.get("requires_refresh"):
+                        requires_refresh = True
 
-            payload = {"status": "success", "requires_refresh": True}
+            payload = {"status": "success", "requires_refresh": requires_refresh}
             if job_id:
                 payload["job_id"] = job_id
             return jsonify(payload)

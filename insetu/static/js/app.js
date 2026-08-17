@@ -60,9 +60,8 @@ initShortcutRouter(window.ExtensionRegistry, () => {
         contexts.unshift('element:' + tag);
         if (activeEl.id) contexts.unshift('element-id:' + activeEl.id);
     }
-
     // 3. Active Modal (Highest Priority)
-    const openModals = Array.from(document.querySelectorAll('yenvui-modal[open], sutram-modal[open], insetu-file-modal, dialog[open]'));
+    const openModals = Array.from(document.querySelectorAll('sutram-modal[open], insetu-file-modal, dialog[open]'));
     openModals.forEach(m => {
         if (m.tagName.toLowerCase() === 'insetu-file-modal') {
             const state = window.inSetu?.stores?.Fs?.getState()?.fileModal;
@@ -100,14 +99,15 @@ export function autoWireSettingsSchemas() {
                 manifest.settingsActions = manifest.settingsActions || [];
                 // Prevent duplicate injections during soft-refreshes
                 if (!manifest.settingsActions.some(a => a.id === `${extName}_generic_settings`)) {
+                    // Pass the full schema. The generic settings modal will natively 
+                    // intercept managedKeys and render custom inline buttons.
                     const action = {
                         id: `${extName}_generic_settings`,
-                        label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Settings`,
-                        icon: '📋',
+                        label: `${manifest.name || extName.charAt(0).toUpperCase() + extName.slice(1)} Base Settings`,
+                        icon: '⚙️',
                         onClick: async () => {
                             const genericModal = document.getElementById('insetu-generic-settings-root');
                             if (genericModal) {
-                                const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas[extName] || manifest.settingsSchema || [];
                                 let formData = {};
                                 try {
                                     const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
@@ -119,12 +119,12 @@ export function autoWireSettingsSchemas() {
                     };
                     manifest.settingsActions.push(action);
                 }
-                // Push directly to the registry to ensure it renders in the DOM
+
+                // Push directly to the registry to ensure it renders in the top-right DOM dropdown
                 if (typeof window.ExtensionRegistry.registerSettingsAction === 'function') {
-                    const actionToRegister = manifest.settingsActions.find(a => a.id === `${extName}_generic_settings`);
-                    if (actionToRegister) {
-                        window.ExtensionRegistry.registerSettingsAction(actionToRegister.id, actionToRegister.label, actionToRegister.icon, actionToRegister.onClick, isCore ? 'System' : 'Extensions');
-                    }
+                    manifest.settingsActions.forEach(act => {
+                        window.ExtensionRegistry.registerSettingsAction(act.id, act.label, act.icon, act.onClick, isCore ? 'System' : 'Extensions');
+                    });
                 }
             }
         });
@@ -246,10 +246,17 @@ async function checkManifestVersion() {
         if (manifestUpdated) {
             AppStore.setState({ manifest: currentManifest || { vfs: {}, ctx: {} } });
         }
+        if (deltaData.timestamp) {
+            lastManifestSyncTs = deltaData.timestamp;
+        }
 
         // 3. Dispatch Physical Mutations to Event Bus
         if (deltaData.mutations && deltaData.mutations.length > 0) {
-            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: deltaData.mutations });
+            try {
+                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: deltaData.mutations });
+            } catch (e) {
+                console.error("VFS Mutation Hook Error:", e);
+            }
         }
 
         // 4. Sync UI Status with Kernel Compilation State
@@ -259,10 +266,6 @@ async function checkManifestVersion() {
             } else if (!deltaData.mutations || deltaData.mutations.length === 0) {
                 window.inSetu.ui.setSyncStatus('synced');
             }
-        }
-
-        if (deltaData.timestamp) {
-            lastManifestSyncTs = deltaData.timestamp;
         }
     } catch (e) {
         console.warn("Heartbeat delta check failed:", e);
@@ -576,7 +579,7 @@ window.addEventListener('error', (e) => {
     const isExtensionError = e.filename && (e.filename.includes('ext_') || e.filename.includes('extensions/'));
     if (window.BOOT_COMPLETE || isExtensionError) {
         e.preventDefault();
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         console.error("⚠️ [Isolated Extension Error]:", e.error || e.message);
         const toastStore = window.inSetu?.stores?.Toast;
         if (toastStore && typeof toastStore.getState === 'function') {
@@ -798,10 +801,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
                             window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                             if (onProgress) onProgress(msg);
                         }
-
                         retries++;
-                        // Tighten the deadlock timeout to 15 seconds (60 retries @ 250ms) to prevent infinite load screens
-                        if (retries > 60) {
+                        // Expand timeout to 3 minutes (720 retries @ 250ms) to support massive initial topology builds
+                        if (retries > 720) {
                             result = { status: 'error', message: 'Compilation timed out. The background worker may have stalled.', files: [] };
                             break;
                         }

@@ -18,6 +18,7 @@ insetu/
 │   ├── 03_extension_inventory_topology.md # Living inventory of active/planned extensions.
 │   ├── 04_ui_design_standards.md   # UI/UX design standards and guardrails.
 │   ├── 05_extension_developer_guide.md # Extension developer guide ("Pit of Success").
+│   ├── 06_extension_compliance_checklist.md # Extension compliance checklist and audit guardrails.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   ├── adrs/                       # Architectural Decision Records.
 │   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.

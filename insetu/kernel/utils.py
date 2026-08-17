@@ -139,6 +139,13 @@ def load_config(workspace_id=None):
         import copy
         cfg = copy.deepcopy(load_json_file(cfg_path, {}))
 
+        # Runtime Sanitization: Strip boundary whitespace to forgive manual config.json edits
+        for repo in cfg.get("target_repos", []):
+            if repo.get("repo_dir"):
+                repo["repo_dir"] = repo["repo_dir"].strip()
+            if repo.get("physical_path"):
+                repo["physical_path"] = repo["physical_path"].strip()
+
         from insetu.kernel.hooks import hooks
         hooks.emit('mutate_workspace_config', cfg, workspace_id=workspace_id)
         _MUTATED_CONFIG_CACHE[cfg_path] = cfg

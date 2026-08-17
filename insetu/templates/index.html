@@ -7,6 +7,7 @@
         window.addEventListener('error', function(e) {
             // Prevent the airbag from deploying for minor non-fatal errors (e.g. image loads)
             if (e.filename && !e.filename.includes('.js')) return;
+            if (window.BOOT_COMPLETE) return;
 
             document.body.innerHTML = `
                 <div style="font-family: monospace; padding: 40px; background: #0f172a; color: #f8fafc; height: 100vh; text-align: center;">
