@@ -40,7 +40,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 **Database & I/O Interfaces:**
 
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.
-* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.read(filepath)`, and `.walk(directory)`. Directly utilizing `os.walk` or `open()` is strictly banned.
+* **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, and `.walk(directory)`. Directly utilizing `os.walk` or `open()` is strictly banned.
 * **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)`, `.is_in_flight(task_name)`, `.update_progress(message)`, and `.update_meta(meta_dict)` to emit streaming updates and discrete metrics to the UI.
 
 ---
@@ -127,7 +127,8 @@ window.ExtensionRegistry.registerExtension('my_ext', {
         order: 10,
         component: "insetu-ext-component" // Exclude 'component' if defining a parent container tab
     }],
-
+    // Declarative custom file editor matchers (ADR 0041)
+    customEditors: [{ id: 'my-editor', match: (filepath) => filepath.endsWith('.ext'), onOpen: (filepath) => { ... } }],
     // Extends workspace configuration cards with domain-specific controls
     repoConfigOptions: [{ id: 'my-repo-opt', order: 10, component: ({ repo, updateCallback }) => { ... } }],
     bucketConfigOptions: [{ id: 'my-bucket-opt', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }],

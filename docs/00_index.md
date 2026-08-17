@@ -11,4 +11,5 @@ This document serves as the local master index for the inSetu Developer OS, an A
 * **[03 Extension Inventory & Topology](./03_extension_inventory_topology.md)**: Living DAG mapping micro-kernel boundaries against active and planned extensions.
 * **[04 UI Design Standards](./04_ui_design_standards.md)**: Visual layout, single-scroll rules, and UX component guardrails.
 * **[05 Extension Developer Guide](./05_extension_developer_guide.md)**: Developer guide and SDK best practices for building extensions.
+* **[06 Extension Compliance Checklist](./06_extension_compliance_checklist.md)**: The definitive audit checklist for architectural purity and SDK adherence.
 * **[Ledger of Logic (ADR Index)](./ADR_INDEX.md)**: Historical index of all Architectural Decision Records.
