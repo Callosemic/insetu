@@ -84,7 +84,8 @@ export class InSetuElement extends SutramElement {
             copyToClipboard: window.inSetu.utils.copyToClipboard,
             copyRawText: window.inSetu.utils.copyRawText,
             formatDate: window.inSetu.utils.formatDate,
-            timeAgo: window.inSetu.utils.timeAgo
+            timeAgo: window.inSetu.utils.timeAgo,
+            clone: window.inSetu.utils.clone
         };
     }
     get api() {
@@ -232,6 +233,12 @@ window.inSetu.events = window.inSetu.events || {
         if (zoneName === 'zone:force-refresh') {
             window.dispatchEvent(new CustomEvent('insetu:force-refresh', { detail: payload, bubbles: true, composed: true }));
         }
+        // Standardize all legacy zone emissions to the Typed Event Bus for migration (ADR 0041)
+        const event = new CustomEvent(zoneName, { detail: payload, bubbles: true, composed: true });
+        event.inSetuResponses = [];
+        window.dispatchEvent(event);
+        if (event.inSetuResponses.length > 0) return event.inSetuResponses[0];
+
         if (window.inSetu?.extensions?.Registry?.executeUIHook) {
             return window.inSetu.extensions.Registry.executeUIHook(zoneName, payload);
         }
@@ -353,6 +360,20 @@ window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
 window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
+
+/**
+* Creates a deep, detached clone of an object or array to safely break memory references.
+* Relies natively on the browser's high-performance structuredClone API, falling back to JSON.
+*/
+window.inSetu.utils.clone = (obj) => {
+    if (obj === undefined || obj === null) return obj;
+    try {
+        return typeof structuredClone === 'function' ? structuredClone(obj) : JSON.parse(JSON.stringify(obj));
+    } catch (e) {
+        console.warn("[SDK] structuredClone failed (likely due to functions or DOM nodes in object). Falling back to JSON parse.", e);
+        return JSON.parse(JSON.stringify(obj));
+    }
+};
 
 // Preserve clipboard API bindings
 window.inSetu.utils.copyToClipboard = async function(text) {

@@ -131,7 +131,6 @@ export class InSetuExtGather extends InSetuElement {
         sharedStyles,
         css`
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
-            .gather-body { flex: 1; overflow-y: auto; padding: 0; }
         `
     ];
 
@@ -266,7 +265,7 @@ export class InSetuExtGather extends InSetuElement {
                     @repo-filter-changed=${(e) => AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos))}>
                 </insetu-repo-filter>
             </sutram-toolbar>
-            <div class="gather-body">
+            <div style="flex: 1; overflow-y: auto; padding: 0;">
                 ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
                 <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
                     ${(() => {

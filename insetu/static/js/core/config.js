@@ -72,6 +72,55 @@ export class InSetuExtConfig extends InSetuElement {
         this._repoBucketsExpanded = true;
         this._expandedBuckets = {};
         this._repoBackup = null;
+        this._isNewRepo = false;
+        this._createDirIfNeeded = true;
+    }
+
+    _cancelRepoEditor() {
+        if (this._isNewRepo && this._editingRepoIdx !== null) {
+            this.configForm.target_repos.splice(this._editingRepoIdx, 1);
+        } else if (this._repoBackup && this._editingRepoIdx !== null) {
+            this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
+        }
+        this._editingRepoIdx = null;
+        this._repoBackup = null;
+        this._isNewRepo = false;
+        this.requestUpdate();
+    }
+    async _handleConfirmRepo() {
+        if (this._isNewRepo) {
+            if (!confirm("Save current edits and add repo?")) {
+                throw new Error("Cancelled by user.");
+            }
+        }
+        const idx = this._editingRepoIdx;
+        const repo = (idx !== null && this.configForm?.target_repos) ? this.configForm.target_repos[idx] : null;
+
+        if (repo) {
+            if (repo.repo_dir) repo.repo_dir = repo.repo_dir.trim();
+            if (repo.physical_path) repo.physical_path = repo.physical_path.trim();
+        }
+
+        if (this._isNewRepo && repo && this._createDirIfNeeded && repo.repo_dir) {
+            try {
+                const safeRepoDir = repo.repo_dir || '';
+                const targetPath = repo.physical_path 
+                    ? `${repo.physical_path.replace(/\/+$/, '')}/.gitkeep` 
+                    : `${safeRepoDir.replace(/^\/+|\/+$/g, '')}/.gitkeep`;
+                await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
+                    filepath: targetPath,
+                    content: '',
+                    is_absolute_artifact: !!repo.physical_path
+                }, { silent: true });
+            } catch (e) {
+                console.warn("Failed to create directory for new repository:", e);
+            }
+        }
+
+        this._repoBackup = null;
+        this._isNewRepo = false;
+        this._editingRepoIdx = null;
+        this.requestUpdate();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -290,8 +339,8 @@ export class InSetuExtConfig extends InSetuElement {
                 <sutram-card-group>
                     ${repos.map((repo, idx) => html`
                         <insetu-card
-                            titleText=${repo.repo_dir || 'New Repository'}
-                            descriptionText=${repo.title || 'No Title'}
+                            titleText=${repo.title || repo.repo_dir || 'New Repository'}
+                            descriptionText=${repo.repo_dir ? `Directory: ${repo.repo_dir}` : 'No Directory Specified'}
                             detailText=${repo.domain || 'Workspaces'}
                             icon="📦"
                             intentColor="var(--intent-highlight)"
@@ -301,12 +350,14 @@ export class InSetuExtConfig extends InSetuElement {
                             @click=${() => { 
                                 this._repoBackup = JSON.parse(JSON.stringify(repo)); 
                                 this._editingRepoIdx = idx; 
+                                this._isNewRepo = false;
                             }}>
                             <div slot="actions" style="display: flex; gap: 8px;">
                                 <button class="btn-sm" style="background: var(--intent-primary);" @click=${(e) => { 
                                     e.stopPropagation(); 
                                     this._repoBackup = JSON.parse(JSON.stringify(repo)); 
                                     this._editingRepoIdx = idx; 
+                                    this._isNewRepo = false;
                                 }}>✏️ Edit</button>
                                 <button class="btn-sm" style="background: var(--intent-danger);" @click=${(e) => {
                                     e.stopPropagation();
@@ -329,22 +380,15 @@ export class InSetuExtConfig extends InSetuElement {
         return html`
             <sutram-modal 
                 ?open=${isOpen} 
-                titleText="Edit Repository: ${repo ? (repo.repo_dir || 'New') : ''}" 
+                titleText="${this._isNewRepo ? 'Add Repository' : 'Edit Repository'}: ${repo ? (repo.title || repo.repo_dir || 'New') : ''}" 
                 ?fullscreen=${true}
                 ?flush=${true}
-                @sutram-modal-closed=${() => { 
-                    if (this._repoBackup && this._editingRepoIdx !== null) {
-                        this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
-                    }
-                    this._editingRepoIdx = null; 
-                    this._repoBackup = null;
-                    this.requestUpdate();
-                }}>
+                @sutram-modal-closed=${() => this._cancelRepoEditor()}>
                 <div slot="body" style="display: flex; flex-direction: column;">
                     ${repo ? html`
                     <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--bg);">
                         <span style="font-size: 1.4rem;">📦</span>
-                        <sutram-input .value=${repo.repo_dir || ''} placeholder="Directory Name (e.g. my-repo)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
+                        <sutram-input .value=${repo.title || ''} placeholder="Display Title (e.g. My Repository)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
                     <sutram-collapsible 
                         titleText="Bucket 0 (Base Pipeline)" 
@@ -360,7 +404,7 @@ export class InSetuExtConfig extends InSetuElement {
                         <div style="display: flex; flex-direction: column; gap: 15px;">
                             <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 0;">Files not captured by explicit sub-buckets automatically fall into this baseline group.</p>
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                                <sutram-input label="Title" .value=${repo.title || ''} placeholder="Display Title" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                                <sutram-input label="Directory Name" .value=${repo.repo_dir || ''} placeholder="e.g. my-repo" @sutram-input-changed=${(e) => { repo.repo_dir = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                                 <sutram-input label="Domain" .value=${repo.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { repo.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                                 <sutram-select label="Archive Type" .value=${repo.archive_type || 'repo'} .options=${[
                                     { value: 'repo', label: 'Standard Repo' },
@@ -368,9 +412,21 @@ export class InSetuExtConfig extends InSetuElement {
                                     ...(repo.archive_type && repo.archive_type !== 'repo' && repo.archive_type !== 'media-vault' ? [{ value: repo.archive_type, label: repo.archive_type }] : [])
                                 ]} @sutram-input-changed=${(e) => { repo.archive_type = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-select>
                             </div>
+
+                            <div style="font-size: 0.8rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: -5px;">
+                                📁 Path Preview: <span style="color: var(--intent-primary); font-weight: bold;">${repo.physical_path ? repo.physical_path : `[project root]/${repo.repo_dir || 'my-new-repo'}/`}</span>
+                            </div>
+
                             <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                                 <sutram-input label="Physical Path (Optional Override)" .value=${repo.physical_path || ''} placeholder="/absolute/path/to/repo" @sutram-input-changed=${(e) => { repo.physical_path = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
                             </div>
+
+                            <sutram-toggle 
+                                label="Create directory if doesn't exist" 
+                                .checked=${this._createDirIfNeeded !== false} 
+                                @sutram-input-changed=${(e) => { this._createDirIfNeeded = e.detail.value; this.requestUpdate(); }} 
+                                ?flush=${true}>
+                            </sutram-toggle>
                             ${this._renderOverrideToggle(repo, 'exts', 'Tracked Extensions', (this.configForm.include_extensions || []))}
                             ${this._renderOverrideToggle(repo, 'repo_ignore_dirs', 'Ignore Directories', (this.configForm.ignore_dirs || []))}
                             ${this._renderOverrideToggle(repo, 'repo_ignore_files', 'Ignore Files', (this.configForm.ignore_files || []))}
@@ -429,23 +485,15 @@ export class InSetuExtConfig extends InSetuElement {
                     ` : ''}
                 </div>
                 ${repo ? html`
-                    <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${() => { 
-                        if (this._repoBackup && this._editingRepoIdx !== null) {
-                            this.configForm.target_repos[this._editingRepoIdx] = JSON.parse(JSON.stringify(this._repoBackup));
-                        }
-                        this._editingRepoIdx = null;
-                        this._repoBackup = null;
-                        this.requestUpdate();
-                    }}>
+                    <button slot="footer" style="background: var(--intent-neutral); color: white;" @click=${() => this._cancelRepoEditor()}>
                         ❌ Cancel
                     </button>
-                    <button slot="footer" style="background: var(--intent-success); color: white;" @click=${() => { 
-                        this._repoBackup = null;
-                        this._editingRepoIdx = null;
-                        this.requestUpdate();
-                    }}>
-                        ✅ Keep Edits
-                    </button>
+                    <sutram-async-btn 
+                        slot="footer" 
+                        label="${this._isNewRepo ? '➕ Create' : '✅ Keep Edits'}" 
+                        intent="success" 
+                        .onClick=${async () => await this._handleConfirmRepo()}>
+                    </sutram-async-btn>
                 ` : ''}
             </sutram-modal>
         `;
@@ -508,8 +556,13 @@ export class InSetuExtConfig extends InSetuElement {
                                         const res = await window.inSetu.api.workspace('gather/repos/template');
                                         if (res.ok) newRepo = await res.json();
                                     } catch(e) {}
-                                        this.configForm.target_repos.push(newRepo);
-                                        this.requestUpdate();
+                                    this.configForm.target_repos.push(newRepo);
+                                    const newIdx = this.configForm.target_repos.length - 1;
+                                    this._repoBackup = null;
+                                    this._editingRepoIdx = newIdx;
+                                    this._isNewRepo = true;
+                                    this._createDirIfNeeded = true;
+                                    this.requestUpdate();
                                 }}>➕ Add Repository</button>
                         </div>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">Repositories dynamically map contexts and define your active multi-tenant workspace environments.</p>

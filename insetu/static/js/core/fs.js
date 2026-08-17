@@ -1023,7 +1023,29 @@ async function saveNewFolder() {
 export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
     const cleanPath = filepath ? filepath.replace(/^vfs:\/\//, '') : filepath;
 
-    if (!bypassHook && window.inSetu.events.emitHook('zone:file-edit-override', cleanPath)) return;
+    if (!bypassHook) {
+        // Legacy Hook Evaluation
+        if (window.inSetu.events.emitHook('zone:file-edit-override', cleanPath)) return;
+
+        // ADR 0041: Declarative Custom Editors Engine
+        const registry = window.ExtensionRegistry;
+        if (registry && registry._manifests) {
+            let intercepted = false;
+            for (const manifest of registry._manifests.values()) {
+                if (manifest.customEditors) {
+                    for (const editor of manifest.customEditors) {
+                        if (editor.match && editor.match(cleanPath)) {
+                            if (editor.onOpen) editor.onOpen(cleanPath);
+                            intercepted = true;
+                            break;
+                        }
+                    }
+                }
+                if (intercepted) break;
+            }
+            if (intercepted) return;
+        }
+    }
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(cleanPath);
 
@@ -1276,10 +1298,9 @@ export class InSetuFileModal extends InSetuElement {
                 }
             }
         } catch (e) {}
-
         if (this.fileModal?.isMarkdown && this.fileModal.content) {
             const { meta } = window.inSetu.utils.parseFrontmatter(this.fileModal.content);
-            const docType = (meta.doctype || meta.type || '').toLowerCase();
+            const docType = (meta.doctype || meta.doc_type || '').toLowerCase();
             const proseTypes = ['prose', 'essay', 'article', 'draft', 'spec', 'story', 'novel'];
             this._writingMode = proseTypes.includes(docType) || meta.writing_mode === 'true' || meta.writing_mode === true;
         } else {
@@ -1655,6 +1676,10 @@ export class InSetuVFSModals extends InSetuElement {
                         <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="font-weight: bold; font-size: 0.95rem; border: 1px solid var(--border); padding: 8px 10px; background: var(--bg); color: var(--text); border-radius: 4px;">
                         <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-top: 2px;"></div>
                         ${window.inSetu.events.emitHook('zone:new-file-options-lit', null) || ''}
+                        ${(() => {
+                            const actions = window.ExtensionRegistry?.getLayoutSlots?.().filter(s => s.slot === 'modal:new-file:actions') || [];
+                            return actions.map(act => html`<div style="display: contents;" data-ext="${act.extName}">${document.createElement(act.component)}</div>`);
+                        })()}
                     </div>
                     <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg);">
                         <insetu-markdown-editor 

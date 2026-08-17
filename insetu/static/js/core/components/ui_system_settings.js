@@ -37,15 +37,42 @@ export class InSetuSystemSettings extends InSetuElement {
         this._sysConfigMeta = {};
         this._handleOutsideClick = this._handleOutsideClick.bind(this);
     }
-    async _openGenericSettings(extName) {
+    async _openGenericSettings(extName, filteredSchema = null) {
         const genericModal = document.getElementById('insetu-generic-settings-root');
-        const schema = window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName];
+        const schema = filteredSchema || window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName];
         let formData = {};
         try {
             const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
             if (res.ok) formData = await res.json();
         } catch(e) {}
         if (genericModal) genericModal.openModal(extName, schema, formData);
+    }
+    _renderExtensionActions(ext, renderBtn) {
+        const manifest = window.ExtensionRegistry?._manifests?.get(ext.id);
+        const customActions = manifest?.settingsActions || [];
+        const btns = [];
+
+        let hasCompleteTakeover = false;
+
+        customActions.forEach(act => {
+            if (act.id === `${ext.id}_generic_settings`) {
+                hasCompleteTakeover = true;
+                btns.push(renderBtn(act.icon || '⚙️', act.label || `${ext.title} Base Settings`, act.onClick));
+            }
+        });
+
+        if (!hasCompleteTakeover) {
+            const rawSchema = window.inSetu.serverSchemas?.[ext.id] || window.inSetu.settingsSchemas?.[ext.id] || [];
+
+            const visibleSchema = rawSchema.filter(s => s.type !== 'hidden');
+            const embeddedActions = customActions.filter(act => !act.id.endsWith('_generic_settings'));
+
+            // If there are visible settings OR custom actions to display in the modal, render the Base Settings button
+            if (visibleSchema.length > 0 || embeddedActions.length > 0) {
+                btns.push(renderBtn('⚙️', `${ext.title} Base Settings`, () => this._openGenericSettings(ext.id, rawSchema)));
+            }
+        }
+        return btns;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -212,13 +239,12 @@ export class InSetuSystemSettings extends InSetuElement {
                             ${renderBtn('📂', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
                             ${renderBtn('🧩', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
                         ` : ''}
-
                         ${this.activeTab === 'core' ? html`
-                            ${coreList.map(ext => renderBtn('🔧', `${ext.title} Settings`, () => this._openGenericSettings(ext.id)))}
+                            ${coreList.map(ext => this._renderExtensionActions(ext, renderBtn))}
                         ` : ''}
 
                         ${this.activeTab === 'extensions' ? html`
-                            ${extList.map(ext => renderBtn('🧩', `${ext.title} Settings`, () => this._openGenericSettings(ext.id)))}
+                            ${extList.map(ext => this._renderExtensionActions(ext, renderBtn))}
                             ${extList.length === 0 ? html`<span style="color: var(--text-muted); font-style: italic; padding: 10px;">No third-party extensions active.</span>` : ''}
                         ` : ''}
                     </div>
@@ -525,9 +551,20 @@ window.addEventListener('sutram-settings-save', async (e) => {
 
     try {
         const payload = {};
+
         schema.forEach(f => {
-            payload[f.id] = formData[f.id] !== undefined ? formData[f.id] : f.default;
+            if (f.type !== 'hidden') {
+                payload[f.id] = formData[f.id] !== undefined ? formData[f.id] : f.default;
+            }
         });
+
+        // If the generic modal has nothing to save (everything was custom or hidden), just close
+        if (Object.keys(payload).length === 0) {
+            document.getElementById('insetu-generic-settings-root').open = false;
+            btn.innerText = origText;
+            return;
+        }
+
         const res = await window.inSetu.api.workspace(`${extName}/settings`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -537,7 +574,6 @@ window.addEventListener('sutram-settings-save', async (e) => {
             document.getElementById('insetu-generic-settings-root').open = false;
             btn.innerText = origText;
             window.dispatchEvent(new Event(`insetu-${extName}-settings-changed`));
-            if (window.inSetu?.sys?.executeSystemCompile) window.inSetu.sys.executeSystemCompile(null, true);
         } else {
             const errData = await res.json().catch(() => ({}));
             alert("Failed to save settings: " + (errData.error || res.statusText || "Unknown Server Error"));

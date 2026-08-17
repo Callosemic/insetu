@@ -269,7 +269,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 const text = await res.text();
                 const { meta, content } = window.inSetu.utils.parseFrontmatter(text);
                 this._yamlData = meta;
-                const docType = (meta.doctype || meta.type || '').toLowerCase();
+                const docType = (meta.doctype || meta.doc_type || '').toLowerCase();
                 const proseDocTypes = ['prose', 'essay', 'article', 'draft', 'spec', 'story', 'novel'];
                 this._writingMode = proseDocTypes.includes(docType) || meta.writing_mode === 'true' || meta.writing_mode === true;
                 this._content = content.replace(/^\s+/, ''); // Strip leading newlines to keep it clean
@@ -382,20 +382,6 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                             }}>
                         </sutram-entity-actions>
                     </div>
-                    <button class="meta-btn ${this._writingMode ? 'active' : ''}"
-                        @click=${() => {
-                            this._writingMode = !this._writingMode;
-                            if (this._writingMode) {
-                                this._yamlData = { ...this._yamlData, doctype: 'prose' };
-                            } else {
-                                const { doctype, writing_mode, ...rest } = this._yamlData;
-                                this._yamlData = rest;
-                            }
-                            this._checkDirty();
-                        }}
-                        title="Toggle Writing Mode">
-                        ✍️<span class="meta-btn-text"> Writing Mode</span>
-                    </button>
                     <button class="meta-btn ${this._metadataExpanded ? 'active' : ''}"
                         @click=${() => this._metadataExpanded = !this._metadataExpanded}
                         title="Toggle Metadata">

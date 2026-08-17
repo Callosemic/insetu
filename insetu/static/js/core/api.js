@@ -58,28 +58,27 @@ window.inSetu.api = {
             const retryRes = await this._attemptReAuthAndRetry(fullUrl, options, true);
             if (retryRes) res = retryRes;
         }
-
         if (options.method && options.method.toUpperCase() !== 'GET') {
             try {
                 const clone = res.clone();
                 const data = await clone.json();
-                if (data && data.requires_refresh) {
+                if (data && (data.requires_refresh || data.job_id)) {
                     if (data.job_id && window.inSetu.utils.pollJob) {
                         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus("⏳ Applying settings...", null);
+                            window.inSetu.ui.setGlobalStatus("⏳ Processing...", null);
                         }
                         window.inSetu.utils.pollJob(data.job_id, {
                             onProgress: (msg) => {
                                 if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                             },
                             onComplete: () => {
-                                if (window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
+                                if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
                             },
                             onError: () => {
-                                if (window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
+                                if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
                             }
                         });
-                    } else if (window.inSetu.sys.performSoftRefresh) {
+                    } else if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) {
                         window.inSetu.sys.performSoftRefresh();
                     }
                 }
