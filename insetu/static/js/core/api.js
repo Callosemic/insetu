@@ -62,25 +62,9 @@ window.inSetu.api = {
             try {
                 const clone = res.clone();
                 const data = await clone.json();
-                if (data && (data.requires_refresh || data.job_id)) {
-                    if (data.job_id && window.inSetu.utils.pollJob) {
-                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                            window.inSetu.ui.setGlobalStatus("⏳ Processing...", null);
-                        }
-                        window.inSetu.utils.pollJob(data.job_id, {
-                            onProgress: (msg) => {
-                                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
-                            },
-                            onComplete: () => {
-                                if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
-                            },
-                            onError: () => {
-                                if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) window.inSetu.sys.performSoftRefresh();
-                            }
-                        });
-                    } else if (data.requires_refresh && window.inSetu.sys.performSoftRefresh) {
-                        window.inSetu.sys.performSoftRefresh();
-                    }
+                if (data && data.requires_refresh && window.inSetu.sys.performSoftRefresh) {
+                    // Offload job polling to the explicit orchestrators (e.g. bindJobAction) to avoid dual-polling loops
+                    window.inSetu.sys.performSoftRefresh();
                 }
             } catch (e) {}
         }

@@ -207,8 +207,12 @@ export async function viewAndCopy(filename) {
     cleanName = cleanName ? cleanName.replace(/^ctx:\/\/(?:contexts\/)?/, '') : cleanName;
 
     const chunks = getChunks(cleanName);
-    const targetFile = (chunks && chunks.length > 0) ? chunks[0] : cleanName;
+    // If the requested filename is explicitly a known chunk, respect it. Otherwise default to the first chunk of the payload.
+    const targetFile = (chunks && chunks.length > 0 && !chunks.includes(cleanName)) ? chunks[0] : cleanName;
+
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
+    const browserState = AppStore.getState().browserConfig;
+    const isParts = browserState && browserState.isParts;
 
     FsStore.setState({ fileModal: {
         open: true,
@@ -226,7 +230,9 @@ export async function viewAndCopy(filename) {
         codeMode
     }});
 
-    closeBrowseModal();
+    if (!isParts) {
+        closeBrowseModal();
+    }
     try {
         const res = await fetch(`/download/${encodeURIComponent(targetFile)}`, { headers: window.inSetu.api._getHeaders(true) });
         if (!res.ok) throw new Error("Failed to fetch");
@@ -1276,8 +1282,14 @@ export class InSetuFileModal extends InSetuElement {
         super.updated(changedProperties);
         const dialog = this.shadowRoot.querySelector('dialog');
         if (dialog) {
-            if (this.fileModal.open && !dialog.open) dialog.showModal();
-            else if (!this.fileModal.open && dialog.open) dialog.close();
+            if (this.fileModal.open && !dialog.open) {
+                dialog.showModal();
+            } else if (!this.fileModal.open && dialog.open) {
+                dialog.close();
+            } else if (this.fileModal.open && dialog.open && changedProperties.has('fileModal')) {
+                dialog.close();
+                dialog.showModal();
+            }
         }
 
         if (this.fileModal?.open && this.fileModal.filename !== this._activeFileForPref) {
@@ -1796,14 +1808,26 @@ export class InSetuVFSModals extends InSetuElement {
                                             <span style="font-size: 1.2rem; flex-shrink: 0;">🧩</span>
                                             <span style="font-weight: bold; color: var(--text);">${displayTitle}</span>
                                         </div>
-                                        <sutram-async-btn
-                                            label="⬇️ Download"
-                                            intent="primary"
-                                            style="margin: 0; padding: 6px 12px; font-size: 0.85rem; flex-shrink: 0;"
-                                            .onClick=${async () => {
-                                                await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
-                                            }}>
-                                        </sutram-async-btn>
+                                        <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                                            <sutram-async-btn
+                                                label="👁️ View"
+                                                intent="neutral"
+                                                style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
+                                                .onClick=${async () => {
+                                                    if (window.inSetu.vfs.viewAndCopy) {
+                                                        window.inSetu.vfs.viewAndCopy(cleanName);
+                                                    }
+                                                }}>
+                                            </sutram-async-btn>
+                                            <sutram-async-btn
+                                                label="⬇️ Download"
+                                                intent="primary"
+                                                style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
+                                                .onClick=${async () => {
+                                                    await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                                }}>
+                                            </sutram-async-btn>
+                                        </div>
                                     </div>
                                 `;
                             })}
