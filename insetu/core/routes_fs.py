@@ -20,6 +20,27 @@ def resolve_vfs_file(workspace_id, filename):
     if filename.startswith("vfs://"):
         filename = filename.replace("vfs://", "", 1)
 
+    is_artifact = filename.startswith("ctx://") or filename.startswith("contexts/") or filename.startswith("diffs/") or filename.startswith("workflows/")
+    if not is_artifact:
+        from insetu.kernel.hooks import hooks
+        manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
+        manifest = next((m for m in manifest_res if m), {})
+        base_name = Path(filename).name
+        if base_name in manifest:
+            is_artifact = True
+        else:
+            for entry in manifest.values():
+                if base_name in entry.get("chunks", []):
+                    is_artifact = True
+                    meta_type = entry.get("meta", {}).get("type", "")
+                    if meta_type == "diff":
+                        filename = f"ctx://diffs/{filename}"
+                    elif meta_type == "flow":
+                        filename = f"ctx://workflows/{filename}"
+                    else:
+                        filename = f"ctx://contexts/{filename}"
+                    break
+
     from insetu.kernel.hooks import hooks
     overrides = hooks.emit('vfs_resolve_file', filename=filename, workspace_id=workspace_id)
     for res in overrides:

@@ -72,9 +72,12 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
         if chunk_num == 1: return base_filename
         base, ext = os.path.splitext(base_filename)
         return f"{base}_part{chunk_num}{ext}"
+    timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stamp = f"Generated: {timestamp_str}\n\n"
+    stamped_header = stamp + header_block
 
-    header_bytes = len(header_block.encode('utf-8'))
-    bins = [{"size": header_bytes, "content": header_block}]
+    header_bytes = len(stamped_header.encode('utf-8'))
+    bins = [{"size": header_bytes, "content": stamped_header}]
 
     for block in text_blocks:
         block_bytes = len(block.encode('utf-8'))
@@ -97,10 +100,9 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
                     b["size"] += s_block_bytes
                     placed = True
                     break
-
             if not placed:
                 new_idx = len(bins) + 1
-                new_header = header_block + f"=== (CONTINUED - PART {new_idx}) ===\n\n"
+                new_header = stamped_header + f"=== (CONTINUED - PART {new_idx}) ===\n\n"
                 bins.append({
                     "size": len(new_header.encode('utf-8')) + s_block_bytes,
                     "content": new_header + s_block
@@ -595,21 +597,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 expected_artifacts.update(entry.get("chunks", [filename]))
     # 3. Global Vacuum: Purge physical files that aren't explicitly declared
     if target_repos is None:
-        vfs = VFSTransaction(workspace_id)
-
-        # Gather only vacuums its own directory. Extensions vacuum their own directories.
-        target_sweeps = [paths["contexts_dir"]]
-        for t_dir in target_sweeps:
-            if not os.path.exists(t_dir): continue
-            for ws_rel_path in vfs.walk(t_dir, exts=['.txt']):
-                f_path = ctx.resolve_path(ws_rel_path)
-                f_basename = Path(f_path).name
-
-                if f_path not in active_ephemerals and f_basename not in expected_artifacts and f_basename != "manifest.json":
-                    try:
-                        execute_vfs_delete(workspace_id, ws_rel_path)
-                    except Exception:
-                        pass
+        from insetu.core.utils_core import vacuum_manifest_artifacts
+        vacuum_manifest_artifacts(ctx, paths["contexts_dir"], expected_artifacts, exempt_abs_paths=active_ephemerals)
 
     # Re-inject surviving Ephemeral Artifacts into the manifest
     old_manifest = ctx.manifest

@@ -153,7 +153,6 @@ def start_filesystem_observer(workspace_ids):
         observer.start()
         print("👁️  Native Filesystem Watchers Engaged.")
     return observer
-
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
@@ -161,12 +160,29 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
         if filepath.startswith("vfs://"):
             filepath = filepath.replace("vfs://", "", 1)
 
-        if filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/"):
+        is_artifact = filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/")
+
+        if not is_artifact:
+            # Deep OS integration: If the path lacks a prefix but belongs to a compiled context chunk, promote it to an artifact
+            from insetu.kernel.hooks import hooks
+            manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
+            manifest = next((m for m in manifest_res if m), {})
+            base_name = Path(filepath).name
+            if base_name in manifest:
+                is_artifact = True
+            else:
+                for entry in manifest.values():
+                    if base_name in entry.get("chunks", []):
+                        is_artifact = True
+                        break
+
+        if is_artifact:
             from insetu.kernel.hooks import hooks
             overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
             for res in overrides:
                 if res and isinstance(res, tuple) and len(res) == 2 and os.path.exists(res[0]):
                     return res[0]
+
         return resolve_logical_path(filepath, workspace_id)
     return None
 def load_workflows(workspace_id=None):
@@ -257,6 +273,30 @@ def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
     return safe_dir.replace('-', '_')
+def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_abs_paths=None):
+    """
+    Centralized garbage collector for compiled context artifacts.
+    Sweeps a specific VFS domain directory and deletes any .txt files
+    that are not explicitly declared in the expected_artifacts_set.
+    """
+    import os
+    from pathlib import Path
+
+    if not os.path.exists(domain_dir):
+        return
+
+    exemptions = exempt_abs_paths or set()
+
+    for ws_rel_path in ctx.vfs.walk(domain_dir, exts=['.txt']):
+        f_path = ctx.resolve_path(ws_rel_path)
+        f_basename = Path(f_path).name
+
+        if f_path not in exemptions and f_basename not in expected_artifacts_set and f_basename != "manifest.json":
+            try:
+                ctx.vfs.delete(ws_rel_path)
+            except Exception:
+                pass
+
 def get_flattened_buckets(workspace_id=None, target_configs=None):
     """Backend SSOT helper for resolving flattened sub-buckets with defensive null-safety."""
     if target_configs is None:
