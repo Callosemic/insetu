@@ -54,6 +54,10 @@ _REGISTERED_SETTINGS_SCHEMAS['core_system'] = [
     }
 ]
 from insetu.kernel.extension import InSetuExtension
+@hooks.on('core_system_settings_updated')
+def core_system_settings_updated(workspace_id=None, **kwargs):
+    # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
+    return {"requires_refresh": True}
 
 core_system_ext = InSetuExtension(
     'core_system', __name__,

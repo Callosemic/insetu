@@ -410,10 +410,15 @@ def sanitize_workspace_config(cfg):
     valid_repos = []
     seen_dirs = set()
     for repo in (cfg.get("target_repos") or []):
-        if not repo or not repo.get("repo_dir"):
+        if not repo or not repo.get("repo_dir") or not repo.get("repo_dir").strip():
             continue
 
-        r_dir = repo.get("repo_dir")
+        r_dir = repo.get("repo_dir").strip()
+        repo["repo_dir"] = r_dir
+
+        if repo.get("physical_path"):
+            repo["physical_path"] = repo["physical_path"].strip()
+
         if r_dir in seen_dirs:
             continue
         seen_dirs.add(r_dir)
