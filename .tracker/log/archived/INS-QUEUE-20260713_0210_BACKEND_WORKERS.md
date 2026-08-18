@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260713_0210_BACKEND_WORKERS
 title: "Backend DX: Background Task Orchestration Decorators"
 created_at: 2026-07-13T02:10:00
