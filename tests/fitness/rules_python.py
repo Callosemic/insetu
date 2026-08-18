@@ -282,6 +282,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     node.lineno,
                     "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme."
                 )
+            if "::" in node.value and any(p in node.value for p in ("repo::", "path::")) and self.filename != "rules_python.py":
+                report_violation(
+                    "LEGACY_BOUNDARY_SYNTAX_BAN",
+                    self.filepath,
+                    node.lineno,
+                    "Legacy '::' repository boundary syntax detected in string literal. Use canonical 'vfs://' URI scheme."
+                )
             if "workspaces.json" in node.value and self.filename != "extension.py":
                 report_violation(
                     "LEGACY_SWITCHBOARD_REFERENCE_BAN",

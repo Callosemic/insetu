@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from .core import FRONTEND_DIR, report_violation
+from .core import FRONTEND_DIR, BACKEND_DIR, report_violation
 def check_javascript_files():
     print("🔍 Sweeping JavaScript Frontend (Regex Analysis)...")
     shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
@@ -25,6 +25,7 @@ def check_javascript_files():
     imperative_dom_create_pattern = re.compile(r'document\.createElement\(')
     raw_fetch_pattern = re.compile(r'\bfetch\s*\(')
     legacy_insetu_fetch_pattern = re.compile(r'window\.inSetu\.fetch\s*\(')
+    legacy_api_routing_pattern = re.compile(r'\bapi\.(?:workspace|system)\s*\(')
     manual_unsub_pattern = re.compile(r'this\._unsub[a-zA-Z0-9_]*\s*=')
     zustand_create_store_pattern = re.compile(r'\bcreateStore\s*\(')
     zustand_direct_import_pattern = re.compile(r'from\s+[\'"]https://esm\.sh/zustand(?:/[^\'"]*)?[\'"]')
@@ -55,11 +56,12 @@ def check_javascript_files():
     unmanaged_document_input_listener_pattern = re.compile(r"document\.addEventListener\(\s*['\"](input|change)['\"]")
     open_virtual_file_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs|vfs)\.openVirtualFile\s*\(')
 
-    for root, _, files in os.walk(FRONTEND_DIR):
-        for file in files:
-            if file.endswith(".js"):
-                filepath = Path(root) / file
-                is_extension = file.startswith("ext_")
+    for target_dir in [FRONTEND_DIR, BACKEND_DIR / "extensions"]:
+        for root, _, files in os.walk(target_dir):
+            for file in files:
+                if file.endswith(".js"):
+                    filepath = Path(root) / file
+                    is_extension = file.startswith("ext_")
                 with open(filepath, "r", encoding="utf-8") as f:
                     lines = f.readlines()
 
@@ -158,6 +160,11 @@ def check_javascript_files():
                         report_violation("DRY_UTILITY_VIOLATION", filepath, line_num, "Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy, this.utils.copyToClipboard, this.utils.copyRawText, or fetchAndDownloadState) instead.")
                     if is_extension and legacy_insetu_fetch_pattern.search(line):
                         report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
+                    if file not in ["api.js", "sdk.js"] and legacy_api_routing_pattern.search(line):
+                        report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Direct invocation of api.workspace() or api.system() detected. Route through the semantic .get() or .post() chains instead.")
+
+                    if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!get|post|delete|getJson|postJson|deleteJson|bindJobAction|pollJob)\w+', line):
+                        report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob).")
 
                     if is_extension and re.search(r'class\s+\w+\s+extends\s+LitElement\b', line):
                         report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends raw LitElement. Inherit from InSetuElement to protect multi-tenant lifecycles.")

@@ -285,11 +285,15 @@ def resolve_python_vendors(active_exts):
         if os.path.exists(abs_path) and abs_path not in sys.path:
             sys.path.insert(0, abs_path)
             print(f"🐍 Python Vendor Injected: [{specifier}] -> {abs_path}")
-
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
-    ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
+    from insetu.kernel.utils import is_core_module
+    if is_core_module(ext_name):
+        ext_dir = Path(app.root_path).joinpath("core", ext_name).resolve()
+    else:
+        ext_dir = Path(app.root_path).joinpath("extensions", ext_name).resolve()
+
     target_path = ext_dir.joinpath(filename).resolve()
 
     try:
@@ -324,10 +328,17 @@ def serve_extension_js(ext_name):
 
     # 3. Virtual fallback for Python-only declarative extensions
     return Response("export default {};", mimetype='application/javascript')
-
 @app.route('/sw.js')
 def sw():
     return send_file(Path(app.static_folder).joinpath('sw.js').as_posix(), mimetype='application/javascript')
+
+@app.route('/README.md')
+def root_readme():
+    readme_path = Path(app.root_path).parent.joinpath('README.md').as_posix()
+    if os.path.exists(readme_path):
+        return send_file(readme_path, mimetype='text/markdown')
+    return "Not found", 404
+
 @app.route('/' + 'manifest.json')
 def manifest():
     import json

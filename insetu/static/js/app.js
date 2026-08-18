@@ -169,7 +169,7 @@ let localCtxSignatures = {};
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
     try {
-        const deltaRes = await window.inSetu.api.system(`deltas?since=${lastManifestSyncTs}`);
+        const deltaRes = await window.inSetu.api.system.get(`deltas?since=${lastManifestSyncTs}`);
         if (!deltaRes.ok) return;
 
         const deltaData = await deltaRes.json();
@@ -199,7 +199,7 @@ async function checkManifestVersion() {
                         continue;
                     }
                     // Surgical Fetch: Fetch repo tree
-                    const treeRes = await window.inSetu.api.workspace(`topology/vfs?repo=${encodeURIComponent(repo)}`);
+                    const treeRes = await window.inSetu.api.workspace.get(`topology/vfs?repo=${encodeURIComponent(repo)}`);
                     if (treeRes.ok) {
                         const treeData = await treeRes.json();
                         if (treeData.buckets) {
@@ -225,7 +225,7 @@ async function checkManifestVersion() {
                         localCtxSignatures[path] = ts;
                         continue;
                     }
-                    const entryRes = await window.inSetu.api.workspace(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
+                    const entryRes = await window.inSetu.api.workspace.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (entryRes.ok) {
                         const entryData = await entryRes.json();
                         if (entryData.entry) {
@@ -280,10 +280,9 @@ window.ExtensionRegistry.startMetronome(
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/js/poller.js';
-
 // Define the Job Polling Subroutine using the abstracted kernel
 const _basePoller = createJobPoller({
-    get: async (path) => window.inSetu.api.system(path)
+    get: async (path) => window.inSetu.api.system.get(path)
 });
 
 // ADR 0017: Wrap the global poller to statelessly swallow callbacks if the tenant workspace shifts mid-flight
@@ -382,7 +381,7 @@ async function executeBootSequence() {
     try {
         console.log("[BOOT] Fetching system configuration...");
         updateBootProgress("Fetching system config...");
-        const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
         console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
         if (cRes.ok) {
             const data = await cRes.json();
@@ -642,13 +641,8 @@ async function executeWorkspaceSwap(key, title) {
     const savedTab = localStorage.getItem(`insetu_active_tab_${key}`) || 'context';
     const savedSub = localStorage.getItem(`insetu_active_subtab_${key}_${savedTab}`) || '';
     window.location.hash = `#/${encodeURIComponent(key)}/${encodeURIComponent(savedTab)}/${encodeURIComponent(savedSub)}`;
-
     // 4. Notify backend of the swap
-    await window.inSetu.api.system('workspaces', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active_workspace: key })
-    });
+    await window.inSetu.api.system.post('workspaces', { active_workspace: key });
 
     // 4. Perform top-down AppStore outward cascade
     await performSoftRefresh();
@@ -656,7 +650,7 @@ async function executeWorkspaceSwap(key, title) {
 }
 async function loadWorkspaces() {
     try {
-        const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
+        const res = await window.inSetu.api.system.get('workspaces?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (data.workspaces) {
@@ -707,16 +701,9 @@ export async function executeWorkspaceMutation(path, payload, options = {}) {
             const parts = cleanPath.split('/');
             cleanPath = parts.slice(3).join('/'); // strips /api/<ws>/
         }
-
         const isFormData = payload instanceof FormData;
-        const headers = isFormData ? {} : { 'Content-Type': 'application/json' };
-        const body = isFormData ? payload : JSON.stringify(payload);
-
-        const res = await window.inSetu.api.workspace(cleanPath, {
-            method: 'POST',
-            headers,
-            body
-        });
+        const options = isFormData ? { headers: {} } : {};
+        const res = await window.inSetu.api.workspace.post(cleanPath, payload, options);
 
         if (!res.ok) {
             let errMsg = res.statusText;
@@ -763,11 +750,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             if (startStep) payload.start_step = startStep;
             if (targetRepos) payload.target_repos = targetRepos;
 
-            const response = await window.inSetu.api.workspace('gather/submit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await window.inSetu.api.workspace.post('gather/submit', payload);
 
             const data = await response.json();
             let result = null;
@@ -785,7 +768,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
                         break;
                     }
 
-                    const pollRes = await window.inSetu.api.system(`jobs/${jobId}`, {
+                    const pollRes = await window.inSetu.api.system.get(`jobs/${jobId}`, {
                         headers: { 'X-Workspace-ID': compilePromiseWs }
                     });
 
@@ -820,7 +803,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             }
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
+                const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
             } else {
@@ -837,10 +820,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
     })();
     return compilePromise;
 };
-
 export async function refreshManifest() {
     try {
-        const res = await window.inSetu.api.system('manifest?t=' + Date.now());
+        const res = await window.inSetu.api.system.get('manifest?t=' + Date.now());
         if (res.ok) {
             const manifest = await res.json();
             AppStore.setState({ manifest });
@@ -855,12 +837,11 @@ async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
     const btn = document.getElementById('simulate-panic-btn');
     if (btn) btn.innerText = "⏳ Crashing...";
-
     // Declarative UI State Transition
     AppStore.setState({ isRebooting: true, rebootType: 'panic' });
 
     try {
-        await window.inSetu.api.system('panic', { method: 'POST' });
+        await window.inSetu.api.system.post('panic', {});
         setInterval(async () => {
             try {
                 // The lifeboat OS does not serve a manifest, so we ping the root HTML
@@ -892,7 +873,7 @@ async function performSoftRefresh() {
     });
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await window.inSetu.api.system('topology?t=' + Date.now());
+        const rRes = await window.inSetu.api.system.get('topology?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
             const tabOrder = d.tab_order || [];
@@ -922,7 +903,7 @@ async function performSoftRefresh() {
             }
         }
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
-        const cRes = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const data = await cRes.json();
             const config = data.config || {};
@@ -983,7 +964,7 @@ async function performSoftRefresh() {
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
-        let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
@@ -1036,7 +1017,7 @@ async function fullRefresh() {
 async function initializeWorkspaceTopology() {
     // 1. Fetch Repository Configurations
     try {
-        const rRes = await window.inSetu.api.system('topology');
+        const rRes = await window.inSetu.api.system.get('topology');
         if (rRes.ok) {
             const d = await rRes.json();
             const tabOrder = d.tab_order || [];
@@ -1062,7 +1043,7 @@ async function initializeWorkspaceTopology() {
 } catch(e) { console.error("Topology fetch failed:", e); }
     // 2. Auto-Hydrate Manifest
     try {
-        let mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
         if (isEmptyManifest) {

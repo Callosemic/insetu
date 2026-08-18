@@ -8,7 +8,7 @@ export const {{cap_name}}Store = createExtensionStore('{{cap_name}}', {
     fetchData: async () => {
         {{cap_name}}Store.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('{{ext_name}}/list');
+            const res = await window.inSetu.api.workspace.get('{{ext_name}}/list');
             if (res.ok) {
                 const data = await res.json();
                 {{cap_name}}Store.setState({ items: data.items || [] });

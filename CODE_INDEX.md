@@ -56,11 +56,12 @@ insetu/
 │   │   ├── 0039-decentralized-manifest-signature-sync-and-topology-boot.md # Syncing manifest signatures statelessly on UI boot.
 │   │   ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
 │   │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
-│   │   └── archived/               # [comment required]
-│   │       ├── 0001-insetu-genesis-and-extension-architecture.md # [comment required]
-│   │       ├── 0003-stateless-multi-tenant-routing.md # [comment required]
-│   │       ├── 0005-transport-shell-decoupling.md # [comment required]
-│   │       └── 0012-extension-subdirectory-extraction.md # [comment required]
+│   │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
+│   │   └── archived/               # Superseded and historical ADR documents.
+│   │       ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
+│   │       ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
+│   │       ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
+│   │       └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
@@ -154,6 +155,7 @@ insetu/
 │   │   │   ├── ext_term.js         # [Terminal Emulator UI]
 │   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── tracker/                # Local offline Kanban board using Markdown-as-Code tickets.
+│   │   │   ├── README.md           # Primary project overview, architecture, and installation guide.
 │   │   │   ├── engine_tracker.py   # [Kanban Issue Tracker & Cache]
 │   │   │   └── ext_tracker.js      # [Kanban Board UI & Store]
 │   │   └── update/                 # Automated Python semantic versioning and PyPI distribution.
