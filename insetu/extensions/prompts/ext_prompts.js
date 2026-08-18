@@ -1,7 +1,7 @@
 // ext_prompts.js - Prompt Library Extension
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -55,11 +55,53 @@ export class InSetuExtPrompts extends InSetuElement {
             this.globalBrowsePath = state.globalBrowsePath || [];
             this.requestUpdate();
         });
-
         this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
-
         this.subscribe(AppStore, state => state.promptsForceRefreshTick, (tick) => {
             if (tick) PromptsStore.getState().fetchPrompts();
+        });
+
+        this.registerGlobalListener('insetu:context-metadata', window, (e) => {
+            if (e.detail === 'prompts_context.txt') {
+                e.inSetuResponses.push({
+                    cat: "Prompts & State",
+                    desc: "The Master Ingestion Prompt and CLI templates.",
+                    displayName: 'prompts_context.txt'
+                });
+            }
+        });
+
+        this.registerGlobalListener('sutram-route-changed', window, (e) => {
+            if (e.detail.tab === 'context') {
+                syncPromptsState();
+            }
+        });
+
+        this.registerGlobalListener('insetu:file-fetch-url', window, (e) => {
+            if (e.detail && isPromptPath(e.detail)) {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                e.inSetuResponses.push(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(e.detail));
+            }
+        });
+
+        this.registerGlobalListener('insetu:global-manifest-files', window, (e) => {
+            const rawPrompts = PromptsStore.getState().prompts || [];
+            if (rawPrompts.length === 0) e.inSetuResponses.push(['.insetu/prompts/.gitkeep']);
+            else e.inSetuResponses.push(rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`));
+        });
+
+        this.registerGlobalListener('insetu:global-manifest-whitelist', window, (e) => {
+            e.inSetuResponses.push(['.insetu/prompts/']);
+        });
+
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
+            if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
+        });
+
+        this.registerGlobalListener('insetu:soft-refresh', window, () => {
+            syncPromptsState();
         });
 
         PromptsStore.getState().fetchPrompts();
@@ -198,54 +240,10 @@ window.ExtensionRegistry.registerExtension('prompts', {
         }
     ]
 });
-window.addEventListener('zone:context-metadata', (e) => {
-    if (e.detail === 'prompts_context.txt') {
-        e.inSetuResponses.push({
-            cat: "Prompts & State",
-            desc: "The Master Ingestion Prompt and CLI templates.",
-            displayName: 'prompts_context.txt'
-        });
-    }
-});
-
-window.addEventListener('sutram-route-changed', (e) => {
-    if (e.detail.tab === 'context') {
-        syncPromptsState();
-    }
-});
-
-window.addEventListener('zone:file-fetch-url', (e) => {
-    if (e.detail && isPromptPath(e.detail)) {
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-        e.inSetuResponses.push(`/api/${activeWs}/prompts/resolve?file=` + encodeURIComponent(e.detail));
-    }
-});
-
-window.addEventListener('zone:global-manifest-files', (e) => {
-    const rawPrompts = PromptsStore.getState().prompts || [];
-    if (rawPrompts.length === 0) e.inSetuResponses.push(['.insetu/prompts/.gitkeep']);
-    else e.inSetuResponses.push(rawPrompts.map(p => p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p.replace(/^prompts\//, '')}`));
-});
-
-window.addEventListener('zone:global-manifest-whitelist', (e) => {
-    e.inSetuResponses.push(['.insetu/prompts/']);
-});
-
-window.addEventListener('zone:vfs-mutated', (e) => {
-    const payload = e.detail;
-    if (!payload || !payload.mutations) return;
-    const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
-    if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
-});
-
-window.addEventListener('zone:soft-refresh', () => {
-    syncPromptsState();
-});
-
 async function syncPromptsState() {
     if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
     try {
-        const res = await window.inSetu.api.workspace('prompts/list?t=' + Date.now(), { cache: 'no-store' });
+        const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
             const rawPrompts = data.prompts || [];

@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
@@ -12,7 +12,7 @@ export const FlowStore = createExtensionStore('Flow', {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
         FlowStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('flow/batches');
+            const res = await window.inSetu.api.get('flow/batches');
             if (res.ok) {
                 const data = await res.json();
                 const gatherStore = window.inSetu?.stores?.Gather;
@@ -113,19 +113,18 @@ export class InSetuExtFlow extends InSetuElement {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.requestUpdate();
         });
-
         this.registerGlobalListener('sutram-route-changed', window, (e) => {
             if (e.detail.tab === 'context' && e.detail.subTabs['context'] === 'flow') {
                 FlowStore.getState().fetchBatches();
             }
         });
 
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
             if (promptTouched) {
-                window.dispatchEvent(new CustomEvent('insetu:flow:refresh-prompt'));
+                this.dispatch('insetu:flow:refresh-prompt');
             }
             const contextOrDiffTouched = payload.mutations.some(m => m.filepath && (
                 m.filepath.includes('diffs/') || 
@@ -153,14 +152,14 @@ export class InSetuExtFlow extends InSetuElement {
         this._editingBatch = batch;
         const savedPrompt = batch && batch.include_prompt ? batch.include_prompt : '';
         const gatherOptions = window.inSetu.stores.Gather.getState().gatherOptions || {};
-
         const cleanSavedPrompt = savedPrompt.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, '');
         const availablePrompts = (gatherOptions.prompts || []).map(p => p.replace(/^\.insetu\/prompts\//, '').replace(/^prompts\//, ''));
-
-        let matchedPrompt = cleanSavedPrompt;
-        if (cleanSavedPrompt && !availablePrompts.includes(cleanSavedPrompt)) {
-            matchedPrompt = availablePrompts.find(p => p.endsWith(cleanSavedPrompt)) || cleanSavedPrompt;
-        }
+        const matchedPrompt = (() => {
+            if (cleanSavedPrompt && !availablePrompts.includes(cleanSavedPrompt)) {
+                return availablePrompts.find(p => p.endsWith(cleanSavedPrompt)) || cleanSavedPrompt;
+            }
+            return cleanSavedPrompt;
+        })();
 
         this._editForm = {
             id: batch ? batch.id : '',
@@ -186,12 +185,11 @@ export class InSetuExtFlow extends InSetuElement {
         this.requestUpdate();
         const { gatherOptions } = window.inSetu.stores.Gather.getState();
         if (batch.include_prompt) {
-            let promptPath = batch.include_prompt;
             const prompts = gatherOptions.prompts || [];
-            if (!prompts.includes(promptPath)) {
-                promptPath = prompts.find(p => p.endsWith(promptPath)) || promptPath;
-            }
-            window.inSetu.api.workspace(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
+            const promptPath = prompts.includes(batch.include_prompt) 
+                ? batch.include_prompt 
+                : (prompts.find(p => p.endsWith(batch.include_prompt)) || batch.include_prompt);
+            window.inSetu.api.get(`prompts/resolve?file=${encodeURIComponent(promptPath)}`)
                 .then(res => res.ok ? res.text() : Promise.reject(new Error("Prompt resolution failed")))
                 .then(text => { this._viewingBatchPromptText = text; })
                 .catch(err => { this._viewingBatchPromptText = `[Error: ${err.message}]`; });
@@ -206,10 +204,9 @@ export class InSetuExtFlow extends InSetuElement {
                 this._editingBatch = null;
                 this._editModalOpen = false;
                 this.requestUpdate();
-
                 const responseData = await res.json();
                 if (responseData.manifest) {
-                    AppStore.setState({ manifest: responseData.manifest });
+                    AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
                 }
 
                 if (this.compileSystem) {
@@ -227,13 +224,13 @@ export class InSetuExtFlow extends InSetuElement {
 
         if (!title) return alert("Title is required.");
 
-        let newId = this.utils.slugify(title);
-        let counter = 1;
         const currentBatches = FlowStore.getState().batches;
-        while (currentBatches.some(b => b.id === newId && b.id !== originalId)) {
-            newId = `${this.utils.slugify(title)}_${counter}`;
-            counter++;
-        }
+        const baseId = this.utils.slugify(title);
+        const newId = (() => {
+            const isTaken = (id) => currentBatches.some(b => b.id === id && b.id !== originalId);
+            if (!isTaken(baseId)) return baseId;
+            return Array.from({length: 100}).map((_, i) => `${baseId}_${i+1}`).find(id => !isTaken(id)) || `${baseId}_${Date.now()}`;
+        })();
 
         const payload = { id: newId, original_id: originalId, title, domain, includes: this._editForm.includes };
 
@@ -259,10 +256,9 @@ export class InSetuExtFlow extends InSetuElement {
                 this._editingBatch = null;
                 this._editModalOpen = false;
                 this.requestUpdate();
-
                 const responseData = await res.json();
                 if (responseData.manifest) {
-                    AppStore.setState({ manifest: responseData.manifest });
+                    AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
                 }
 
                 if (this.compileSystem) {
@@ -284,7 +280,7 @@ export class InSetuExtFlow extends InSetuElement {
         const localISOTime = (new Date(now - tzOffset)).toISOString().slice(0, -1);
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this._viewingBatch.response_path.replace('{date}', dStr);
-        const allRepos = window.inSetu.stores.Gather.getState().allRepos || [];
+        const allRepos = this.ecosystem.allRepos || [];
         const isRepoTarget = allRepos.includes(finalPath.split('/')[0]);
 
         const payload = {
@@ -412,14 +408,7 @@ export class InSetuExtFlow extends InSetuElement {
                                             const filename = b._filename;
                                             const manifestObj = AppStore.getState().manifest?.ctx?.[filename] || {};
                                             const meta = manifestObj.meta || {};
-                                            let sizeStr = "";
-                                            if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                                                const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-                                                sizeStr = sizes.join(' + ') + " kb";
-                                            } else if (meta.size_bytes !== undefined) {
-                                                const kb = Math.round(meta.size_bytes / 1024);
-                                                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-                                            }
+                                            const sizeStr = this.utils.formatArtifactSize(meta);
                                             const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
                                             return html`
                                                 <insetu-card
@@ -477,11 +466,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
-                                                            let icon = "📄";
-                                                            if (inc.includes('diffs/')) icon = "🔄";
-                                                            else if (inc.includes('contexts/')) icon = "📦";
-                                                            else if (inc.endsWith('/')) icon = "📁";
-                                                            else if (!isSystem && !inc.includes('.')) icon = "📁"; // rough heuristic for path directories without trailing slash
+                                                            const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
                                                             return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -540,11 +525,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
-                                                            let icon = "📄";
-                                                            if (inc.includes('diffs/')) icon = "🔄";
-                                                            else if (inc.includes('contexts/')) icon = "📦";
-                                                            else if (inc.endsWith('/')) icon = "📁";
-                                                            else if (!isSystem && !inc.includes('.')) icon = "📁";
+                                                            const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
                                                             return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -570,11 +551,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                             const checkName = isSystem ? inc.replace('ctx://', '') : inc;
                                                             const isMissing = isContextOrDiff && !allFiles.includes(checkName);
 
-                                                            let icon = "📄";
-                                                            if (inc.includes('diffs/')) icon = "🔄";
-                                                            else if (inc.includes('contexts/')) icon = "📦";
-                                                            else if (inc.endsWith('/')) icon = "📁";
-                                                            else if (!isSystem && !inc.includes('.')) icon = "📁";
+                                                            const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
                                                             return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
@@ -619,23 +596,15 @@ export class InSetuExtFlow extends InSetuElement {
                     </sutram-modal>
                     <sutram-modal .open=${this._showSelectContexts} titleText="Select Contexts" @sutram-modal-closed=${() => { this._showSelectContexts = false; this._contextSearchQuery = ''; }}>
                             <div slot="body" style="display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0;">
-                                    <input type="text" placeholder="🔍 Fuzzy search contexts..." style="padding: 8px; margin-bottom: 10px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;" .value=${this._contextSearchQuery} @input=${(e) => { this._contextSearchQuery = e.target.value; }}>
+                                    <sutram-input placeholder="🔍 Fuzzy search contexts..." .value=${this._contextSearchQuery} @sutram-input-changed=${(e) => { this._contextSearchQuery = e.detail.value; }}></sutram-input>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
                                             ${(this._contextSearchQuery ? window.inSetu.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => {
                                                 const systemUri = `ctx://${file}`;
                                                 const isChecked = this._tempContexts.includes(systemUri) || this._tempContexts.includes(file); // Handle legacy untyped files
-
                                                 const isDiff = file.includes('diffs/');
                                                 const manifestObj = manifest[file.split('/').pop()] || {};
                                                 const meta = manifestObj.meta || {};
-                                                let sizeStr = "";
-                                                if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                                                    const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-                                                    sizeStr = sizes.join(' + ') + " KB";
-                                                } else if (meta.size_bytes !== undefined) {
-                                                    const kb = Math.round(meta.size_bytes / 1024);
-                                                    sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " MB" : kb + " KB";
-                                                }
+                                                const sizeStr = this.utils.formatArtifactSize(meta);
 
                                                 return html`
                                                     <div style="display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--border); background: var(--bg);">
@@ -706,14 +675,11 @@ export class InSetuExtFlow extends InSetuElement {
                                             ${this._viewingBatch.include_prompt ? html`
                                                     <div>
                                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Instruction Prompt</h4>
-                                                            <textarea style="width: 100%; box-sizing: border-box; padding: 10px; height: 150px; margin-bottom: 10px; font-family: monospace; font-size: 0.85rem;" readonly>${this._viewingBatchPromptText}</textarea>
+                                                            <sutram-textarea readonly style="width: 100%; min-height: 150px; margin-bottom: 10px;" .value=${this._viewingBatchPromptText}></sutram-textarea>
                                                             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                                                                     ${(() => {
-                                                                        let promptPath = this._viewingBatch.include_prompt;
                                                                         const prompts = gatherOptions.prompts || [];
-                                                                        if (!prompts.includes(promptPath)) {
-                                                                            promptPath = prompts.find(p => p.endsWith(promptPath)) || promptPath;
-                                                                        }
+                                                                        const promptPath = prompts.includes(this._viewingBatch.include_prompt) ? this._viewingBatch.include_prompt : (prompts.find(p => p.endsWith(this._viewingBatch.include_prompt)) || this._viewingBatch.include_prompt);
                                                                         return html`
                                                                             <sutram-entity-actions 
                                                                                 .entityType=${'file:prompt'} 

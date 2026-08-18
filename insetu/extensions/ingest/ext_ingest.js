@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -72,7 +72,7 @@ export class InSetuExtIngestModals extends InSetuElement {
                 const shouldOverwrite = currentContent.trim() !== '' ? confirm("Overwrite existing content with imported markdown?") : false;
                 const newContent = (shouldOverwrite || currentContent.trim() === '') ? statusData.artifact.markdown : currentContent + '\n\n' + statusData.artifact.markdown;
                 fsState.setModal('newFile', { content: newContent });
-                window.inSetu.events.emitHook('zone:post-import-url', statusData.artifact);
+                window.inSetu.events.emitHook('insetu:post-import-url', statusData.artifact);
 
                 const currentFileName = fsState.modals.newFile?.fileName || '';
                 if (currentFileName.trim() === '') {

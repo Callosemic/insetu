@@ -26,11 +26,7 @@ window.ExtensionRegistry.registerExtension('format', {
             },
             onClick: async (data, e) => {
                 try {
-                    const res = await window.inSetu.api.workspace('format/format-code', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ filepath: data.filepath })
-                    });
+                    const res = await window.inSetu.api.post('format/format-code', { filepath: data.filepath });
                     if (res.ok) {
                         const resData = await res.json();
                         window.inSetu.utils.pollJob(resData.job_id, {
@@ -48,6 +44,5 @@ window.ExtensionRegistry.registerExtension('format', {
             }
         }
     ],
-    layoutSlots: [],
-    uiHooks: {}
+    layoutSlots: []
 });

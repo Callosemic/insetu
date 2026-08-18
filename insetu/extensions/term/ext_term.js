@@ -18,7 +18,6 @@ export class InSetuExtTerm extends InSetuElement {
         :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
         #terminal-container { flex: 1; overflow: hidden; width: 100%; height: 100%; }
     `;
-
     constructor() {
         super();
         this._term = null;
@@ -26,25 +25,23 @@ export class InSetuExtTerm extends InSetuElement {
         this._ws = null;
         this._hasSock = true;
         this._supportPty = true;
+        this._initSequence = 0;
     }
     connectedCallback() {
         super.connectedCallback();
         this._checkStatus();
-        super.connectedCallback();
-        window.addEventListener('resize', this._handleResize);
+        this.registerGlobalListener('resize', window, this._handleResize);
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
         // Decouple from static uiHooks DOM sniffing
-        this.registerGlobalListener('insetu:term:resize', window, () => {
-            setTimeout(() => {
-                if (this._initTimer) return; // Prevent racing the teardown timer
-                if (!this._term) {
-                    this._initTerminal();
-                } else if (this._handleResize) {
-                    this._handleResize();
-                }
-            }, 50);
-        });
+        this.registerGlobalListener('insetu:term:resize', window, this.utils.debounce(() => {
+            if (!this.isConnected) return;
+            if (!this._term) {
+                this._initTerminal();
+            } else if (this._handleResize) {
+                this._handleResize();
+            }
+        }, 50));
         this.registerGlobalListener('insetu:term:restart', window, () => {
             this.onWorkspaceChanged(this.workspaceId);
         });
@@ -52,25 +49,18 @@ export class InSetuExtTerm extends InSetuElement {
     firstUpdated() {
         const container = this.shadowRoot.getElementById('terminal-container');
         if (container) {
-            this._visibilityObserver = new IntersectionObserver((entries) => {
-                if (entries[0].isIntersecting) {
-                    // Yield to browser layout engine to prevent 0x0 geometry crashes
-                    if (this._visTimer) clearTimeout(this._visTimer);
-                    this._visTimer = setTimeout(() => {
-                        if (!this._term) {
-                            this._initTerminal();
-                        } else {
-                            this._handleResize();
-                        }
-                    }, 50);
+            this._visibilityObserver = new IntersectionObserver(this.utils.debounce((entries) => {
+                if (entries[0].isIntersecting && this.isConnected) {
+                    if (!this._term) {
+                        this._initTerminal();
+                    } else {
+                        this._handleResize();
+                    }
                 }
-            });
+            }, 50));
             this._visibilityObserver.observe(this);
 
-            this._resizeObserver = new ResizeObserver(() => {
-                if (this._resizeTimer) clearTimeout(this._resizeTimer);
-                this._resizeTimer = setTimeout(() => this._handleResize(), 50);
-            });
+            this._resizeObserver = new ResizeObserver(this.utils.debounce(() => this._handleResize(), 50));
             this._resizeObserver.observe(this);
         }
     }
@@ -79,10 +69,7 @@ export class InSetuExtTerm extends InSetuElement {
     }
     disconnectedCallback() {
         super.disconnectedCallback();
-        clearTimeout(this._initTimer);
-        clearTimeout(this._wsTimer);
-        clearTimeout(this._resizeTimer);
-        clearTimeout(this._visTimer);
+        this._isUnmounted = true;
         window.removeEventListener('resize', this._handleResize);
         if (this._themeObserver) this._themeObserver.disconnect();
         if (this._resizeObserver) this._resizeObserver.disconnect();
@@ -111,10 +98,6 @@ export class InSetuExtTerm extends InSetuElement {
         } catch (e) {}
     }
     onWorkspaceChanged(newWorkspaceId) {
-        clearTimeout(this._initTimer);
-        clearTimeout(this._wsTimer);
-        clearTimeout(this._visTimer);
-
         if (this._ws) {
             this._ws.onopen = null;
             this._ws.onmessage = null;
@@ -127,31 +110,34 @@ export class InSetuExtTerm extends InSetuElement {
             try { this._term.dispose(); } catch (e) {}
             this._term = null;
         }
-        // Only queue a rebuild if the extension is actually authorized for the new workspace
+
+        // Use an incrementing sequence token to orphan previous pending builds
+        this._initSequence = (this._initSequence || 0) + 1;
+        const currentSeq = this._initSequence;
+
         if (!this.isExtensionActive()) return;
+
         // Defer complete terminal recreation to avoid race conditions during DOM teardown
-        this._initTimer = setTimeout(() => {
-            this._initTimer = null;
-            if (this.isConnected) {
-                // Hard reset the WebSocket again just in case the IntersectionObserver spawned a ghost
-                clearTimeout(this._wsTimer);
-                if (this._ws) {
-                    this._ws.onopen = null;
-                    this._ws.onmessage = null;
-                    this._ws.onerror = null;
-                    this._ws.onclose = null;
-                    this._ws.close();
-                    this._ws = null;
-                }
-                // Failsafe: Ensure ghost instances are fully destroyed if the 50ms resize somehow slipped through
-                if (this._term) {
-                    try { this._term.dispose(); } catch (e) {}
-                    this._term = null;
-                }
-                const container = this.shadowRoot.getElementById('terminal-container');
-                if (container) container.innerHTML = '';
-                this._initTerminal();
+        setTimeout(() => {
+            if (!this.isConnected || this._initSequence !== currentSeq) return;
+
+            if (this._ws) {
+                this._ws.onopen = null;
+                this._ws.onmessage = null;
+                this._ws.onerror = null;
+                this._ws.onclose = null;
+                this._ws.close();
+                this._ws = null;
             }
+            if (this._term) {
+                try { this._term.dispose(); } catch (e) {}
+                this._term = null;
+            }
+            const container = this.shadowRoot.getElementById('terminal-container');
+            if (container) {
+                while (container.firstChild) container.removeChild(container.firstChild);
+            }
+            this._initTerminal();
         }, 300);
     }
     _handleResize = () => {
@@ -189,10 +175,10 @@ export class InSetuExtTerm extends InSetuElement {
 
         // Provide immediate visual feedback so the screen is never blank
         this._term.writeln('\x1b[36mInitializing terminal session...\x1b[0m');
-
         // Wait slightly for DOM to settle before fitting
-        this._wsTimer = setTimeout(() => {
-            if (!this.isConnected) return;
+        const currentSeq = this._initSequence || 0;
+        setTimeout(() => {
+            if (!this.isConnected || this._initSequence !== currentSeq) return;
             this._handleResize();
             this._connectWebSocket();
         }, 50);
@@ -240,11 +226,9 @@ export class InSetuExtTerm extends InSetuElement {
         };
         this._ws.onclose = (event) => {
             if (this._term) {
-                let msg = '\r\n\x1b[31m[Disconnected from terminal session]\x1b[0m\r\n';
-                if (event && event.code) {
-                    msg += `\x1b[33mCode: ${event.code} Reason: ${event.reason || 'Unknown'}\x1b[0m\r\n`;
-                }
-                this._term.write(msg);
+                const msgBase = '\r\n\x1b[31m[Disconnected from terminal session]\x1b[0m\r\n';
+                const msgAdd = (event && event.code) ? `\x1b[33mCode: ${event.code} Reason: ${event.reason || 'Unknown'}\x1b[0m\r\n` : '';
+                this._term.write(msgBase + msgAdd);
             }
         };
     }
@@ -334,17 +318,5 @@ window.ExtensionRegistry.registerExtension('term', {
             component: "insetu-ext-term-actions",
             order: 1
         }
-    ],
-    uiHooks: {
-        'zone:tab-changed': (tabId) => {
-            if (tabId === 'ctrl') {
-                window.inSetu.events.emit('insetu:term:resize');
-            }
-        },
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'ctrl' && data.subId === 'term') {
-                window.dispatchEvent(new CustomEvent('insetu:term:resize'));
-            }
-        }
-    }
+    ]
 });

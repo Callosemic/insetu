@@ -18,7 +18,7 @@ export const NotesStore = createExtensionStore('Notes', {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('notes')) return;
         NotesStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('notes/list');
+            const res = await window.inSetu.api.get('notes/list');
             if (res.ok) {
                 const data = await res.json();
                 NotesStore.setState({ notes: data.notes || [] });
@@ -29,17 +29,12 @@ export const NotesStore = createExtensionStore('Notes', {
             NotesStore.setState({ loading: false });
         }
     },
-
     saveNewNote: async () => {
         const { title, repo, bucket, tags } = NotesStore.getState().noteForm;
         if (!title) return alert("Title is required.");
 
         try {
-            const res = await window.inSetu.api.workspace('notes/new', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, repo, sub_bucket: bucket, tags })
-            });
+            const res = await window.inSetu.api.post('notes/new', { title, repo, sub_bucket: bucket, tags });
             if (res.ok) {
                 const data = await res.json();
                 NotesStore.setState({ 
@@ -77,7 +72,7 @@ export class InSetuExtNotesModals extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
 
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const currentEdit = NotesStore.getState().editNoteFilepath;
@@ -300,7 +295,7 @@ export class InSetuExtNotes extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
 
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/notes/'));

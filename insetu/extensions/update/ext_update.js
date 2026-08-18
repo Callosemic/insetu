@@ -74,21 +74,19 @@ export const UpdateStore = createExtensionStore('Update', {
     },
     fetchEligibleRepos: async () => {
         try {
-            const res = await window.inSetu.api.workspace('update/eligible_repos');
+            const res = await window.inSetu.api.workspace.get('update/eligible_repos');
             if (res.ok) {
                 const data = await res.json();
                 const eligibility = data.eligibility || {};
-
                 const currentRepo = UpdateStore.getState().targetRepo;
                 const allRepos = window.inSetu.stores.App.getState().allRepos || [];
                 const withToml = allRepos.filter(r => eligibility[r]);
-                let nextRepo = currentRepo;
 
                 // Auto-select the first versioned repository to keep the visually reordered dropdown in sync.
                 // If the current repo is unversioned, snap to the versioned one. The user can still manually re-select the unversioned repo later.
-                if (!currentRepo || !allRepos.includes(currentRepo) || (!eligibility[currentRepo] && withToml.length > 0)) {
-                    nextRepo = withToml.length > 0 ? withToml[0] : (allRepos.length > 0 ? allRepos[0] : '');
-                }
+                const nextRepo = (!currentRepo || !allRepos.includes(currentRepo) || (!eligibility[currentRepo] && withToml.length > 0)) 
+                    ? (withToml.length > 0 ? withToml[0] : (allRepos.length > 0 ? allRepos[0] : '')) 
+                    : currentRepo;
 
                 const updates = { eligibleRepos: eligibility };
                 if (nextRepo !== currentRepo) {
@@ -102,7 +100,7 @@ export const UpdateStore = createExtensionStore('Update', {
     },
     checkDependencies: async () => {
         try {
-            const res = await window.inSetu.api.system('config');
+            const res = await window.inSetu.api.system.get('config');
             if (res.ok) {
                 const data = await res.json();
                 const extMeta = (data.meta?.available_extensions || []).find(e => e.id === 'update');
@@ -554,7 +552,7 @@ export class InSetuExtUpdate extends InSetuElement {
                             ${!this.repoLoading && this.repoConfigured && !this.hasRelease ? html`
                                 <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
                                     <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic;">⚠️ Local version configured, but no Git release tag has been established.</span>
-                                    <button class="btn-sm" style="background: var(--intent-primary); color: #fff; border: none; padding: 6px 12px; font-weight: bold; font-size: 0.8rem; border-radius: 4px; cursor: pointer; align-self: flex-start;"
+                                    <button class="btn-sm" style="background: var(--intent-primary); color: white; border: none; padding: 6px 12px; font-weight: bold; font-size: 0.8rem; border-radius: 4px; cursor: pointer; align-self: flex-start;"
                                         @click=${() => {
                                             const ver = this.repoVersion || "0.1.0";
                                             if (confirm(`Establish and tag initial baseline release v${ver}?`)) {
@@ -581,7 +579,7 @@ export class InSetuExtUpdate extends InSetuElement {
                     ${!this.repoLoading && !this.hasPyproject ? html`
                         <div style="background: var(--bg); border: 1px dashed var(--intent-warning); border-radius: 4px; padding: 8px 12px; margin-bottom: 10px; color: var(--intent-warning); font-size: 0.85rem; font-weight: bold; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
                             <span>⚠️ Missing pyproject.toml in this repository.</span>
-                            <button class="btn-sm" style="background: var(--intent-warning); color: #000; border: none; padding: 4px 10px; font-weight: bold; font-size: 0.75rem; border-radius: 4px; cursor: pointer;"
+                            <button class="btn-sm" style="background: var(--intent-warning); color: black; border: none; padding: 4px 10px; font-weight: bold; font-size: 0.75rem; border-radius: 4px; cursor: pointer;"
                                 @click=${() => {
                                     const initVer = prompt("Enter initial semantic version (e.g., 0.1.0):", "0.1.0");
                                     if (initVer) {
@@ -754,12 +752,12 @@ export class InSetuExtUpdate extends InSetuElement {
                     </p>
                     <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
                         ${this.previewActionType !== 'log_view' ? html`
-                            <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
+                            <button class="btn-sm" style="background: ${this.previewTab === 'changelog' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'changelog' ? 'white' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
                                 @click=${() => UpdateStore.setState({ previewTab: 'changelog' })}>
                                 📝 Change Log
                             </button>
                         ` : ''}
-                        <button class="btn-sm" style="background: ${this.previewTab === 'full' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'full' ? '#fff' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
+                        <button class="btn-sm" style="background: ${this.previewTab === 'full' ? 'var(--intent-primary)' : 'var(--input-bg)'}; color: ${this.previewTab === 'full' ? 'white' : 'var(--text)'}; border: 1px solid var(--border); border-radius: 4px; padding: 6px 12px; font-weight: bold; cursor: pointer;"
                             @click=${() => UpdateStore.setState({ previewTab: 'full' })}>
                             📋 Complete Report
                         </button>
@@ -788,10 +786,8 @@ export class InSetuExtUpdate extends InSetuElement {
                     ${this.previewActionType !== 'log_view' ? html`
                         <sutram-async-btn label="${this.previewActionType === 'publish' ? '⚡ Confirm & Execute Publish' : (this.previewActionType === 'first_release' ? '⚡ Confirm & Initial Release' : '⚡ Confirm & Execute Bump')}" intent="success" style="flex: 1; margin: 0; --btn-padding: 10px 15px;" .onClick=${async () => {
                             UpdateStore.setState({ previewModalOpen: false });
-                            let endpoint = 'bump';
-                            let msg = 'Bump';
-                            if (this.previewActionType === 'publish') { endpoint = 'publish'; msg = 'Publish'; }
-                            else if (this.previewActionType === 'first_release') { endpoint = 'first_release'; msg = 'First Release'; }
+                            const endpoint = this.previewActionType === 'publish' ? 'publish' : (this.previewActionType === 'first_release' ? 'first_release' : 'bump');
+                            const msg = this.previewActionType === 'publish' ? 'Publish' : (this.previewActionType === 'first_release' ? 'First Release' : 'Bump');
 
                             const action = this._getReleaseAction(endpoint, msg, this.previewActionType === 'first_release');
                             await action();
@@ -815,14 +811,5 @@ window.ExtensionRegistry.registerExtension('update', {
             order: 4,
             component: "insetu-ext-update"
         }
-    ],
-    uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'ctrl' && data.subId === 'update') {
-                const repo = UpdateStore.getState().targetRepo;
-                if (repo) UpdateStore.getState().fetchRepoStatus(repo);
-                UpdateStore.getState().fetchEligibleRepos();
-            }
-        }
-    }
+    ]
 });

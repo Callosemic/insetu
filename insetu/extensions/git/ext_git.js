@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -17,7 +17,7 @@ export const GitStore = createExtensionStore('Git', {
     fetchStatus: async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         try {
-            const res = await window.inSetu.api.workspace('git/status');
+            const res = await window.inSetu.api.get('git/status');
             if (res.ok) {
                 const data = await res.json();
                 GitStore.setState({ reposStatus: data.repos || {} });
@@ -59,9 +59,6 @@ export async function generateDiffs(force = false) {
         }
     }
 }
-
-window.addEventListener('insetu:git:generate-diffs', (e) => generateDiffs(e.detail?.force));
-
 export class InSetuExtGitDiffs extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
@@ -110,14 +107,11 @@ export class InSetuExtGitDiffs extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(GitStore, (state) => {
-            let cached = state.cachedDiffFiles;
             const manifestCtx = AppStore.getState().manifest?.ctx || {};
-            if (!cached && manifestCtx) {
-                cached = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
-                    filename: k,
-                    repo: manifestCtx[k].meta?.repo
-                }));
-            }
+            const cached = state.cachedDiffFiles || Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+                filename: k,
+                repo: manifestCtx[k].meta?.repo
+            }));
             this.cachedDiffFiles = cached || [];
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobMessage = state.diffJobMessage;
@@ -144,14 +138,11 @@ export class InSetuExtGitDiffs extends InSetuElement {
         const state = AppStore.getState();
         const gitState = GitStore.getState();
         const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};
-        let cached = gitState.cachedDiffFiles;
         const manifestCtx = state.manifest?.ctx || {};
-        if (!cached && manifestCtx) {
-            cached = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
-                filename: k,
-                repo: manifestCtx[k]?.meta?.repo
-            }));
-        }
+        const cached = gitState.cachedDiffFiles || Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+            filename: k,
+            repo: manifestCtx[k]?.meta?.repo
+        }));
         this.cachedDiffFiles = cached || [];
         this.activeDiffJobId = gitState.activeDiffJobId;
         this.diffJobMessage = gitState.diffJobMessage;
@@ -159,10 +150,30 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.activePushJobId = gitState.activePushJobId;
         this.categoryOrder = gatherState.categoryOrder || [];
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
-
+        this.registerGlobalListener('insetu:git:generate-diffs', window, (e) => generateDiffs(e.detail?.force));
         this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
         this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const { dirtyDiffRepos } = GitStore.getState();
+            const newDirty = new Set(dirtyDiffRepos);
+
+            const reposChanged = payload.mutations.some(m => {
+                if (!m.filepath) return false;
+                const repo = m.filepath.split('/')[0];
+                if (repo) {
+                    newDirty.add(repo);
+                    return true;
+                }
+                return false;
+            });
+
+            if (reposChanged) {
+                GitStore.setState({ dirtyDiffRepos: newDirty });
+            }
+        });
 
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
@@ -225,7 +236,7 @@ disconnectedCallback() {
             const res = await this.api.post('sweep/status', {});
             if (!res.ok) throw new Error("Failed to start scan");
             const data = await res.json();
-            this.api.pollJob(data.job_id, {
+            window.inSetu.utils.pollJob(data.job_id, {
                 onProgress: () => {},
                 onComplete: (statusData) => {
                     this.sweepFiles = statusData.artifact.repos || {};
@@ -251,13 +262,13 @@ disconnectedCallback() {
     _getSweepAllAction() {
         return this.api.bindJobAction('sweep/push', () => {
             const selections = {};
-            let totalFiles = 0;
-            Object.keys(this.sweepFiles).forEach(repo => {
+            const totalFiles = Object.keys(this.sweepFiles).reduce((acc, repo) => {
                 if (this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(repo)) {
                     const selected = this.selectedSweepFiles[repo] || [];
-                    if (selected.length > 0) { selections[repo] = selected; totalFiles += selected.length; }
+                    if (selected.length > 0) { selections[repo] = selected; return acc + selected.length; }
                 }
-            });
+                return acc;
+            }, 0);
             if (totalFiles === 0) throw new Error("No files selected to sweep.");
             const msg = prompt(`Enter a commit message to sweep ${totalFiles} file(s) across multiple repositories:`, "chore: global workspace sweep");
             if (!msg) throw new Error("Commit message required.");
@@ -323,19 +334,11 @@ disconnectedCallback() {
 
             const diffMeta = diffManifestObj.meta || {};
             const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: diffMeta.domain || "Workspaces", desc: "Pending diff payload." };
-            const extMeta = window.inSetu.events.emitHook('zone:context-metadata', baseFile);
+            const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', baseFile);
             const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
             const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
             const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + (contextMeta.title.includes('(Diffs)') ? '' : " (Diffs)");
-
-            let sizeStr = "";
-            if (diffMeta.chunk_sizes && diffMeta.chunk_sizes.length > 1) {
-                const sizes = diffMeta.chunk_sizes.map(s => Math.round(s / 1024) + "kb");
-                sizeStr = "( " + sizes.join(' + ') + " )";
-            } else if (diffMeta.size_bytes !== undefined) {
-                const kb = Math.round(diffMeta.size_bytes / 1024);
-                sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-            }
+            const sizeStr = this.utils.formatArtifactSize(diffMeta);
             if (!categories[finalCat]) categories[finalCat] = [];
             categories[finalCat].push({
                 filename: file,
@@ -384,12 +387,8 @@ disconnectedCallback() {
                             ${categories[catName].map(f => {
                                 const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
                                 const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
-
                                 // Extract sizes if previously stuffed into detailText
-                                let sizeStr = "";
-                                if (f.detailText && f.detailText.includes(' | ')) {
-                                    sizeStr = f.detailText.split(' | ')[1];
-                                }
+                                const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
                                 return html`
                                 <insetu-card
                                     .filename=${f.filename}
@@ -444,25 +443,28 @@ disconnectedCallback() {
                                         this.requestUpdate();
                                     }}>
                                 </insetu-card>
-
                                 ${this.sweepExpandedRepos.has(repo) ? html`
                                     <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: -8px; margin-bottom: 15px; margin-left: 15px;">
-                                        ${files.map(f => html`
-                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-                                                <input type="checkbox" 
-                                                    .checked=${(this.selectedSweepFiles[repo] || []).includes(f.path)}
-                                                    @change=${(e) => {
-                                                        const isChecked = e.target.checked;
-                                                        const currentList = this.selectedSweepFiles[repo] || [];
-                                                        this.selectedSweepFiles = {
-                                                            ...this.selectedSweepFiles,
-                                                            [repo]: isChecked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
-                                                        };
-                                                        this.requestUpdate();
-                                                    }}>
-                                                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
-                                            </div>
-                                        `)}
+                                        ${files.map(f => {
+                                            const isChecked = (this.selectedSweepFiles[repo] || []).includes(f.path);
+                                            return html`
+                                                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                                    <sutram-toggle 
+                                                        .checked=${isChecked}
+                                                        @sutram-input-changed=${(e) => {
+                                                            const checked = e.detail.value;
+                                                            const currentList = this.selectedSweepFiles[repo] || [];
+                                                            this.selectedSweepFiles = {
+                                                                ...this.selectedSweepFiles,
+                                                                [repo]: checked ? [...currentList, f.path] : currentList.filter(p => p !== f.path)
+                                                            };
+                                                            this.requestUpdate();
+                                                        }}>
+                                                    </sutram-toggle>
+                                                    <span style="font-family: monospace; font-size: 0.8rem; color: var(--text-muted);">[${f.status}] ${f.path}</span>
+                                                </div>
+                                            `;
+                                        })}
                                     </div>
                                 ` : ''}
                             `;})}
@@ -480,13 +482,18 @@ disconnectedCallback() {
             </div>
             <sutram-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @sutram-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Recent Changelogs:</label>
-                    <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold; flex-shrink: 0;" @change=${(e) => this.gitPushMessage = e.target.value}>
-                        <option value="">-- Type a custom message below --</option>
-                        ${this.pushChangelogs.map(cl => html`<option value="${cl.title}" ?selected=${this.gitPushMessage === cl.title}>${cl.title}</option>`)}
-                    </select>
-                    <label style="font-weight: bold; margin-bottom: 5px; font-size: 0.9rem;">Commit Message:</label>
-                    <textarea placeholder="Enter commit message..." .value=${this.gitPushMessage} @input=${(e) => this.gitPushMessage = e.target.value} style="margin-bottom: 15px; padding: 10px; font-weight: bold; flex: 1; min-height: 80px; width: 100%; box-sizing: border-box;"></textarea>
+                    <sutram-select 
+                        label="Recent Changelogs"
+                        .value=${this.gitPushMessage}
+                        .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
+                        @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
+                    </sutram-select>
+                    <sutram-textarea 
+                        label="Commit Message"
+                        placeholder="Enter commit message..."
+                        .value=${this.gitPushMessage}
+                        @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
+                    </sutram-textarea>
                 </div>
                 <sutram-async-btn slot="footer" label="🚀 Execute Push" intent="primary" .onClick=${this._getPushAction()}></sutram-async-btn>
             </sutram-modal>
@@ -695,10 +702,9 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         return html`
                             <insetu-card titleText=${repo} descriptionText="Not a Git repository." icon="📁" intentColor="var(--intent-neutral)">
                                 <div slot="actions" style="display: flex; align-items: center; gap: 5px;">
-                                    <input type="text" .value=${"main"} placeholder="main" style="width: 80px; padding: 4px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem;">
-                                    <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${(e) => {
-                                        const branch = e.target.previousElementSibling.value || 'main';
-                                        this._initRepo(repo, branch);
+                                    <sutram-input .value=${"main"} placeholder="main" style="width: 100px; margin: 0;" @sutram-input-changed=${(e) => this.newBranchName = e.detail.value}></sutram-input>
+                                    <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => {
+                                        this._initRepo(repo, this.newBranchName || 'main');
                                     }}>✨ Initialize</button>
                                 </div>
                             </insetu-card>
@@ -743,20 +749,19 @@ export class InSetuExtGitCtrl extends InSetuElement {
             <sutram-modal ?open=${this.branchModalOpen} ?fullscreen=${true} titleText="Branch Management: ${this.activeRepo}" @sutram-modal-closed=${() => this.branchModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
-                        <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Switch to Existing Branch:</label>
-                        <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);" @change=${(e) => {
-                            if (e.target.value) this._checkoutBranch(this.activeRepo, e.target.value, false);
-                            e.target.value = "";
-                        }}>
-                            <option value="">-- Select Branch --</option>
-                            ${(this.reposStatus[this.activeRepo]?.branches || []).map(b => html`<option value="${b}">${b}</option>`)}
-                        </select>
+                        <sutram-select 
+                            label="Switch to Existing Branch"
+                            .value=""
+                            .options=${[{ value: '', label: '-- Select Branch --' }, ...(this.reposStatus[this.activeRepo]?.branches || []).map(b => ({ value: b, label: b }))]}
+                            @sutram-input-changed=${(e) => {
+                                if (e.detail.value) this._checkoutBranch(this.activeRepo, e.detail.value, false);
+                            }}>
+                        </sutram-select>
                     </div>
                     <hr style="border: 0; border-top: 1px solid var(--border); width: 100%;">
                     <div>
-                        <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Create New Branch:</label>
-                        <div style="display: flex; gap: 10px;">
-                            <input type="text" placeholder="new-feature-branch" .value=${this.newBranchName} @input=${e => this.newBranchName = e.target.value} style="flex: 1; padding: 10px; font-weight: bold; box-sizing: border-box;">
+                        <div style="display: flex; gap: 10px; align-items: flex-end;">
+                            <sutram-input label="Create New Branch" placeholder="new-feature-branch" .value=${this.newBranchName} @sutram-input-changed=${e => this.newBranchName = e.detail.value} style="flex: 1; margin: 0;"></sutram-input>
                             <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => {
                                 if(this.newBranchName) this._checkoutBranch(this.activeRepo, this.newBranchName, true);
                             }}>➕ Create & Switch</button>
@@ -773,14 +778,16 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         if (currentStrategy === 'runtime') {
                             return html`
                                 <div style="display: flex; align-items: center; gap: 10px; background: var(--input-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border); margin-top: 5px;">
-                                    <label style="font-size: 0.85rem; color: var(--text); font-weight: bold;">Reconciliation Strategy:</label>
-                                    <select style="padding: 4px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: var(--font-mono); font-size: 0.8rem;"
+                                    <sutram-select 
+                                        label="Reconciliation Strategy"
                                         .value=${this._runtimeStrategy}
-                                        @change=${(e) => this._runtimeStrategy = e.target.value}>
-                                        <option value="rebase">Rebase (--rebase)</option>
-                                        <option value="merge">Merge (--no-rebase)</option>
-                                        <option value="ff_only">Fast-Forward Only (--ff-only)</option>
-                                    </select>
+                                        .options=${[
+                                            { value: 'rebase', label: 'Rebase (--rebase)' },
+                                            { value: 'merge', label: 'Merge (--no-rebase)' },
+                                            { value: 'ff_only', label: 'Fast-Forward Only (--ff-only)' }
+                                        ]}
+                                        @sutram-input-changed=${(e) => this._runtimeStrategy = e.detail.value}>
+                                    </sutram-select>
                                 </div>
                             `;
                         }
@@ -800,20 +807,17 @@ export class InSetuExtGitCtrl extends InSetuElement {
                         </div>
                     ` : html`
                         <div>
-                            <label style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Remote Git URL:</label>
-                            <div style="display: flex; gap: 10px;">
-                                <input type="text" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @input=${e => this.remoteUrlInput = e.target.value} style="flex: 1; padding: 10px; font-weight: bold; box-sizing: border-box; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;">
-                                <button class="btn-sm" style="background: var(--intent-neutral); margin: 0; white-space: nowrap;" @click=${() => {
-                                    const url = this.remoteUrlInput.trim();
-                                    const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
-                                    if (match) {
-                                        this.remoteUrlInput = 'git@' + match[1] + ':' + match[2] + '.git';
-                                        this.requestUpdate();
-                                    } else if (url.startsWith('https://')) {
-                                        alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
-                                    }
-                                }}>🔄 Convert to SSH</button>
-                            </div>
+                            <sutram-input label="Remote Git URL" placeholder="git@github.com:user/repo.git" .value=${this.remoteUrlInput} @sutram-input-changed=${e => this.remoteUrlInput = e.detail.value}></sutram-input>
+                            <button class="btn-sm" style="background: var(--intent-neutral); margin-top: 8px; white-space: nowrap;" @click=${() => {
+                                const url = this.remoteUrlInput.trim();
+                                const match = url.match(/^https:\/\/(github\.com|gitlab\.com|bitbucket\.org)\/(.+?)(?:\.git)?\/?$/);
+                                if (match) {
+                                    this.remoteUrlInput = 'git@' + match[1] + ':' + match[2] + '.git';
+                                    this.requestUpdate();
+                                } else if (url.startsWith('https://')) {
+                                    alert("Could not auto-convert. Ensure it is a standard GitHub, GitLab, or Bitbucket HTTPS URL.");
+                                }
+                            }}>🔄 Convert to SSH</button>
                             <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 8px;">We will set this as the 'origin' remote and push the current branch to establish upstream tracking. <b style="color: var(--intent-warning);">Use an SSH URL to avoid headless authentication errors.</b></p>
                         </div>
                     `}
@@ -931,24 +935,4 @@ window.ExtensionRegistry.registerExtension('git', {
             component: "insetu-ext-git-diffs"
         }
     ]
-});
-window.addEventListener('zone:vfs-mutated', (e) => {
-    const payload = e.detail;
-    if (!payload || !payload.mutations) return;
-    let reposChanged = false;
-    const { dirtyDiffRepos } = GitStore.getState();
-    const newDirty = new Set(dirtyDiffRepos);
-
-    payload.mutations.forEach(m => {
-        if (!m.filepath) return;
-        const repo = m.filepath.split('/')[0];
-        if (repo) {
-            newDirty.add(repo);
-            reposChanged = true;
-        }
-    });
-
-    if (reposChanged) {
-        GitStore.setState({ dirtyDiffRepos: newDirty });
-    }
 });

@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { InSetuElement, createExtensionStore } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 const AppStore = window.inSetu.stores.App;
 
@@ -105,17 +105,17 @@ export class InSetuExtFreshdesk extends InSetuElement {
         this.fetchTickets();
     }
     _ticketMatchesFilters(t, filterStatus, filterAssignee, myAgentId) {
-        let sMatch = true;
-        if (filterStatus === 'Open') sMatch = (t.status === 2);
-        else if (filterStatus === 'Pending') sMatch = (t.status === 3);
-        else if (filterStatus === 'Open + Pending') sMatch = (t.status === 2 || t.status === 3);
+        const sMatch = filterStatus === 'All' || 
+            (filterStatus === 'Open' && t.status === 2) || 
+            (filterStatus === 'Pending' && t.status === 3) || 
+            (filterStatus === 'Open + Pending' && (t.status === 2 || t.status === 3));
 
-        let aMatch = true;
         const isMe = t.responder_id === myAgentId;
         const isUnassigned = !t.responder_id;
-        if (filterAssignee === 'Self') aMatch = isMe;
-        else if (filterAssignee === 'Unassigned') aMatch = isUnassigned;
-        else if (filterAssignee === 'Self + Unassigned') aMatch = (isMe || isUnassigned);
+        const aMatch = filterAssignee === 'All' || 
+            (filterAssignee === 'Self' && isMe) || 
+            (filterAssignee === 'Unassigned' && isUnassigned) || 
+            (filterAssignee === 'Self + Unassigned' && (isMe || isUnassigned));
 
         return sMatch && aMatch;
     }
@@ -211,7 +211,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         const ticketId = this.selectedTicket?.id;
         if (!ticketId) return;
         try {
-            const res = await window.inSetu.api.workspace(`fs/fetch?file=.insetu/freshdesk/${ticketId}.md`);
+            const res = await window.inSetu.api.get(`fs/fetch?file=.insetu/freshdesk/${ticketId}.md`);
             if (res.ok) {
                 const txt = await res.text();
                 // Enforce DRY Utility Centralization Mandate
@@ -271,7 +271,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                 const data = await res.json();
                 FreshdeskStore.setState({ activeJobId: data.job_id });
                 // Utilize the OS job metronome to poll the background task statelessly
-                this.api.pollJob(data.job_id, {
+                window.inSetu.utils.pollJob(data.job_id, {
                     onProgress: (msg, statusData) => {
                         const updates = { loadingMsg: msg };
                         if (statusData && statusData.artifact && statusData.artifact.tickets) {
@@ -375,22 +375,30 @@ export class InSetuExtFreshdesk extends InSetuElement {
             </sutram-modal>
             <div style="display: flex; gap: 15px; margin-top: 15px; align-items: center; background: var(--input-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted);">Assignee:</label>
-                    <select style="padding: 4px 8px; width: auto;" .value=${this.filterAssignee} @change=${e => { FreshdeskStore.setState({ filterAssignee: e.target.value }); this.fetchTickets(); }}>
-                        <option value="Self">Self</option>
-                        <option value="Unassigned">Unassigned</option>
-                        <option value="Self + Unassigned">Self + Unassigned</option>
-                        <option value="All">All</option>
-                    </select>
+                    <sutram-select 
+                        label="Assignee" 
+                        .value=${this.filterAssignee} 
+                        .options=${[
+                            { value: 'Self', label: 'Self' },
+                            { value: 'Unassigned', label: 'Unassigned' },
+                            { value: 'Self + Unassigned', label: 'Self + Unassigned' },
+                            { value: 'All', label: 'All' }
+                        ]} 
+                        @sutram-input-changed=${e => { FreshdeskStore.setState({ filterAssignee: e.detail.value }); this.fetchTickets(); }}>
+                    </sutram-select>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted);">Status:</label>
-                    <select style="padding: 4px 8px; width: auto;" .value=${this.filterStatus} @change=${e => { FreshdeskStore.setState({ filterStatus: e.target.value }); this.fetchTickets(); }}>
-                        <option value="Open">Open</option>
-                        <option value="Pending">Pending</option>
-                        <option value="Open + Pending">Open + Pending</option>
-                        <option value="All">All</option>
-                    </select>
+                    <sutram-select 
+                        label="Status" 
+                        .value=${this.filterStatus} 
+                        .options=${[
+                            { value: 'Open', label: 'Open' },
+                            { value: 'Pending', label: 'Pending' },
+                            { value: 'Open + Pending', label: 'Open + Pending' },
+                            { value: 'All', label: 'All' }
+                        ]} 
+                        @sutram-input-changed=${e => { FreshdeskStore.setState({ filterStatus: e.detail.value }); this.fetchTickets(); }}>
+                    </sutram-select>
                 </div>
             </div>
             ${this.syncLedger.length > 0 ? html`
@@ -398,7 +406,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                     <strong style="color: var(--text);">Cache Coverage:</strong>
                     <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 5px;">
                         ${this.syncLedger.map(l => html`
-                            <div>✔️ ${new Date(l.start_time).toLocaleDateString()} to ${new Date(l.end_time).toLocaleDateString()}</div>
+                            <div>✔️ ${this.utils.formatDate(l.start_time)} to ${this.utils.formatDate(l.end_time)}</div>
                         `)}
                     </div>
                 </div>
@@ -414,17 +422,14 @@ export class InSetuExtFreshdesk extends InSetuElement {
                     const statusMap = { 2: 'Open', 3: 'Pending', 4: 'Resolved', 5: 'Closed' };
                     const prioMap = { 1: 'Low', 2: 'Medium', 3: 'High', 4: 'Urgent' };
 
-                    let assigneeText = 'None';
-                    if (t.responder_id) {
-                        assigneeText = (t.responder_id === this.myAgentId) ? 'Me' : (t.responder_name || 'Someone Else');
-                    }
+                    const assigneeText = t.responder_id ? ((t.responder_id === this.myAgentId) ? 'Me' : (t.responder_name || 'Someone Else')) : 'None';
 
                     return html`
                     <insetu-card
                         .filename=${`Ticket #${t.id}`}
                         .titleText=${t.subject}
                         .descriptionText=${`Assignee: ${assigneeText} | Status: ${statusMap[t.status] || t.status} | Priority: ${prioMap[t.priority] || t.priority}`}
-                        .detailText=${new Date(t.created_at).toLocaleString()}
+                        .detailText=${this.utils.formatDate(t.created_at)}
                         icon="🎫"
                         intentColor="var(--intent-highlight)"
                         entityType="freshdesk_ticket"
@@ -504,7 +509,5 @@ window.ExtensionRegistry.registerExtension('freshdesk', {
             order: 5,
             component: "insetu-ext-freshdesk"
         }
-    ],
-    // React to global OS events without direct DOM coupling
-    uiHooks: {}
+    ]
 });

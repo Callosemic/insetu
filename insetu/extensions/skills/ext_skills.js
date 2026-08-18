@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -21,7 +21,7 @@ export const SkillsStore = createExtensionStore('Skills', {
                 if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 if (!silent) SkillsStore.setState({ loading: true });
                 try {
-                    const res = await window.inSetu.api.workspace('skills/playlist');
+                    const res = await window.inSetu.api.get('skills/playlist');
                     if (res.ok) {
                         const data = await res.json();
                         SkillsStore.setState({ playlist: data.playlist || [] });
@@ -35,7 +35,7 @@ export const SkillsStore = createExtensionStore('Skills', {
             fetchAllSkills: async () => {
                 if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 try {
-                    const res = await window.inSetu.api.workspace('skills/list');
+                    const res = await window.inSetu.api.get('skills/list');
                     if (res.ok) {
                         const data = await res.json();
                         const skills = data.skills || [];
@@ -49,7 +49,7 @@ export const SkillsStore = createExtensionStore('Skills', {
             fetchDomainConfig: async () => {
                 if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('skills')) return;
                 try {
-                    const res = await window.inSetu.api.workspace('skills/settings');
+                    const res = await window.inSetu.api.get('skills/settings');
                     if (res.ok) {
                         const settings = await res.json();
                         SkillsStore.setState({ domainConfig: settings.domains || {} });
@@ -129,9 +129,19 @@ export class InSetuExtSkills extends InSetuElement {
         // Strict UI boundary isolation: Read layout state from the DOM tree, not global storage
         return this.closest('.sub-tab-content')?.classList.contains('active') ?? false;
     }
-
     connectedCallback() {
         super.connectedCallback();
+
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (!payload || !payload.mutations) return;
+            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/skills/'));
+            if (touchedSkill) {
+                SkillsStore.getState().fetchPlaylist(true);
+                SkillsStore.getState().fetchAllSkills();
+            }
+        });
+
         this.subscribe(SkillsStore, state => {
             this.playlist = state.playlist;
             this.allSkills = state.allSkills;
@@ -476,14 +486,13 @@ export class InSetuExtSkills extends InSetuElement {
                 @sutram-modal-closed=${() => SkillsStore.setState({ selectedItem: null })}>
                 <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
                     <div>
-                        <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Quality Rating Scale (SM-2 Algorithm)</label>
-                        <select .value=${this.formScore} @change=${(e) => SkillsStore.setState({ formScore: parseInt(e.target.value, 10) })}>
-                            <option value="5">5 - Perfect execution (Immediate retention)</option>
-                            <option value="4">4 - Correct execution with minimal hesitation</option>
-                            <option value="3">3 - Correct execution but required notable effort</option>
-                            <option value="2">2 - Incorrect execution; clear structural breakdown</option>
-                            <option value="1">1 - Blackout/Untouched (Complete memory lapse)</option>
-                        </select>
+                        <sutram-select label="Quality Rating Scale (SM-2 Algorithm)" .value=${this.formScore} .options=${[
+                            {value: 5, label: '5 - Perfect execution (Immediate retention)'},
+                            {value: 4, label: '4 - Correct execution with minimal hesitation'},
+                            {value: 3, label: '3 - Correct execution but required notable effort'},
+                            {value: 2, label: '2 - Incorrect execution; clear structural breakdown'},
+                            {value: 1, label: '1 - Blackout/Untouched (Complete memory lapse)'}
+                        ]} @sutram-input-changed=${(e) => SkillsStore.setState({ formScore: parseInt(e.detail.value, 10) })}></sutram-select>
                     </div>
                     ${(() => {
                         if (!this.selectedItem) return '';
@@ -493,10 +502,7 @@ export class InSetuExtSkills extends InSetuElement {
                         if (options.length === 0) return '';
                         return html`
                             <div>
-                                <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 5px;">Current Mastery Stage</label>
-                                <select .value=${this.formStatus} @change=${this._handleStatusChange}>
-                                    ${options.map(opt => html`<option value="${opt.key}">${opt.label}</option>`)}
-                                </select>
+                                <sutram-select label="Current Mastery Stage" .value=${this.formStatus} .options=${options.map(opt => ({value: opt.key, label: opt.label}))} @sutram-input-changed=${(e) => { this.selectedItem.status = e.detail.value; this._handleStatusChange({target: {value: e.detail.value}}); }}></sutram-select>
                             </div>
                         `;
                     })()}
@@ -525,11 +531,7 @@ export class InSetuExtSkills extends InSetuElement {
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                         <sutram-input label="Track / Skill Title" .value=${this._editName || ''} @sutram-input-changed=${(e) => this._editName = e.detail.value}></sutram-input>
                         <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Parent Collection Group</label>
-                            <input type="text" list="edit-group-list" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @input=${(e) => this._editGroup = e.target.value} style="width:100%; padding: 8px 12px; font-size: 0.95rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text);">
-                            <datalist id="edit-group-list">
-                                ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
-                            </datalist>
+                            <sutram-input label="Parent Collection Group" placeholder="e.g. Warmups (or leave blank)" .value=${this._editGroup || ''} @sutram-input-changed=${(e) => this._editGroup = e.detail.value}></sutram-input>
                         </div>
                     </div>
                     <sutram-input label="Tags" .value=${this._editTags || ''} placeholder="e.g. Piano, Acoustic, Classical" @sutram-input-changed=${(e) => this._editTags = e.detail.value}></sutram-input>
@@ -548,12 +550,7 @@ export class InSetuExtSkills extends InSetuElement {
                     <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;">
                         <sutram-input label="Item Name / Track Title" placeholder="e.g. Stairway to Heaven" .value=${this._newSkillForm.name || ''} @sutram-input-changed=${e => this._newSkillForm.name = e.detail.value}></sutram-input>
                         <div>
-                            <label style="font-weight: bold; font-size: 0.85rem; display: block; margin-bottom: 6px; color: var(--text-muted);">Collection Group</label>
-                            <input type="text" list="new-group-list" placeholder="e.g. Repertoire (or leave blank)" style="width: 100%; padding: 8px 12px; font-size: 0.95rem; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text);"
-                                .value=${this._newSkillForm.group || ''} @input=${e => this._newSkillForm.group = e.target.value}>
-                            <datalist id="new-group-list">
-                                ${this.groupsList.map(g => html`<option value="${g}"></option>`)}
-                            </datalist>
+                            <sutram-input label="Collection Group" placeholder="e.g. Repertoire (or leave blank)" .value=${this._newSkillForm.group || ''} @sutram-input-changed=${e => this._newSkillForm.group = e.detail.value}></sutram-input>
                         </div>
                         <sutram-select 
                             label="Target Domain Framework" 
@@ -600,19 +597,25 @@ export class InSetuExtSkills extends InSetuElement {
                                         }
                                         return html`
                                             <div>
-                                                <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">${m.label}</label>
-                                                <select .value=${this._newSkillMetrics[key] || min} @change=${e => this._newSkillMetrics[key] = e.target.value}>
-                                                    ${options.map(opt => html`<option value="${opt}">${opt}</option>`)}
-                                                </select>
+                                                <sutram-select 
+                                                    label=${m.label} 
+                                                    .value=${this._newSkillMetrics[key] || min} 
+                                                    .options=${options.map(opt => ({ value: opt, label: String(opt) }))}
+                                                    @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
+                                                </sutram-select>
                                             </div>
                                         `;
                                     }
 
                                     return html`
                                         <div>
-                                            <label style="font-size: 0.8rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">${m.label} ${m.unit ? `(${m.unit})` : ''}</label>
-                                            <input type="number" placeholder="${m.unit ? m.unit : 'Value'}"
-                                                .value=${this._newSkillMetrics[key] || ''} @input=${e => this._newSkillMetrics[key] = e.target.value}>
+                                            <sutram-input 
+                                                type="number"
+                                                label="${m.label} ${m.unit ? `(${m.unit})` : ''}"
+                                                placeholder="${m.unit ? m.unit : 'Value'}"
+                                                .value=${this._newSkillMetrics[key] || ''} 
+                                                @sutram-input-changed=${e => this._newSkillMetrics[key] = e.detail.value}>
+                                            </sutram-input>
                                         </div>
                                     `;
                                 })}
@@ -684,16 +687,5 @@ window.ExtensionRegistry.registerExtension('skills', {
             order: 2,
             component: "insetu-ext-skills"
         }
-    ],
-    uiHooks: {
-        'zone:vfs-mutated': (payload) => {
-            if (!payload || !payload.mutations) return false;
-            const touchedSkill = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/skills/'));
-            if (touchedSkill) {
-                SkillsStore.getState().fetchPlaylist(true);
-                SkillsStore.getState().fetchAllSkills();
-            }
-            return false;
-        }
-    }
+    ]
 });

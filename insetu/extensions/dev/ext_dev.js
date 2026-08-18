@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { InSetuElement, createExtensionStore } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
     bridgeErrors: [],
@@ -47,21 +47,17 @@ export class InSetuExtDevDash extends InSetuElement {
             }
         });
 
-        this.registerGlobalListener('zone:soft-refresh', window, () => {
+        this.registerGlobalListener('insetu:soft-refresh', window, () => {
             DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
         });
-
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, this.utils.debounce((e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const activeTab = window.inSetu.stores.App?.getState()?.activeTab;
             if (activeTab === 'dev') {
-                if (window._devDashRefreshTimer) clearTimeout(window._devDashRefreshTimer);
-                window._devDashRefreshTimer = setTimeout(() => {
-                    DevStore.setState({ forceRefreshTick: Date.now() });
-                }, 2000);
+                DevStore.setState({ forceRefreshTick: Date.now() });
             }
-        });
+        }, 2000));
 
         this.fetchMetrics();
     }
@@ -160,7 +156,7 @@ export class InSetuExtDevDash extends InSetuElement {
                                     <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
                                         <div style="display: flex; align-items: center; gap: 8px;">
                                             <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-primary); word-break: break-all;">${err.filepath}</span>
-                                            ${err.attempt_count > 1 ? html`<span style="background: var(--intent-warning); color: #000; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; font-weight: bold;">${err.attempt_count}x Attempts</span>` : ''}
+                                            ${err.attempt_count > 1 ? html`<span style="background: var(--intent-warning); color: black; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; font-weight: bold;">${err.attempt_count}x Attempts</span>` : ''}
                                         </div>
                                         <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
                                     </div>
@@ -171,9 +167,9 @@ export class InSetuExtDevDash extends InSetuElement {
                                             <sutram-collapsible titleText="🔍 View Full Context" intent="neutral" style="--title-size: 0.8rem;">
                                                 <div style="display: flex; flex-direction: column; gap: 8px;">
                                                     <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted);">Patch Payload:</div>
-                                                    <textarea readonly style="width: 100%; height: 100px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;">${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}</textarea>
+                                                    <sutram-textarea readonly style="width: 100%; height: 100px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;" .value=${err.patch_payload ? (typeof err.patch_payload === 'string' && (err.patch_payload.startsWith('{') || err.patch_payload.startsWith('[')) ? JSON.stringify(JSON.parse(err.patch_payload), null, 2) : err.patch_payload) : 'N/A'}></sutram-textarea>
                                                     <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Target File Content:</div>
-                                                    <textarea readonly style="width: 100%; height: 150px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;">${err.file_content || 'N/A'}</textarea>
+                                                    <sutram-textarea readonly style="width: 100%; height: 150px; font-family: var(--font-mono); font-size: 0.75rem; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px; resize: vertical;" .value=${err.file_content || 'N/A'}></sutram-textarea>
                                                 </div>
                                             </sutram-collapsible>
                                         </div>

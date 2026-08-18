@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -85,7 +85,7 @@ export class InSetuExtResearch extends InSetuElement {
     }
     disconnectedCallback() {
         super.disconnectedCallback();
-        if (this._pollTimer) clearTimeout(this._pollTimer);
+        this._isUnmounted = true;
     }
     async fetchState() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('research')) return;
@@ -106,12 +106,10 @@ export class InSetuExtResearch extends InSetuElement {
                 }));
 
                 ResearchStore.setState({ jobs: parsedJobs, inbox: iData.items || [] });
-
                 // Native component polling to replace the banned global tick
                 const activeJobs = (jData.jobs || []).filter(j => j.status === 'running' || j.status === 'gathering');
-                if (activeJobs.length > 0) {
-                    if (this._pollTimer) clearTimeout(this._pollTimer);
-                    this._pollTimer = setTimeout(() => this.fetchState(), 3000);
+                if (activeJobs.length > 0 && !this._isUnmounted) {
+                    setTimeout(() => { if (!this._isUnmounted) this.fetchState(); }, 3000);
                 }
             }
         } catch (e) {
@@ -122,7 +120,7 @@ export class InSetuExtResearch extends InSetuElement {
         this.fetchState();
     }
     onForceRefresh() {
-        ResearchStore.setState({ jobs: [], inbox: [] });
+        ResearchStore.setState({ isTabActive: true, jobs: [], inbox: [] });
         this.fetchState();
     }
     async startJob(e) {
@@ -333,10 +331,10 @@ export class InSetuExtResearch extends InSetuElement {
                     <sutram-async-btn style="margin-bottom: 25px; display: block;" label="📦 Pack Context Files" intent="primary" .onClick=${this._getGenerateContextAction(job.id)}></sutram-async-btn>
 
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 2: Prompt Template</h4>
-                    <textarea readonly style="width: 100%; min-height: 160px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 25px; resize: vertical;" onclick="this.select()">Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of \`id\` strings: \`accept\` (highly relevant), \`reject\` (spam/irrelevant), and \`rescan\` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}</textarea>
+                    <sutram-textarea readonly style="width: 100%; min-height: 160px; margin-bottom: 25px;" .value=${'Review these scraped documents. I am researching [INSERT TOPIC]. Filter out any documents that are SEO spam, irrelevant, or low quality. Output your response as a raw JSON object containing three arrays of `id` strings: `accept` (highly relevant), `reject` (spam/irrelevant), and `rescan` (relevant but poorly formatted or truncated). Do not include markdown blocks. Example: {"accept": ["id-1"], "reject": ["id-2"], "rescan": ["id-3"]}'}></sutram-textarea>
                     <h4 style="margin: 0 0 10px 0; color: var(--text);">Step 3: Ingest AI Triage</h4>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 10px;">Paste the raw JSON object from the LLM here to process the batch.</p>
-                    <textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @input=${e => this._aiJsonInput = e.target.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; padding: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; font-family: monospace; font-size: 0.85rem; margin-bottom: 10px; resize: vertical;"></textarea>
+                    <sutram-textarea id="rs-ai-json-input" .value=${this._aiJsonInput} @sutram-input-changed=${e => this._aiJsonInput = e.detail.value} placeholder='{"accept": [], "reject": [], "rescan": []}' style="width: 100%; min-height: 120px; margin-bottom: 10px;"></sutram-textarea>
                     <sutram-async-btn style="width: 100%; display: block;" label="🤖 Execute Triage" intent="highlight" .onClick=${this.executeAITriage.bind(this)}></sutram-async-btn>
                 </div>
             ` : html`
@@ -400,7 +398,7 @@ export class InSetuExtResearch extends InSetuElement {
                             </div>
                             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                                 <div style="display: flex; gap: 5px; flex: 1; min-width: 200px;">
-                                    <input type="text" .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; padding: 6px; font-family: monospace;" @input=${(e) => ResearchStore.setState({ targetDir: e.target.value })}>
+                                    <sutram-input .value=${this.targetDir || 'research/'} placeholder="Target path (e.g. research/)" style="flex: 1; margin: 0; font-family: monospace;" @sutram-input-changed=${(e) => ResearchStore.setState({ targetDir: e.detail.value })}></sutram-input>
                                     <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 6px 12px;" @click=${() => { if(this.ui && this.ui.openFolderBrowser) this.ui.openFolderBrowser((p) => { ResearchStore.setState({ targetDir: p ? p + '/' : '' }); }); }}>...</button>
                                 </div>
                                 <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this.handleDisposition(activeItem.id, 'accepted')}>✅ Accept to Workspace</button>
@@ -483,7 +481,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'warning',
             order: 10,
             match: (data) => data.status === 'running',
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'pause' } }))
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'pause' } })
         },
         {
             targetEntity: 'research_job',
@@ -493,7 +491,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'success',
             order: 10,
             match: (data) => data.status === 'paused',
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'resume' } }))
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'resume' } })
         },
         {
             targetEntity: 'research_job',
@@ -503,7 +501,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'highlight',
             order: 10,
             match: (data) => data.status === 'failed',
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'retry' } }))
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'retry' } })
         },
         {
             targetEntity: 'research_job',
@@ -513,7 +511,7 @@ window.ExtensionRegistry.registerExtension('research', {
             intent: 'neutral',
             order: 20,
             match: (data) => ['running', 'paused', 'gathering', 'failed'].includes(data.status),
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'cancel' } }))
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'cancel' } })
         },
         {
             targetEntity: 'research_job',
@@ -522,7 +520,7 @@ window.ExtensionRegistry.registerExtension('research', {
             icon: '🗑️',
             intent: 'danger',
             order: 30,
-            asyncAction: async (data, e) => window.dispatchEvent(new CustomEvent('insetu:research:action', { detail: { id: data.id, action: 'delete' } }))
+            emitEvent: (data) => ({ name: 'insetu:research:action', detail: { id: data.id, action: 'delete' } })
         }
     ],
     layoutSlots: [
@@ -541,16 +539,7 @@ window.ExtensionRegistry.registerExtension('research', {
             order: 4,
             component: "insetu-ext-research"
         }
-    ],
-    uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.subId === 'research') {
-                ResearchStore.setState({ isTabActive: true });
-            } else {
-                ResearchStore.setState({ isTabActive: false });
-            }
-        }
-    }
+    ]
 });
 
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
@@ -558,8 +547,8 @@ window.ExtensionRegistry.registerExtension('research', {
 async function syncResearchState() {
     try {
         const [jRes, iRes] = await Promise.all([
-            window.inSetu.api.workspace('research/jobs'),
-            window.inSetu.api.workspace('research/inbox?status=pending,duplicate,in_library')
+            window.inSetu.api.get('research/jobs'),
+            window.inSetu.api.get('research/inbox?status=pending,duplicate,in_library')
         ]);
         if (jRes.ok && iRes.ok) {
             const jData = await jRes.json();

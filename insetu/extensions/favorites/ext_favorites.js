@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
@@ -15,7 +15,7 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         }
         FavoritesStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('favorites/list');
+            const res = await window.inSetu.api.get('favorites/list');
             if (res.ok) {
                 const data = await res.json();
                 FavoritesStore.setState({ items: data.favorites || [] });
@@ -44,13 +44,8 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         };
 
         FavoritesStore.setState(state => ({ items: [...state.items, newItem] }));
-
         try {
-            const res = await window.inSetu.api.workspace('favorites/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newItem)
-            });
+            const res = await window.inSetu.api.post('favorites/add', newItem);
             if (res.ok) {
                 FavoritesStore.getState().fetchFavorites();
             } else {
@@ -67,9 +62,7 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         }));
 
         try {
-            const res = await window.inSetu.api.workspace(`favorites/delete/${id}`, {
-                method: 'POST'
-            });
+            const res = await window.inSetu.api.post(`favorites/delete/${id}`, {});
             if (!res.ok) {
                 FavoritesStore.getState().fetchFavorites();
                 console.error("Failed to safely delete favorite token on disk.");
@@ -153,11 +146,15 @@ export class InSetuExtFavorites extends InSetuElement {
         });
         FavoritesStore.getState().fetchFavorites();
     }
-
     // InSetuElement SDK lifecycle hook for stateless tenant swaps
     onWorkspaceChanged(newWorkspaceId) {
         FavoritesStore.getState().fetchFavorites();
     }
+
+    onForceRefresh() {
+        FavoritesStore.getState().fetchFavorites();
+    }
+
     _navigateToFavorite(item) {
         if (item.type === 'file') {
             const isContext = item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
@@ -234,12 +231,5 @@ window.ExtensionRegistry.registerExtension('favorites', {
             order: 0,
             component: "insetu-ext-favorites"
         }
-    ],
-    uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'edit' && data.subId === 'favorites') {
-                FavoritesStore.getState().fetchFavorites();
-            }
-        }
-    }
+    ]
 });

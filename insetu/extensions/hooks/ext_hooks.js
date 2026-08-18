@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -15,7 +15,7 @@ export const HooksStore = createExtensionStore('Hooks', {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
         HooksStore.setState({ loading: true });
         try {
-            const res = await window.inSetu.api.workspace('hooks/list');
+            const res = await window.inSetu.api.get('hooks/list');
             if (res.ok) {
                 const data = await res.json();
                 HooksStore.setState({ rules: data.rules || [] });
@@ -29,7 +29,7 @@ export const HooksStore = createExtensionStore('Hooks', {
     fetchLogs: async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('hooks')) return;
         try {
-            const res = await window.inSetu.api.workspace('hooks/logs');
+            const res = await window.inSetu.api.get('hooks/logs');
             if (res.ok) {
                 const data = await res.json();
                 HooksStore.setState({ logs: data.logs || [] });
@@ -96,8 +96,13 @@ export class InSetuExtHooks extends InSetuElement {
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
     }
-
     onWorkspaceChanged(newWorkspaceId) {
+        HooksStore.setState({ rules: [], logs: [] });
+        HooksStore.getState().fetchRules();
+        HooksStore.getState().fetchLogs();
+    }
+
+    onForceRefresh() {
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
     }
@@ -272,12 +277,11 @@ export class InSetuExtHooks extends InSetuElement {
                         <div style="flex: 1; min-width: 180px;">
                             <label style="font-size: 0.85rem; font-weight: bold; color: var(--text-muted); display: block; margin-bottom: 4px;">Target Boundary</label>
                             ${this.ruleForm.trigger_type === 'repo_update' ? html`
-                                <select style="width: 100%; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"
+                                <sutram-select 
                                     .value=${this.ruleForm.trigger_target}
-                                    @change=${e => HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: e.target.value } }))}>
-                                    <option value="ALL">ALL Repositories</option>
-                                    ${this.allRepos.map(r => html`<option value="${r}">${r}</option>`)}
-                                </select>
+                                    .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.allRepos.map(r => ({ value: r, label: r }))]}
+                                    @sutram-input-changed=${e => HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: e.detail.value } }))}>
+                                </sutram-select>
                             ` : html`
                                 <div style="display: flex; gap: 8px;">
                                     ${(() => {
@@ -287,24 +291,25 @@ export class InSetuExtHooks extends InSetuElement {
                                         const buckets = selectedRepo ? this.sys.getFlattenedBuckets(selectedRepo) : [];
 
                                         return html`
-                                            <select style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"
+                                            <sutram-select 
+                                                style="flex: 1;"
                                                 .value=${selectedRepo}
-                                                @change=${e => {
-                                                    const newRepo = e.target.value;
+                                                .options=${this.allRepos.map(r => ({ value: r, label: r }))}
+                                                @sutram-input-changed=${e => {
+                                                    const newRepo = e.detail.value;
                                                     const newBuckets = this.sys.getFlattenedBuckets(newRepo);
                                                     const newBucket = newBuckets.length > 0 ? newBuckets[0].id : '';
                                                     HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: newRepo + '::' + newBucket } }));
                                                 }}>
-                                                ${this.allRepos.map(r => html`<option value="${r}">${r}</option>`)}
-                                            </select>
-                                            <select style="flex: 1; padding: 8px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border);"
+                                            </sutram-select>
+                                            <sutram-select 
+                                                style="flex: 1;"
                                                 .value=${selectedBucket}
-                                                @change=${e => {
-                                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: selectedRepo + '::' + e.target.value } }));
+                                                .options=${buckets.length > 0 ? buckets.map(b => ({ value: b.id, label: b.title })) : [{ value: '', label: 'No Buckets' }]}
+                                                @sutram-input-changed=${e => {
+                                                    HooksStore.setState(s => ({ ruleForm: { ...s.ruleForm, trigger_target: selectedRepo + '::' + e.detail.value } }));
                                                 }}>
-                                                ${buckets.map(b => html`<option value="${b.id}">${b.title}</option>`)}
-                                                ${buckets.length === 0 ? html`<option value="">No Buckets</option>` : ''}
-                                            </select>
+                                            </sutram-select>
                                         `;
                                     })()}
                                 </div>
@@ -415,17 +420,5 @@ window.ExtensionRegistry.registerExtension('hooks', {
             component: "insetu-ext-hooks-actions",
             order: 1
         }
-    ],
-    uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'ctrl' && data.subId === 'hooks') {
-                HooksStore.getState().fetchRules();
-                HooksStore.getState().fetchLogs();
-            }
-        },
-        'zone:soft-refresh': (ws) => {
-            HooksStore.setState({ rules: [], logs: [] });
-            return false;
-        }
-    }
+    ]
 });

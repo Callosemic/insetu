@@ -31,7 +31,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
     resetState: () => KanbanStore.setState({ tasks: [] }),
     fetchTasks: async () => {
         if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
-        const res = await window.inSetu.api.workspace('tracker/files?t=' + Date.now());
+        const res = await window.inSetu.api.get('tracker/files?t=' + Date.now());
         if (res.ok) {
             const data = await res.json();
             KanbanStore.setState({ tasks: data.tasks || [] });
@@ -44,20 +44,16 @@ export const KanbanStore = createExtensionStore('Kanban', {
         if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('tracker')) return;
         try {
             const [res, sysRes] = await Promise.allSettled([
-                window.inSetu.api.workspace('tracker/settings?t=' + Date.now()),
-                window.inSetu.api.workspace('tracker/system_schemas?t=' + Date.now())
+                window.inSetu.api.get('tracker/settings?t=' + Date.now()),
+                window.inSetu.api.get('tracker/system_schemas?t=' + Date.now())
             ]);
+            const newSettings = (res.status === 'fulfilled' && res.value.ok) 
+                ? await res.value.json() 
+                : (KanbanStore.getState().settings || {});
 
-            let newSettings = KanbanStore.getState().settings || {};
-            let newSchemas = KanbanStore.getState().systemSchemas || [];
-
-            if (res.status === 'fulfilled' && res.value.ok) {
-                newSettings = await res.value.json();
-            }
-            if (sysRes.status === 'fulfilled' && sysRes.value.ok) {
-                const sysData = await sysRes.value.json();
-                newSchemas = sysData.system_schemas || [];
-            }
+            const newSchemas = (sysRes.status === 'fulfilled' && sysRes.value.ok) 
+                ? (await sysRes.value.json()).system_schemas || [] 
+                : (KanbanStore.getState().systemSchemas || []);
 
             KanbanStore.setState({ settings: newSettings, systemSchemas: newSchemas });
 
@@ -119,11 +115,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
         }
     },
     transitionTask: async (task, newStatus, newType = null) => {
-        const res = await window.inSetu.api.workspace('tracker/transition', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repo: task.repo, filepath: task.filepath, new_status: newStatus, new_type: newType })
-        });
+        const res = await window.inSetu.api.post('tracker/transition', { repo: task.repo, filepath: task.filepath, new_status: newStatus, new_type: newType });
         if (res.ok) {
             const data = await res.json();
             KanbanStore.setState(state => ({
@@ -139,7 +131,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
 }, ['pinnedTags', 'pinnedBuckets']);
 window.inSetu.stores.Kanban = KanbanStore;
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 export class InSetuExtTracker extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
@@ -213,7 +205,7 @@ constructor() {
         this.registerGlobalListener('insetu:tracker:load-board', window, () => {
             KanbanStore.getState().fetchTasks();
         });
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const touchedTracker = payload.mutations.some(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
@@ -320,16 +312,16 @@ constructor() {
     _renderStackedView(targetTier, filteredTasks, filters) {
         const typeFilter = t => {
             if (!filters) return true;
-            let matchType = true;
-            if (filters.ticket_types) {
+            const matchType = (() => {
+                if (!filters.ticket_types) return true;
                 const allowed = filters.ticket_types.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-                matchType = allowed.length === 0 || allowed.includes((t.ticket_type || '').toLowerCase());
-            }
-            let matchStatus = true;
-            if (filters.statuses) {
+                return allowed.length === 0 || allowed.includes((t.ticket_type || '').toLowerCase());
+            })();
+            const matchStatus = (() => {
+                if (!filters.statuses) return true;
                 const allowed = filters.statuses.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-                matchStatus = allowed.length === 0 || allowed.includes((t.status || '').toLowerCase());
-            }
+                return allowed.length === 0 || allowed.includes((t.status || '').toLowerCase());
+            })();
             return matchType && matchStatus;
         };
         const parentCards = filteredTasks.filter(t => t.tier === targetTier && typeFilter(t));
@@ -444,38 +436,41 @@ constructor() {
         const currentView = (this.customViews || []).find(v => v.id === this.activeTab);
         const repoStrategy = currentView?.repo_strategy || 'global';
         const activeFocusId = KanbanStore.getState().activeFocusId;
-        let focusedTaskIds = new Set();
-        let focusedTaskTitle = '';
-        if (activeFocusId) {
-            focusedTaskIds.add(activeFocusId);
-            const focusTarget = this.tasks.find(t => t.id === activeFocusId);
-            if (focusTarget) {
-                focusedTaskTitle = focusTarget.title || focusTarget.id;
-                const getDesc = (pid) => {
-                    this.tasks.forEach(t => {
-                        if (t.parentId === pid) {
-                            focusedTaskIds.add(t.id);
-                            getDesc(t.id);
-                        }
-                    });
-                };
-                getDesc(activeFocusId);
-            } else {
-                KanbanStore.getState().setFocus(null);
+        const focusState = (() => {
+            const ids = new Set();
+            const data = { title: '' };
+            if (activeFocusId) {
+                ids.add(activeFocusId);
+                const focusTarget = this.tasks.find(t => t.id === activeFocusId);
+                if (focusTarget) {
+                    data.title = focusTarget.title || focusTarget.id;
+                    const getDesc = (pid) => {
+                        this.tasks.forEach(t => {
+                            if (t.parentId === pid) {
+                                ids.add(t.id);
+                                getDesc(t.id);
+                            }
+                        });
+                    };
+                    getDesc(activeFocusId);
+                } else {
+                    KanbanStore.getState().setFocus(null);
+                }
             }
-        }
-
+            return { ids, title: data.title };
+        })();
+        const focusedTaskIds = focusState.ids;
+        const focusedTaskTitle = focusState.title;
         // 1. Scope to View Rules first
-        let viewScopedTasks = this.tasks.filter(t => t.status !== 'template');
-        if (currentView) {
-            viewScopedTasks = viewScopedTasks.filter(t => {
+        const viewScopedTasks = (() => {
+            const baseTasks = this.tasks.filter(t => t.status !== 'template');
+            if (!currentView) return baseTasks;
+            return baseTasks.filter(t => {
                 if (currentView.target_schema) {
                     const repoSchema = (this.settings.kanban_repo_map || {})[t.repo] || 'agile_basic';
                     if (repoSchema !== currentView.target_schema) return false;
                 }
-
                 if (currentView.target_tier && t.tier !== currentView.target_tier) return false;
-
                 if (currentView.layout !== 'log' && currentView.filters) {
                     if (currentView.filters.ticket_types) {
                         const allowed = currentView.filters.ticket_types.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -488,39 +483,39 @@ constructor() {
                 }
                 return true;
             });
-        }
+        })();
 
         // 2. Determine base allowed repos for custom strategies
-        let baseAllowedRepos = this.ecosystem.allRepos;
-        if (repoStrategy === 'schema') {
-            const targetSchema = currentView.target_schema;
-            if (targetSchema) {
-                baseAllowedRepos = this.ecosystem.allRepos.filter(r => (this.settings.kanban_repo_map || {})[r] === targetSchema);
+        const baseAllowedRepos = (() => {
+            if (repoStrategy === 'schema') {
+                const targetSchema = currentView.target_schema;
+                if (targetSchema) {
+                    return this.ecosystem.allRepos.filter(r => (this.settings.kanban_repo_map || {})[r] === targetSchema);
+                }
+            } else if (repoStrategy === 'explicit') {
+                return currentView.explicit_repos || [];
             }
-        } else if (repoStrategy === 'explicit') {
-            baseAllowedRepos = currentView.explicit_repos || [];
-        }
+            return this.ecosystem.allRepos;
+        })();
 
         // 3. Apply active filters
         const activeRepoPins = repoStrategy === 'global' ? this.ecosystem.pinnedRepos : this._localPinnedRepos;
         const activeTagPins = repoStrategy === 'global' ? this.pinnedTags : this._localPinnedTags;
         const activeBucketPins = repoStrategy === 'global' ? this.pinnedBuckets : this._localPinnedBuckets;
-        let hiddenTasksCount = 0;
-        let hiddenTasksByStatus = {};
-        let missingRepos = new Set();
+
+        const hiddenTracker = { count: 0, byStatus: {}, missingRepos: new Set() };
 
         const fullyFilteredTasks = viewScopedTasks.filter(t => {
             if (repoStrategy !== 'global' && !baseAllowedRepos.includes(t.repo)) return false;
 
             const matchesTag = activeTagPins.has('ALL') || (t.tags && t.tags.some(tag => activeTagPins.has(tag)));
 
-            let matchesBucket = true;
-            if (!activeBucketPins.has('ALL')) {
+            const matchesBucket = (() => {
+                if (activeBucketPins.has('ALL')) return true;
                 const repoBucketsPinned = Array.from(activeBucketPins).some(pb => pb.startsWith(t.repo + '::'));
-                if (repoBucketsPinned) {
-                    matchesBucket = activeBucketPins.has(t.repo + '::' + t.subBucket);
-                }
-            }
+                if (repoBucketsPinned) return activeBucketPins.has(t.repo + '::' + t.subBucket);
+                return true;
+            })();
 
             // Drop tasks that fail non-repo filters before counting them as "hidden"
             if (!matchesTag || !matchesBucket) return false;
@@ -528,9 +523,9 @@ constructor() {
             const matchesRepo = activeRepoPins.has('ALL') || activeRepoPins.has(t.repo);
             if (!matchesRepo && repoStrategy === 'global') {
                 if (t.status !== 'template') {
-                    hiddenTasksCount++;
-                    hiddenTasksByStatus[t.status] = (hiddenTasksByStatus[t.status] || 0) + 1;
-                    missingRepos.add(t.repo);
+                    hiddenTracker.count++;
+                    hiddenTracker.byStatus[t.status] = (hiddenTracker.byStatus[t.status] || 0) + 1;
+                    hiddenTracker.missingRepos.add(t.repo);
                 }
                 return false;
             }
@@ -571,7 +566,7 @@ constructor() {
                 .hasFiltersOverride=${hasFilters}>
                 <div slot="filters" style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
                     ${repoStrategy !== 'global' ? html`
-                        <div style="background: var(--intent-highlight); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-align: center; margin-bottom: -5px;">
+                        <div style="background: var(--intent-highlight); color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-align: center; margin-bottom: -5px;">
                             Tab-Specific Filtering Enabled
                         </div>
                     ` : ''}
@@ -612,7 +607,7 @@ constructor() {
                                             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @sutram-pill-toggled=${(e) => {
                                                 e.stopPropagation();
                                                 const { id, active } = e.detail;
-                                                let newSet = new Set(activeBucketPins);
+                                                const newSet = new Set(activeBucketPins);
 
                                                 if (id === repo + '::ALL') {
                                                     buckets.forEach(b => newSet.delete(repo + '::' + b.id));
@@ -655,7 +650,7 @@ constructor() {
             </sutram-toolbar>
             <div class="tracker-body" style="${currentView?.layout === 'log' ? 'padding: 0;' : ''}">
                 ${activeFocusId ? html`
-                    <div style="background: var(--intent-highlight); color: #fff; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <div style="background: var(--intent-highlight); color: white; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <span style="font-size: 1.2rem;">🎯</span>
                             <div style="display: flex; flex-direction: column;">
@@ -666,18 +661,18 @@ constructor() {
                         <div style="display: flex; gap: 8px;">
                             <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => {
                                 const task = this.tasks.find(t => t.id === activeFocusId);
-                                if (task) window.dispatchEvent(new CustomEvent('insetu:tracker:open-hierarchy', { detail: { task } }));
+                                if (task) window.inSetu.events.emit('insetu:tracker:open-hierarchy', { task });
                             }}>🌳 View Hierarchy</button>
                             <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => KanbanStore.getState().setFocus(null)}>✕ Clear Focus</button>
                         </div>
                     </div>
                 ` : ''}
-                ${hiddenTasksCount > 0 && repoStrategy === 'global' ? html`
+                ${hiddenTracker.count > 0 && repoStrategy === 'global' ? html`
                     <div style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-bottom: 15px; text-align: center;">
-                        Note: ${Object.entries(hiddenTasksByStatus).sort(([a], [b]) => {
+                        Note: ${Object.entries(hiddenTracker.byStatus).sort(([a], [b]) => {
                             const order = ['active', 'open', 'closed', 'logged', 'archived'];
                             return (order.indexOf(a) > -1 ? order.indexOf(a) : 99) - (order.indexOf(b) > -1 ? order.indexOf(b) : 99);
-                        }).map(([status, count]) => `${count} ${status}`).join(', ')} task${hiddenTasksCount === 1 ? '' : 's'} currently hidden by the Smart Repo Filter.
+                        }).map(([status, count]) => `${count} ${status}`).join(', ')} task${hiddenTracker.count === 1 ? '' : 's'} currently hidden by the Smart Repo Filter.
                     </div>
                 ` : ''}
                 ${(() => {
@@ -812,7 +807,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _templateRepoFilter: { type: String },
         _returnToTemplatesBrowser: { type: Boolean },
         _hierarchyModalOpen: { type: Boolean },
-        _hierarchyTask: { type: Object }
+        _hierarchyTask: { type: Object },
+        _returnToHierarchy: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -846,6 +842,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._returnToTemplatesBrowser = false;
         this._hierarchyModalOpen = false;
         this._hierarchyTask = null;
+        this._returnToHierarchy = false;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -866,7 +863,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this.registerGlobalListener('insetu:tracker:open-edit-task', window, (e) => {
             this._openEditTaskModal(e.detail.filepath);
         });
-        this.registerGlobalListener('zone:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const currentEdit = KanbanStore.getState().editTaskForm?.filepath;
@@ -924,11 +921,9 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 varMap.set(key, def);
             }
         };
-
         tree.forEach(t => {
-            let match;
-            while ((match = regex.exec(t.title)) !== null) processMatch(match);
-            while ((match = regex.exec(t.description)) !== null) processMatch(match);
+            for (const match of (t.title || '').matchAll(regex)) processMatch(match);
+            for (const match of (t.description || '').matchAll(regex)) processMatch(match);
         });
 
         // Calculate a clean display name for the modal title
@@ -967,13 +962,13 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const prePopulatedTags = Array.from(this.pinnedTags || []).filter(t => t !== 'ALL');
         const defaultTagsStr = prePopulatedTags.join(', ');
 
-        let targetRepo = this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : '';
-        if (this.ecosystem.pinnedRepos.size === 1 && !this.ecosystem.pinnedRepos.has('ALL')) {
-            const pinnedRepo = Array.from(this.ecosystem.pinnedRepos)[0];
-            if (this.ecosystem.allRepos.includes(pinnedRepo)) {
-                targetRepo = pinnedRepo;
+        const targetRepo = (() => {
+            if (this.ecosystem.pinnedRepos.size === 1 && !this.ecosystem.pinnedRepos.has('ALL')) {
+                const pinnedRepo = Array.from(this.ecosystem.pinnedRepos)[0];
+                if (this.ecosystem.allRepos.includes(pinnedRepo)) return pinnedRepo;
             }
-        }
+            return this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : '';
+        })();
         const settings = state.settings || {};
         const schemaId = (settings.kanban_repo_map || {})[targetRepo] || 'agile_basic';
         const allSchemas = [...(state.systemSchemas || []), ...(settings.kanban_profiles || [])];
@@ -982,41 +977,37 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const t1Types = getTierTypes(1);
         const t2Types = getTierTypes(2);
         const t3Types = getTierTypes(3);
-        let defaultTier = 3;
-        let defaultType = t3Types.length > 0 ? t3Types[0] : 'task';
-
         const customViews = state.customViews || [];
         const activeView = customViews.find(v => v.id === activeTab);
 
-        if (activeView) {
-            // 1. Inherit from strict tier targeting
-            if (activeView.target_tier) {
-                defaultTier = activeView.target_tier;
-                const tierTypes = getTierTypes(defaultTier);
-                if (tierTypes.length > 0) defaultType = tierTypes[0];
-            }
-
-            // 2. Inherit from strict type filtering (overrides tier defaults)
-            if (activeView.filters && activeView.filters.ticket_types) {
-                const allowedTypes = activeView.filters.ticket_types.split(',').map(s => s.trim()).filter(Boolean);
-                if (allowedTypes.length === 1) {
-                    defaultType = allowedTypes[0];
-                    // Reverse-infer the tier to keep the UI dropdowns in sync
-                    if (t1Types.includes(defaultType)) defaultTier = 1;
-                    else if (t2Types.includes(defaultType)) defaultTier = 2;
-                    else if (t3Types.includes(defaultType)) defaultTier = 3;
+        const { defaultTier, defaultType } = (() => {
+            const initial = { tier: 3, type: t3Types.length > 0 ? t3Types[0] : 'task' };
+            if (activeView) {
+                if (activeView.target_tier) {
+                    initial.tier = activeView.target_tier;
+                    const tierTypes = getTierTypes(initial.tier);
+                    if (tierTypes.length > 0) initial.type = tierTypes[0];
+                }
+                if (activeView.filters && activeView.filters.ticket_types) {
+                    const allowedTypes = activeView.filters.ticket_types.split(',').map(s => s.trim()).filter(Boolean);
+                    if (allowedTypes.length === 1) {
+                        initial.type = allowedTypes[0];
+                        if (t1Types.includes(initial.type)) initial.tier = 1;
+                        else if (t2Types.includes(initial.type)) initial.tier = 2;
+                        else if (t3Types.includes(initial.type)) initial.tier = 3;
+                    }
+                }
+            } else {
+                const matchType = [...t1Types, ...t2Types, ...t3Types].find(t => activeTab.includes(t));
+                if (matchType) {
+                    initial.type = matchType;
+                    if (t1Types.includes(initial.type)) initial.tier = 1;
+                    else if (t2Types.includes(initial.type)) initial.tier = 2;
+                    else if (t3Types.includes(initial.type)) initial.tier = 3;
                 }
             }
-        } else {
-            // Fallback for hardcoded routing: match active tab ID to a configured schema type
-            const matchType = [...t1Types, ...t2Types, ...t3Types].find(t => activeTab.includes(t));
-            if (matchType) {
-                defaultType = matchType;
-                if (t1Types.includes(defaultType)) defaultTier = 1;
-                else if (t2Types.includes(defaultType)) defaultTier = 2;
-                else if (t3Types.includes(defaultType)) defaultTier = 3;
-            }
-        }
+            return { defaultTier: initial.tier, defaultType: initial.type };
+        })();
 
         state.setNewTaskField('repo', targetRepo);
         state.setNewTaskField('tier', defaultTier);
@@ -1024,20 +1015,40 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setNewTaskField('tags', defaultTagsStr);
         state.setNewTaskField('title', '');
         state.setNewTaskField('desc', '');
-        let defaultStatus = 'open';
-        if (activeView) {
-            if (activeView.filters && activeView.filters.statuses) {
+
+        const defaultStatus = (() => {
+            if (activeView && activeView.filters && activeView.filters.statuses) {
                 const statuses = activeView.filters.statuses.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-                if (statuses.length === 1 && statuses[0] === 'template') {
-                    defaultStatus = 'template';
-                }
+                if (statuses.length === 1 && statuses[0] === 'template') return 'template';
             }
-        }
+            return 'open';
+        })();
+
         state.setNewTaskField('status', defaultStatus);
         state.setNewTaskField('deliveryDate', '');
 
         // Smart Bucket Resolution from active bucket filters
-        let targetBucket = 'None';
+        const targetBucket = (() => {
+            const activeBucketPins = Array.from(state.pinnedBuckets || []).filter(b => b !== 'ALL');
+            if (activeBucketPins.length > 0) {
+                const repoPrefix = targetRepo ? `${targetRepo}::` : '';
+                const matchingPins = activeBucketPins.filter(b => !targetRepo || b.startsWith(repoPrefix));
+                const bucketIds = Array.from(new Set(matchingPins.map(b => b.includes('::') ? b.split('::')[1] : b)));
+                if (bucketIds.length === 1) return bucketIds[0];
+                if (activeBucketPins.length === 1) {
+                    const singlePin = activeBucketPins[0];
+                    if (singlePin.includes('::')) {
+                        const [pRepo, pBucket] = singlePin.split('::');
+                        if (!targetRepo || pRepo === targetRepo) {
+                            if (!targetRepo) state.setNewTaskField('repo', pRepo);
+                            return pBucket;
+                        }
+                    }
+                }
+            }
+            return 'None';
+        })();
+
         const activeBucketPins = Array.from(state.pinnedBuckets || []).filter(b => b !== 'ALL');
         if (activeBucketPins.length > 0) {
             const repoPrefix = targetRepo ? `${targetRepo}::` : '';
@@ -1098,13 +1109,15 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const defaultTitle = filepath.split('/').pop();
         const pathParts = filepath.split('/');
         const trackerIdx = pathParts.indexOf('.tracker');
-        let inferredType = 'task';
-        if (trackerIdx !== -1 && pathParts.length > trackerIdx + 1) {
-            const folder = pathParts[trackerIdx + 1];
-            if (folder !== 'log') {
-                inferredType = folder.endsWith('s') ? folder.slice(0, -1) : folder;
+        const inferredType = (() => {
+            if (trackerIdx !== -1 && pathParts.length > trackerIdx + 1) {
+                const folder = pathParts[trackerIdx + 1];
+                if (folder !== 'log') {
+                    return folder.endsWith('s') ? folder.slice(0, -1) : folder;
+                }
             }
-        }
+            return 'task';
+        })();
 
         const inferredStatus = filepath.includes('/active/') ? 'active' : filepath.includes('/closed/') ? 'closed' : filepath.includes('/archived/') ? 'archived' : filepath.includes('/log/') ? 'logged' : 'open';
 
@@ -1316,6 +1329,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         this._returnToTemplatesBrowser = false;
                         this._templatesBrowserOpen = true;
                         this.requestUpdate();
+                    } else if (this._returnToHierarchy) {
+                        this._returnToHierarchy = false;
+                        this._hierarchyModalOpen = true;
+                        this.requestUpdate();
                     }
                 }}>
 
@@ -1494,7 +1511,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                             const currentFilepath = activeForm.filepath;
                             const currentTier = activeForm.tier || (state.tasks.find(t => t.filepath === currentFilepath)?.tier) || 3;
 
-                            let candidates = state.tasks.filter(t => {
+                            const baseCandidates = state.tasks.filter(t => {
                                 if (currentFilepath && t.filepath === currentFilepath) return false;
                                 if (this._pickerRepoFilter !== 'ALL' && t.repo !== this._pickerRepoFilter) return false;
 
@@ -1504,9 +1521,9 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 return true;
                             });
 
-                            if (this._pickerSearchQuery) {
-                                candidates = this.utils.fuzzyFilterObjects(candidates, this._pickerSearchQuery, t => `${t.id} ${t.title} ${t.repo} ${t.subBucket || ''} ${(t.tags || []).join(' ')}`);
-                            }
+                            const candidates = this._pickerSearchQuery 
+                                ? this.utils.fuzzyFilterObjects(baseCandidates, this._pickerSearchQuery, t => `${t.id} ${t.title} ${t.repo} ${t.subBucket || ''} ${(t.tags || []).join(' ')}`)
+                                : baseCandidates;
 
                             const displayed = candidates.slice(0, 40);
 
@@ -1618,13 +1635,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
                     ${allKidsDone && t.status !== 'closed' ? html`<sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>` : ''}
                     ${t.dependsOn && t.dependsOn.length > 0 ? t.dependsOn.map(dep => {
-                        let dRepo = t.repo;
-                        let dId = dep;
-                        if (dep.includes('/')) {
-                            const parts = dep.split('/');
-                            dRepo = parts[0];
-                            dId = parts[1];
-                        }
+                        const { dRepo, dId } = (() => {
+                            if (dep.includes('/')) {
+                                const parts = dep.split('/');
+                                return { dRepo: parts[0], dId: parts[1] };
+                            }
+                            return { dRepo: t.repo, dId: dep };
+                        })();
+
                         const depTask = this.tasks.find(x => x.id === dId && x.repo === dRepo);
                         const isResolved = !depTask || ['closed', 'logged', 'archived'].includes(depTask.status);
                         return html`
@@ -1649,20 +1667,33 @@ export class InSetuExtTrackerModals extends InSetuElement {
             return acc;
         }, {});
 
-        const renderNode = (taskId, depth = 0) => {
+        const renderNode = (taskId, depth = 0, isLast = true) => {
             const task = allTasks.find(t => t.id === taskId);
             if (!task) return '';
             const children = childMap[taskId] || [];
 
             return html`
-                <div style="margin-left: ${depth === 0 ? 0 : 20}px; border-left: ${depth > 0 ? '2px solid var(--border)' : 'none'}; padding-left: ${depth > 0 ? '15px' : '0'}; margin-bottom: 15px;">
+                <div style="position: relative; display: flex; flex-direction: column; padding-left: ${depth > 0 ? 30 : 0}px;">
+                    ${depth > 0 ? html`
+                        ${!isLast ? html`
+                            <div style="position: absolute; left: 10px; top: -15px; bottom: 0; width: 2px; background: var(--border); z-index: 1;"></div>
+                        ` : html`
+                            <div style="position: absolute; left: 10px; top: -15px; height: 53px; width: 2px; background: var(--border); z-index: 1;"></div>
+                        `}
+                        <div style="position: absolute; left: 10px; top: 36px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
+                    ` : ''}
+
                     ${this._renderTaskCard(task, () => {
                         this._hierarchyModalOpen = false;
+                        this._returnToHierarchy = true;
                         this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
                     }, childMap)}
-                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                        ${children.map(c => renderNode(c.id, depth + 1))}
-                    </div>
+
+                    ${children.length > 0 ? html`
+                        <div style="position: relative; display: flex; flex-direction: column; margin-left: ${depth === 0 ? 10 : 0}px;">
+                            ${children.map((c, i) => renderNode(c.id, depth + 1, i === children.length - 1))}
+                        </div>
+                    ` : ''}
                 </div>
             `;
         };
@@ -1675,7 +1706,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     <h3 style="margin: 0; color: var(--text);">Hierarchy: ${rootDisplayTitle}</h3>
                 </div>
                 <div>
-                    ${renderNode(this._hierarchyTask.id, 0)}
+                    ${renderNode(this._hierarchyTask.id, 0, true)}
                 </div>
             </div>
         `;
@@ -1703,8 +1734,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 return this.requestUpdate();
             }
             const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-
-            const renderNode = (taskId, depth = 0) => {
+            const renderNode = (taskId, depth = 0, isLast = true) => {
                 const task = filteredTasks.find(t => t.id === taskId);
                 if (!task) return '';
                 const children = childMap[taskId] || [];
@@ -1714,24 +1744,41 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 const nextTierLabel = nextTier ? (schema[`t${nextTier}_label`] || `Tier ${nextTier}`) : null;
 
                 return html`
-                    <div style="margin-left: ${depth === 0 ? 0 : 20}px; border-left: ${depth > 0 ? '2px solid var(--border)' : 'none'}; padding-left: ${depth > 0 ? '15px' : '0'}; margin-bottom: 15px;">
+                    <div style="position: relative; display: flex; flex-direction: column; padding-left: ${depth > 0 ? 30 : 0}px;">
+                        ${depth > 0 ? html`
+                            ${!isLast ? html`
+                                <div style="position: absolute; left: 10px; top: -15px; bottom: 0; width: 2px; background: var(--border); z-index: 1;"></div>
+                            ` : html`
+                                <div style="position: absolute; left: 10px; top: -15px; height: 53px; width: 2px; background: var(--border); z-index: 1;"></div>
+                            `}
+                            <div style="position: absolute; left: 10px; top: 36px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
+                        ` : ''}
+
                         ${this._renderTaskCard(task, null, childMap)}
-                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                            ${children.map(c => renderNode(c.id, depth + 1))}
-                            ${nextTier ? html`
-                                <button class="btn-sm" style="background: transparent; color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin-top: 5px;"
-                                    @click=${() => {
-                                        this._templatesBrowserOpen = false;
-                                        this._returnToTemplatesBrowser = true;
-                                        this.dispatch('insetu:tracker:open-new-task', { 
-                                            activeTab: 'todos', 
-                                            prefill: { parentId: task.id, tier: nextTier, repo: task.repo, status: 'template' } 
-                                        });
-                                    }}>
-                                    ➕ New ${nextTierLabel}
-                                </button>
-                            ` : ''}
-                        </div>
+
+                        ${(children.length > 0 || nextTier) ? html`
+                            <div style="position: relative; display: flex; flex-direction: column; margin-left: ${depth === 0 ? 10 : 0}px;">
+                                ${children.map((c, i) => renderNode(c.id, depth + 1, i === children.length - 1 && !nextTier))}
+                                ${nextTier ? html`
+                                    <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
+                                        <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
+                                        <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
+
+                                        <button class="btn-sm" style="background: var(--input-bg); color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin: 0; z-index: 2;"
+                                            @click=${() => {
+                                                this._templatesBrowserOpen = false;
+                                                this._returnToTemplatesBrowser = true;
+                                                this.dispatch('insetu:tracker:open-new-task', { 
+                                                    activeTab: 'todos', 
+                                                    prefill: { parentId: task.id, tier: nextTier, repo: task.repo, status: 'template' } 
+                                                });
+                                            }}>
+                                            ➕ New ${nextTierLabel}
+                                        </button>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        ` : ''}
                     </div>
                 `;
             };
@@ -1743,19 +1790,20 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
                     </div>
                     <div>
-                        ${renderNode(rootTask.id, 0)}
+                        ${renderNode(rootTask.id, 0, true)}
                     </div>
                 </div>
             `;
         }
         // LIST VIEW
-        let repoFiltered = filteredTasks;
         const currentRepo = this._templateRepoFilter || (this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : 'ALL');
-
-        if (currentRepo !== 'ALL') {
-            const targetSchema = repoMap[currentRepo] || 'agile_basic';
-            repoFiltered = filteredTasks.filter(t => (repoMap[t.repo] || 'agile_basic') === targetSchema);
-        }
+        const repoFiltered = (() => {
+            if (currentRepo !== 'ALL') {
+                const targetSchema = repoMap[currentRepo] || 'agile_basic';
+                return filteredTasks.filter(t => (repoMap[t.repo] || 'agile_basic') === targetSchema);
+            }
+            return filteredTasks;
+        })();
 
         const roots = repoFiltered.filter(t => !t.parentId);
 
@@ -1939,11 +1987,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
         }
         this.requestUpdate();
     }
-
     _deleteSchema() {
         if (this.schemaFormData.isSystem) return;
         this.customSchemas = this.customSchemas.filter(s => s.id !== this.selectedSchemaId);
-
         const newRepoMap = { ...this.repoMap };
         Object.keys(newRepoMap).forEach(repo => {
             if (newRepoMap[repo] === this.selectedSchemaId) {
@@ -2110,15 +2156,14 @@ export class InSetuExtTrackerSettings extends InSetuElement {
             </div>
         ` : html`
             <div style="display: flex; flex-direction: column; height: 100%; min-height: 0;">
-
-                <yenvui-tabs 
+                <sutram-tabs 
                     variant="sub"
                     .tabs=${[
                         { id: 'schemas', label: '📋 Repository Schemas' },
                         { id: 'views', label: '👀 Global Tabs & Views' }
                     ]}
                     .activeTab=${this.activeSettingsTab}
-                    @yenvui-tab-selected=${(e) => this.activeSettingsTab = e.detail.tabId}>
+                    @sutram-tab-selected=${(e) => this.activeSettingsTab = e.detail.tabId}>
 
                     <div slot="schemas" style="display: flex; flex-direction: column; overflow-y: auto;">
                         <sutram-collapsible titleText="Assign Schemas" intent="neutral" ?open=${true}>
@@ -2275,12 +2320,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                     ${this.allRepos.map(repo => {
                                                         const currentExplicit = v.explicit_repos || [];
                                                         return html`<sutram-toggle label=${repo} .checked=${currentExplicit.includes(repo)} @sutram-input-changed=${(e) => {
-                                                            let newSelected = [...currentExplicit];
-                                                            if (e.detail.value) {
-                                                                if (!newSelected.includes(repo)) newSelected.push(repo);
-                                                            } else {
-                                                                newSelected = newSelected.filter(r => r !== repo);
-                                                            }
+                                                            const newSelected = e.detail.value 
+                                                                ? (currentExplicit.includes(repo) ? currentExplicit : [...currentExplicit, repo])
+                                                                : currentExplicit.filter(r => r !== repo);
                                                             this._updateGlobalView(i, 'explicit_repos', newSelected);
                                                         }} ?flush=${true}></sutram-toggle>`;
                                                     })}
@@ -2311,12 +2353,10 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                             ${availableTypes.map(type => {
                                                                 const isChecked = currentTypes.includes(type);
                                                                 return html`<sutram-toggle label=${type} .checked=${isChecked} @sutram-input-changed=${(e) => {
-                                                                    let newSelected = [...currentTypes];
-                                                                    if (e.detail.value) {
-                                                                        if (!newSelected.includes(type)) newSelected.push(type);
-                                                                    } else {
-                                                                        newSelected = newSelected.filter(t => t !== type);
-                                                                    }
+                                                                    const newSelected = e.detail.value 
+                                                                        ? (currentTypes.includes(type) ? currentTypes : [...currentTypes, type])
+                                                                        : currentTypes.filter(t => t !== type);
+
                                                                     if (newSelected.length === availableTypes.length) this._updateGlobalViewFilter(i, 'ticket_types', '');
                                                                     else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'ticket_types', 'NONE');
                                                                     else this._updateGlobalViewFilter(i, 'ticket_types', newSelected.join(', '));
@@ -2331,12 +2371,10 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                         ${allStatuses.map(status => {
                                                             const isChecked = currentStatuses.includes(status);
                                                             return html`<sutram-toggle label=${status} .checked=${isChecked} @sutram-input-changed=${(e) => {
-                                                                let newSelected = [...currentStatuses];
-                                                                if (e.detail.value) {
-                                                                    if (!newSelected.includes(status)) newSelected.push(status);
-                                                                } else {
-                                                                    newSelected = newSelected.filter(t => t !== status);
-                                                                }
+                                                                const newSelected = e.detail.value 
+                                                                    ? (currentStatuses.includes(status) ? currentStatuses : [...currentStatuses, status])
+                                                                    : currentStatuses.filter(t => t !== status);
+
                                                                 if (newSelected.length === allStatuses.length) this._updateGlobalViewFilter(i, 'statuses', '');
                                                                 else if (newSelected.length === 0) this._updateGlobalViewFilter(i, 'statuses', 'NONE');
                                                                 else this._updateGlobalViewFilter(i, 'statuses', newSelected.join(', '));
@@ -2358,7 +2396,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                         </div>
                     </sutram-collapsible>
                 </div>
-                </yenvui-tabs>
+                </sutram-tabs>
         </div>
         `;
 
@@ -2397,13 +2435,13 @@ window.ExtensionRegistry.registerExtension('tracker', {
             context: 'modal:new-task-modal',
             key: 'ctrl+s',
             label: 'Save New Task',
-            action: () => window.dispatchEvent(new CustomEvent('insetu:tracker:save-new-task'))
+            action: () => window.inSetu.events.emit('insetu:tracker:save-new-task')
         },
         {
             context: 'modal:edit-task-modal',
             key: 'ctrl+s',
             label: 'Save Edited Task',
-            action: () => window.dispatchEvent(new CustomEvent('insetu:tracker:save-edit-task'))
+            action: () => window.inSetu.events.emit('insetu:tracker:save-edit-task')
         }
     ],
     entityActions: [
@@ -2439,9 +2477,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: 'highlight',
             order: 30,
             match: (data) => data.status !== 'closed' && data.status !== 'archived',
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('insetu:tracker:open-convert', { detail: { task: data } }));
-            }
+            emitEvent: (data) => ({ name: 'insetu:tracker:open-convert', detail: { task: data } })
         },
         {
             targetEntity: 'task',
@@ -2451,9 +2487,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: 'neutral',
             order: 35,
             match: (data) => data.tier < 3 && data.status !== 'template',
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('insetu:tracker:open-hierarchy', { detail: { task: data } }));
-            }
+            emitEvent: (data) => ({ name: 'insetu:tracker:open-hierarchy', detail: { task: data } })
         },
         {
             targetEntity: 'task',
@@ -2475,14 +2509,15 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: 'primary',
             order: 40,
             match: (data) => data.tier < 3 && data.status !== 'closed' && data.status !== 'archived' && data.status !== 'template',
-            onClick: (data, e) => {
+            emitEvent: (data) => {
                 const nextTier = data.tier < 3 ? data.tier + 1 : 3;
-                window.dispatchEvent(new CustomEvent('insetu:tracker:open-new-task', {
+                return {
+                    name: 'insetu:tracker:open-new-task',
                     detail: {
                         activeTab: window.inSetu.stores.App.getState().activeTab,
                         prefill: { parentId: data.id, tier: nextTier, repo: data.repo }
                     }
-                }));
+                };
             }
         },
         {
@@ -2517,9 +2552,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
             intent: 'primary',
             order: 70,
             match: (data) => data.status === 'template',
-            onClick: (data, e) => {
-                window.dispatchEvent(new CustomEvent('insetu:tracker:open-spawn', { detail: { task: data } }));
-            }
+            emitEvent: (data) => ({ name: 'insetu:tracker:open-spawn', detail: { task: data } })
         }
     ],
     layoutSlots: [

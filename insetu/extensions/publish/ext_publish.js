@@ -1,5 +1,5 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../core/shared_styles.js';
+import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
@@ -71,13 +71,16 @@ export class InSetuExtPublishModals extends InSetuElement {
         return html`
             <sutram-modal ?open=${this.publishModalOpen} ?fullscreen=${true} titleText="Publish Document" @sutram-modal-closed=${() => PublishStore.setState({ publishModalOpen: false })}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
-                    <label style="font-weight: bold; margin-bottom: 5px; display: block; font-size: 0.9rem;">Target Format:</label>
-                    <select style="width: 100%; padding: 10px; border-radius: 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); margin-bottom: 15px; font-weight: bold;"
-                        .value=${this.publishMode} @change=${e => PublishStore.setState({ publishMode: e.target.value })}>
-                        <option value="pdf">PDF (Requires LaTeX/pdflatex)</option>
-                        <option value="docx">Word Document (.docx)</option>
-                        <option value="html">HTML Webpage</option>
-                    </select>
+                    <sutram-select 
+                        label="Target Format"
+                        .value=${this.publishMode}
+                        .options=${[
+                            { value: 'pdf', label: 'PDF (Requires LaTeX/pdflatex)' },
+                            { value: 'docx', label: 'Word Document (.docx)' },
+                            { value: 'html', label: 'HTML Webpage' }
+                        ]}
+                        @sutram-input-changed=${e => PublishStore.setState({ publishMode: e.detail.value })}>
+                    </sutram-select>
                     <insetu-job-tracker 
                         .jobId=${this.activePublishJobId} 
                         @job-complete=${async (e) => {
@@ -125,6 +128,5 @@ window.ExtensionRegistry.registerExtension('publish', {
             slot: "slots:global",
             component: "insetu-ext-publish-modals"
         }
-    ],
-    uiHooks: {}
+    ]
 });
