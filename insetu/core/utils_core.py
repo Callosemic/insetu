@@ -155,7 +155,7 @@ def start_filesystem_observer(workspace_ids):
     return observer
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
-    """Provides logical repo::path boundary resolution to the Kernel VFS."""
+    """Provides logical vfs://repo/path boundary resolution to the Kernel VFS."""
     if filepath:
         is_artifact = filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/")
 
