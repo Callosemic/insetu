@@ -1,4 +1,17 @@
+import os
 from pathlib import Path
+def collect_unique_files(directories, extensions):
+    seen = set()
+    for directory in directories:
+        for root, dirs, files in os.walk(directory):
+            if "vendor" in dirs: dirs.remove("vendor")
+            if "node_modules" in dirs: dirs.remove("node_modules")
+            for file in files:
+                if any(file.endswith(ext) for ext in extensions):
+                    fp = (Path(root) / file).resolve()
+                    if fp not in seen:
+                        seen.add(fp)
+                        yield fp
 
 # --- CONFIGURATION ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent

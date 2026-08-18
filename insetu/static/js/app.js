@@ -110,7 +110,7 @@ export function autoWireSettingsSchemas() {
                             if (genericModal) {
                                 let formData = {};
                                 try {
-                                    const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
+                                    const res = await window.inSetu.api.workspace.get(`${extName}/settings?t=${Date.now()}`);
                                     if (res.ok) formData = await res.json();
                                 } catch(e) {}
                                 genericModal.openModal(extName, schema, formData);
@@ -249,11 +249,10 @@ async function checkManifestVersion() {
         if (deltaData.timestamp) {
             lastManifestSyncTs = deltaData.timestamp;
         }
-
         // 3. Dispatch Physical Mutations to Event Bus
         if (deltaData.mutations && deltaData.mutations.length > 0) {
             try {
-                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: deltaData.mutations });
+                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: deltaData.mutations });
             } catch (e) {
                 console.error("VFS Mutation Hook Error:", e);
             }
@@ -408,20 +407,17 @@ async function executeBootSequence() {
     console.log("[BOOT] Topology initialized.");
     console.log("[BOOT] Booting Extensions...");
     await bootExtensions();
-
     // Native System Sync Indicator Hook
-    if (window.ExtensionRegistry && window.ExtensionRegistry.registerUIHook) {
-        window.ExtensionRegistry.registerUIHook('zone:vfs-mutated', (payload) => {
-            if (payload && payload.mutations) {
-                // If any file was touched that actually matters to the ledger, flip to Pending
-                const requiresSync = payload.mutations.some(m => !m.ignore_ledger);
-                if (requiresSync && window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
-                    window.inSetu.ui.setSyncStatus('pending');
-                }
+    window.inSetu.events.emitHook = window.inSetu.events.emitHook || function(){};
+    window.addEventListener('insetu:vfs-mutated', (e) => {
+        const payload = e.detail;
+        if (payload && payload.mutations) {
+            const requiresSync = payload.mutations.some(m => !m.ignore_ledger);
+            if (requiresSync && window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
+                window.inSetu.ui.setSyncStatus('pending');
             }
-            return false;
-        });
-    }
+        }
+    });
     // Declarative Tab Ordering: AppStore syncs tabOrder directly to Sutram
     AppStore.subscribe(
         state => state.tabOrder,
@@ -473,13 +469,12 @@ async function executeBootSequence() {
         const prevSub = state.activeSubTabs[tab];
 
         AppStore.getState().setActiveRoute(tab, sub, deepPath.length > 0 ? deepPath : null);
-
         // Emit standard non-refresh events upon actual navigation
         if (tab !== prevTab) {
-            window.inSetu.events.emitHook('zone:tab-changed', tab);
+            window.inSetu.events.emitHook('insetu:tab-changed', tab);
         }
         if (sub && sub !== prevSub) {
-            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tab, subId: sub, forceRefresh: false });
+            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tab, subId: sub, forceRefresh: false });
         }
         lastRouteHash = window.location.hash;
     };
@@ -521,13 +516,13 @@ async function executeBootSequence() {
 
         if (isAlreadyActive) {
             const activeSub = state.activeSubTabs[tabId];
-            window.inSetu.events.emitHook('zone:force-refresh', { parentId: tabId, subId: activeSub });
+            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId: activeSub });
         } else {
             AppStore.getState().setActiveRoute(tabId, state.activeSubTabs[tabId] || null);
-            window.inSetu.events.emitHook('zone:tab-changed', tabId);
+            window.inSetu.events.emitHook('insetu:tab-changed', tabId);
             const activeSub = state.activeSubTabs[tabId];
             if (activeSub) {
-                window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId: activeSub });
+                window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId: activeSub });
             }
         }
     });
@@ -536,10 +531,10 @@ async function executeBootSequence() {
         const { tabId, subId, isAlreadyActive } = e.detail;
 
         if (isAlreadyActive) {
-            window.inSetu.events.emitHook('zone:force-refresh', { parentId: tabId, subId });
+            window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId });
         } else {
             AppStore.getState().setActiveRoute(tabId, subId);
-            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: tabId, subId });
+            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId });
         }
     });
     try {
@@ -550,10 +545,10 @@ async function executeBootSequence() {
         }));
 
         if (state.activeTab) {
-            window.inSetu.events.emitHook('zone:tab-changed', state.activeTab);
+            window.inSetu.events.emitHook('insetu:tab-changed', state.activeTab);
             const activeSub = state.activeSubTabs[state.activeTab];
             if (activeSub) {
-                window.inSetu.events.emitHook('zone:subtab-changed', { parentId: state.activeTab, subId: activeSub, forceRefresh: true });
+                window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: state.activeTab, subId: activeSub, forceRefresh: true });
             }
         }
     } catch (bootErr) {
@@ -979,13 +974,13 @@ async function performSoftRefresh() {
             // no need to thrash the compiler heavily on every UI tab swap.
         }
         // 4. Hydrate active DOM views using native routing
-        window.inSetu.events.emitHook('zone:soft-refresh', currentWs);
+        window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);
         const state = AppStore.getState();
         const activeTab = state.activeTab || 'context';
         const activeSub = state.activeSubTabs[activeTab];
-        window.inSetu.events.emitHook('zone:tab-changed', activeTab);
+        window.inSetu.events.emitHook('insetu:tab-changed', activeTab);
         if (activeSub) {
-            window.inSetu.events.emitHook('zone:subtab-changed', { parentId: activeTab, subId: activeSub, forceRefresh: true });
+            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: activeTab, subId: activeSub, forceRefresh: true });
         }
 
         window.inSetu.ui.setGlobalStatus("✅ Workspace Hydrated", 2000);

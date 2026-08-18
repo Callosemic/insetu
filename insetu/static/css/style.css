@@ -80,22 +80,22 @@ padding: 0; border: none; overflow-x: auto; height: 100%; align-items: center; s
 .screen { display: none; background: transparent; padding: 0; flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
 box-sizing: border-box; border-radius: 0; box-shadow: none; flex-direction: column; container-type: inline-size; }
 /* Full-Bleed Chassis: Component roots naturally command bounds now */
-.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { overflow: hidden !important; }
+.screen:has(#sub-term.active), .screen:has(#sub-bridge.active), .screen:has(.sub-tab-content[data-ext="tracker"].active), .screen:has(.sub-tab-content[data-ext="gather"].active), .screen:has(.sub-tab-content[data-ext="git"].active), .screen:has(.sub-tab-content[data-ext="flow"].active), .screen:has(.sub-tab-content[data-ext="prompts"].active), .screen:has(.sub-tab-content[data-ext="files"].active) { overflow: hidden; }
 .sticky-header { flex-shrink: 0; padding: 15px 20px; background: var(--bg); z-index: 10; border-bottom: 1px solid var(--border); }
 .screen.active { display: flex; }
 textarea, input[type="text"] { width: 100%; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; box-sizing: border-box; }
 textarea::placeholder, input[type="text"]::placeholder, input::placeholder { color: var(--text-muted); opacity: 0.5; }
 textarea { height: 250px; margin-top: 10px; }
-pre, #status-box { font-family: var(--font-mono) !important; line-height: 1.5; letter-spacing: 0.3px; }
+pre, #status-box { font-family: var(--font-mono); line-height: 1.5; letter-spacing: 0.3px; }
 
 pre { background: var(--input-bg); padding: 15px; border-radius: 4px; border-left: 4px solid var(--btn); white-space: pre-wrap; font-size: 14px; max-height: 200px; overflow-y: auto;}
 button { background: var(--btn); color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 4px; cursor: pointer; margin-top: 20px; }
 button:hover { background: var(--btn-hover); }
 .spinner { display: none; margin-top: 20px; font-style: italic; color: #888; }
 .folder-label { font-weight: bold; font-family: monospace; color: var(--intent-warning); font-size: 1.1rem; }
-.task-bug { color: #ef4444 !important; font-size: 0.95rem; }
-.task-todo { color: #10b981 !important; font-size: 0.95rem; }
-.task-queue { color: #a855f7 !important; font-size: 0.95rem; }
+.task-bug { color: #ef4444; font-size: 0.95rem; }
+.task-todo { color: #10b981; font-size: 0.95rem; }
+.task-queue { color: #a855f7; font-size: 0.95rem; }
 .task-tag { background: var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; opacity: 0.8; }
 .btn-sm { margin-top: 0; padding: 8px 14px; font-size: 14px; }
 /* YAML Frontmatter Formatting */
@@ -129,7 +129,7 @@ h1, h2, h3, h4, h5, h6 {
 [data-theme="light"] h4, 
 [data-theme="light"] h5, 
 [data-theme="light"] h6 { 
-    color: var(--text) !important; 
+    color: var(--text); 
 }
 
 [data-theme="light"] {
@@ -146,10 +146,10 @@ h1, h2, h3, h4, h5, h6 {
     color: #b45309;       /* Deep amber for contrast on white */
 }
 [data-theme="light"] .task-bug {
-    color: #dc2626 !important; /* Darker crimson red */
+    color: #dc2626; /* Darker crimson red */
 }
 [data-theme="light"] .task-todo {
-    color: #059669 !important; /* Darker emerald green */
+    color: #059669; /* Darker emerald green */
 }
 
 [data-theme="light"] textarea,  
@@ -160,24 +160,24 @@ h1, h2, h3, h4, h5, h6 {
 }
 /* --- App-Specific E-Ink Mode Adjustments --- */
 [data-theme="e-ink"] .folder-label { 
-    color: #000000 !important;
+    color: #000000;
     font-weight: 900;
 }
 [data-theme="e-ink"] #status-box {
-    border: 2px solid #84cc16 !important; /* Lime */
-    background: #ffffff !important;
-    color: #000000 !important;
+    border: 2px solid #84cc16; /* Lime */
+    background: #ffffff;
+    color: #000000;
     font-weight: bold;
 }
 
 [data-theme="e-ink"] .top-bar {
-    border-bottom: 2px solid #d946ef !important; /* Fuchsia header separator */
+    border-bottom: 2px solid #d946ef; /* Fuchsia header separator */
 }
 [data-theme="e-ink"] .task-tag {
-    background: #ffffff !important;
-    color: #000000 !important;
-    border: 1px dashed #000000 !important;
-    opacity: 1 !important;
+    background: #ffffff;
+    color: #000000;
+    border: 1px dashed #000000;
+    opacity: 1;
 }
 
 /* Wiki Link Popup */

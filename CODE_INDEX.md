@@ -63,6 +63,41 @@ insetu/
 │   │       ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
 │   │       └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
+├── extensions/                     # Tier 3 Domain Extensions (Opt-in functionality).
+│   ├── citations/                  # CSL-JSON Academic Reference Library.
+│   │   └── ext_citations.js        # [Citations Manager UI & Store]
+│   ├── dev/                        # Developer Dashboard for bridge telemetry and thrashing.
+│   │   └── ext_dev.js              # Dashboard UI for metrics display.
+│   ├── favorites/                  # Pinned file and folder quick-access tray.
+│   │   └── ext_favorites.js        # UI tray and management for favorites.
+│   ├── flow/                       # Workflow batch automation and Prompt template executor.
+│   │   └── ext_flow.js             # Workflow builder and execution UI.
+│   ├── format/                     # Pandoc document publishing and jsbeautifier formatting.
+│   │   └── ext_format.js           # Formatting UI and publishing modals.
+│   ├── freshdesk/                  # Helpdesk integration for threaded B2B support tickets.
+│   │   └── ext_freshdesk.js        # Ticket viewing and response UI.
+│   ├── git/                        # Version control, branch management, and workspace sweeping.
+│   │   └── ext_git.js              # [Git Push & Sweep UI]
+│   ├── hooks/                      # IFTTT-style automation hooks based on VFS and topology events.
+│   │   └── ext_hooks.js            # UI for creating and managing hooks.
+│   ├── ingest/                     # URL to Markdown extraction via Jina or BeautifulSoup.
+│   │   └── ext_ingest.js           # UI modal for URL ingestion.
+│   ├── notes/                      # Markdown note-taking interface with frontmatter management.
+│   │   └── ext_notes.js            # Note-taking editor and browser.
+│   ├── prompts/                    # Management of global prompt templates and macro inclusions.
+│   │   └── ext_prompts.js          # Prompt UI and embedding tool.
+│   ├── publish/                    # Standalone Pandoc/LaTeX document publishing extension.
+│   │   └── ext_publish.js          # Document publishing UI and modal controls.
+│   ├── research/                   # Map-Reduce web scraping, SERP indexing, and AI triage.
+│   │   └── ext_research.js         # [Research Inbox UI & Triage]
+│   ├── skills/                     # Spaced-repetition tracking for discrete musical/technical skills.
+│   │   └── ext_skills.js           # Spaced-repetition training UI.
+│   ├── term/                       # Embedded terminal multiplexer and PTY WebSocket stream.
+│   │   └── ext_term.js             # [Terminal Emulator UI]
+│   ├── tracker/                    # Local offline Kanban board using Markdown-as-Code tickets.
+│   │   └── ext_tracker.js          # [Kanban Board UI & Store]
+│   └── update/                     # Automated Python semantic versioning and PyPI distribution.
+│       └── ext_update.js           # Release preview and publish UI.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
@@ -205,6 +240,15 @@ insetu/
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
 │   └── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+├── static/                         # Web server static assets and frontend bundles.
+│   └── js/                         # [Frontend JavaScript Payloads]
+│       ├── app.js                  # [Frontend Bootloader & Core Setup]
+│       └── core/                   # Core frontend SDK and UI components.
+│           ├── components/         # Reusable Lit Web Components for the OS.
+│           │   └── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
+│           ├── fs.js               # [Virtual File System Modals & UI]
+│           ├── gather.js           # [Context Batch & Workflow UI]
+│           └── sdk.js              # The InSetuElement base class and Zustand store factory.
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.
