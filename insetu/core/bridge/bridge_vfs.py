@@ -50,11 +50,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             original_buffers[filepath] = content
             memory_buffers[filepath] = content
         return content
-
     patch_index = 0
-    for target_file, blocks in parsed_structure.items():
-        if target_file not in active_files or not blocks: continue
+    for raw_target_file, blocks in parsed_structure.items():
+        if raw_target_file not in active_files or not blocks: continue
+
+        # Enforce vfs:// logical boundary mapping directly
+        target_file = raw_target_file.replace("vfs://", "", 1) if raw_target_file.startswith("vfs://") else raw_target_file
         norm_target = target_file
+
         if norm_target.endswith('insetu/cli.py') or norm_target.endswith('fallback_bridge.py'):
             telemetry["can_commit"] = False
             patch_tel = {

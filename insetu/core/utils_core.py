@@ -157,9 +157,6 @@ def start_filesystem_observer(workspace_ids):
 def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical repo::path boundary resolution to the Kernel VFS."""
     if filepath:
-        if filepath.startswith("vfs://"):
-            filepath = filepath.replace("vfs://", "", 1)
-
         is_artifact = filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/")
 
         if not is_artifact:
@@ -384,25 +381,26 @@ def resolve_logical_path(path, workspace_id=None):
 
     norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
+    target_repos = cfg.get("target_repos", [])
 
-    # Handle explicit repo boundary ::
-    if '::' in norm_path:
-        boundary_parts = norm_path.split('::', 1)
-        target_repo, downstream = boundary_parts[0], boundary_parts[1].lstrip('/')
-        for repo in cfg.get("target_repos", []):
-            if target_repo == repo.get("repo_dir"):
-                physical_path = repo.get("physical_path")
-                expanded_base = Path(physical_path).expanduser().resolve() if physical_path else (ws_root_path / target_repo).resolve()
-                return expanded_base.joinpath(downstream).resolve().as_posix()
-        norm_path = norm_path.replace('::', '/')
+    # Handle strict VFS logical boundary (vfs://repo/path)
+    if norm_path.startswith("vfs://"):
+        norm_path = norm_path.replace("vfs://", "", 1)
+        boundary_parts = norm_path.split('/', 1)
+        if len(boundary_parts) == 2:
+            target_repo, downstream = boundary_parts[0], boundary_parts[1].lstrip('/')
+            for repo in target_repos:
+                if target_repo == repo.get("repo_dir"):
+                    physical_path = repo.get("physical_path")
+                    expanded_base = Path(physical_path).expanduser().resolve() if physical_path else (ws_root_path / target_repo).resolve()
+                    return expanded_base.joinpath(downstream).resolve().as_posix()
 
-    # Pass 1: Direct match relative to workspace root
+    # Pass 1: Direct match relative to workspace root (SSOT)
     direct_cand = ws_root_path.joinpath(norm_path).resolve()
     if direct_cand.exists():
         return direct_cand.as_posix()
 
-    # Pass 2: Try prefixing with each target repo ({repo}/path)
-    target_repos = cfg.get("target_repos", [])
+    # Pass 2: Try prefixing with each target repo to rescue implicit paths ({repo}/path)
     for repo in target_repos:
         repo_dir = repo.get("repo_dir")
         p_path = repo.get("physical_path")
@@ -411,27 +409,9 @@ def resolve_logical_path(path, workspace_id=None):
         repo_cand = repo_base.joinpath(norm_path).resolve()
         if repo_cand.exists():
             return repo_cand.as_posix()
-    # Pass 3: Handle redundant/duplicated repo prefixes by stripping leading repo_dir segments
-    parts = [p for p in norm_path.split('/') if p]
-    for repo in target_repos:
-        repo_dir = repo.get("repo_dir")
-        p_path = repo.get("physical_path")
-        repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
 
-        if parts and parts[0] == repo_dir:
-            stripped_cand = repo_base.joinpath(*parts[1:]).resolve()
-            if stripped_cand.exists():
-                return stripped_cand.as_posix()
-
-    # Fallback for new file creation: Anchor new paths to their target repository
-    if parts:
-        for repo in target_repos:
-            if parts[0] == repo.get("repo_dir"):
-                repo_dir = repo.get("repo_dir")
-                p_path = repo.get("physical_path")
-                repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
-                return repo_base.joinpath(*parts[1:]).resolve().as_posix()
-
+    # Fallback for new file creation: Rely on the exact provided string relative to the workspace root.
+    # We deliberately omit the dangerous "strip prefix" heuristic that caused ghost package boundaries.
     return direct_cand.as_posix()
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
     if not exts:

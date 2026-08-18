@@ -16,11 +16,9 @@ def resolve_vfs_file(workspace_id, filename):
     if filename.startswith("system://"):
         filename = filename.replace("system://", "ctx://", 1)
 
-    # Strip vfs:// explicitly to process as a standard physical path
-    if filename.startswith("vfs://"):
-        filename = filename.replace("vfs://", "", 1)
+    check_name = filename.replace("vfs://", "", 1) if filename.startswith("vfs://") else filename
 
-    is_artifact = filename.startswith("ctx://") or filename.startswith("contexts/") or filename.startswith("diffs/") or filename.startswith("workflows/")
+    is_artifact = check_name.startswith("ctx://") or check_name.startswith("contexts/") or check_name.startswith("diffs/") or check_name.startswith("workflows/")
     if not is_artifact:
         from insetu.kernel.hooks import hooks
         manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
@@ -47,9 +45,8 @@ def resolve_vfs_file(workspace_id, filename):
         if res and isinstance(res, tuple) and len(res) == 2:
             if os.path.exists(res[0]):
                 return res
-
     from insetu.kernel.utils import resolve_sandbox_path
-    resolved = resolve_sandbox_path(filename, workspace_id)
+    resolved = resolve_sandbox_path(check_name, workspace_id)
     if os.path.exists(resolved):
         return resolved, False
 
