@@ -88,11 +88,38 @@ window.inSetu.api = {
         return res;
     },
     post: function(path, payload, options = {}) {
-        return this.workspace(path, {
-            ...options,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-            body: JSON.stringify(payload)
-        });
+        // Legacy fallback alias
+        return this.workspace.post(path, payload, options);
     }
+};
+
+// Semantic Substrate Routing
+window.inSetu.api.workspace.get = function(path, options = {}) {
+    return window.inSetu.api.workspace(path, { ...options, method: 'GET' });
+};
+window.inSetu.api.workspace.post = function(path, payload, options = {}) {
+    const isFD = payload instanceof FormData;
+    const headers = isFD ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    const body = isFD ? payload : JSON.stringify(payload);
+    return window.inSetu.api.workspace(path, { ...options, method: 'POST', headers, body });
+};
+
+window.inSetu.api.system.get = function(path, options = {}) {
+    return window.inSetu.api.system(path, { ...options, method: 'GET' });
+};
+window.inSetu.api.system.post = function(path, payload, options = {}) {
+    return window.inSetu.api.system(path, {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        body: JSON.stringify(payload)
+    });
+};
+
+window.inSetu.api.workspace.delete = function(path, options = {}) {
+    return window.inSetu.api.workspace(path, { ...options, method: 'DELETE' });
+};
+
+window.inSetu.api.system.delete = function(path, options = {}) {
+    return window.inSetu.api.system(path, { ...options, method: 'DELETE' });
 };

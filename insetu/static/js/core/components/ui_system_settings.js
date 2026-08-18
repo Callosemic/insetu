@@ -7,6 +7,8 @@ export class InSetuSystemSettings extends InSetuElement {
         menuOpen: { type: Boolean },
         modalOpen: { type: Boolean },
         manageExtOpen: { type: Boolean },
+        docsModalOpen: { type: Boolean },
+        _docsStatus: { type: Array },
         activeTab: { type: String },
         workspaces: { type: Object },
         emoji: { type: String },
@@ -29,6 +31,8 @@ export class InSetuSystemSettings extends InSetuElement {
         this.menuOpen = false;
         this.modalOpen = false;
         this.manageExtOpen = false;
+        this.docsModalOpen = false;
+        this._docsStatus = null;
         this.activeTab = 'system';
         this.workspaces = {};
         this.emoji = '⚙️';
@@ -42,7 +46,7 @@ export class InSetuSystemSettings extends InSetuElement {
         const schema = filteredSchema || window.inSetu.serverSchemas?.[extName] || window.inSetu.settingsSchemas?.[extName];
         let formData = {};
         try {
-            const res = await window.inSetu.api.workspace(`${extName}/settings?t=${Date.now()}`);
+            const res = await window.inSetu.api.workspace.get(`${extName}/settings?t=${Date.now()}`);
             if (res.ok) formData = await res.json();
         } catch(e) {}
         if (genericModal) genericModal.openModal(extName, schema, formData);
@@ -72,6 +76,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 btns.push(renderBtn('⚙️', `${ext.title} Base Settings`, () => this._openGenericSettings(ext.id, rawSchema)));
             }
         }
+
         return btns;
     }
     connectedCallback() {
@@ -101,12 +106,11 @@ export class InSetuSystemSettings extends InSetuElement {
         localStorage.setItem('insetu_theme', theme);
         this.menuOpen = false;
     }
-
     async _openSettings() {
         this.menuOpen = false; 
         this.modalOpen = true;
         try {
-            const res = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this._sysConfigForm = data.config || {};
@@ -114,18 +118,59 @@ export class InSetuSystemSettings extends InSetuElement {
             }
         } catch(e) {}
     }
+    async _openDocsModal() {
+        this.menuOpen = false;
+        this.docsModalOpen = true;
+        this._docsStatus = null;
+        this.requestUpdate();
 
+        const checks = [];
+        const checkUrl = async (id, title, url, type) => {
+            try {
+                const res = await fetch(url, { method: 'HEAD' });
+                return { id, title, url, type, exists: res.ok };
+            } catch {
+                return { id, title, url, type, exists: false };
+            }
+        };
+
+        checks.push(checkUrl('insetu', 'inSetu Developer OS', '/README.md', 'root'));
+
+        ['bridge', 'cartographer', 'editor', 'gather', 'sdk', 'topology'].forEach(ext => {
+            const title = ext.charAt(0).toUpperCase() + ext.slice(1);
+            checks.push(checkUrl(ext, title, `/static/extensions/${ext}/README.md`, 'core'));
+        });
+
+        (this._sysConfigMeta?.available_extensions || []).forEach(ext => {
+            checks.push(checkUrl(ext.id, ext.title, `/static/extensions/${ext.id}/README.md`, 'ext'));
+        });
+
+        this._docsStatus = await Promise.all(checks);
+        this.requestUpdate();
+    }
+    async _readDoc(doc) {
+        if (!doc.exists) return;
+        try {
+            const res = await fetch(doc.url);
+            if (res.ok) {
+                const text = await res.text();
+                if (window.inSetu.ui && window.inSetu.ui.viewTextBlob) {
+                    window.inSetu.ui.viewTextBlob(`${doc.title} Documentation`, text, `${doc.id}_docs.md`);
+                }
+                this.docsModalOpen = false;
+            }
+        } catch(e) {
+            this.setStatus(`Error loading docs: ${e.message}`, 3000, true);
+        }
+    }
     async _saveActiveExtensions() {
         try {
-            const res = await window.inSetu.api.workspace('system/config', {
-                method: 'POST',
-                body: JSON.stringify(this._sysConfigForm)
-            });
+            const res = await window.inSetu.api.system.post('config', this._sysConfigForm);
             if (res.ok) {
                 const data = await res.json();
                 if (data.requires_reboot) {
                     this.setStatus("Reboot required. Restarting...", 3000, true);
-                    await window.inSetu.api.system('reboot', { method: 'POST' });
+                    await window.inSetu.api.system.post('reboot', {});
                     setInterval(() => window.location.reload(), 2000);
                 } else {
                     this.setStatus("Extensions updated. Refreshing UI...", 2000);
@@ -177,6 +222,9 @@ export class InSetuSystemSettings extends InSetuElement {
                         <div style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px;">
                             <button class="menu-btn" @click=${() => this._openSettings()} style="margin: 0; background: var(--input-bg); color: var(--text); text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'">
                                 <span style="font-size: 1.1rem;">⚙️</span> <span>Settings Hub</span>
+                            </button>
+                            <button class="menu-btn" @click=${() => this._openDocsModal()} style="margin: 0; background: var(--input-bg); color: var(--text); text-align: left; padding: 8px 10px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; display: flex; align-items: center; gap: 8px; transition: background 0.2s;" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background='var(--input-bg)'">
+                                <span style="font-size: 1.1rem;">📖</span> <span>Documentation</span>
                             </button>
                         </div>
 
@@ -295,6 +343,66 @@ export class InSetuSystemSettings extends InSetuElement {
                     <sutram-async-btn style="width: 100%; display: block;" label="💾 Save Active Extensions" intent="success" .onClick=${() => this._saveActiveExtensions()}></sutram-async-btn>
                 </div>
             </sutram-modal>
+
+            <sutram-modal 
+                ?open=${this.docsModalOpen} 
+                titleText="📖 Documentation Hub" 
+                ?fullscreen=${true} 
+                @sutram-modal-closed=${() => this.docsModalOpen = false}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px; flex: 1; min-height: 0; overflow-y: auto;">
+                    ${!this._docsStatus ? html`
+                        <div class="spinner" style="display: block; padding: 20px;">Scanning for documentation...</div>
+                    ` : html`
+                        <div style="display: flex; flex-direction: column; gap: 20px;">
+                            <div>
+                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Primary OS</h4>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                    ${this._docsStatus.filter(d => d.type === 'root').map(doc => html`
+                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
+                                            ${doc.exists ? html`
+                                                <button class="btn-sm" style="background: var(--intent-success); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                            ` : html`
+                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                            `}
+                                        </div>
+                                    `)}
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Core Modules</h4>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                    ${this._docsStatus.filter(d => d.type === 'core').map(doc => html`
+                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
+                                            ${doc.exists ? html`
+                                                <button class="btn-sm" style="background: var(--intent-primary); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                            ` : html`
+                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                            `}
+                                        </div>
+                                    `)}
+                                </div>
+                            </div>
+                            <div>
+                                <h4 style="margin: 0 0 10px 0; color: var(--intent-primary); border-bottom: 1px solid var(--border); padding-bottom: 5px;">Extensions</h4>
+                                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                                    ${this._docsStatus.filter(d => d.type === 'ext').map(doc => html`
+                                        <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border: 1px solid var(--border); border-radius: 6px; opacity: ${doc.exists ? 1 : 0.6};">
+                                            <span style="font-weight: bold; color: var(--text);">${doc.title}</span>
+                                            ${doc.exists ? html`
+                                                <button class="btn-sm" style="background: var(--intent-highlight); margin: 0;" @click=${() => this._readDoc(doc)}>Read</button>
+                                            ` : html`
+                                                <span style="font-size: 0.8rem; color: var(--text-muted); font-style: italic;">No README</span>
+                                            `}
+                                        </div>
+                                    `)}
+                                </div>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            </sutram-modal>
         `;
     }
 }
@@ -339,7 +447,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     async _loadHostDirs(path = '') {
         try {
-            const res = await window.inSetu.api.system(`fs/list_local?path=${encodeURIComponent(path)}`);
+            const res = await window.inSetu.api.system.get(`fs/list_local?path=${encodeURIComponent(path)}`);
             if (res.ok) {
                 const data = await res.json();
                 this._hostCurrentPath = data.current;
@@ -374,7 +482,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     async _loadWorkspacesManifest() {
         try {
-            const res = await window.inSetu.api.system('workspaces?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system.get('workspaces?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.workspaces = data.workspaces || {};
@@ -391,11 +499,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         const wsRoot = this._newWsRoot.trim();
         if (!wsId) return;
         try {
-            const res = await window.inSetu.api.system('workspaces/create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: wsId, workspace_root: wsRoot })
-            });
+            const res = await window.inSetu.api.system.post('workspaces/create', { id: wsId, workspace_root: wsRoot });
             if (res.ok) {
                 this._newWsId = '';
                 this._newWsRoot = '';
@@ -414,11 +518,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         if (wsId === 'default') return;
         if (!confirm(`⚠️ Are you sure you want to permanently delete workspace "${wsId}"?\nThis removes its tracking configuration metadata indexes instantly.`)) return;
         try {
-            const res = await window.inSetu.api.system('workspaces/delete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: wsId })
-            });
+            const res = await window.inSetu.api.system.post('workspaces/delete', { id: wsId });
             if (res.ok) {
                 await this._loadWorkspacesManifest();
                 if (window.inSetu.sys.loadWorkspaces) window.inSetu.sys.loadWorkspaces();
@@ -518,7 +618,7 @@ window.addEventListener('sutram-settings-action', async (e) => {
     const cleanEndpoint = rawEndpoint.startsWith('/') ? rawEndpoint.substring(1) : rawEndpoint;
 
     try {
-        const res = await window.inSetu.api.workspace(cleanEndpoint, { method: 'POST' });
+        const res = await window.inSetu.api.workspace.post(cleanEndpoint, {});
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.error || "Action request failed.");
@@ -565,11 +665,7 @@ window.addEventListener('sutram-settings-save', async (e) => {
             return;
         }
 
-        const res = await window.inSetu.api.workspace(`${extName}/settings`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const res = await window.inSetu.api.workspace.post(`${extName}/settings`, payload);
         if (res.ok) {
             document.getElementById('insetu-generic-settings-root').open = false;
             btn.innerText = origText;

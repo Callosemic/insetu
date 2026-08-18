@@ -259,12 +259,11 @@ export class InSetuFrontmatterEditor extends InSetuElement {
             this._loadFile();
         }
     }
-
     async _loadFile() {
         if (!this.filepath) return;
         this._loading = true;
         try {
-            const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(this.filepath)}`);
+            const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(this.filepath)}`);
             if (res.ok) {
                 const text = await res.text();
                 const { meta, content } = window.inSetu.utils.parseFrontmatter(text);

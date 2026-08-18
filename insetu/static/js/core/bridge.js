@@ -139,10 +139,9 @@ export const BridgeStore = createExtensionStore('Bridge', {
     setViewMode: (mode) => BridgeStore.setState({ viewMode: mode }),
     setConsoleOutput: (out) => BridgeStore.setState({ consoleOutput: out }),
     setTelemetry: (tel) => BridgeStore.setState({ telemetry: tel }),
-    
     fetchHistory: async () => {
         try {
-            const res = await window.inSetu.api.workspace('bridge/history');
+            const res = await window.inSetu.api.workspace.get('bridge/history');
             if (res.ok) {
                 const data = await res.json();
                 BridgeStore.setState({ historyRecords: data.history || [] });

@@ -84,12 +84,7 @@ const packSelectionPayload = async (items) => {
     }).filter(i => i !== null);
 
     if (payloadItems.length === 0) throw new Error("No valid items to pack.");
-
-    const res = await window.inSetu.api.workspace('gather/pack_selection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: payloadItems })
-    });
+    const res = await window.inSetu.api.workspace.post('gather/pack_selection', { items: payloadItems });
     if (!res.ok) throw new Error("Failed to queue compilation.");
     const data = await res.json();
     return new Promise((resolve, reject) => {
@@ -97,7 +92,7 @@ const packSelectionPayload = async (items) => {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
                 try {
-                    const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
+                    const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
                     if (mRes.ok) window.inSetu.stores.App.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                 } catch(e) {}
                 resolve(statusData.artifact);
@@ -311,11 +306,11 @@ export class InSetuExtGather extends InSetuElement {
                                     ${cat === 'Quickpacks' ? html`
                                         <sutram-async-btn slot="actions" label="Clear" intent="danger" .onClick=${async () => {
                                             try {
-                                                const res = await window.inSetu.api.workspace('gather/clear_quickpacks', { method: 'POST' });
+                                                const res = await window.inSetu.api.workspace.post('gather/clear_quickpacks', {});
                                                 if (res.ok) {
                                                     const data = await res.json();
                                                     if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                                    const mRes = await window.inSetu.api.system('manifest?t=' + Date.now());
+                                                    const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
                                                     if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                                                 }
                                             } catch(e) {

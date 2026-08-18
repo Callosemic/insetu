@@ -119,9 +119,8 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         } else {
             const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filePath);
             if (overrideUrl) res = await fetch(overrideUrl);
-
             if (!res) {
-                res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filePath)}`);
+                res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filePath)}`);
             }
         }
 
@@ -470,7 +469,7 @@ async function downloadFromModal() {
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
                 await downloadFile(fetchUrl, state.filename.split('/').pop());
             } else {
-                const res = await window.inSetu.api.workspace(fetchUrl);
+                const res = await window.inSetu.api.workspace.get(fetchUrl);
                 if (!res.ok) throw new Error('Download failed from server.');
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
@@ -964,12 +963,11 @@ async function openNewFolderModal(overridePath = null) {
     const gbPath = AppStore.getState().globalBrowsePath || [];
     const isRoot = overridePath === null && gbPath.length === 0;
     const prefix = typeof overridePath === 'string' ? overridePath : (isRoot ? '' : gbPath.join('/') + '/');
-
     let exts = '.py, .json, .md, .sh, .txt, .html, .css, .js';
     let domain = 'Workspaces';
     if (isRoot) {
         try {
-            const res = await window.inSetu.api.workspace('gather/repos/template');
+            const res = await window.inSetu.api.workspace.get('gather/repos/template');
             if (res.ok) {
                 const tpl = await res.json();
                 exts = tpl.exts.join(', ');
@@ -1073,7 +1071,7 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
 
     closeBrowseModal();
     try {
-        const res = await window.inSetu.api.workspace(`fs/fetch?file=${encodeURIComponent(filepath)}`);
+        const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filepath)}`);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
@@ -1576,21 +1574,16 @@ export async function executeDeepLinkSearch(overrideQuery = null) {
         FsStore.getState().setModal('linkInsert', { searchResults: [] });
         return;
     }
-
     FsStore.getState().setModal('linkInsert', { deepSearchLoading: true, searchResults: [] });
     try {
-        const res = await window.inSetu.api.workspace('fs/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ q: query })
-        });
+        const res = await window.inSetu.api.workspace.post('fs/search', { q: query });
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
         if (res.status === 202) {
             const jobId = data.job_id;
             while (true) {
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                const pollRes = await window.inSetu.api.system(`jobs/${jobId}`);
+                const pollRes = await window.inSetu.api.system.get(`jobs/${jobId}`);
                 if (!pollRes.ok) throw new Error("Search job failed");
                 const pollData = await pollRes.json();
                 if (pollData.status === 'completed') {

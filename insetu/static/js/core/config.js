@@ -146,11 +146,7 @@ export class InSetuExtConfig extends InSetuElement {
     async _testRepoBucketing(repoIdx, filterBucketId = null) {
         const repo = this.configForm.target_repos[repoIdx];
         try {
-            const res = await window.inSetu.api.workspace('system/config/test_bucketing', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_cfg: repo })
-            });
+            const res = await window.inSetu.api.system.post('config/test_bucketing', { repo_cfg: repo });
             if (res.ok) {
                 const data = await res.json();
                 let text = `Dry Run: Repository Bucketing for '${repo.repo_dir}'\n=======================================================\n\n`;
@@ -188,11 +184,10 @@ export class InSetuExtConfig extends InSetuElement {
             alert("Network error: " + e.message);
         }
     }
-
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await window.inSetu.api.workspace('system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.configForm = data.config || {};
@@ -547,13 +542,12 @@ export class InSetuExtConfig extends InSetuElement {
                             <button class="btn-sm" style="background: var(--intent-primary); margin: 0; padding: 4px 10px; font-size: 0.75rem;"
                                 @click=${async () => {
                                     if (!this.configForm.target_repos) this.configForm.target_repos = [];
-
                                     let newRepo = {    
                                         repo_dir: '', title: '', domain: 'Workspaces', 
                                         exts: ['.py', '.json', '.md', '.txt'], apply_ignore: true, sub_buckets: [] 
                                     };
                                     try {
-                                        const res = await window.inSetu.api.workspace('gather/repos/template');
+                                        const res = await window.inSetu.api.workspace.get('gather/repos/template');
                                         if (res.ok) newRepo = await res.json();
                                     } catch(e) {}
                                     this.configForm.target_repos.push(newRepo);
@@ -584,15 +578,10 @@ export class InSetuExtConfig extends InSetuElement {
             </sutram-modal>
         `;
     }
-
     async _saveConfig() {
         try {
             // Config saves utilize explicit multi-tenant URL path boundaries
-            const res = await window.inSetu.api.workspace('system/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(this.configForm)
-            });
+            const res = await window.inSetu.api.system.post('config', this.configForm);
 
             if (res.ok) {
                 const data = await res.json();
@@ -605,7 +594,7 @@ export class InSetuExtConfig extends InSetuElement {
                     AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
 
                     try {
-                        await window.inSetu.api.system('reboot', { method: 'POST' });
+                        await window.inSetu.api.system.post('reboot', {});
                     } catch(err) {}
                     setInterval(async () => {
                         try {

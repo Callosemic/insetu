@@ -121,26 +121,21 @@ export class InSetuElement extends SutramElement {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'GET' });
+                return window.inSetu.api.workspace.get(`${this.extName}/${cleanPath}`, options);
             },
             post: (path, payload, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, {
-                    ...options,
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-                    body: JSON.stringify(payload)
-                });
+                return window.inSetu.api.workspace.post(`${this.extName}/${cleanPath}`, payload, options);
             },
             delete: (path, options = {}) => {
                 if (!window.inSetu.isCore(this.extName) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(this.extName)) {
                     return Promise.resolve(new Response(JSON.stringify({ error: "Extension disabled" }), { status: 403 }));
                 }
                 const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-                return window.inSetu.api.workspace(`${this.extName}/${cleanPath}`, { ...options, method: 'DELETE' });
+                return window.inSetu.api.workspace.delete(`${this.extName}/${cleanPath}`, options);
             },
             getJson: async (path, options = {}) => {
                 const res = await this.api.get(path, options);
