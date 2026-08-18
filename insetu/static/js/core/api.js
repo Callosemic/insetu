@@ -3,8 +3,41 @@
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const originalFetch = window.fetch;
-
 window.inSetu.api = {
+    get: function(path, options = {}) {
+        return this.workspace(path, { ...options, method: 'GET' });
+    },
+    system: Object.assign(
+        async function(path, options = {}) {
+            const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+            const fullUrl = `/api/system/${cleanPath}`;
+            const headers = window.inSetu.api._getHeaders(true);
+            if (options.headers) {
+                new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+            }
+
+            let res = await originalFetch(fullUrl, { ...options, headers });
+            if (res.status === 401) {
+                const retryRes = await window.inSetu.api._attemptReAuthAndRetry(fullUrl, options, true);
+                if (retryRes) res = retryRes;
+            }
+
+            return res;
+        },
+        {
+            get: function(path, options = {}) {
+                return window.inSetu.api.system(path, { ...options, method: 'GET' });
+            },
+            post: function(path, payload = {}, options = {}) {
+                return window.inSetu.api.system(path, {
+                    ...options,
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+                    body: JSON.stringify(payload)
+                });
+            }
+        }
+    ),
     _getHeaders: function(isWorkspaceScoped = false) {
         const headers = new Headers();
         // Universal Intent Security Token

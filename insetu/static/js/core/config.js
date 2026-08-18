@@ -671,7 +671,7 @@ window.ExtensionRegistry.registerExtension('config', {
                 if (data && data.closeModal) data.closeModal();
                 AppStore.setState({ isRebooting: true, rebootType: 'reboot' });
                 try {
-                    await window.inSetu.api.system('reboot', { method: 'POST' });
+                    await window.inSetu.api.system.post('reboot', {});
                     setInterval(async () => {
                         try {
                             const ping = await fetch('/?t=' + Date.now(), { cache: 'no-store' });

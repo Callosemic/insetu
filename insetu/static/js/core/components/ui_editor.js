@@ -344,8 +344,7 @@ export class InSetuFrontmatterEditor extends InSetuElement {
                 this._isDirty = false;
                 this.dispatchEvent(new CustomEvent('editor-dirty', { detail: { isDirty: false }, bubbles: true, composed: true }));
                 this.requestUpdate();
-
-                window.inSetu.events.emitHook('zone:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
+                window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: [{ filepath: this.filepath, operation: 'save' }] });
 
                 if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                     window.inSetu.ui.setGlobalStatus("💾 File Saved Successfully", 2000);

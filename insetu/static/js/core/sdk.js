@@ -85,7 +85,9 @@ export class InSetuElement extends SutramElement {
             copyRawText: window.inSetu.utils.copyRawText,
             formatDate: window.inSetu.utils.formatDate,
             timeAgo: window.inSetu.utils.timeAgo,
-            clone: window.inSetu.utils.clone
+            clone: window.inSetu.utils.clone,
+            debounce: window.ExtensionRegistry.utils.debounce,
+            formatArtifactSize: window.inSetu.utils.formatArtifactSize
         };
     }
     get api() {
@@ -225,7 +227,7 @@ window.inSetu.events = window.inSetu.events || {
         window.dispatchEvent(new CustomEvent(eventName, { detail, bubbles: true, composed: true }));
     },
     emitHook: function(zoneName, payload = null) {
-        if (zoneName === 'zone:force-refresh') {
+        if (zoneName === 'insetu:force-refresh') {
             window.dispatchEvent(new CustomEvent('insetu:force-refresh', { detail: payload, bubbles: true, composed: true }));
         }
         // Standardize all legacy zone emissions to the Typed Event Bus for migration (ADR 0041)
@@ -234,9 +236,6 @@ window.inSetu.events = window.inSetu.events || {
         window.dispatchEvent(event);
         if (event.inSetuResponses.length > 0) return event.inSetuResponses[0];
 
-        if (window.inSetu?.extensions?.Registry?.executeUIHook) {
-            return window.inSetu.extensions.Registry.executeUIHook(zoneName, payload);
-        }
         return null;
     }
 };
@@ -294,17 +293,19 @@ window.ExtensionRegistry.getEntityActions = function(compoundType, data) {
         return true;
     });
 };
-
 window.ExtensionRegistry.utils = {
     debounce,
-    _verifyTimers: {},
+    _verifyTokens: {},
     debounceVerifyFile: function(workspaceId, filepath, callback, delay = 300) {
         const key = `verify_${filepath}`;
-        if (this._verifyTimers[key]) window.clearTimeout(this._verifyTimers[key]); // utils.debounce whitelist
-        this._verifyTimers[key] = setTimeout(async () => {
+        this._verifyTokens[key] = (this._verifyTokens[key] || 0) + 1;
+        const currentToken = this._verifyTokens[key];
+
+        setTimeout(async () => {
+            if (this._verifyTokens[key] !== currentToken) return;
             try {
-                const res = await window.inSetu.api.workspace(`fs/exists?file=${encodeURIComponent(filepath)}`);
-                if (res.ok) {
+                const res = await window.inSetu.api.workspace.get(`fs/exists?file=${encodeURIComponent(filepath)}`);
+                if (res.ok && this._verifyTokens[key] === currentToken) {
                     const data = await res.json();
                     callback(data.exists, filepath);
                 }
@@ -355,6 +356,18 @@ window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
 window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
+
+window.inSetu.utils.formatArtifactSize = function(meta) {
+    if (!meta) return "";
+    if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
+        const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
+        return sizes.join(' + ') + " kb";
+    } else if (meta.size_bytes !== undefined) {
+        const kb = Math.round(meta.size_bytes / 1024);
+        return kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
+    }
+    return "";
+};
 
 /**
 * Creates a deep, detached clone of an object or array to safely break memory references.

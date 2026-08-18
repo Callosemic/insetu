@@ -197,16 +197,9 @@ export class InSetuExtGather extends InSetuElement {
                 let finalCat = (file.startsWith && file.startsWith('quickpack_')) || file.includes('quickpack_') || file.includes('selection_') ? 'Quickpacks' : meta.domain;
                 let finalDesc = meta.desc;
                 let finalTitle = meta.title;
-                let sizeStr = "";
-                if (meta.chunk_sizes && meta.chunk_sizes.length > 1) {
-                    const sizes = meta.chunk_sizes.map(s => Math.round(s / 1024));
-                    sizeStr = sizes.join(' + ') + " kb";
-                } else if (meta.size_bytes !== undefined) {
-                        const kb = Math.round(meta.size_bytes / 1024);
-                        sizeStr = kb > 1024 ? (kb / 1024).toFixed(1) + " mb" : kb + " kb";
-                }
+                let sizeStr = window.inSetu.utils.formatArtifactSize(meta);
                 let repoDir = meta.repo || null;
-                const extMeta = window.inSetu.events.emitHook('zone:context-metadata', file);
+                const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', file);
                 if (extMeta) {
                         finalCat = extMeta.cat;
                         finalDesc = extMeta.desc;

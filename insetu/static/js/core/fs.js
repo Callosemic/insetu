@@ -29,7 +29,7 @@ document.addEventListener('dragstart', (e) => {
         const filename = dragEl.dataset.filename;
         let fetchUrl = dragEl.dataset.fetchUrl;
         // Resolve dynamic extension overrides natively
-        const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filename);
+        const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filename);
         if (overrideUrl) fetchUrl = overrideUrl;
 
         if (filename && fetchUrl) {
@@ -117,7 +117,7 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         if (explicitUrl) {
             res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
         } else {
-            const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filePath);
+            const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
             if (overrideUrl) res = await fetch(overrideUrl);
             if (!res) {
                 res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filePath)}`);
@@ -140,8 +140,7 @@ export async function fetchAndDownloadState(filePath, explicitUrl = null) {
         if (!fetchUrl) {
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
-
-            const override = window.inSetu.events.emitHook('zone:file-fetch-url', filePath);
+            const override = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
             if (override) fetchUrl = override;
         }
         await downloadFile(fetchUrl, filePath.split('/').pop());
@@ -157,7 +156,7 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
     const shareFilesArray = [];
     try {
         for (const filepath of filesToFetch) {
-            let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', filepath);
+            let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filepath);
 
             if (!fetchUrl) {
                 const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
@@ -243,10 +242,9 @@ export async function viewAndCopy(filename) {
 }
 function refreshActiveFileViews(oldPath, newPath = null) {
     updateManifestState(oldPath, newPath);
-
     const mutations = [{ filepath: oldPath, operation: 'delete' }];
     if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
-    window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
+    window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
 
     // Trigger a proactive compile to let the Cartographer map the renamed/moved/deleted files
     if (window.inSetu.sys.executeSystemCompile) {
@@ -359,7 +357,7 @@ async function saveModalFile(autoSave = false) {
 async function copyFromModal() {
     const state = FsStore.getState().fileModal;
     let text = state.content;
-    const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
+    const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', state.filename);
     if (overrideUrl) {
         try {
             const res = await fetch(overrideUrl, { headers: window.inSetu.api._getHeaders(true) });
@@ -465,11 +463,10 @@ async function downloadFromModal() {
             let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
             const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
             if (overrideUrl) fetchUrl = overrideUrl;
-
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
                 await downloadFile(fetchUrl, state.filename.split('/').pop());
             } else {
-                const res = await window.inSetu.api.workspace.get(fetchUrl);
+                const res = await window.inSetu.api.get(fetchUrl);
                 if (!res.ok) throw new Error('Download failed from server.');
                 const blob = await res.blob();
                 const url = window.URL.createObjectURL(blob);
@@ -517,16 +514,15 @@ export const getGlobalManifest = () => {
     const allFiles = Array.from(new Set([
         ...Object.values(vfsManifest).flatMap(obj => obj.files || [])
     ]));
-
     // Let extensions inject their own system artifacts (e.g. Prompts)
-    const extensionFiles = window.inSetu.events.emitHook('zone:global-manifest-files') || [];
+    const extensionFiles = window.inSetu.events.emitHook('insetu:global-manifest-files') || [];
     extensionFiles.forEach(extFiles => {
         if (Array.isArray(extFiles)) {
             extFiles.forEach(f => allFiles.push(f));
         }
     });
 
-    const whitelists = window.inSetu.events.emitHook('zone:global-manifest-whitelist') || [];
+    const whitelists = window.inSetu.events.emitHook('insetu:global-manifest-whitelist') || [];
     const allowedPrefixes = [].concat(...whitelists.filter(w => Array.isArray(w)));
 
     // Explicitly whitelist extensions via hook to avoid opening the entire OS control plane
@@ -682,7 +678,7 @@ export class InSetuVFSExplorerActions extends InSetuElement {
                 items.push({ label: 'Delete Folder', icon: '🗑️', onClick: () => deleteEmptyFolder(currentPath) });
             }
         }
-        window.inSetu.events.emitHook('zone:fs-dropdown-menu', { currentPath, menuItems: items });
+        window.inSetu.events.emitHook('insetu:fs-dropdown-menu', { currentPath, menuItems: items });
         return items;
     }
     render() {
@@ -754,8 +750,7 @@ window.ExtensionRegistry.registerExtension('files', {
                     await copyFromModal();
                     return;
                 }
-
-                let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
+                let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', data.filepath);
 
                 // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                 if (!fetchUrl) {
@@ -885,16 +880,7 @@ window.ExtensionRegistry.registerExtension('files', {
             component: "insetu-vfs-explorer-actions",
             order: 2
         }
-    ],
-    uiHooks: {
-        'zone:subtab-changed': (data) => {
-            if (data.parentId === 'edit' && data.subId === 'files') {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                    window.inSetu.sys.refreshManifest();
-                }
-            }
-        }
-    }
+    ]
 });
 export function checkFileExtension(filename) {
     const warningEl = document.getElementById('new-file-ext-warning');
@@ -945,8 +931,7 @@ async function saveNewFile() {
     }
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
-
-    content = await window.inSetu.events.emitHook('zone:pre-save-new-file', { fileName, content, filepath }) || content;
+    content = await window.inSetu.events.emitHook('insetu:pre-save-new-file', { fileName, content, filepath }) || content;
 
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
         filepath,
@@ -1013,7 +998,7 @@ async function saveNewFolder() {
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
-                const rRes = await window.inSetu.api.system('topology?t=' + Date.now());
+                const rRes = await window.inSetu.api.system.get('topology?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
                     AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
@@ -1026,11 +1011,7 @@ async function saveNewFolder() {
 }
 export async function viewSourceFile(filepath, isFS = false, bypassHook = false) {
     const cleanPath = filepath ? filepath.replace(/^vfs:\/\//, '') : filepath;
-
     if (!bypassHook) {
-        // Legacy Hook Evaluation
-        if (window.inSetu.events.emitHook('zone:file-edit-override', cleanPath)) return;
-
         // ADR 0041: Declarative Custom Editors Engine
         const registry = window.ExtensionRegistry;
         if (registry && registry._manifests) {
@@ -1295,11 +1276,10 @@ export class InSetuFileModal extends InSetuElement {
             this._loadPreference(this.fileModal.filename);
         }
     }
-
     async _loadPreference(filename) {
         if (!filename) return;
         try {
-            const res = await window.inSetu.api.workspace(`editor/preference?file=${encodeURIComponent(filename)}`);
+            const res = await window.inSetu.api.workspace.get(`editor/preference?file=${encodeURIComponent(filename)}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.writing_mode !== undefined && data.writing_mode !== null) {
@@ -1338,10 +1318,6 @@ export class InSetuFileModal extends InSetuElement {
         const shouldBeReadOnly = !(m.isFS || m.forceEdit);
         const kbSize = Math.round((m.fullText?.length || 0) / 1024);
 
-        let extMenuItems = [];
-        if (m.isFS && m.filename) {
-            window.inSetu.events.emitHook('zone:modal-ext-menu', { filepath: m.filename, isMarkdown: m.isMarkdown, ext: m.ext, menuItems: extMenuItems });
-        }
         return html`
             <dialog class="fs-modal-container" @cancel=${(e) => { e.preventDefault(); closeFileModal(); }}>
                 <div class="fullscreen-wrapper ${this._writingMode ? 'is-prose' : ''} ${this._editorFocused ? 'is-focused' : ''}"
@@ -1384,12 +1360,6 @@ export class InSetuFileModal extends InSetuElement {
                             ]}>
                                 <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">📝 Edit ▾</button>
                             </sutram-dropdown>
-
-                            ${extMenuItems.length > 0 ? html`
-                                <sutram-dropdown align="left" .items=${extMenuItems}>
-                                    <button slot="trigger" class="btn-sm" style="background: transparent; color: var(--text); border: 1px solid var(--border); margin: 0; font-weight: bold;">🧩 Extensions ▾</button>
-                                </sutram-dropdown>
-                            ` : ''}
                         </div>
                     ` : ''}
                     ${m.isTruncated ? html`
@@ -1680,7 +1650,7 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                         <input type="text" placeholder="Filename (e.g. my-prompt.md)..." .value=${m.newFile?.fileName || ''} @input=${e => { FsStore.getState().setModal('newFile', { fileName: e.target.value }); if(window.inSetu.ui.checkFileExtension) window.inSetu.ui.checkFileExtension(e.target.value); }} style="font-weight: bold; font-size: 0.95rem; border: 1px solid var(--border); padding: 8px 10px; background: var(--bg); color: var(--text); border-radius: 4px;">
                         <div id="new-file-ext-warning" style="display: none; color: var(--intent-warning); font-size: 0.8rem; font-weight: bold; margin-top: 2px;"></div>
-                        ${window.inSetu.events.emitHook('zone:new-file-options-lit', null) || ''}
+
                         ${(() => {
                             const actions = window.ExtensionRegistry?.getLayoutSlots?.().filter(s => s.slot === 'modal:new-file:actions') || [];
                             return actions.map(act => html`<div style="display: contents;" data-ext="${act.extName}">${document.createElement(act.component)}</div>`);
