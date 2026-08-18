@@ -51,14 +51,13 @@ def _parse_list_field(raw_val):
 def _parse_string_enum(raw_val):
     """Helper to safely parse and normalize string enumerations like priority and size."""
     return str(raw_val).upper() if raw_val and str(raw_val).lower() not in ('null', 'none', '') else ''
-
 DEFAULT_GLOBAL_VIEWS = [
-    { "_uuid": "sys_v1", "id": "epics", "label": "🎯 Epics", "target_tier": 1, "layout": "stacked", "filters": { "ticket_types": "epic, campaign", "statuses": "" } },
-    { "_uuid": "sys_v2", "id": "sprints", "label": "📦 Sprints", "target_tier": 2, "layout": "stacked", "filters": { "ticket_types": "sprint, article, video", "statuses": "" } },
-    { "_uuid": "sys_v3", "id": "todos", "label": "📄 To-Dos", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "todo, draft", "statuses": "" } },
-    { "_uuid": "sys_v4", "id": "bugs", "label": "🐛 Bugs", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "bug, edit", "statuses": "" } },
-    { "_uuid": "sys_v5", "id": "queue", "label": "🔬 Queue", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "queue, publish", "statuses": "" } },
-    { "_uuid": "sys_v6", "id": "log", "label": "📜 Log", "target_tier": None, "layout": "log", "filters": { "ticket_types": "", "statuses": "" } }
+    { "_uuid": "sys_v1", "id": "epics", "label": "🎯 Epics", "target_tier": 1, "layout": "stacked", "filters": { "ticket_types": "epic, campaign", "statuses": "open, active" }, "repo_strategy": "global", "explicit_repos": [] },
+    { "_uuid": "sys_v2", "id": "sprints", "label": "📦 Sprints", "target_tier": 2, "layout": "stacked", "filters": { "ticket_types": "sprint, article, video", "statuses": "open, active" }, "repo_strategy": "global", "explicit_repos": [] },
+    { "_uuid": "sys_v3", "id": "todos", "label": "📄 To-Dos", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "todo, draft", "statuses": "open, active, closed" }, "repo_strategy": "global", "explicit_repos": [] },
+    { "_uuid": "sys_v4", "id": "bugs", "label": "🐛 Bugs", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "bug, edit", "statuses": "open, active, closed" }, "repo_strategy": "global", "explicit_repos": [] },
+    { "_uuid": "sys_v5", "id": "queue", "label": "🔬 Queue", "target_tier": 3, "layout": "columns", "filters": { "ticket_types": "queue, publish", "statuses": "open, active, closed" }, "repo_strategy": "global", "explicit_repos": [] },
+    { "_uuid": "sys_v6", "id": "log", "label": "📜 Log", "target_tier": None, "layout": "log", "filters": { "ticket_types": "", "statuses": "closed, logged, archived" }, "repo_strategy": "global", "explicit_repos": [] }
 ]
 TRACKER_SETTINGS_SCHEMA = [
     {
@@ -181,7 +180,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
         inferred = Path(rel_path).parent.parent.name.lower()
         if inferred.endswith("s"): inferred = inferred[:-1]
 
-        ticket_type = yaml_data.get('type', inferred if inferred else "todo").lower()
+        ticket_type = yaml_data.get('type', inferred if inferred else "task").lower()
         status = yaml_data.get('status')
         if not status:
             if "/open/" in rel_path: status = "open"
@@ -189,6 +188,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
             elif "/closed/" in rel_path: status = "closed"
             elif "/archived/" in rel_path: status = "archived"
             elif "/log/" in rel_path: status = "logged"
+            elif "/template/" in rel_path: status = "template"
             else: status = "unknown"
         else:
             status = status.lower()
@@ -196,6 +196,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
             elif "clos" in status: status = "closed"
             elif "archiv" in status: status = "archived"
             elif "log" in status: status = "logged"
+            elif "template" in status: status = "template"
             else: status = "open"
         repo = yaml_data.get('repo', rel_path.split('/')[0] if '/' in rel_path else "unknown")
         tier = _resolve_tier(ctx, repo, ticket_type)
@@ -262,19 +263,32 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
         if "sub_buckets" not in repo_cfg:
             repo_cfg["sub_buckets"] = []
         safe_r_dir = get_safe_repo_id(repo_cfg.get("repo_dir", ""))
-
         domain = "Tracker Issues"
         if strat == "repo":
             domain = repo_cfg.get("domain", "Workspaces")
         elif strat == "custom" and custom_val:
             domain = custom_val
 
-        main_prefixes = [
-            ".tracker/todos/open", ".tracker/todos/active", 
-            ".tracker/bugs/open", ".tracker/bugs/active", 
-            ".tracker/queue/open", ".tracker/queue/active"
-        ]
-        closed_prefixes = [".tracker/todos/closed", ".tracker/bugs/closed", ".tracker/queue/closed"]
+        repo_dir = repo_cfg.get("repo_dir", "")
+        kanban_repo_map = tracker_cfg.get("kanban_repo_map", {})
+        kanban_profiles = tracker_cfg.get("kanban_profiles", [])
+        schema_id = kanban_repo_map.get(repo_dir, "agile_basic")
+
+        active_schemas = SYSTEM_SCHEMAS + kanban_profiles
+        schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
+
+        valid_types = []
+        if schema:
+            for t_key in ["t1_types", "t2_types", "t3_types"]:
+                valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
+        if not valid_types: valid_types = ["todo", "bug", "queue"]
+        main_prefixes = []
+        closed_prefixes = []
+        for vt in valid_types:
+            folder = vt if vt.endswith('s') or vt == 'queue' else f"{vt}s"
+            main_prefixes.extend([f".tracker/{folder}/open", f".tracker/{folder}/active"])
+            closed_prefixes.append(f".tracker/{folder}/closed")
+
         log_prefixes = [".tracker/log/"]
 
         if include_closed == "grace_period":
@@ -359,7 +373,6 @@ def _resolve_tier(ctx, repo, ticket_type):
         if ticket_type in t1: return 1
         elif ticket_type in t2: return 2
     return 3
-
 def get_tracker_path(repo, ticket_type, status):
     """Resolves the relative directory for a ticket based on your taxonomy."""
     base = f"{repo}/.tracker"
@@ -368,21 +381,25 @@ def get_tracker_path(repo, ticket_type, status):
     elif status == "logged":
         return f"{base}/log"
 
-    folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
+    # Smart pluralization: avoid double 's' and handle known uncountables dynamically
+    folder_type = ticket_type if ticket_type.endswith('s') or ticket_type == 'queue' else f"{ticket_type}s"
     return f"{base}/{folder_type}/{status}"
-def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, parent_id=None, depends_on="", priority="", size=""):
+def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, parent_id=None, depends_on="", priority="", size="", ticket_id=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     from insetu.core.utils_core import update_frontmatter
     tier = _resolve_tier(ctx, repo, ticket_type)
 
-    repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
-    if not repo_prefix: repo_prefix = "TKT"
+    if not ticket_id:
+        repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
+        if not repo_prefix: repo_prefix = "TKT"
 
-    now = datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M")
-    ticket_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}"
+        now = datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S") # Include seconds to prevent rapid-fire collisions
+        import random
+        entropy = f"{random.getrandbits(16):04x}".upper()
+        ticket_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}-{entropy}"
+
     filename = f"{ticket_id}.md"
-
     target_dir = get_tracker_path(repo, ticket_type, status)
 
     raw_content = f"## Description\n{description}\n\n## Notes / Execution Log\n"
@@ -409,8 +426,7 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
 
     content = update_frontmatter(raw_content, yaml_data)
 
-    folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
-    ticket_path = f"{repo}/.tracker/{folder_type}/{status}/{filename}"
+    ticket_path = f"{target_dir}/{filename}"
 
     conn = ctx.db
     conn.execute("""
@@ -461,11 +477,10 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
 
                 yaml_data, body, _ = parse_frontmatter(content)
                 yaml_data['type'] = new_type
-
                 # Recalculate target path
                 from pathlib import Path
                 filename = Path(old_rel_path).name
-                new_rel_path = f".tracker/{new_type}/{status}/{filename}"
+                new_rel_path = f"{get_tracker_path(repo, new_type, status)}/{filename}"
                 # Reconstruct MaC payload (preserving structure, updating type)
                 from insetu.core.utils_core import update_frontmatter
                 new_content = update_frontmatter(content, yaml_data)
@@ -488,26 +503,27 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
 
     filename = Path(current_rel_path).name
     yaml_data, body, _ = parse_frontmatter(content)
-
     # SSOT: Read the active type directly from the file's declarative state
-    ticket_type = yaml_data.get("type", "todo").lower()
+    ticket_type = yaml_data.get("type", "task").lower()
     if new_type: ticket_type = new_type
+    if new_status in ["closed", "logged", "archived"]:
+        # Evaluate Blockers
+        depends_str = _parse_list_field(yaml_data.get('depends_on', '[]'))
+        import json
+        for dep in json.loads(depends_str):
+            d_repo, d_id = dep.split("/", 1) if "/" in dep else (repo, dep)
+            dep_row = ctx.db.execute("SELECT status FROM tracker_tickets WHERE id=? AND repo=?", (d_id, d_repo)).fetchone()
+            if dep_row and dep_row['status'] not in ["closed", "logged", "archived"]:
+                raise ValueError(f"Blocked by open dependency: {dep}")
 
-    if new_status in ["closed", "logged", "archived"] and (yaml_data.get("closed_at") in ["null", None, ""]):
-        yaml_data["closed_at"] = datetime.now().isoformat(timespec='seconds')
+        if yaml_data.get("closed_at") in ["null", None, ""]:
+            yaml_data["closed_at"] = datetime.now().isoformat(timespec='seconds')
 
     yaml_data["status"] = new_status
     if new_type: yaml_data["type"] = new_type
 
     content = update_frontmatter(content, yaml_data)
-
-    if new_status == "archived":
-        new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
-    elif new_status == "logged":
-        new_rel_path = f"{repo}/.tracker/log/{filename}"
-    else:
-        folder_type = "queue" if ticket_type == "queue" else f"{ticket_type}s"
-        new_rel_path = f"{repo}/.tracker/{folder_type}/{new_status}/{filename}"
+    new_rel_path = f"{get_tracker_path(repo, ticket_type, new_status)}/{filename}"
 
     ctx.vfs.save(new_rel_path, content, data={"delete_source": current_rel_path if current_rel_path != new_rel_path else None})
     tier = _resolve_tier(ctx, repo, ticket_type)
@@ -589,18 +605,17 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
             rel_dir = Path(ws_rel_path[len(tracker_rel_base)+1:]).parent.as_posix()
             if rel_dir == '.': rel_dir = ''
             rel_dir_lower = rel_dir.lower()
-
-            # Infer current state from path as fallback, defaulting to todo
-            inferred_type = "todo"
+            # Infer current state from path as fallback
+            inferred_type = "task"
             parts = [p for p in rel_dir_lower.split('/') if p]
             if parts and parts[0] != "log":
                 inferred_type = parts[0][:-1] if parts[0].endswith("s") else parts[0]
-
             inferred_status = "open"
             if "active" in rel_dir_lower: inferred_status = "active"
             elif "close" in rel_dir_lower: inferred_status = "closed"
             elif "archive" in rel_dir_lower: inferred_status = "archived"
             elif "log" in rel_dir_lower: inferred_status = "logged"
+            elif "template" in rel_dir_lower: inferred_status = "template"
             try:
                 content = ctx.vfs.read(ws_rel_path)
                 if content is None:
@@ -640,22 +655,18 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     if part and part.lower() not in standard_dirs:
                         inferred_sub_bucket = part
                         break
-
                 raw_type = yaml_data.get('type', inferred_type).lower()
                 if raw_type in valid_types:
                     decl_type = raw_type
                 else:
-                    # Heuristic rescue for legacy types, otherwise fallback to the primary Tier 3 type
-                    if "bug" in raw_type and "bug" in valid_types: decl_type = "bug"
-                    elif "todo" in raw_type and "todo" in valid_types: decl_type = "todo"
-                    elif "queue" in raw_type and "queue" in valid_types: decl_type = "queue"
-                    else: decl_type = valid_types[0]
-
+                    # Fallback to the primary Tier 3 type if the current type violates the active schema
+                    decl_type = valid_types[0]
                 raw_status = yaml_data.get('status', inferred_status).lower()
                 if "active" in raw_status: decl_status = "active"
                 elif "clos" in raw_status: decl_status = "closed"
                 elif "archiv" in raw_status: decl_status = "archived"
                 elif "log" in raw_status: decl_status = "logged"
+                elif "template" in raw_status: decl_status = "template"
                 else: decl_status = "open"
                 decl_id = yaml_data.get('id', filename.replace('.md', ''))
                 decl_title = yaml_data.get('title', filename.replace('.md', ''))
@@ -692,7 +703,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                         decl_created = datetime.now().isoformat(timespec='seconds')
                 # Enforce the System Clock as the single authority on closure timelines
                 if decl_status in ('closed', 'logged', 'archived'):
-                    if db_status in ('open', 'active', 'queue', 'todo', 'bug'):
+                    if db_status in ('open', 'active'):
                         # State transition detected (Open -> Closed)! Force system clock to override LLM hallucinations.
                         decl_closed = datetime.now().isoformat(timespec='seconds')
                     elif db_status in ('closed', 'logged', 'archived') and db_closed_at:
@@ -796,6 +807,101 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 print(f"Warning: Ticket Housekeeping failed on {ws_rel_path}: {e}")
 
     return enforced_count
+@tracker_bp.worker("spawn_template_task")
+def _background_spawn_template(ctx, target_repo, template_id, variables):
+    ctx.jobs.update_progress("Spawning template instance...")
+    all_tickets = ctx.db.get_all("tracker_tickets")
+
+    root_ticket = next((t for t in all_tickets if t['id'] == template_id), None)
+    if not root_ticket:
+        raise ValueError("Template root ticket not found.")
+
+    tree_tickets = []
+    def collect_children(parent_id):
+        children = [t for t in all_tickets if t['parent_id'] == parent_id]
+        for c in children:
+            tree_tickets.append(c)
+            collect_children(c['id'])
+
+    tree_tickets.append(root_ticket)
+    collect_children(template_id)
+
+    import uuid, datetime, json
+
+    id_map = {}
+    now = datetime.datetime.now()
+
+    repo_prefix = target_repo.split("-")[-1].upper()[:3] if "-" in target_repo else target_repo.upper()[:3]
+    if not repo_prefix: repo_prefix = "TKT"
+
+    # Generate sequential timestamps to prevent collision
+    for idx, t in enumerate(tree_tickets):
+        ticket_type = t['ticket_type']
+        timestamp = (now + datetime.timedelta(seconds=idx)).strftime("%Y%m%d_%H%M%S")
+        new_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}"
+        id_map[t['id']] = new_id
+
+    import re
+    def apply_vars(text):
+        if not text: return text
+        def replacer(match):
+            key = match.group(1).strip()
+            default_val = match.group(2).strip() if match.group(2) else ""
+            # If the UI passed a value, use it. Otherwise use the default.
+            return variables.get(key, default_val)
+
+        # Matches {{key}} or {{key|default}}
+        return re.sub(r'\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}', replacer, text)
+
+    for t in tree_tickets:
+        new_id = id_map[t['id']]
+        new_title = apply_vars(t['title'])
+        new_desc = apply_vars(t['description'])
+        new_parent = id_map.get(t['parent_id']) if t['parent_id'] else None
+
+        try:
+            old_deps = json.loads(t['depends_on']) if t['depends_on'] else []
+        except Exception:
+            old_deps = []
+        new_deps = [id_map.get(d, d) for d in old_deps]
+
+        tags = ""
+        try:
+            tags_arr = json.loads(t['tags']) if t['tags'] else []
+            tags = ",".join(tags_arr)
+        except Exception: pass
+        create_ticket(
+            ctx=ctx,
+            repo=target_repo,
+            ticket_type=t['ticket_type'],
+            status="open",
+            title=new_title,
+            description=new_desc,
+            tags=tags,
+            sub_bucket=t['sub_bucket'],
+            delivery_date=None,
+            parent_id=new_parent,
+            depends_on=",".join(new_deps),
+            priority=t['priority'] or "",
+            size=t['size'] or "",
+            ticket_id=new_id
+        )
+
+    return {"message": f"Successfully spawned template instance with {len(tree_tickets)} tasks.", "artifact": {}}
+
+@tracker_bp.route('spawn_template', methods=['POST'])
+def api_tracker_spawn_template(ctx):
+    data = ctx.req.json
+    target_repo = data.get('target_repo')
+    template_id = data.get('template_id')
+    variables = data.get('variables', {})
+
+    if not target_repo or not template_id:
+        return jsonify({"error": "Target repo and template_id required."}), 400
+
+    job_id = ctx.jobs.submit("spawn_template_task", target_repo=target_repo, template_id=template_id, variables=variables)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 def archive_stale_tickets(workspace_id=None):
     """Sweeps all repos for tickets passing the dynamic log and archive thresholds."""
     ctx = tracker_bp.get_context(workspace_id)
@@ -810,9 +916,23 @@ def archive_stale_tickets(workspace_id=None):
     date_archive = datetime.now() - timedelta(days=archive_days)
     archived_count = 0
 
+    kanban_repo_map = tracker_cfg.get("kanban_repo_map", {})
+    kanban_profiles = tracker_cfg.get("kanban_profiles", [])
+
     for repo in repos:
+        schema_id = kanban_repo_map.get(repo, "agile_basic")
+        active_schemas = SYSTEM_SCHEMAS + kanban_profiles
+        schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
+
+        valid_types = []
+        if schema:
+            for t_key in ["t1_types", "t2_types", "t3_types"]:
+                valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
+        if not valid_types: valid_types = ["todo", "bug", "queue"]
+        folders_to_sweep = set([vt if vt.endswith('s') or vt == 'queue' else f"{vt}s" for vt in valid_types])
+
         # Sweep 1: Move >grace_period day closed tickets to log
-        for folder_type in ["todos", "bugs", "queue"]:
+        for folder_type in folders_to_sweep:
             closed_dir_rel = f"{repo}/.tracker/{folder_type}/closed"
             for ws_rel_path in ctx.vfs.walk(closed_dir_rel, exts=['.md']):
                 filename = Path(ws_rel_path).name
@@ -944,9 +1064,6 @@ def api_tracker_files(ctx):
                 "priority": row['priority'] or '',
                 "size": row['size'] or '',
                 "ticket_type": row['ticket_type'],
-                "isTodo": row['ticket_type'] == 'todo',
-                "isBug": row['ticket_type'] == 'bug',
-                "isQueue": row['ticket_type'] == 'queue',
                 "status": row['status'],
                 "title": row['title'],
                 "description": row['description'],

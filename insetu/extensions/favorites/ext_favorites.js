@@ -161,10 +161,9 @@ export class InSetuExtFavorites extends InSetuElement {
     _navigateToFavorite(item) {
         if (item.type === 'file') {
             const isContext = item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_');
-            const cleanPath = item.path.replace(/^vfs:\/\//, '');
 
             if (!isContext && this.vfs && this.vfs.viewSourceFile) {
-                this.vfs.viewSourceFile(cleanPath, true);
+                this.vfs.viewSourceFile(item.path, true);
             } else if (isContext && this.vfs && this.vfs.viewAndCopy) {
                 this.vfs.viewAndCopy(item.path);
             }

@@ -13,7 +13,9 @@ export const KanbanStore = createExtensionStore('Kanban', {
     systemSchemas: [],
     customViews: [],
     parentTabs: [],
-    newTaskForm: { repo: '', tier: 3, type: 'todo', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '', parentId: '', dependsOn: [], priority: '', size: '' },
+    activeFocusId: null,
+    setFocus: (id) => KanbanStore.setState({ activeFocusId: id }),
+    newTaskForm: { repo: '', tier: 3, type: 'task', status: 'open', bucket: 'None', title: '', tags: '', desc: '', deliveryDate: '', parentId: '', dependsOn: [], priority: '', size: '' },
     editTaskForm: { filepath: '', title: '', tagsRaw: '', bucket: 'None', desc: '', origYaml: '', deliveryDate: '', createdAt: '', closedAt: '', parentId: '', dependsOn: [], priority: '', size: '', tier: 3 },
     setNewTaskField: (field, value) => KanbanStore.setState((state) => {
         const updatedForm = { ...state.newTaskForm };
@@ -126,8 +128,7 @@ export const KanbanStore = createExtensionStore('Kanban', {
             const data = await res.json();
             KanbanStore.setState(state => ({
                 tasks: state.tasks.map(t => t.id === task.id ? {
-                    ...t, status: newStatus, filepath: data.new_filepath, ticket_type: newType || t.ticket_type,
-                    isTodo: newType ? newType === 'todo' : t.isTodo, isBug: newType ? newType === 'bug' : t.isBug, isQueue: newType ? newType === 'queue' : t.isQueue
+                    ...t, status: newStatus, filepath: data.new_filepath, ticket_type: newType || t.ticket_type
                 } : t)
             }));
         } else {
@@ -146,6 +147,7 @@ export class InSetuExtTracker extends InSetuElement {
         tasks: { type: Array },
         customViews: { type: Array },
         settings: { type: Object },
+        systemSchemas: { type: Array },
         pinnedTags: { type: Object },
         pinnedBuckets: { type: Object },
         activeTab: { type: String },
@@ -153,7 +155,10 @@ export class InSetuExtTracker extends InSetuElement {
         _reposExpanded: { type: Boolean },
         _bucketsExpanded: { type: Boolean },
         _tagsExpanded: { type: Boolean },
-        _logExpanded: { type: Object }
+        _logExpanded: { type: Object },
+        _localPinnedRepos: { type: Object },
+        _localPinnedTags: { type: Object },
+        _localPinnedBuckets: { type: Object }
     };
 static styles = [
     sharedStyles,
@@ -165,6 +170,7 @@ static styles = [
 constructor() {
         super();
         this.tasks = [];
+        this.systemSchemas = [];
         this.pinnedTags = new Set(['ALL']);
         this.pinnedBuckets = new Set(['ALL']);
         this.activeTab = 'todos';
@@ -173,17 +179,20 @@ constructor() {
         this._bucketsExpanded = true;
         this._tagsExpanded = true;
         this._logExpanded = { closed: true, logged: true, archived: false };
+        this._localPinnedRepos = new Set(['ALL']);
+        this._localPinnedTags = new Set(['ALL']);
+        this._localPinnedBuckets = new Set(['ALL']);
 }
     connectedCallback() {
         super.connectedCallback();
         const parsedTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '');
         this.activeTab = parsedTab || 'todos';
-
         if (typeof KanbanStore !== 'undefined' && KanbanStore) {
             this.subscribe(KanbanStore, (state) => {
                 this.tasks = state?.tasks || [];
                 this.customViews = state?.customViews || [];
                 this.settings = state?.settings || {};
+                this.systemSchemas = state?.systemSchemas || [];
                 this.pinnedTags = state?.pinnedTags || new Set(['ALL']);
                 this.pinnedBuckets = state?.pinnedBuckets || new Set(['ALL']);
                 this.requestUpdate();
@@ -192,6 +201,7 @@ constructor() {
             this.tasks = kState?.tasks || [];
             this.customViews = kState?.customViews || [];
             this.settings = kState?.settings || {};
+            this.systemSchemas = kState?.systemSchemas || [];
             this.pinnedTags = kState?.pinnedTags || new Set(['ALL']);
             this.pinnedBuckets = kState?.pinnedBuckets || new Set(['ALL']);
         }
@@ -213,7 +223,6 @@ constructor() {
             KanbanStore.getState().fetchTasks();
             KanbanStore.getState().fetchSettings();
         }
-
         this.registerGlobalListener('sutram-route-changed', window, (e) => {
             if (e.detail.tab === 'tasks') {
                 KanbanStore.getState().fetchTasks();
@@ -260,7 +269,7 @@ constructor() {
         const activeLabels = { ...globalLabels, ...repoLabels };
         return activeLabels[`tier_${tierNumber}`] || `Tier ${tierNumber}`;
     }
-    _renderTaskCard(t) {
+    _renderTaskCard(t, overrideClick = null) {
         const dateStr = this.utils.formatDate(t.timestamp);
         const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
         const descText = `${t.repo}${bucketStr} | ${dateStr}`;
@@ -269,21 +278,27 @@ constructor() {
         const childTasks = this._getChildTasksMap()[t.id] || [];
         const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
 
-        const intentColor = t.isBug ? 'var(--intent-danger)' : (t.isQueue ? 'var(--intent-highlight)' : 'var(--intent-success)');
-        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (t.isBug ? '🐛' : '✨'));
+        // Dynamic intent inference based on vocabulary heuristics
+        const typeStr = (t.ticket_type || '').toLowerCase();
+        const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
+        const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
+
+        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
+        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
         const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
+        const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
 
         return html`
             <insetu-card
                 data-task-id=${t.id}
                 .filename=${t.filepath}
-                .titleText=${t.title}
+                .titleText=${displayTitle}
                 .descriptionText=${descText}
                 .intentColor=${intentColor}
                 .icon=${icon}
                 entityType="file:task"
                 .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
-                @card-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}>
+                @card-clicked=${overrideClick ? overrideClick : () => this.vfs.viewSourceFile(t.filepath, true)}>
                 <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
                     ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
                     ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
@@ -326,10 +341,9 @@ constructor() {
         return html`
             <div style="display: flex; flex-direction: column; gap: 15px;">
                 ${parentCards.map(parent => {
-                    const childTasks = this.tasks.filter(t => t.parentId === parent.id || (t.dependsOn && t.dependsOn.includes(`${parent.repo}::${parent.id}`)));
+                    const childTasks = this.tasks.filter(t => t.status !== 'template' && (t.parentId === parent.id || (t.dependsOn && t.dependsOn.includes(`${parent.repo}::${parent.id}`))));
                     const closedCount = childTasks.filter(t => ['closed', 'archived', 'logged'].includes(t.status)).length;
                     const tierLabel = this._getResolvedTierLabel(parent.repo, targetTier);
-
                     return html`
                         <sutram-card-group ?stacked=${true} ?accordion=${true}>
                             <insetu-card
@@ -360,23 +374,10 @@ constructor() {
             if (b.deliveryDate) return 1;
             return a.timestamp.localeCompare(b.timestamp); // Fallback to Oldest-First FIFO
         };
-
         const openTasks = filteredTasks.filter(t => t.status === 'open').sort(sortChronological);
         const activeTasks = filteredTasks.filter(t => t.status === 'active').sort(sortChronological);
         const closedTasks = filteredTasks.filter(t => t.status === 'closed').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 
-        if (filters && filters.ticket_types && filters.ticket_types.includes('queue')) {
-            return html`
-                <sutram-board>
-                    <sutram-column titleText="Open (Research Queue)">
-                        ${openTasks.map(t => this._renderTaskCard(t))}
-                    </sutram-column>
-                    <sutram-column titleText="Closed (Resolved)" intentColor="var(--intent-success)">
-                        ${closedTasks.map(t => this._renderTaskCard(t))}
-                    </sutram-column>
-                </sutram-board>
-            `;
-        }
         return html`
             <sutram-board>
                 <sutram-column titleText="Active">
@@ -440,48 +441,41 @@ constructor() {
     }
     render() {
         const activeWs = AppStore.getState().activeWorkspace || 'default';
-// Compute all available tags for the filter
-        const allTags = new Set();
-        this.tasks.forEach(t => {
-            const matchesRepo = this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(t.repo);
-            if (matchesRepo && t.tags) {
-                t.tags.forEach(tag => allTags.add(tag));
-            }
-        });
-        const tagsArray = Array.from(allTags).sort();
-        // Apply filters to tasks
-        const filteredTasks = this.tasks.filter(t => {
-            const matchesRepo = this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(t.repo);
-            const matchesTag = this.pinnedTags.has('ALL') || (t.tags && t.tags.some(tag => this.pinnedTags.has(tag)));
-
-            let matchesBucket = true;
-            if (!this.pinnedBuckets.has('ALL')) {
-                const repoBucketsPinned = Array.from(this.pinnedBuckets).some(pb => pb.startsWith(t.repo + '::'));
-                if (repoBucketsPinned) {
-                    matchesBucket = this.pinnedBuckets.has(t.repo + '::' + t.subBucket);
-                }
-            }
-            return matchesRepo && matchesTag && matchesBucket;
-        });
-        const hasFilters = !this.ecosystem.pinnedRepos.has('ALL') || !this.pinnedTags.has('ALL') || !this.pinnedBuckets.has('ALL');
         const currentView = (this.customViews || []).find(v => v.id === this.activeTab);
-        let viewScopedTasks = filteredTasks;
+        const repoStrategy = currentView?.repo_strategy || 'global';
+        const activeFocusId = KanbanStore.getState().activeFocusId;
+        let focusedTaskIds = new Set();
+        let focusedTaskTitle = '';
+        if (activeFocusId) {
+            focusedTaskIds.add(activeFocusId);
+            const focusTarget = this.tasks.find(t => t.id === activeFocusId);
+            if (focusTarget) {
+                focusedTaskTitle = focusTarget.title || focusTarget.id;
+                const getDesc = (pid) => {
+                    this.tasks.forEach(t => {
+                        if (t.parentId === pid) {
+                            focusedTaskIds.add(t.id);
+                            getDesc(t.id);
+                        }
+                    });
+                };
+                getDesc(activeFocusId);
+            } else {
+                KanbanStore.getState().setFocus(null);
+            }
+        }
+
+        // 1. Scope to View Rules first
+        let viewScopedTasks = this.tasks.filter(t => t.status !== 'template');
         if (currentView) {
             viewScopedTasks = viewScopedTasks.filter(t => {
-                // 1. Schema Scope
                 if (currentView.target_schema) {
                     const repoSchema = (this.settings.kanban_repo_map || {})[t.repo] || 'agile_basic';
                     if (repoSchema !== currentView.target_schema) return false;
                 }
 
-                // Stacked views only apply tier and type filters to the PARENTS, not the overall list.
-                // Child tasks need to be rendered regardless of the view's tier scope.
-                if (currentView.layout === 'stacked') return true;
-
-                // 2. Tier Scope (All other views)
                 if (currentView.target_tier && t.tier !== currentView.target_tier) return false;
 
-                // 3. Type & Status Filters (Bypassed for Log view)
                 if (currentView.layout !== 'log' && currentView.filters) {
                     if (currentView.filters.ticket_types) {
                         const allowed = currentView.filters.ticket_types.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -496,9 +490,76 @@ constructor() {
             });
         }
 
+        // 2. Determine base allowed repos for custom strategies
+        let baseAllowedRepos = this.ecosystem.allRepos;
+        if (repoStrategy === 'schema') {
+            const targetSchema = currentView.target_schema;
+            if (targetSchema) {
+                baseAllowedRepos = this.ecosystem.allRepos.filter(r => (this.settings.kanban_repo_map || {})[r] === targetSchema);
+            }
+        } else if (repoStrategy === 'explicit') {
+            baseAllowedRepos = currentView.explicit_repos || [];
+        }
+
+        // 3. Apply active filters
+        const activeRepoPins = repoStrategy === 'global' ? this.ecosystem.pinnedRepos : this._localPinnedRepos;
+        const activeTagPins = repoStrategy === 'global' ? this.pinnedTags : this._localPinnedTags;
+        const activeBucketPins = repoStrategy === 'global' ? this.pinnedBuckets : this._localPinnedBuckets;
+        let hiddenTasksCount = 0;
+        let hiddenTasksByStatus = {};
+        let missingRepos = new Set();
+
+        const fullyFilteredTasks = viewScopedTasks.filter(t => {
+            if (repoStrategy !== 'global' && !baseAllowedRepos.includes(t.repo)) return false;
+
+            const matchesTag = activeTagPins.has('ALL') || (t.tags && t.tags.some(tag => activeTagPins.has(tag)));
+
+            let matchesBucket = true;
+            if (!activeBucketPins.has('ALL')) {
+                const repoBucketsPinned = Array.from(activeBucketPins).some(pb => pb.startsWith(t.repo + '::'));
+                if (repoBucketsPinned) {
+                    matchesBucket = activeBucketPins.has(t.repo + '::' + t.subBucket);
+                }
+            }
+
+            // Drop tasks that fail non-repo filters before counting them as "hidden"
+            if (!matchesTag || !matchesBucket) return false;
+
+            const matchesRepo = activeRepoPins.has('ALL') || activeRepoPins.has(t.repo);
+            if (!matchesRepo && repoStrategy === 'global') {
+                if (t.status !== 'template') {
+                    hiddenTasksCount++;
+                    hiddenTasksByStatus[t.status] = (hiddenTasksByStatus[t.status] || 0) + 1;
+                    missingRepos.add(t.repo);
+                }
+                return false;
+            }
+
+            if (activeFocusId && !focusedTaskIds.has(t.id)) return false;
+
+            return matchesRepo;
+        });
+
+        // Compute all available tags for the active filter set
+        const allTags = new Set();
+        viewScopedTasks.forEach(t => {
+            if (repoStrategy !== 'global' && !baseAllowedRepos.includes(t.repo)) return;
+            const matchesRepo = activeRepoPins.has('ALL') || activeRepoPins.has(t.repo);
+            if (matchesRepo && t.tags) {
+                t.tags.forEach(tag => allTags.add(tag));
+            }
+        });
+        const tagsArray = Array.from(allTags).sort();
+
+        const hasFilters = !activeRepoPins.has('ALL') || !activeTagPins.has('ALL') || !activeBucketPins.has('ALL');
+
         const textFilteredTasks = this.searchQuery 
-            ? window.inSetu.utils.fuzzyFilterObjects(viewScopedTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
-            : viewScopedTasks;
+            ? window.inSetu.utils.fuzzyFilterObjects(fullyFilteredTasks, this.searchQuery, t => `${t.title} ${t.id} ${t.description} ${(t.tags || []).join(' ')}`) 
+            : fullyFilteredTasks;
+
+        const setPinnedRepos = (reposSet) => repoStrategy === 'global' ? AppStore.getState().setPinnedRepos(reposSet) : (this._localPinnedRepos = reposSet, this.requestUpdate());
+        const setPinnedBuckets = (bucketsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedBuckets: bucketsSet }) : (this._localPinnedBuckets = bucketsSet, this.requestUpdate());
+        const setPinnedTags = (tagsSet) => repoStrategy === 'global' ? KanbanStore.setState({ pinnedTags: tagsSet }) : (this._localPinnedTags = tagsSet, this.requestUpdate());
 
         return html`
             <sutram-toolbar
@@ -509,32 +570,37 @@ constructor() {
                 .filterText=${"Filters"}
                 .hasFiltersOverride=${hasFilters}>
                 <div slot="filters" style="display: flex; flex-direction: column; gap: 15px; width: 100%;">
+                    ${repoStrategy !== 'global' ? html`
+                        <div style="background: var(--intent-highlight); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-align: center; margin-bottom: -5px;">
+                            Tab-Specific Filtering Enabled
+                        </div>
+                    ` : ''}
                     <div style="display: flex; align-items: flex-start; gap: 5px;">
                         <span style="font-size: 0.85rem; font-weight: bold; color: var(--text); cursor: pointer; user-select: none; margin-top: 4px; white-space: nowrap;" @click=${() => this._reposExpanded = !this._reposExpanded}>
                             📌 Repos ${this._reposExpanded ? '▼' : '▶'}
                         </span>
                         <insetu-repo-filter
                             label=""
-                            .repos=${this._reposExpanded ? this.ecosystem.allRepos : Array.from(this.ecosystem.pinnedRepos).filter(r => r !== 'ALL')}
-                            .activeRepos=${Array.from(this.ecosystem.pinnedRepos)}
+                            .repos=${this._reposExpanded ? baseAllowedRepos : Array.from(activeRepoPins).filter(r => r !== 'ALL')}
+                            .activeRepos=${Array.from(activeRepoPins)}
                             @repo-filter-changed=${(e) => {
-                                AppStore.getState().setPinnedRepos(new Set(e.detail.activeRepos));
-                                KanbanStore.setState({ pinnedBuckets: new Set(['ALL']) });
+                                setPinnedRepos(new Set(e.detail.activeRepos));
+                                setPinnedBuckets(new Set(['ALL']));
                             }}>
                         </insetu-repo-filter>
                     </div>
-                        ${!this.ecosystem.pinnedRepos.has('ALL') ? html`
+                        ${!activeRepoPins.has('ALL') ? html`
                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border);">
-                                ${Array.from(this.ecosystem.pinnedRepos).map(repo => {
+                                ${Array.from(activeRepoPins).map(repo => {
                                     const buckets = this.sys.getFlattenedBuckets(repo);
                                     if (buckets.length === 0) return '';
 
-                                    const repoBucketsActive = buckets.some(b => this.pinnedBuckets.has(repo + '::' + b.id));
-                                    const repoAllActive = this.pinnedBuckets.has('ALL') || !repoBucketsActive;
+                                    const repoBucketsActive = buckets.some(b => activeBucketPins.has(repo + '::' + b.id));
+                                    const repoAllActive = activeBucketPins.has('ALL') || !repoBucketsActive;
 
                                     const visibleBuckets = this._bucketsExpanded 
                                         ? buckets 
-                                        : buckets.filter(b => this.pinnedBuckets.has(repo + '::' + b.id));
+                                        : buckets.filter(b => activeBucketPins.has(repo + '::' + b.id));
 
                                     if (!this._bucketsExpanded && !repoBucketsActive) return '';
 
@@ -546,7 +612,7 @@ constructor() {
                                             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" @sutram-pill-toggled=${(e) => {
                                                 e.stopPropagation();
                                                 const { id, active } = e.detail;
-                                                let newSet = new Set(this.pinnedBuckets);
+                                                let newSet = new Set(activeBucketPins);
 
                                                 if (id === repo + '::ALL') {
                                                     buckets.forEach(b => newSet.delete(repo + '::' + b.id));
@@ -557,11 +623,11 @@ constructor() {
                                                     else newSet.delete(id);
                                                     if (newSet.size === 0) newSet.add('ALL');
                                                 }
-                                                KanbanStore.setState({ pinnedBuckets: newSet });
+                                                setPinnedBuckets(newSet);
                                             }}>
                                                 <sutram-pill pillId=${repo + '::ALL'} labelText="All" variant="text" ?active=${repoAllActive}></sutram-pill>
                                                 ${visibleBuckets.map(b => html`
-                                                    <sutram-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${this.pinnedBuckets.has(repo + '::' + b.id)}></sutram-pill>
+                                                    <sutram-pill pillId=${repo + '::' + b.id} labelText=${b.title} variant="text" ?active=${activeBucketPins.has(repo + '::' + b.id)}></sutram-pill>
                                                 `)}
                                             </div>
                                         </div>
@@ -577,10 +643,10 @@ constructor() {
                                 <sutram-filter-group
                                     label=""
                                     .allowAll=${true}
-                                    .items=${(this._tagsExpanded ? tagsArray : Array.from(this.pinnedTags).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
-                                    .activeItems=${Array.from(this.pinnedTags)}
+                                    .items=${(this._tagsExpanded ? tagsArray : Array.from(activeTagPins).filter(t => t !== 'ALL')).map(t => ({id: t, label: '#' + t}))}
+                                    .activeItems=${Array.from(activeTagPins)}
                                     @sutram-filter-changed=${(e) => {
-                                        KanbanStore.setState({ pinnedTags: new Set(e.detail.activeItems) });
+                                        setPinnedTags(new Set(e.detail.activeItems));
                                     }}>
                                 </sutram-filter-group>
                             </div>
@@ -588,6 +654,32 @@ constructor() {
                 </div>
             </sutram-toolbar>
             <div class="tracker-body" style="${currentView?.layout === 'log' ? 'padding: 0;' : ''}">
+                ${activeFocusId ? html`
+                    <div style="background: var(--intent-highlight); color: #fff; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 1.2rem;">🎯</span>
+                            <div style="display: flex; flex-direction: column;">
+                                <span style="font-weight: bold; font-size: 0.95rem;">Active Focus</span>
+                                <span style="font-size: 0.85rem; opacity: 0.9;">${focusedTaskTitle}</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => {
+                                const task = this.tasks.find(t => t.id === activeFocusId);
+                                if (task) window.dispatchEvent(new CustomEvent('insetu:tracker:open-hierarchy', { detail: { task } }));
+                            }}>🌳 View Hierarchy</button>
+                            <button class="btn-sm" style="background: rgba(0,0,0,0.2); color: white; border: 1px solid rgba(255,255,255,0.3); margin: 0;" @click=${() => KanbanStore.getState().setFocus(null)}>✕ Clear Focus</button>
+                        </div>
+                    </div>
+                ` : ''}
+                ${hiddenTasksCount > 0 && repoStrategy === 'global' ? html`
+                    <div style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-bottom: 15px; text-align: center;">
+                        Note: ${Object.entries(hiddenTasksByStatus).sort(([a], [b]) => {
+                            const order = ['active', 'open', 'closed', 'logged', 'archived'];
+                            return (order.indexOf(a) > -1 ? order.indexOf(a) : 99) - (order.indexOf(b) > -1 ? order.indexOf(b) : 99);
+                        }).map(([status, count]) => `${count} ${status}`).join(', ')} task${hiddenTasksCount === 1 ? '' : 's'} currently hidden by the Smart Repo Filter.
+                    </div>
+                ` : ''}
                 ${(() => {
                     if (!currentView) return '';
                     if (currentView.layout === 'log') {
@@ -629,7 +721,12 @@ constructor() {
                                 if (dateStr !== acc.currentDate) {
                                                 newParts.push(`\n## ${dateStr}\n\n`);
                                 }
-                                const typeIcon = t.isBug ? '🐛' : t.isQueue ? '🔬' : '✨';
+
+                                const typeStr = (t.ticket_type || '').toLowerCase();
+                                const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
+                                const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
+                                const typeIcon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : (isHighlight ? '🔬' : '✨')));
+
                                 newParts.push(`### ${typeIcon} ${t.title}\n\n`);
 
                                 if (t.description) {
@@ -657,11 +754,15 @@ export class InSetuExtTrackerActions extends InSetuElement {
     get extName() { return 'tracker'; }
     static styles = [sharedStyles];
     get _menuItems() {
-        const activeSubTab = this.dataset.subId || 'todos';
+        const appState = window.inSetu.stores.App.getState();
+        const activeSubTab = this.dataset.subId || this.parentElement?.id?.replace('sub-', '') || appState.activeSubTabs[appState.activeTab] || '';
         const items = [];
         if (activeSubTab !== 'log') {
             items.push({ label: 'New Task', icon: '🎫', onClick: () => { 
                 this.dispatch('insetu:tracker:open-new-task', { activeTab: activeSubTab });
+            } });
+            items.push({ label: 'Templates...', icon: '🧬', onClick: () => { 
+                this.dispatch('insetu:tracker:open-templates-browser');
             } });
         } else if (activeSubTab === 'log') {
             items.push({ label: 'Generate Changelog (all)', icon: '📜', onClick: () => { 
@@ -696,7 +797,22 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _pickerMode: { type: String },
         _pickerForm: { type: String },
         _pickerSearchQuery: { type: String },
-        _pickerRepoFilter: { type: String }
+        _pickerRepoFilter: { type: String },
+        _convertOpen: { type: Boolean },
+        _convertTask: { type: Object },
+        _spawnModalOpen: { type: Boolean },
+        _spawnTask: { type: Object },
+        _spawnVariables: { type: Array },
+        _spawnForm: { type: Object },
+        _spawnTargetRepo: { type: String },
+        _spawnCompatibleRepos: { type: Array },
+        _spawnDisplayName: { type: String },
+        _templatesBrowserOpen: { type: Boolean },
+        _activeTemplateRoot: { type: String },
+        _templateRepoFilter: { type: String },
+        _returnToTemplatesBrowser: { type: Boolean },
+        _hierarchyModalOpen: { type: Boolean },
+        _hierarchyTask: { type: Object }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -715,6 +831,21 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._pickerForm = 'new';
         this._pickerSearchQuery = '';
         this._pickerRepoFilter = 'ALL';
+        this._convertOpen = false;
+        this._convertTask = null;
+        this._spawnModalOpen = false;
+        this._spawnTask = null;
+        this._spawnVariables = [];
+        this._spawnForm = {};
+        this._spawnTargetRepo = '';
+        this._spawnCompatibleRepos = [];
+        this._spawnDisplayName = '';
+        this._templatesBrowserOpen = false;
+        this._activeTemplateRoot = null;
+        this._templateRepoFilter = null;
+        this._returnToTemplatesBrowser = false;
+        this._hierarchyModalOpen = false;
+        this._hierarchyTask = null;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -730,7 +861,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
             this._modals = kState?.modals || { new: false, edit: false };
         }
         this.registerGlobalListener('insetu:tracker:open-new-task', window, (e) => {
-            this._openNewTaskModal(e.detail.activeTab);
+            this._openNewTaskModal(e.detail.activeTab, e.detail.prefill);
         });
         this.registerGlobalListener('insetu:tracker:open-edit-task', window, (e) => {
             this._openEditTaskModal(e.detail.filepath);
@@ -749,6 +880,80 @@ export class InSetuExtTrackerModals extends InSetuElement {
             const fm = this.shadowRoot.getElementById('fm-editor-tracker');
             if (fm && typeof fm._handleSave === 'function') fm._handleSave();
         });
+        this.registerGlobalListener('insetu:tracker:open-convert', window, (e) => {
+            this._convertTask = e.detail.task;
+            this._convertOpen = true;
+            this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:tracker:open-spawn', window, (e) => {
+            this._openSpawnModal(e.detail.task);
+        });
+        this.registerGlobalListener('insetu:tracker:open-templates-browser', window, () => {
+            this._templatesBrowserOpen = true;
+            this._activeTemplateRoot = null;
+            this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:tracker:open-hierarchy', window, (e) => {
+            this._hierarchyTask = e.detail.task;
+            this._hierarchyModalOpen = true;
+            this.requestUpdate();
+        });
+    }
+
+    _openSpawnModal(task) {
+        const allTasks = KanbanStore.getState().tasks;
+        const descendants = [];
+        const findChildren = (parentId) => {
+            const children = allTasks.filter(t => t.parentId === parentId);
+            descendants.push(...children);
+            children.forEach(c => findChildren(c.id));
+        };
+        findChildren(task.id);
+
+        const tree = [task, ...descendants];
+
+        // Scan the entire tree for variables and defaults using {{key|default}}
+        const varMap = new Map();
+        const regex = /\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g;
+
+        const processMatch = (match) => {
+            const key = match[1].trim();
+            const def = match[2] ? match[2].trim() : '';
+            // If we haven't seen this key, or if we have but the current one provides a default, store it
+            if (!varMap.has(key) || (!varMap.get(key) && def)) {
+                varMap.set(key, def);
+            }
+        };
+
+        tree.forEach(t => {
+            let match;
+            while ((match = regex.exec(t.title)) !== null) processMatch(match);
+            while ((match = regex.exec(t.description)) !== null) processMatch(match);
+        });
+
+        // Calculate a clean display name for the modal title
+        const evaluateDisplayName = (text) => {
+            if (!text) return '';
+            return text.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim());
+        };
+        const displayName = evaluateDisplayName(task.title) || task.id;
+
+        // Filter compatible repositories to avoid cross-schema contamination
+        const state = KanbanStore.getState();
+        const repoMap = state.settings?.kanban_repo_map || {};
+        const sourceSchema = repoMap[task.repo] || 'agile_basic';
+        const compatibleRepos = this.ecosystem.allRepos.filter(r => (repoMap[r] || 'agile_basic') === sourceSchema);
+
+        this._spawnTask = task;
+        this._spawnVariables = Array.from(varMap.keys());
+        this._spawnForm = {};
+        // Pre-populate the form with discovered default values
+        this._spawnVariables.forEach(v => this._spawnForm[v] = varMap.get(v));
+        this._spawnTargetRepo = compatibleRepos.length > 0 ? compatibleRepos[0] : task.repo;
+        this._spawnCompatibleRepos = compatibleRepos;
+        this._spawnDisplayName = displayName;
+        this._spawnModalOpen = true;
+        this.requestUpdate();
     }
     _getBucketsForRepo(repoDir) {
         const getFn = window.inSetu?.utils?.getFlattenedBuckets || this.sys?.getFlattenedBuckets;
@@ -757,7 +962,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         if (!repoConfig) return [];
         return getFn([repoConfig]);
     }
-    _openNewTaskModal(activeTab) {
+    _openNewTaskModal(activeTab, prefill = null) {
         const state = KanbanStore.getState();
         const prePopulatedTags = Array.from(this.pinnedTags || []).filter(t => t !== 'ALL');
         const defaultTagsStr = prePopulatedTags.join(', ');
@@ -777,9 +982,8 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const t1Types = getTierTypes(1);
         const t2Types = getTierTypes(2);
         const t3Types = getTierTypes(3);
-
         let defaultTier = 3;
-        let defaultType = t3Types.length > 0 ? t3Types[0] : 'todo';
+        let defaultType = t3Types.length > 0 ? t3Types[0] : 'task';
 
         const customViews = state.customViews || [];
         const activeView = customViews.find(v => v.id === activeTab);
@@ -804,9 +1008,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 }
             }
         } else {
-            // Fallback for hardcoded routing
-            if (activeTab === 'bugs' && t3Types.includes('bug')) defaultType = 'bug';
-            if (activeTab === 'queue' && t3Types.includes('queue')) defaultType = 'queue';
+            // Fallback for hardcoded routing: match active tab ID to a configured schema type
+            const matchType = [...t1Types, ...t2Types, ...t3Types].find(t => activeTab.includes(t));
+            if (matchType) {
+                defaultType = matchType;
+                if (t1Types.includes(defaultType)) defaultTier = 1;
+                else if (t2Types.includes(defaultType)) defaultTier = 2;
+                else if (t3Types.includes(defaultType)) defaultTier = 3;
+            }
         }
 
         state.setNewTaskField('repo', targetRepo);
@@ -815,7 +1024,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setNewTaskField('tags', defaultTagsStr);
         state.setNewTaskField('title', '');
         state.setNewTaskField('desc', '');
-        state.setNewTaskField('status', 'open');
+        let defaultStatus = 'open';
+        if (activeView) {
+            if (activeView.filters && activeView.filters.statuses) {
+                const statuses = activeView.filters.statuses.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+                if (statuses.length === 1 && statuses[0] === 'template') {
+                    defaultStatus = 'template';
+                }
+            }
+        }
+        state.setNewTaskField('status', defaultStatus);
         state.setNewTaskField('deliveryDate', '');
 
         // Smart Bucket Resolution from active bucket filters
@@ -840,6 +1058,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
         }
         state.setNewTaskField('bucket', targetBucket);
 
+        if (prefill) {
+            Object.entries(prefill).forEach(([k, v]) => {
+                state.setNewTaskField(k, v);
+            });
+            // Auto-resolve ticket type if tier was forced via prefill
+            if (prefill.tier) {
+                const forcedTypes = getTierTypes(prefill.tier);
+                if (forcedTypes.length > 0) state.setNewTaskField('type', forcedTypes[0]);
+            }
+        }
+
         state.setModal('new', true);
     }
     async _saveNewTask() {
@@ -861,14 +1090,22 @@ export class InSetuExtTrackerModals extends InSetuElement {
         KanbanStore.getState().setEditTaskField('filepath', filepath);
         KanbanStore.getState().setModal('edit', true);
     }
-
     _onFrontmatterLoaded(e) {
         const yaml = e.detail.yaml;
         const content = e.detail.content;
         const filepath = KanbanStore.getState().editTaskForm.filepath;
         const repo = filepath.split('/')[0];
         const defaultTitle = filepath.split('/').pop();
-        const inferredType = filepath.includes('/bugs/') ? 'bug' : filepath.includes('/queue/') ? 'queue' : 'todo';
+        const pathParts = filepath.split('/');
+        const trackerIdx = pathParts.indexOf('.tracker');
+        let inferredType = 'task';
+        if (trackerIdx !== -1 && pathParts.length > trackerIdx + 1) {
+            const folder = pathParts[trackerIdx + 1];
+            if (folder !== 'log') {
+                inferredType = folder.endsWith('s') ? folder.slice(0, -1) : folder;
+            }
+        }
+
         const inferredStatus = filepath.includes('/active/') ? 'active' : filepath.includes('/closed/') ? 'closed' : filepath.includes('/archived/') ? 'archived' : filepath.includes('/log/') ? 'logged' : 'open';
 
         const cleanTags = (() => {
@@ -978,7 +1215,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?open=${this._modals?.new} 
                 ?fullscreen=${true}
                 titleText="Create New Ticket"
-                @sutram-modal-closed=${() => KanbanStore.getState().setModal('new', false)}>
+                @sutram-modal-closed=${() => {
+                    KanbanStore.getState().setModal('new', false);
+                    if (this._returnToTemplatesBrowser) {
+                        this._returnToTemplatesBrowser = false;
+                        this._templatesBrowserOpen = true;
+                        this.requestUpdate();
+                    }
+                }}>
                 <div slot="body" style="display: contents;">
                     <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
                         ${(() => {
@@ -1004,19 +1248,19 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 ${bindStoreInput(KanbanStore, 'newTaskForm.repo', newTaskForm.repo, { label: 'Repository', type: 'select', flush: true, selectOptions: this.ecosystem.allRepos.map(r => ({value: r, label: r})), onUpdate: () => {
                                     // Re-evaluate schema on repo change
                                     const newSchemaId = (KanbanStore.getState().settings?.kanban_repo_map || {})[KanbanStore.getState().newTaskForm.repo] || 'agile_basic';
-                                    const newSchema = (KanbanStore.getState().settings?.kanban_profiles || []).find(p => p.id === newSchemaId) || {};
+                                    const newSchema = allSchemas.find(p => p.id === newSchemaId) || {};
                                     const newT3Types = (newSchema.t3_types || '').split(',').map(s => s.trim()).filter(Boolean);
-                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'todo' } }));
+                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'task' } }));
                                 } })}
                                 ${bucketsNew.length > 0 ? bindStoreInput(KanbanStore, 'newTaskForm.bucket', newTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsNew.map(b => ({value: b.id, label: b.title}))] }) : ''}
                                 ${tierOptions.length > 0 ? bindStoreInput(KanbanStore, 'newTaskForm.tier', newTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
                                     const types = getTierTypes(val);
-                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, type: types.length > 0 ? types[0] : 'todo' } }));
+                                    KanbanStore.setState(s => ({ newTaskForm: { ...s.newTaskForm, type: types.length > 0 ? types[0] : 'task' } }));
                                 }}) : ''}
                                 ${typeOptions.length > 1 ? bindStoreInput(KanbanStore, 'newTaskForm.type', newTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions }) : ''}
                             `;
                         })()}
-                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}] })}
+                        ${bindStoreInput(KanbanStore, 'newTaskForm.status', newTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}, {value: 'template', label: 'Template'}] })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.priority', newTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.size', newTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
                         ${bindStoreInput(KanbanStore, 'newTaskForm.tags', newTaskForm.tags, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
@@ -1024,7 +1268,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                     <div class="meta-grid" style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px; flex: 1; min-height: 0;">
                         ${bindStoreInput(KanbanStore, 'newTaskForm.title', newTaskForm.title, { label: 'Ticket Title', placeholder: 'e.g., Fix schema registry timeout', style: 'font-weight: bold;', flush: true })}
-                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; align-items: start;">
+                        <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch;">
                             <div style="display: flex; flex-direction: column; gap: 6px;">
                                 <sutram-label text="Parent ID"></sutram-label>
                                 <div style="display: flex; gap: 8px; align-items: center;">
@@ -1065,7 +1309,15 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 ?flush=${true}
                 style="--modal-backdrop: transparent; --modal-backdrop-filter: none;"
                 @sutram-modal-closing=${this._handleModalClosing}
-                @sutram-modal-closed=${() => { KanbanStore.getState().setModal('edit', false); this._originalTaskSnapshot = null; }}>
+                @sutram-modal-closed=${() => { 
+                    KanbanStore.getState().setModal('edit', false); 
+                    this._originalTaskSnapshot = null; 
+                    if (this._returnToTemplatesBrowser) {
+                        this._returnToTemplatesBrowser = false;
+                        this._templatesBrowserOpen = true;
+                        this.requestUpdate();
+                    }
+                }}>
 
                 <div slot="body" style="display: contents;">
                     ${this._modals?.edit && editTaskForm.filepath ? html`
@@ -1117,17 +1369,17 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                                 const newSchemaId = (KanbanStore.getState().settings?.kanban_repo_map || {})[KanbanStore.getState().editTaskForm.repo] || 'agile_basic';
                                                 const newSchema = allSchemas.find(p => p.id === newSchemaId) || {};
                                                 const newT3Types = (newSchema.t3_types || '').split(',').map(s => s.trim()).filter(Boolean);
-                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'todo' } }));
+                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, bucket: 'None', tier: 3, type: newT3Types.length > 0 ? newT3Types[0] : 'task' } }));
                                             } })}
                                             ${bucketsEdit.length > 0 ? bindStoreInput(KanbanStore, 'editTaskForm.bucket', editTaskForm.bucket, { label: 'Sub-Bucket', type: 'select', flush: true, selectOptions: [{value: 'None', label: 'No Bucket'}, ...bucketsEdit.map(b => ({value: b.id, label: b.title}))] }) : ''}
                                             ${tierOptions.length > 1 ? bindStoreInput(KanbanStore, 'editTaskForm.tier', editTaskForm.tier || 3, { label: 'Tier', type: 'select', flush: true, selectOptions: tierOptions, onUpdate: (val) => {
                                                 const types = getTierTypes(val);
-                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: types.length > 0 ? types[0] : 'todo' } }));
+                                                KanbanStore.setState(s => ({ editTaskForm: { ...s.editTaskForm, type: types.length > 0 ? types[0] : 'task' } }));
                                             }}) : ''}
                                             ${bindStoreInput(KanbanStore, 'editTaskForm.type', editTaskForm.type, { label: 'Ticket Type', type: 'select', flush: true, selectOptions: typeOptions })}
                                         `;
                                     })()}
-                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}] })}
+                                    ${bindStoreInput(KanbanStore, 'editTaskForm.status', editTaskForm.status, { label: 'Status Zone', type: 'select', flush: true, selectOptions: [{value: 'open', label: 'Open (Backlog)'}, {value: 'active', label: 'Active (In Progress)'}, {value: 'closed', label: 'Closed (Resolved)'}, {value: 'template', label: 'Template'}] })}
                                     ${bindStoreInput(KanbanStore, 'editTaskForm.priority', editTaskForm.priority, { label: 'Priority', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'P0', label: 'P0'}, {value: 'P1', label: 'P1'}, {value: 'P2', label: 'P2'}, {value: 'P3', label: 'P3'}] })}
                                     ${bindStoreInput(KanbanStore, 'editTaskForm.size', editTaskForm.size, { label: 'Size Estimate', type: 'select', flush: true, selectOptions: [{value: '', label: 'None'}, {value: 'XS', label: 'XS'}, {value: 'S', label: 'S'}, {value: 'M', label: 'M'}, {value: 'L', label: 'L'}, {value: 'XL', label: 'XL'}] })}
                                     ${bindStoreInput(KanbanStore, 'editTaskForm.tagsRaw', editTaskForm.tagsRaw, { label: 'Tags (comma-separated)', placeholder: 'Architecture, UI', flush: true })}
@@ -1135,7 +1387,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                     ${bindStoreInput(KanbanStore, 'editTaskForm.createdAt', editTaskForm.createdAt, { label: 'Created At', type: 'datetime-local', flush: true })}
                                     ${bindStoreInput(KanbanStore, 'editTaskForm.closedAt', editTaskForm.closedAt, { label: 'Closed At', type: 'datetime-local', flush: true })}
                                 </div>
-                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; align-items: start; padding-top: 12px; border-top: 1px solid var(--border);">
+                                <div style="display: flex; flex-direction: column; gap: 15px; align-items: stretch; padding-top: 12px; border-top: 1px solid var(--border);">
                                     <div style="display: flex; flex-direction: column; gap: 6px;">
                                         <sutram-label text="Parent ID"></sutram-label>
                                         <div style="display: flex; gap: 8px; align-items: center;">
@@ -1178,6 +1430,37 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 ` : ''}
             </sutram-modal>
+            <!-- Quick Convert Modal -->
+            <sutram-modal 
+                ?open=${this._convertOpen}
+                titleText="Convert Type"
+                @sutram-modal-closed=${() => { this._convertOpen = false; this._convertTask = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 10px;">
+                    ${(() => {
+                        if (!this._convertTask) return '';
+                        const state = KanbanStore.getState();
+                        const settings = state.settings || {};
+                        const schemaId = (settings.kanban_repo_map || {})[this._convertTask.repo] || 'agile_basic';
+                        const allSchemas = [...(state.systemSchemas || []), ...(settings.kanban_profiles || [])];
+                        const schema = allSchemas.find(p => p.id === schemaId) || {};
+                        const types = (schema[`t${this._convertTask.tier}_types`] || '').split(',').map(s => s.trim()).filter(Boolean);
+
+                        const otherTypes = types.filter(t => t !== this._convertTask.ticket_type);
+                        if (otherTypes.length === 0) {
+                            return html`<span style="color: var(--text-muted); font-style: italic;">No other types available in this tier for the active schema.</span>`;
+                        }
+
+                        return otherTypes.map(t => html`
+                            <sutram-async-btn label="Convert to ${t.charAt(0).toUpperCase() + t.slice(1)}" intent="neutral" style="width: 100%; justify-content: flex-start;" .onClick=${async () => {
+                                await KanbanStore.getState().transitionTask(this._convertTask, 'open', t);
+                                this._convertOpen = false;
+                                this._convertTask = null;
+                                this.requestUpdate();
+                            }}></sutram-async-btn>
+                        `);
+                    })()}
+                </div>
+            </sutram-modal>
 
             <!-- Ticket Selection Modal for Parent / Dependency Pickers -->
             <sutram-modal 
@@ -1192,9 +1475,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
                             .value=${this._pickerRepoFilter}
                             .options=${[{ value: 'ALL', label: 'ALL Repositories' }, ...this.ecosystem.allRepos.map(r => ({ value: r, label: r }))]}
                             @sutram-input-changed=${e => this._pickerRepoFilter = e.detail.value}
+                            ?disabled=${this._pickerMode === 'parentId'}
                             style="flex: 1; margin: 0;">
                         </sutram-select>
-                        <sutram-input 
+                        <sutram-input  
                             label="Fuzzy Search" 
                             placeholder="Type ID, title, tags, or bucket..." 
                             .value=${this._pickerSearchQuery} 
@@ -1230,12 +1514,13 @@ export class InSetuExtTrackerModals extends InSetuElement {
                                 return html`<span style="color: var(--text-muted); font-style: italic; padding: 15px;">No matching candidates found.</span>`;
                             }
                             return displayed.map(t => {
-                                const targetString = t.repo === currentRepo ? t.id : `${t.repo}::${t.id}`;
+                                const targetString = t.repo === currentRepo ? t.id : `${t.repo}/${t.id}`;
                                 const detailStr = `Repo: ${t.repo} | Tier ${t.tier} | Bucket: ${t.subBucket || 'None'} ${(t.tags && t.tags.length > 0) ? `| Tags: #${t.tags.join(' #')}` : ''}`;
+                                const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
                                 return html`
                                     <sutram-card 
                                         ?compact=${true}
-                                        .titleText=${targetString + ' - ' + t.title}
+                                        .titleText=${targetString + ' - ' + displayTitle}
                                         .detailText=${detailStr}
                                         icon="📄"
                                         intentColor="var(--intent-primary)"
@@ -1250,14 +1535,262 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
+
+            <!-- Templates Browser Modal -->
+            <sutram-modal 
+                ?open=${this._templatesBrowserOpen}  
+                ?fullscreen=${true}
+                titleText="🧬 Template Library"
+                @sutram-modal-closed=${() => { this._templatesBrowserOpen = false; this._activeTemplateRoot = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px;">
+                    ${this._renderTemplatesView()}
+                </div>
+                ${!this._activeTemplateRoot ? html`
+                    <div slot="footer" style="width: 100%;">
+                        <sutram-async-btn 
+                            label="➕ Create New Template" 
+                            intent="success" 
+                            style="width: 100%; display: block;" 
+                            .onClick=${() => {
+                                this._templatesBrowserOpen = false;
+                                this._returnToTemplatesBrowser = true;
+                                const currentRepo = this._templateRepoFilter && this._templateRepoFilter !== 'ALL' ? this._templateRepoFilter : (this.ecosystem.allRepos[0] || '');
+                                this.dispatch('insetu:tracker:open-new-task', {
+                                    activeTab: 'todos',
+                                    prefill: { repo: currentRepo, status: 'template' }
+                                });
+                            }}>
+                        </sutram-async-btn>
+                    </div>
+                ` : ''}
+            </sutram-modal>
+
+            <!-- Hierarchy Modal -->
+            <sutram-modal 
+                ?open=${this._hierarchyModalOpen}  
+                ?fullscreen=${true}
+                titleText="🌳 Task Hierarchy"
+                @sutram-modal-closed=${() => { this._hierarchyModalOpen = false; this._hierarchyTask = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px;">
+                    ${this._renderHierarchyView()}
+                </div>
+            </sutram-modal>
 `;
     }
+    _renderTaskCard(t, overrideClick = null, childMap = {}) {
+        const dateStr = this.utils.formatDate(t.timestamp);
+        const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
+        const descText = `${t.repo}${bucketStr} | ${dateStr}`;
 
+        const childTasks = childMap[t.id] || [];
+        const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
+
+        const typeStr = (t.ticket_type || '').toLowerCase();
+        const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
+        const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
+
+        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
+        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
+        const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
+        const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+
+        return html`
+            <insetu-card
+                data-task-id=${t.id}
+                .filename=${t.filepath}
+                .titleText=${displayTitle}
+                .descriptionText=${descText}
+                .intentColor=${intentColor}
+                .icon=${icon}
+                entityType="file:task"
+                .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
+                @card-clicked=${overrideClick ? overrideClick : () => {
+                    if (this._templatesBrowserOpen) {
+                        this._templatesBrowserOpen = false;
+                        this._returnToTemplatesBrowser = true;
+                        this.dispatch('insetu:tracker:open-edit-task', { filepath: t.filepath });
+                    } else {
+                        if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(t.filepath, true);
+                    }
+                }}>
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                    ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
+                    ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
+                    ${allKidsDone && t.status !== 'closed' ? html`<sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>` : ''}
+                    ${t.dependsOn && t.dependsOn.length > 0 ? t.dependsOn.map(dep => {
+                        let dRepo = t.repo;
+                        let dId = dep;
+                        if (dep.includes('/')) {
+                            const parts = dep.split('/');
+                            dRepo = parts[0];
+                            dId = parts[1];
+                        }
+                        const depTask = this.tasks.find(x => x.id === dId && x.repo === dRepo);
+                        const isResolved = !depTask || ['closed', 'logged', 'archived'].includes(depTask.status);
+                        return html`
+                            <sutram-tag intent="${isResolved ? 'success' : 'danger'}" title="${isResolved ? 'Resolved' : 'Blocking'}">
+                                ${isResolved ? '✅' : '🔒'} ${dep}
+                            </sutram-tag>
+                        `;
+                    }) : ''}
+                    ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>` : ''}
+                </div>
+            </insetu-card>
+        `;
+    }
+    _renderHierarchyView() {
+        if (!this._hierarchyTask) return '';
+        const allTasks = KanbanStore.getState().tasks;
+        const childMap = allTasks.reduce((acc, t) => {
+            if (t.parentId) {
+                if (!acc[t.parentId]) acc[t.parentId] = [];
+                acc[t.parentId].push(t);
+            }
+            return acc;
+        }, {});
+
+        const renderNode = (taskId, depth = 0) => {
+            const task = allTasks.find(t => t.id === taskId);
+            if (!task) return '';
+            const children = childMap[taskId] || [];
+
+            return html`
+                <div style="margin-left: ${depth === 0 ? 0 : 20}px; border-left: ${depth > 0 ? '2px solid var(--border)' : 'none'}; padding-left: ${depth > 0 ? '15px' : '0'}; margin-bottom: 15px;">
+                    ${this._renderTaskCard(task, () => {
+                        this._hierarchyModalOpen = false;
+                        this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
+                    }, childMap)}
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        ${children.map(c => renderNode(c.id, depth + 1))}
+                    </div>
+                </div>
+            `;
+        };
+
+        const rootDisplayTitle = this._hierarchyTask.title ? this._hierarchyTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
+                    <h3 style="margin: 0; color: var(--text);">Hierarchy: ${rootDisplayTitle}</h3>
+                </div>
+                <div>
+                    ${renderNode(this._hierarchyTask.id, 0)}
+                </div>
+            </div>
+        `;
+    }
+
+    _renderTemplatesView() {
+        const state = KanbanStore.getState();
+        const filteredTasks = state.tasks.filter(t => t.status === 'template');
+
+        const allSchemas = [...(state.systemSchemas || []), ...(state.settings?.kanban_profiles || [])];
+        const repoMap = state.settings?.kanban_repo_map || {};
+
+        const childMap = filteredTasks.reduce((acc, t) => {
+            if (t.parentId) {
+                if (!acc[t.parentId]) acc[t.parentId] = [];
+                acc[t.parentId].push(t);
+            }
+            return acc;
+        }, {});
+        if (this._activeTemplateRoot) {
+            // TREE VIEW
+            const rootTask = filteredTasks.find(t => t.id === this._activeTemplateRoot);
+            if (!rootTask) {
+                this._activeTemplateRoot = null;
+                return this.requestUpdate();
+            }
+            const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+
+            const renderNode = (taskId, depth = 0) => {
+                const task = filteredTasks.find(t => t.id === taskId);
+                if (!task) return '';
+                const children = childMap[taskId] || [];
+                const schemaId = repoMap[task.repo] || 'agile_basic';
+                const schema = allSchemas.find(s => s.id === schemaId) || {};
+                const nextTier = task.tier < 3 ? task.tier + 1 : null;
+                const nextTierLabel = nextTier ? (schema[`t${nextTier}_label`] || `Tier ${nextTier}`) : null;
+
+                return html`
+                    <div style="margin-left: ${depth === 0 ? 0 : 20}px; border-left: ${depth > 0 ? '2px solid var(--border)' : 'none'}; padding-left: ${depth > 0 ? '15px' : '0'}; margin-bottom: 15px;">
+                        ${this._renderTaskCard(task, null, childMap)}
+                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                            ${children.map(c => renderNode(c.id, depth + 1))}
+                            ${nextTier ? html`
+                                <button class="btn-sm" style="background: transparent; color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin-top: 5px;"
+                                    @click=${() => {
+                                        this._templatesBrowserOpen = false;
+                                        this._returnToTemplatesBrowser = true;
+                                        this.dispatch('insetu:tracker:open-new-task', { 
+                                            activeTab: 'todos', 
+                                            prefill: { parentId: task.id, tier: nextTier, repo: task.repo, status: 'template' } 
+                                        });
+                                    }}>
+                                    ➕ New ${nextTierLabel}
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            };
+
+            return html`
+                <div style="display: flex; flex-direction: column; gap: 20px;">
+                    <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
+                        <button class="btn-sm" style="background: var(--intent-neutral); margin: 0;" @click=${() => this._activeTemplateRoot = null}>🔙 Back</button>
+                        <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
+                    </div>
+                    <div>
+                        ${renderNode(rootTask.id, 0)}
+                    </div>
+                </div>
+            `;
+        }
+        // LIST VIEW
+        let repoFiltered = filteredTasks;
+        const currentRepo = this._templateRepoFilter || (this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : 'ALL');
+
+        if (currentRepo !== 'ALL') {
+            const targetSchema = repoMap[currentRepo] || 'agile_basic';
+            repoFiltered = filteredTasks.filter(t => (repoMap[t.repo] || 'agile_basic') === targetSchema);
+        }
+
+        const roots = repoFiltered.filter(t => !t.parentId);
+
+        return html`
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; background: var(--input-bg); padding: 10px 15px; border-radius: 6px; border: 1px solid var(--border);">
+                    <span style="font-weight: bold; font-size: 0.9rem; color: var(--text-muted);">Repository:</span>
+                    <sutram-select 
+                        style="margin: 0; min-width: 200px;"
+                        .value=${currentRepo}
+                        .options=${[{value: 'ALL', label: 'All Repositories'}, ...this.ecosystem.allRepos.map(r => ({value: r, label: r}))]}
+                        @sutram-input-changed=${(e) => { this._templateRepoFilter = e.detail.value; this.requestUpdate(); }}>
+                    </sutram-select>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    ${roots.length > 0 
+                        ? roots.map(t => {
+                            const hasChildren = childMap[t.id] && childMap[t.id].length > 0;
+                            return this._renderTaskCard(t, hasChildren ? () => { this._activeTemplateRoot = t.id; this.requestUpdate(); } : null, childMap);
+                        }) 
+                        : html`<sutram-empty-state text="No templates found for this repository's schema."></sutram-empty-state>`
+                    }
+                </div>
+            </div>
+        `;
+    }
     _openPicker(mode, formType) {
+        const state = KanbanStore.getState();
+        const activeForm = formType === 'new' ? state.newTaskForm : state.editTaskForm;
+        const currentRepo = activeForm.repo || this.ecosystem.allRepos[0] || '';
+
         this._pickerMode = mode;
         this._pickerForm = formType;
         this._pickerSearchQuery = '';
-        this._pickerRepoFilter = 'ALL';
+        this._pickerRepoFilter = mode === 'parentId' ? currentRepo : 'ALL';
         this._pickerOpen = true;
         this.requestUpdate();
     }
@@ -1705,6 +2238,17 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                             ]}
                                             @sutram-input-changed=${(e) => this._updateGlobalView(i, 'target_schema', e.detail.value)}>
                                         </sutram-select>
+                                        <sutram-select 
+                                            label="Repo Filtering Strategy"
+                                            style="margin: 0;"
+                                            .value=${v.repo_strategy || 'global'} 
+                                            .options=${[
+                                                {value: 'global', label: 'Follow Global Repo Filter'},
+                                                {value: 'schema', label: 'Ignore Global (Auto-filter to Schema)'},
+                                                {value: 'explicit', label: 'Ignore Global (Explicit Repos)'}
+                                            ]}
+                                            @sutram-input-changed=${(e) => this._updateGlobalView(i, 'repo_strategy', e.detail.value)}>
+                                        </sutram-select>
                                         ${(() => {
                                             const activeSchema = this.customSchemas.find(s => s.id === v.target_schema) || this.customSchemas.find(s => s.id === 'agile_basic') || this.customSchemas[0] || {};
                                             return html`
@@ -1724,12 +2268,31 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                         })()}
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 5px; padding-top: 12px; border-top: 1px dashed var(--border);">
+                                        ${v.repo_strategy === 'explicit' ? html`
+                                            <div style="display: flex; flex-direction: column; gap: 6px;">
+                                                <label style="font-size: 0.85rem; color: var(--text-muted); font-weight: bold;">Select Explicit Repositories</label>
+                                                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                                    ${this.allRepos.map(repo => {
+                                                        const currentExplicit = v.explicit_repos || [];
+                                                        return html`<sutram-toggle label=${repo} .checked=${currentExplicit.includes(repo)} @sutram-input-changed=${(e) => {
+                                                            let newSelected = [...currentExplicit];
+                                                            if (e.detail.value) {
+                                                                if (!newSelected.includes(repo)) newSelected.push(repo);
+                                                            } else {
+                                                                newSelected = newSelected.filter(r => r !== repo);
+                                                            }
+                                                            this._updateGlobalView(i, 'explicit_repos', newSelected);
+                                                        }} ?flush=${true}></sutram-toggle>`;
+                                                    })}
+                                                </div>
+                                            </div>
+                                        ` : ''}
                                         ${(() => {
                                             if (v.layout === 'log') {
                                                 return html`
                                                     <div style="padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px;">
                                                         <span style="font-size: 0.85rem; color: var(--text-muted); font-style: italic;">
-                                                            ℹ️ This is a special view for observing closed, logged, and archived tickets. It inherits your schema and tier scope, but status and type filters are managed automatically.
+                                                            ℹ️ This is a specialized layout. It inherits your schema and tier scope, but status and type filters are managed automatically by the engine.
                                                         </span>
                                                     </div>
                                                 `;
@@ -1737,8 +2300,7 @@ export class InSetuExtTrackerSettings extends InSetuElement {
 
                                             const availableTypes = this._getTypesForScope(v.target_schema, v.target_tier);
                                             const currentTypes = v.filters?.ticket_types === 'NONE' ? [] : (v.filters?.ticket_types ? v.filters.ticket_types.split(',').map(s=>s.trim()) : availableTypes);
-
-                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived'];
+                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived', 'template'];
                                             const currentStatuses = v.filters?.statuses === 'NONE' ? [] : (v.filters?.statuses ? v.filters.statuses.split(',').map(s=>s.trim()) : allStatuses);
 
                                             return html`
@@ -1851,10 +2413,76 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Start',
             icon: '▶️',
             intent: 'warning',
-            order: 110,
-            match: (data) => data.status === 'open' && !data.isQueue,
+            order: 10,
+            match: (data) => data.status === 'open' && !(data.ticket_type || '').toLowerCase().includes('queue'),
             asyncAction: async (data, e) => {
                 await KanbanStore.getState().transitionTask(data, 'active');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-close',
+            label: (data) => (data.ticket_type || '').toLowerCase().includes('queue') ? 'Resolve' : 'Close',
+            icon: '✅',
+            intent: (data) => (data.ticket_type || '').toLowerCase().includes('queue') ? 'neutral' : 'success',
+            order: 20,
+            match: (data) => data.status !== 'closed' && data.status !== 'archived' && data.status !== 'template',
+            asyncAction: async (data, e) => {
+                await KanbanStore.getState().transitionTask(data, 'closed');
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-convert',
+            label: 'Convert Type',
+            icon: '🔄',
+            intent: 'highlight',
+            order: 30,
+            match: (data) => data.status !== 'closed' && data.status !== 'archived',
+            onClick: (data, e) => {
+                window.dispatchEvent(new CustomEvent('insetu:tracker:open-convert', { detail: { task: data } }));
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-hierarchy',
+            label: 'Hierarchy',
+            icon: '🌳',
+            intent: 'neutral',
+            order: 35,
+            match: (data) => data.tier < 3 && data.status !== 'template',
+            onClick: (data, e) => {
+                window.dispatchEvent(new CustomEvent('insetu:tracker:open-hierarchy', { detail: { task: data } }));
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-focus',
+            label: 'Focus',
+            icon: '🎯',
+            intent: 'highlight',
+            order: 36,
+            match: (data) => data.tier < 3 && data.status !== 'template',
+            onClick: (data, e) => {
+                window.inSetu.stores.Kanban.getState().setFocus(data.id);
+            }
+        },
+        {
+            targetEntity: 'task',
+            id: 'task-new-child',
+            label: 'New Child',
+            icon: '➕',
+            intent: 'primary',
+            order: 40,
+            match: (data) => data.tier < 3 && data.status !== 'closed' && data.status !== 'archived' && data.status !== 'template',
+            onClick: (data, e) => {
+                const nextTier = data.tier < 3 ? data.tier + 1 : 3;
+                window.dispatchEvent(new CustomEvent('insetu:tracker:open-new-task', {
+                    detail: {
+                        activeTab: window.inSetu.stores.App.getState().activeTab,
+                        prefill: { parentId: data.id, tier: nextTier, repo: data.repo }
+                    }
+                }));
             }
         },
         {
@@ -1863,22 +2491,10 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Re-open',
             icon: '🔄',
             intent: 'highlight',
-            order: 110,
+            order: 50,
             match: (data) => data.status === 'closed',
             asyncAction: async (data, e) => {
                 await KanbanStore.getState().transitionTask(data, 'open');
-            }
-        },
-        {
-            targetEntity: 'task',
-            id: 'task-accept',
-            label: 'Accept',
-            icon: '✅',
-            intent: 'success',
-            order: 110,
-            match: (data) => data.status !== 'closed' && data.isQueue,
-            asyncAction: async (data, e) => {
-                await KanbanStore.getState().transitionTask(data, 'open', 'todo');
             }
         },
         {
@@ -1887,22 +2503,22 @@ window.ExtensionRegistry.registerExtension('tracker', {
             label: 'Pause',
             icon: '⏸️',
             intent: 'neutral',
-            order: 120,
-            match: (data) => data.status === 'active' && !data.isQueue,
+            order: 60,
+            match: (data) => data.status === 'active' && !(data.ticket_type || '').toLowerCase().includes('queue'),
             asyncAction: async (data, e) => {
                 await KanbanStore.getState().transitionTask(data, 'open');
             }
         },
         {
             targetEntity: 'task',
-            id: 'task-close',
-            label: (data) => data.isQueue ? 'Resolve' : 'Close',
-            icon: '✅',
-            intent: (data) => data.isQueue ? 'neutral' : 'success',
-            order: 130,
-            match: (data) => data.status !== 'closed' && data.status !== 'archived',
-            asyncAction: async (data, e) => {
-                await KanbanStore.getState().transitionTask(data, 'closed');
+            id: 'task-spawn',
+            label: 'Spawn Instance',
+            icon: '🚀',
+            intent: 'primary',
+            order: 70,
+            match: (data) => data.status === 'template',
+            onClick: (data, e) => {
+                window.dispatchEvent(new CustomEvent('insetu:tracker:open-spawn', { detail: { task: data } }));
             }
         }
     ],
@@ -1987,7 +2603,21 @@ window.ExtensionRegistry.registerExtension('tracker', {
             match: (filepath) => filepath && filepath.includes('.tracker/'),
             onOpen: (filepath) => {
                 if (window.inSetu.ui && window.inSetu.ui.closeFileModal) window.inSetu.ui.closeFileModal(true);
-                AppStore.getState().setActiveRoute('tasks', 'todos');
+
+                const appState = AppStore.getState();
+                const trackerState = KanbanStore.getState();
+                const parentTabs = trackerState.parentTabs && trackerState.parentTabs.length > 0 
+                    ? trackerState.parentTabs.map(t => t.id) 
+                    : ['tasks'];
+
+                if (!parentTabs.includes(appState.activeTab)) {
+                    const targetParent = parentTabs[0];
+                    const targetSub = trackerState.customViews && trackerState.customViews.length > 0 
+                        ? trackerState.customViews[0].id 
+                        : 'todos';
+                    AppStore.getState().setActiveRoute(targetParent, targetSub);
+                }
+
                 window.inSetu.events.emit('insetu:tracker:open-edit-task', { filepath });
             }
         }
