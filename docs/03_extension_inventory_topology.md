@@ -46,12 +46,13 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Hooks: Primary Navigation Tab injection (The Triage UI).
 ### D. Kanban Tracker (`engine_tracker.py`)
 * **Status:** Active Extension (Upgraded to SDK V2).
-* **Role:** Project management, issue routing, and sprint tracking.
+* **Role:** Project management, issue routing, sprint tracking, shadow board template spawning, task hierarchy tree inspection, and active focus isolation.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `~/.insetu/data/tracker.db` (CQRS Cache) backed by asynchronous `.tracker/` Markdown file commits via the VFS.
 * **Injection Surfaces:**
-    * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer.
+    * Config Hooks: Uses `@hooks.on('mutate_workspace_config')` to natively inject `.tracker/` virtual sub-buckets into the RAG Gatherer based on active schema types.
     * VFS Hooks: Uses `vfs_mutated` to instantly sync the UI SQLite index.
+    * Polymorphic Cards: Registers `task-start`, `task-close`, `task-convert`, `task-hierarchy`, `task-focus`, `task-new-child`, `task-reopen`, `task-pause`, `task-spawn` entity actions.
 ### E. Code Formatting (`engine_format.py`)
 * **Status:** Active Extension.
 * **Role:** Source code beautification and formatting (JS, JSON, CSS, HTML, Python).
