@@ -2,6 +2,98 @@
 
 <!-- version list -->
 
+## v0.16.0 (2026-08-18)
+
+### Bug Fixes
+
+- Remove banned CDN imports and fix bridge telemetry path resolution
+  ([`a902911`](https://github.com/Callosemic/insetu/commit/a9029116c9ea846967cfc73d1ca24b8b67667fe4))
+
+- Sanitize target repo paths and emit core settings refresh hook
+  ([`87c8e42`](https://github.com/Callosemic/insetu/commit/87c8e424c2146016b185970d9239f5b41f89e9cf))
+
+- Standardize defaults template file extensions, harden shortcut router shadow DOM context
+  discovery, and sync VFS mutation emissions
+  ([`9ad0465`](https://github.com/Callosemic/insetu/commit/9ad0465a090c16a6053492fbed4976e4613bad14))
+
+- Update extension PyPI query fix
+  ([`a7aed02`](https://github.com/Callosemic/insetu/commit/a7aed02832e7e7f20583beaed89faf58f8b9d535))
+
+- Update extension reactivity after PyPI push (Step 2 button not showing)
+  ([`844726e`](https://github.com/Callosemic/insetu/commit/844726e867a80a31776ca4cf9f8d8330d9f2b7c2))
+
+- **core**: Heal compilation event traps, synchronize upload VFS mutations, enforce topology
+  extension filters, and add per-file editor preferences
+  ([`84abecd`](https://github.com/Callosemic/insetu/commit/84abecd0221b8b81e7825e605b2a9ae91402b593))
+
+- **kernel**: Enforce settings write barrier, expand compile timeout, and sanitize config paths
+  ([`8e9ca53`](https://github.com/Callosemic/insetu/commit/8e9ca53643da5b4c06551a1ec5b70899d4f44185))
+
+- **sdk**: Offload gateway job polling and refine parts browser modal viewing lifecycle
+  ([`6ba57f5`](https://github.com/Callosemic/insetu/commit/6ba57f56119bca6771dd7513e403196beea13abd))
+
+- **term**: Inject self-destructing PROMPT_COMMAND trap for terminal PTY sessions
+  ([`86885ee`](https://github.com/Callosemic/insetu/commit/86885ee1aa004845e3eadcf3f54a473bb5ee037f))
+
+### Documentation
+
+- **schema**: Update extension type definitions, placeholder styling, and code index
+  ([`f5ae699`](https://github.com/Callosemic/insetu/commit/f5ae6992d2a6238bb62f9501fae61ae7c26fda9c))
+
+### Features
+
+- **config**: Decouple gather context exclusions and add repository bucketing diagnostic actions
+  ([`25d7412`](https://github.com/Callosemic/insetu/commit/25d74126476201966d70e7648bfb9cb5c61adaba))
+
+- **editor**: Add prose writing mode and shortcut metadata tracking
+  ([`a43b0c8`](https://github.com/Callosemic/insetu/commit/a43b0c806c8b13e6f6bc41fad58d34a728c2533d))
+
+- **gather**: Add timestamp header stamping and smart chunk path resolution
+  ([`073045e`](https://github.com/Callosemic/insetu/commit/073045e3d9fc36be1c593cf04667c3f6fec5ea2a))
+
+- **sdk**: Enhance repo setup UX, settings action routing, and custom editor integration
+  ([`273f19f`](https://github.com/Callosemic/insetu/commit/273f19ff77e89dd38183906edbe5d521eb3d8e3c))
+
+- **term**: Add terminal status check endpoint, fallback UI banner for missing flask-sock, and
+  preserve original PS1 prompt
+  ([`979e929`](https://github.com/Callosemic/insetu/commit/979e9296e96eb101e53542f59fed93be5ab4ba71))
+
+- **topology**: Standardize main bucket naming, refine repo-level ignore overrides, and add
+  bucketing test endpoint
+  ([`9e3c80f`](https://github.com/Callosemic/insetu/commit/9e3c80fe53233b9b3471349512d802b5311b55c6))
+
+- **tracker,favorites**: Add ticket template spawning, focus mode, hierarchy view, and dynamic
+  schema path resolution
+  ([`708a9e7`](https://github.com/Callosemic/insetu/commit/708a9e713bb95c14ba2ddf473fcc5e87ea86cbcf))
+
+- **update**: Add last publish timestamp persistence and PyPI indexing status indicator
+  ([`93100e6`](https://github.com/Callosemic/insetu/commit/93100e677f783ec806417938ca79395cf74268cc))
+
+### Refactoring
+
+- **docs**: Synchronize code index comments and document semantic API requirements
+  ([`f3f576b`](https://github.com/Callosemic/insetu/commit/f3f576b059d72d561bfcc6d855bf5f694540a028))
+
+- **extensions**: Deprecate uiHooks for ADR 0041, adopt vacuum_manifest_artifacts, and expand
+  hierarchical tracker schemas
+  ([`eec1662`](https://github.com/Callosemic/insetu/commit/eec1662076d3f7af5be7d63be8a94267a811f3e6))
+
+- **git,tracker**: Standardize diff bucket naming and contribute declarative diff exclusion options
+  ([`72f171d`](https://github.com/Callosemic/insetu/commit/72f171d5bf02a0f74541b2a42bc7406d8d195548))
+
+- **sdk**: Standardize client API gateway calls with semantic HTTP methods
+  ([`82fa88c`](https://github.com/Callosemic/insetu/commit/82fa88c7f3bcdd12bc9a06538d42840ae28fc1f1))
+
+- **update**: Extract distribution build pipeline and enforce sutram toggles
+  ([`e31ad6c`](https://github.com/Callosemic/insetu/commit/e31ad6c2345d07126699dc15ce1aa09e00617d57))
+
+- **vendor**: Bundle CodeMirror 6 locally and harden CDN import linter
+  ([`5eb80cc`](https://github.com/Callosemic/insetu/commit/5eb80cc61ddae958ac23e342f22faac76441c127))
+
+- **vfs**: Standardize vfs:// logical URI resolution and purge legacy path heuristics
+  ([`c7bcbf3`](https://github.com/Callosemic/insetu/commit/c7bcbf36b8dd1a9a2a12679a90ee0f2d3c6c5423))
+
+
 ## v0.15.1 (2026-08-12)
 
 ### Bug Fixes
