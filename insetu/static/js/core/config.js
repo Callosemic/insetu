@@ -135,8 +135,7 @@ export class InSetuExtConfig extends InSetuElement {
             if (this._isOpen) this._saveConfig();
         });
     }
-
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         if (this._isOpen) this.openModal();
     }
 
@@ -224,7 +223,7 @@ export class InSetuExtConfig extends InSetuElement {
                             <button class="btn-sm" style="background: var(--input-bg); border: 1px solid var(--border); color: var(--text); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
                                 @click=${(e) => {
                                     e.stopPropagation();
-                                    this._testRepoBucketing(rIdx, b.id || 'untitled_bucket');
+                                    this._testRepoBucketing(rIdx, b.id);
                                 }}>🧪 Test</button>
                         ` : ''}
                         <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0; padding: 2px 8px; font-size: 0.75rem;"
@@ -244,9 +243,9 @@ export class InSetuExtConfig extends InSetuElement {
                                 ]}
                                 @sutram-input-changed=${(e) => {
                                     if (e.detail.value === 'implicit') {
-                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { dynamic_split_prefix: '.', meta_map: {} };
+                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, dynamic_split_prefix: '.', meta_map: {} };
                                     } else {
-                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { title: '', match_prefixes: [] };
+                                        this.configForm.target_repos[rIdx].sub_buckets[bIdx] = { id: b.id || `bucket_${Date.now()}`, title: '', match_prefixes: [] };
                                     }
                                     this.requestUpdate();
                                 }} ?flush=${true} style="width: 250px;">
@@ -254,7 +253,11 @@ export class InSetuExtConfig extends InSetuElement {
                         </div>
                         ${!isImplicit ? html`
                         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                            <sutram-input label="Title" .value=${b.title || ''} placeholder="Display Name" @sutram-input-changed=${(e) => { b.title = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
+                            <sutram-input label="Title" .value=${b.title || ''} placeholder="Display Name" @sutram-input-changed=${(e) => { 
+                                b.title = e.detail.value; 
+                                b.id = this.utils.slugify(e.detail.value) || b.id;
+                                this.requestUpdate(); 
+                            }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                             <sutram-input label="Domain" .value=${b.domain || ''} placeholder="Category" @sutram-input-changed=${(e) => { b.domain = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 150px;"></sutram-input>
                         </div>
                         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
@@ -469,7 +472,7 @@ export class InSetuExtConfig extends InSetuElement {
                             <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; padding: 4px 10px; font-size: 0.75rem;" @click=${(e) => {
                                 e.stopPropagation();
                                 if (!repo.sub_buckets) repo.sub_buckets = [];
-                                repo.sub_buckets.push({ title: '', match_prefixes: [] });
+                                repo.sub_buckets.push({ id: `bucket_${Date.now()}`, title: '', match_prefixes: [] });
                                 this.requestUpdate();
                             }}>➕ Add Bucket</button>
                         </div>

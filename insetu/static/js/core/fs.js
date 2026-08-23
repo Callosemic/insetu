@@ -461,7 +461,7 @@ async function downloadFromModal() {
             downloadBlob(blob, state.filename);
         } else {
             let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
-            const overrideUrl = window.inSetu.events.emitHook('zone:file-fetch-url', state.filename);
+            const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', state.filename);
             if (overrideUrl) fetchUrl = overrideUrl;
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
                 await downloadFile(fetchUrl, state.filename.split('/').pop());
@@ -604,8 +604,7 @@ export class InSetuVFSExplorer extends InSetuElement {
                         this.loading = false;
                 }
         }
-
-        async onWorkspaceChanged(newWorkspaceId) {
+        async onWorkspaceLoad(workspaceId) {
                 if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                         this.loading = true;
                         await window.inSetu.sys.refreshManifest();
@@ -839,7 +838,6 @@ window.ExtensionRegistry.registerExtension('files', {
 
                 const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
                 const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
-
                 if (chunks && chunks.length > 1) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
                     for (const f of chunks) {
@@ -849,7 +847,7 @@ window.ExtensionRegistry.registerExtension('files', {
                         await new Promise(r => setTimeout(r, 300));
                     }
                 } else {
-                    let fetchUrl = window.inSetu.events.emitHook('zone:file-fetch-url', data.filepath);
+                    let fetchUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', data.filepath);
 
                     // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                     if (!fetchUrl) {
@@ -1266,8 +1264,13 @@ export class InSetuFileModal extends InSetuElement {
             } else if (!this.fileModal.open && dialog.open) {
                 dialog.close();
             } else if (this.fileModal.open && dialog.open && changedProperties.has('fileModal')) {
-                dialog.close();
-                dialog.showModal();
+                // Ensure we only bounce the dialog if the actual filename changed (e.g. navigation),
+                // NOT when the user types a character and updates the content property.
+                const oldModal = changedProperties.get('fileModal');
+                if (oldModal && oldModal.filename !== this.fileModal.filename) {
+                    dialog.close();
+                    dialog.showModal();
+                }
             }
         }
 
@@ -1550,25 +1553,20 @@ export async function executeDeepLinkSearch(overrideQuery = null) {
         if (!res.ok) throw new Error("Search failed");
         const data = await res.json();
         if (res.status === 202) {
-            const jobId = data.job_id;
-            while (true) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                const pollRes = await window.inSetu.api.system.get(`jobs/${jobId}`);
-                if (!pollRes.ok) throw new Error("Search job failed");
-                const pollData = await pollRes.json();
-                if (pollData.status === 'completed') {
-                    FsStore.getState().setModal('linkInsert', { searchResults: pollData.artifact?.results || [] });
-                    break;
-                } else if (pollData.status === 'failed') {
-                    throw new Error(pollData.message);
+            window.inSetu.utils.pollJob(data.job_id, {
+                onComplete: (pollData) => {
+                    FsStore.getState().setModal('linkInsert', { searchResults: pollData.artifact?.results || [], deepSearchLoading: false });
+                },
+                onError: (err) => {
+                    console.error("Deep search error:", err);
+                    FsStore.getState().setModal('linkInsert', { deepSearchLoading: false });
                 }
-            }
+            });
         } else {
-            FsStore.getState().setModal('linkInsert', { searchResults: data.results || [] });
+            FsStore.getState().setModal('linkInsert', { searchResults: data.results || [], deepSearchLoading: false });
         }
     } catch (e) {
         console.error("Deep search error:", e);
-    } finally {
         FsStore.getState().setModal('linkInsert', { deepSearchLoading: false });
     }
 }

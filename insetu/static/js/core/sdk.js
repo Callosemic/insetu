@@ -165,7 +165,6 @@ export class InSetuElement extends SutramElement {
     }
     connectedCallback() {
         super.connectedCallback();
-
         // Wire up the new unified onForceRefresh lifecycle method
         this.registerGlobalListener('insetu:force-refresh', window, (e) => {
             if (typeof this.onForceRefresh === 'function') {
@@ -177,14 +176,43 @@ export class InSetuElement extends SutramElement {
             }
         });
 
+        // Wire up the lazy-load visibility lifecycle method
+        this.registerGlobalListener('insetu:tab-changed', window, (e) => {
+            if (typeof this.onViewActivated === 'function') {
+                const tabId = e.detail;
+                if (tabId === this.extName && !this.dataset.subId) {
+                    this.onViewActivated();
+                }
+            }
+        });
+
+        this.registerGlobalListener('insetu:subtab-changed', window, (e) => {
+            if (typeof this.onViewActivated === 'function') {
+                const { parentId, subId } = e.detail || {};
+                const mySubId = this.dataset.subId || this.extName;
+                if (subId === mySubId || (!subId && parentId === this.extName)) {
+                    this.onViewActivated();
+                }
+            }
+        });
+
         const appStore = window.inSetu?.stores?.App;
         if (appStore) {
             this.subscribe(appStore, state => state.activeWorkspace, (ws) => {
                 if (this.workspaceId !== ws) {
                     this.workspaceId = ws;
-                    this.onWorkspaceChanged(ws);
+                    this.onWorkspaceLoad(ws);
                 }
             });
+
+            // Guarantee components natively hydrate their workspace context on initial mount 
+            // even if they were instantiated after the global swap event fired.
+            const currentWs = appStore.getState().activeWorkspace;
+            if (!this._hasHydratedWorkspaceSwap) {
+                this._hasHydratedWorkspaceSwap = true;
+                this.workspaceId = currentWs;
+                setTimeout(() => this.onWorkspaceLoad(currentWs), 0);
+            }
         }
         // Auto-hydrate the ecosystem topology for all extensions natively
         if (appStore) {
@@ -204,8 +232,8 @@ export class InSetuElement extends SutramElement {
             };
         }
     }
-
-    onWorkspaceChanged(newWorkspaceId) {}
+    onWorkspaceLoad(workspaceId) {}
+    onViewActivated() {}
 }
 // Safely initialize nested global namespaces individually
 export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer', 'core_text_blobs']);
@@ -244,11 +272,10 @@ window.inSetu.extensions.Registry = SutramRegistry;
 window.ExtensionRegistry = SutramRegistry;
 window.inSetu.extensions.InSetuElement = InSetuElement;
 window.inSetu.extensions.createExtensionStore = createExtensionStore;
-
 // Wire inSetu's active extension policy into Sutram's agnostic filter slot
 window.ExtensionRegistry.setFilterPredicate((extName) => {
     if (window.inSetu?.isCore && window.inSetu.isCore(extName)) return true;
-    if (!window.ACTIVE_EXTENSIONS || window.ACTIVE_EXTENSIONS.length === 0) return true;
+    if (!window.ACTIVE_EXTENSIONS) return true;
     return window.ACTIVE_EXTENSIONS.includes(extName);
 });
 // Apply opinionated inSetu OS extensions to the generic Sutram Registry
@@ -275,7 +302,7 @@ window.ExtensionRegistry.getLayoutSlots = function() {
         return slots.filter(s => {
             if (!s.extName) return true;
             if (window.inSetu.isCore(s.extName)) return true;
-            if (!active || active.length === 0) return true;
+            if (!active) return true; // Allow if strictly undefined/uninitialized
             return active.includes(s.extName);
         });
     } catch (e) {

@@ -137,7 +137,7 @@ export class InSetuExtGather extends InSetuElement {
         this.searchQuery = '';
         this._expandedCats = {};
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         this.loadContext(false);
     }
     connectedCallback() {

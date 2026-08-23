@@ -191,8 +191,7 @@ export class InSetuExtBridge extends InSetuElement {
         this._headerTouchStartX = null;
         this._headerTouchStartY = null;
     }
-
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         window.inSetu.stores.Fs.setState({ fileVerificationCache: {} });
         if (this.cells && this.cells.length > 0) {
             window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
