@@ -103,6 +103,7 @@ insetu = [
 ]
 
 [tool.semantic_release]
+prerelease_token = "beta"
 vcs_release = false
 build_command = "python -m build"
 version_toml = [
