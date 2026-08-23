@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.16.1-beta.1 (2026-08-22)
+
+### Bug Fixes
+
+- Harden localhost auth csrf check, fix json vfs save mtime, and standardize extension workspace
+  load lifecycle
+  ([`7cf6b9a`](https://github.com/Callosemic/insetu/commit/7cf6b9ad3fe6a79adb28e9a1526392ed9e904ee9))
+
+- **core**: Harden REST route error boundaries and align workspace CRUD with save_json_file
+  ([`e70bcd9`](https://github.com/Callosemic/insetu/commit/e70bcd9642c690426d730061c113c31032ff5aac))
+
+- **update**: Prerelease token
+  ([`63be025`](https://github.com/Callosemic/insetu/commit/63be025cb5da4b9e999ad707b512be5d561ad494))
+
+- **update**: Use —as-prerelease instead of —prerelease
+  ([`b894373`](https://github.com/Callosemic/insetu/commit/b8943738aea618c981805bb5d01535cc60fc14cb))
+
+### Documentation
+
+- **core**: Align hook_vfs_resolve_path docstring with ADR 0042 vfs:// URI scheme
+  ([`e8c47d6`](https://github.com/Callosemic/insetu/commit/e8c47d6b421cd188ede14338729f11c17dff392e))
+
+### Refactoring
+
+- **extensions**: Complete sutram form control migration, adr 0041 uihooks deprecation, and api
+  gateway alignment
+  ([`36323d8`](https://github.com/Callosemic/insetu/commit/36323d828e6af1120f2d920118d19be94e3cff25))
+
+- **extensions**: Standardize onWorkspaceLoad lifecycle hook, expand tracker columns, and add
+  pre-release update engine
+  ([`f371004`](https://github.com/Callosemic/insetu/commit/f371004f5ce4369006786bf24e51c72e78448e81))
+
+- **sdk**: Deprecate legacy zone hooks, centralize artifact size formatting, and enforce semantic
+  API routing
+  ([`0c6761f`](https://github.com/Callosemic/insetu/commit/0c6761f09c9c7923e2de91f056711d1930b22f67))
+
+- **sdk**: Harmonize component lifecycle hooks, offload deep search polling, and polish system
+  settings UI
+  ([`79f872c`](https://github.com/Callosemic/insetu/commit/79f872c8c800d7cb8455e57d32b94e915617aa87))
+
+- **ui/fitness**: Purge CSS !important overrides, align ADR 0041 event hooks, and deduplicate
+  fitness file collectors
+  ([`91ff55c`](https://github.com/Callosemic/insetu/commit/91ff55c3493f3a8c1fb3de4a07c7ee4a41ede0e2))
+
+
 ## v0.16.0 (2026-08-18)
 
 ### Bug Fixes
