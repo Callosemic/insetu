@@ -80,7 +80,7 @@ Extensions declare their spatial footprint and contextual actions statelessly us
 >
 > * Use the `customEditors` declarative array for custom file matchers and modal overrides (replacing `zone:file-edit-override`).
 > * Use expanded `layoutSlots` (e.g. `slot: "modal:new-file:actions"`) for modal and action slot mounting.
-> * Use native `InSetuElement` class lifecycle handlers (`onForceRefresh()`, `onWorkspaceChanged()`) or the Typed Event Bus (`window.inSetu.events`) for behavioral events.
+> * Use native `InSetuElement` class lifecycle handlers (`onForceRefresh()`, `onWorkspaceLoad()`) or the Typed Event Bus (`window.inSetu.events`) for behavioral events.
 
 Legacy zone hook behaviors (preserved for historical reference):
 * `zone:file-edit-override`: (Superseded by `customEditors`).

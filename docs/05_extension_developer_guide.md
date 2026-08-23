@@ -112,9 +112,8 @@ export class MyComponent extends InSetuElement {
             this.items = state.items;
         });
     }
-    
     // Natively reacts to the user hot-swapping workspaces
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(newWorkspaceId) {
         // Fetch new data for the new tenant
     }
 }
@@ -200,7 +199,7 @@ Before an extension is considered fully migrated to the V2 SDK, it must pass the
 2. **State Management**: Banned raw Zustand `createStore` imports. Must use `createExtensionStore('Name', initialState)`.
 3. **Network Routing**: Raw `fetch()` calls and manual URL concatenations (`/api/${workspace}/...`) are strictly banned. Use `this.api.get()`, `this.api.post()`, etc.
 4. **Store Subscriptions**: Manual un-subscription variables (`this._unsub`) inside `disconnectedCallback` are banned. Use `this.subscribe(Store, selector, callback)`.
-5. **Tenant Lifecycle**: Do not manually subscribe to `activeWorkspace` changes in the AppStore. Implement the `onWorkspaceChanged(ws)` method instead.
+5. **Tenant Lifecycle**: Do not manually subscribe to `activeWorkspace` changes in the AppStore. Implement the `onWorkspaceLoad(ws)` method instead.
 
 ### Backend (The `InSetuExtension` Contract)
 1. **Inheritance**: The Flask blueprint must be instantiated via `InSetuExtension('name', __name__)`.

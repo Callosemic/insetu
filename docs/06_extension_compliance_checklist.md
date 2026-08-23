@@ -48,7 +48,7 @@ The frontend chassis must remain a "dumb" visual grid, isolating business logic 
 
 *   **Layout Injection & UI Zones (ADR 0041)**
     *   ❌ **Noncompliant:** Utilizing legacy string hooks like `ExtensionRegistry.registerUIHook('zone:vfs-mutated', ...)` or injecting raw HTML fragments into hardcoded DOM zones.
-    *   ✅ **Gold Standard:** Routing physical DOM elements through `layoutSlots` and `entityActions`, while routing lifecycle behaviors through `InSetuElement` methods (e.g., `onWorkspaceChanged`) or `window.inSetu.events`.
+    *   ✅ **Gold Standard:** Routing physical DOM elements through `layoutSlots` and `entityActions`, while routing lifecycle behaviors through `InSetuElement` methods (e.g., `onWorkspaceLoad`) or `window.inSetu.events`.
 
 *   **Form Controls & Buttons (ADR 0025, 0034)**
     *   ❌ **Noncompliant:** Using raw HTML `<input>`, `<select>`, `<textarea>`, or firing network requests from a standard `<button>`.
