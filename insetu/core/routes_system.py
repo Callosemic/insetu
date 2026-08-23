@@ -171,7 +171,6 @@ def get_system_config(workspace_id):
                                             import shutil
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
-
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
     from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
 
@@ -186,7 +185,7 @@ def get_system_config(workspace_id):
     return {
             "config": data,
             "meta": {
-                    "available_extensions": sorted(available, key=lambda x: x['title']),
+                    "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
                     "settings_schemas": evaluated_schemas
             }
     }
@@ -220,17 +219,16 @@ def api_system_reboot(workspace_id=None):
 
     threading.Thread(target=restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Rebooting inSetu OS..."})
-
 @system_bp.route('/api/system/config', methods=['GET', 'POST'])
 @system_bp.route('/api/<workspace_id>/system/config', methods=['GET', 'POST'])
 def api_system_config(workspace_id=None):
-    if not workspace_id: workspace_id = sniff_tenant_id()
-    if request.method == 'GET':
-        data = get_system_config(workspace_id)
-        return jsonify(data)
-    else:
-        try:
-            payload = request.json
+    try:
+        if not workspace_id: workspace_id = sniff_tenant_id()
+        if request.method == 'GET':
+            data = get_system_config(workspace_id)
+            return jsonify(data)
+        else:
+            payload = request.get_json(silent=True) or {}
 
             from flask import current_app
             requires_reboot = False
@@ -244,44 +242,51 @@ def api_system_config(workspace_id=None):
                 "message": "Configuration saved successfully.", 
                 "requires_reboot": requires_reboot
             })
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        import traceback
+        print(f"Config Route Error: {traceback.format_exc()}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 @system_bp.route('/api/system/topology', methods=['GET'])
 @system_bp.route('/api/<workspace_id>/system/topology', methods=['GET'])
 def api_system_topology(workspace_id=None):
-    if not workspace_id:
-        workspace_id = sniff_tenant_id()
-    from insetu.core.utils_core import get_sister_repos
-    import os
-    from pathlib import Path
-    cfg = load_config(workspace_id)
-    targets = cfg.get("target_repos", []) or []
-    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    try:
+        if not workspace_id:
+            workspace_id = sniff_tenant_id()
+        from insetu.core.utils_core import get_sister_repos
+        import os
+        from pathlib import Path
+        cfg = load_config(workspace_id)
+        targets = cfg.get("target_repos", []) or []
+        cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
 
-    for c in targets:
-        if not c: continue
-        r_dir = c.get("repo_dir", "")
-        for b in (c.get("sub_buckets") or []):
-            if b and b.get("dynamic_split_prefix"):
-                if "meta_map" not in b:
-                    b["meta_map"] = {}
-                dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
-                if os.path.exists(dyn_dir):
-                    for module in os.listdir(dyn_dir):
-                        if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
-                            if module not in b["meta_map"]:
-                                b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
-    return jsonify({
-        "repos": get_sister_repos(workspace_id),
-        "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
-        "term_port": cfg.get("term_port", 8181),
-        "targets": targets,
-        "virtual_contexts": cfg.get("virtual_contexts", []),
-        "category_order": cfg.get("category_order", []),
-        "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
-        "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
-        "config_missing": not os.path.exists(cfg_path)
-    })
+        for c in targets:
+            if not c: continue
+            r_dir = c.get("repo_dir", "")
+            for b in (c.get("sub_buckets") or []):
+                if b and b.get("dynamic_split_prefix"):
+                    if "meta_map" not in b:
+                        b["meta_map"] = {}
+                    dyn_dir = Path(ws_root).joinpath(r_dir, b["dynamic_split_prefix"]).as_posix()
+                    if os.path.exists(dyn_dir):
+                        for module in os.listdir(dyn_dir):
+                            if os.path.isdir(Path(dyn_dir).joinpath(module).as_posix()) and not module.startswith('.'):
+                                if module not in b["meta_map"]:
+                                    b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
+        return jsonify({
+            "repos": get_sister_repos(workspace_id),
+            "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
+            "term_port": cfg.get("term_port", 8181),
+            "targets": targets,
+            "virtual_contexts": cfg.get("virtual_contexts", []),
+            "category_order": cfg.get("category_order", []),
+            "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
+            "hidden_outputs": cfg.get("hidden_outputs", ["context_prompt.md", "context_prompt_diffs.txt"]),
+            "config_missing": not os.path.exists(cfg_path)
+        })
+    except Exception as e:
+        import traceback
+        print(f"Topology Route Error: {traceback.format_exc()}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 @system_bp.route('/api/system/manifest', methods=['GET'])
 @system_bp.route('/api/<workspace_id>/system/manifest', methods=['GET'])
 def api_system_manifest(workspace_id=None):
@@ -295,88 +300,90 @@ def api_system_manifest(workspace_id=None):
     vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=workspace_id) if m), {})
 
     return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
-
 @system_bp.route('/api/system/workspaces/create', methods=['POST'])
 def api_create_workspace():
-    data = request.json or {}
-    ws_id = data.get('id', '').strip().lower()
-    if not ws_id or ws_id in ['default', 'none']:
-        return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
-    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-    if not os.path.exists(index_path):
-        w_data = {"workspaces": {"default": {"config_path": "config.json"}}}
-    else:
-        with open(index_path, 'r', encoding='utf-8') as f:
-            w_data = json.load(f)
+    try:
+        data = request.json or {}
+        ws_id = data.get('id', '').strip().lower()
+        if not ws_id or ws_id in ['default', 'none']:
+            return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
+        index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
+        from insetu.kernel.utils import load_json_file, save_json_file
+
+        w_data = load_json_file(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
-    if ws_id in w_data.get("workspaces", {}):
-        return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
-    custom_root = data.get('workspace_root', '').strip()
-    if not custom_root:
-        return jsonify({"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}), 400
-    resolved_root = os.path.abspath(os.path.expanduser(custom_root))
+        if ws_id in w_data.get("workspaces", {}):
+            return jsonify({"error": f"Workspace '{ws_id}' already exists"}), 400
+        custom_root = data.get('workspace_root', '').strip()
+        if not custom_root:
+            return jsonify({"error": "Workspace Root Directory Path is strictly required to ensure absolute codebase isolation."}), 400
+        resolved_root = os.path.abspath(os.path.expanduser(custom_root))
 
-    ws_insetu_dir = Path(resolved_root).joinpath(".insetu")
-    try:
+        ws_insetu_dir = Path(resolved_root).joinpath(".insetu")
         os.makedirs(ws_insetu_dir.joinpath("data").as_posix(), exist_ok=True)
+        config_abs_path = ws_insetu_dir.joinpath("config.json").as_posix()
+        config_rel_path = config_abs_path
+        starter_config = {
+            "workspace_root": resolved_root,
+            "extensions": ["config"],
+            "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
+        }
+        os.makedirs(starter_config["workspace_root"], exist_ok=True)
+
+        # 1. Register workspace in system.json FIRST to satisfy get_workspace_physics bounds checking
+        if "workspaces" not in w_data:
+            w_data["workspaces"] = {}
+        w_data["workspaces"][ws_id] = {"title": ws_id.title(), "config_path": config_rel_path}
+
+        # Use save_json_file to ensure _JSON_CACHE is updated synchronously for immediate reads
+        save_json_file(index_path, w_data, workspace_id="default")
+
+        # 2. Save the pure topology mapping
+        save_json_file(config_abs_path, starter_config, workspace_id=ws_id)
+
+        # 3. Seed the Tier 2 Workspace Settings safely
+        from insetu.kernel.extension import SettingsManager
+        settings = SettingsManager('core_system', ws_id)
+        settings.set("instance_title", f"inSetu Workspace: {ws_id}")
+
+        return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
     except Exception as e:
-        return jsonify({"error": f"Failed to mount physical directory. Check path permissions: {str(e)}"}), 500
-    config_abs_path = ws_insetu_dir.joinpath("config.json").as_posix()
-    config_rel_path = config_abs_path
-    starter_config = {
-        "workspace_root": resolved_root,
-        "extensions": ["config"],
-        "ignore_dirs": ["node_modules", "__pycache__", "venv", ".git", ".insetu"]
-    }
-    os.makedirs(starter_config["workspace_root"], exist_ok=True)
-
-    from insetu.kernel.vfs import execute_vfs_save
-    # Save the pure topology mapping
-    execute_vfs_save(ws_id, config_abs_path, json.dumps(starter_config, indent=2), data={"is_absolute_artifact": True})
-
-    # Seed the Tier 2 Workspace Settings
-    from insetu.kernel.extension import SettingsManager
-    settings = SettingsManager('core_system', ws_id)
-    settings.set("instance_title", f"inSetu Workspace: {ws_id}")
-
-    if "workspaces" not in w_data:
-        w_data["workspaces"] = {}
-    w_data["workspaces"][ws_id] = {"title": ws_id.title(), "config_path": config_rel_path}
-
-    execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
-
-    return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+        import traceback
+        print(f"Workspace Create Error: {traceback.format_exc()}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 @system_bp.route('/api/system/workspaces/delete', methods=['POST'])
 def api_delete_workspace():
-    data = request.json or {}
-    ws_id = data.get('id', '').strip().lower()
-    if ws_id == 'default':
-        return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
-    index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-    if not os.path.exists(index_path):
-        return jsonify({"error": "system.json not found"}), 404
+    try:
+        data = request.json or {}
+        ws_id = data.get('id', '').strip().lower()
+        if ws_id == 'default':
+            return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
+        index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
+        from insetu.kernel.utils import load_json_file, save_json_file
 
-    with open(index_path, 'r', encoding='utf-8') as f:
-        w_data = json.load(f)
+        w_data = load_json_file(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
-    if ws_id not in w_data.get("workspaces", {}):
-        return jsonify({"error": "Target workspace not found."}), 404
-    del w_data["workspaces"][ws_id]
-    hooks.emit('workspace_shutdown', workspace_id=ws_id)
-    local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
-    ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
-    if os.path.exists(ws_dir.as_posix()):
-        from insetu.kernel.vfs import execute_vfs_delete
-        execute_vfs_delete("default", ws_dir.as_posix())
+        if ws_id not in w_data.get("workspaces", {}):
+            return jsonify({"error": "Target workspace not found."}), 404
+        del w_data["workspaces"][ws_id]
+        hooks.emit('workspace_shutdown', workspace_id=ws_id)
+        local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
+        ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
+        if os.path.exists(ws_dir.as_posix()):
+            from insetu.kernel.vfs import execute_vfs_delete
+            execute_vfs_delete("default", ws_dir.as_posix())
 
-    from insetu.kernel.vfs import execute_vfs_save
-    execute_vfs_save("default", index_path, json.dumps(w_data, indent=2), data={"is_absolute_artifact": True})
+        save_json_file(index_path, w_data, workspace_id="default")
 
-    return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+        return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
+    except Exception as e:
+        import traceback
+        print(f"Workspace Delete Error: {traceback.format_exc()}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
 @system_bp.route('/api/system/jobs/<job_id>', methods=['GET'])
 def api_job_status(job_id):
@@ -425,37 +432,42 @@ def api_workspaces():
 @system_bp.route('/api/system/config/test_bucketing', methods=['POST'])
 @system_bp.route('/api/<workspace_id>/system/config/test_bucketing', methods=['POST'])
 def api_system_config_test_bucketing(workspace_id=None):
-    if not workspace_id: workspace_id = sniff_tenant_id()
-    data = request.json or {}
-    repo_cfg = data.get("repo_cfg", {})
+    try:
+        if not workspace_id: workspace_id = sniff_tenant_id()
+        data = request.get_json(silent=True) or {}
+        repo_cfg = data.get("repo_cfg", {})
 
-    from insetu.kernel.utils import get_workspace_physics
-    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
-    repo_dir = repo_cfg.get("repo_dir")
-    if not repo_dir:
-        return jsonify({"error": "repo_dir missing"}), 400
+        from insetu.kernel.utils import get_workspace_physics
+        cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+        repo_dir = repo_cfg.get("repo_dir")
+        if not repo_dir:
+            return jsonify({"error": "repo_dir missing"}), 400
 
-    physical_path = repo_cfg.get("physical_path")
-    repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root).joinpath(repo_dir).resolve()
+        physical_path = repo_cfg.get("physical_path")
+        repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root).joinpath(repo_dir).resolve()
 
-    if not repo_path.exists():
-        return jsonify({"error": f"Path not found: {repo_path}"}), 404
+        if not repo_path.exists():
+            return jsonify({"error": f"Path not found: {repo_path}"}), 404
 
-    from insetu.core.topology.engine_topology import get_valid_workspace_files, resolve_file_bucket
-    valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, workspace_id)
+        from insetu.core.topology.engine_topology import get_valid_workspace_files, resolve_file_bucket
+        valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, workspace_id)
 
-    sub_buckets = repo_cfg.get("sub_buckets", [])
-    buckets_map = {}
+        sub_buckets = repo_cfg.get("sub_buckets", [])
+        buckets_map = {}
 
-    for f in valid_files:
-        b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
-        bucket_id = module if (b and module) else (b.get("id") if b else "main")
+        for f in valid_files:
+            b, module = resolve_file_bucket(f, sub_buckets, repo_dir=repo_dir)
+            bucket_id = module if (b and module) else (b.get("id") if b else "main")
 
-        if bucket_id not in buckets_map:
-            buckets_map[bucket_id] = []
-        buckets_map[bucket_id].append(f)
+            if bucket_id not in buckets_map:
+                buckets_map[bucket_id] = []
+            buckets_map[bucket_id].append(f)
 
-    return jsonify({"status": "success", "buckets": buckets_map})
+        return jsonify({"status": "success", "buckets": buckets_map})
+    except Exception as e:
+        import traceback
+        print(f"Bucketing Test Error: {traceback.format_exc()}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
 @system_bp.route('/api/system/fs/list_local', methods=['GET'])
 def api_list_local_host_dirs():

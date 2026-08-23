@@ -114,46 +114,52 @@ def _background_fs_search(job_id, workspace_id, query):
         update_immediate_job_status(job_id, 'failed', f"Search failed: {str(e)}", workspace_id=workspace_id)
 
 register_callback("fs", "search_task", _background_fs_search)
-
 @fs_bp.route('/api/<workspace_id>/fs/search', methods=['POST'])
 def api_fs_search(workspace_id):
-    data = request.json or {}
-    query = data.get('q', '').lower()
-    if not query: return jsonify({"results": []})
+    try:
+        data = request.get_json(silent=True) or {}
+        query = data.get('q', '').lower()
+        if not query: return jsonify({"results": []})
 
-    job_id = f"sch_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id)
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
-
+        job_id = f"sch_{uuid.uuid4().hex[:8]}"
+        submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id)
+        return jsonify({"status": "accepted", "job_id": job_id}), 202
+    except Exception as e:
+        return jsonify({"error": f"Search dispatch failed: {str(e)}"}), 500
 @fs_bp.route('/api/<workspace_id>/fs/move', methods=['POST'])
 def api_fs_move(workspace_id):
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    dest_path = data.get("dest_path", "").strip()
-    if not filepath or not dest_path:
-            return jsonify({"error": "Filepath and destination required"}), 400
-    res, code = execute_vfs_move(workspace_id, filepath, dest_path)
-    return jsonify(res), code
-
-
+    try:
+        data = request.get_json(silent=True) or {}
+        filepath = data.get("filepath", "").strip()
+        dest_path = data.get("dest_path", "").strip()
+        if not filepath or not dest_path:
+                return jsonify({"error": "Filepath and destination required"}), 400
+        res, code = execute_vfs_move(workspace_id, filepath, dest_path)
+        return jsonify(res), code
+    except Exception as e:
+        return jsonify({"error": f"VFS Move Error: {str(e)}"}), 500
 @fs_bp.route('/api/<workspace_id>/fs/archive', methods=['POST'])
 def api_fs_archive(workspace_id):
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    if not filepath:
-            return jsonify({"error": "Filepath required"}), 400
-    res, code = execute_vfs_archive(workspace_id, filepath)
-    return jsonify(res), code
-
-
+    try:
+        data = request.get_json(silent=True) or {}
+        filepath = data.get("filepath", "").strip()
+        if not filepath:
+                return jsonify({"error": "Filepath required"}), 400
+        res, code = execute_vfs_archive(workspace_id, filepath)
+        return jsonify(res), code
+    except Exception as e:
+        return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
 @fs_bp.route('/api/<workspace_id>/fs/delete', methods=['POST'])
 def api_fs_delete(workspace_id):
-    data = request.json
-    filepath = data.get("filepath", "").strip()
-    if not filepath:
-            return jsonify({"error": "Filepath required"}), 400
-    res, code = execute_vfs_delete(workspace_id, filepath)
-    return jsonify(res), code
+    try:
+        data = request.get_json(silent=True) or {}
+        filepath = data.get("filepath", "").strip()
+        if not filepath:
+                return jsonify({"error": "Filepath required"}), 400
+        res, code = execute_vfs_delete(workspace_id, filepath)
+        return jsonify(res), code
+    except Exception as e:
+        return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
 
 @fs_bp.route('/api/<workspace_id>/fs/upload', methods=['POST'])
 def api_fs_upload(workspace_id):
@@ -203,23 +209,22 @@ def api_fs_upload(workspace_id):
             return jsonify({"error": "No valid files uploaded"}), 400
 
     return jsonify({"status": "success", "message": f"{len(uploaded_paths)} file(s) uploaded successfully.", "filepaths": uploaded_paths})
-
 @fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])
 def api_fs_save(workspace_id):
     """Universal save-back endpoint with explicit path routing guardrails."""
-    data = request.json
-    if not data:
-            return jsonify({"error": "Invalid or missing JSON payload"}), 400
-
-    if "is_absolute_artifact" in data:
-            del data["is_absolute_artifact"]
-
-    filepath, content = data.get("filepath", "").strip(), data.get("content", "")
-    if not filepath: 
-            return jsonify({"error": "Filepath is required"}), 400
-
     try:
-            result = execute_vfs_save(workspace_id, filepath, content, data)
-            return jsonify(result)
+        data = request.get_json(silent=True)
+        if not data:
+                return jsonify({"error": "Invalid or missing JSON payload"}), 400
+
+        if "is_absolute_artifact" in data:
+                del data["is_absolute_artifact"]
+
+        filepath, content = data.get("filepath", "").strip(), data.get("content", "")
+        if not filepath: 
+                return jsonify({"error": "Filepath is required"}), 400
+
+        result = execute_vfs_save(workspace_id, filepath, content, data)
+        return jsonify(result)
     except Exception as e:
-            return jsonify({"error": f"File System Error: {str(e)}"}), 500
+        return jsonify({"error": f"File System Error: {str(e)}"}), 500
