@@ -118,6 +118,7 @@ def save_json_file(filepath, data, workspace_id=None):
     global _JSON_CACHE, _JSON_MTIME
     from insetu.kernel.vfs import VFSTransaction
     import json
+    import time
 
     wid = workspace_id or sniff_tenant_id()
     if not wid:
@@ -127,7 +128,7 @@ def save_json_file(filepath, data, workspace_id=None):
     vfs.save(filepath, json.dumps(data, indent=2), {"is_absolute_artifact": True})
 
     _JSON_CACHE[filepath] = data
-    _JSON_MTIME[filepath] = 0
+    _JSON_MTIME[filepath] = time.time()
 
 _MUTATED_CONFIG_CACHE = {}
 _MUTATED_CONFIG_MTIME = {}

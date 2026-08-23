@@ -47,8 +47,7 @@ export class InSetuExt{{cap_name}} extends InSetuElement {
         });
         {{cap_name}}Store.getState().fetchData();
     }
-
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         {{cap_name}}Store.getState().fetchData();
     }
 

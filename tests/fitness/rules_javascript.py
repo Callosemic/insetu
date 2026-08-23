@@ -243,6 +243,8 @@ def check_javascript_files():
                 report_violation("LEGACY_SYSTEM_URI_BAN", filepath, line_num, "Legacy 'system://' URI scheme detected. Migrate to 'ctx://' URI scheme.")
             if is_extension and legacy_refresh_pattern.search(line):
                 report_violation("LIFECYCLE_CONSOLIDATION_MANDATE", filepath, line_num, "Legacy onNavReselected or onSubNavReselected detected. Migrate to unified onForceRefresh() lifecycle method.")
+            if is_extension and "onWorkspaceChanged(" in line:
+                report_violation("DEPRECATED_WORKSPACE_HOOK", filepath, line_num, "Deprecated onWorkspaceChanged() detected. Migrate to onWorkspaceLoad(workspaceId) lifecycle method.")
             if unmanaged_document_input_listener_pattern.search(line):
                 report_violation("UNMANAGED_FORM_INPUT_LISTENER_BAN", filepath, line_num, "Direct DOM input/change listener on 'document' detected. Form input management must route through Sutram web component lifecycles (<sutram-input>, <sutram-textarea>).")
             if open_virtual_file_pattern.search(line):

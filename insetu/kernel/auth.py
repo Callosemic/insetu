@@ -128,10 +128,18 @@ def bootstrap():
 
     # Extract real IP if behind Tailscale Serve or a Reverse Proxy
     client_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
-
     # --- ROUTE A: LOCALHOST BYPASS ---
     # If the user is physically on the machine, auto-authenticate
     if client_ip == '127.0.0.1':
+        # Check for cross-origin browser requests (Localhost Drive-By CSRF prevention)
+        origin = request.headers.get('Origin', '')
+        referer = request.headers.get('Referer', '')
+        allowed_hosts = ['127.0.0.1', 'localhost', '.ts.net']
+        if origin and not any(host in origin for host in allowed_hosts):
+            return jsonify({"error": "Forbidden: Cross-origin request blocked"}), 403
+        if referer and not any(host in referer for host in allowed_hosts):
+            return jsonify({"error": "Forbidden: Cross-origin request blocked"}), 403
+
         return jsonify({
             "status": "authenticated", 
             "token": BOOT_TOKEN, 
