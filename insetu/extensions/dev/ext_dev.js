@@ -58,7 +58,8 @@ export class InSetuExtDevDash extends InSetuElement {
                 DevStore.setState({ forceRefreshTick: Date.now() });
             }
         }, 2000));
-
+    }
+    onWorkspaceLoad(workspaceId) {
         this.fetchMetrics();
     }
     async fetchMetrics() {

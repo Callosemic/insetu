@@ -43,7 +43,7 @@ export class InSetuExtTerm extends InSetuElement {
             }
         }, 50));
         this.registerGlobalListener('insetu:term:restart', window, () => {
-            this.onWorkspaceChanged(this.workspaceId);
+            this.onWorkspaceLoad(this.workspaceId);
         });
     }
     firstUpdated() {
@@ -65,7 +65,7 @@ export class InSetuExtTerm extends InSetuElement {
         }
     }
     onForceRefresh() {
-        this.onWorkspaceChanged(this.workspaceId);
+        this.onWorkspaceLoad(this.workspaceId);
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -97,7 +97,7 @@ export class InSetuExtTerm extends InSetuElement {
             }
         } catch (e) {}
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         if (this._ws) {
             this._ws.onopen = null;
             this._ws.onmessage = null;

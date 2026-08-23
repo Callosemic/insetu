@@ -222,7 +222,7 @@ constructor() {
             }
         });
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         KanbanStore.getState().fetchTasks();
         KanbanStore.getState().fetchSettings();
     }
@@ -370,16 +370,47 @@ constructor() {
         const activeTasks = filteredTasks.filter(t => t.status === 'active').sort(sortChronological);
         const closedTasks = filteredTasks.filter(t => t.status === 'closed').sort((a, b) => (b.closedAt || b.timestamp).localeCompare(a.closedAt || a.timestamp));
 
+        const parentIdsInView = new Set(filteredTasks.map(t => t.id));
+        const filterTopLevel = (tasks) => {
+            return tasks.filter(t => {
+                if (t.parentId && parentIdsInView.has(t.parentId)) return false;
+                const isChildDependency = t.dependsOn && t.dependsOn.some(dep => {
+                    const parts = dep.split('::');
+                    const pId = parts.length > 1 ? parts[1] : parts[0];
+                    return parentIdsInView.has(pId);
+                });
+                if (isChildDependency) return false;
+                return true;
+            });
+        };
+
+        const topActive = filterTopLevel(activeTasks);
+        const topOpen = filterTopLevel(openTasks);
+        const topClosed = filterTopLevel(closedTasks);
+
+        const renderGroupedTask = (t) => {
+            const childTasks = this.tasks.filter(child => child.status !== 'template' && (child.parentId === t.id || (child.dependsOn && child.dependsOn.includes(`${t.repo}::${t.id}`))));
+            if (childTasks.length > 0) {
+                return html`
+                    <sutram-card-group ?stacked=${true} ?accordion=${true}>
+                        ${this._renderTaskCard(t)}
+                        ${childTasks.map(child => this._renderTaskCard(child))}
+                    </sutram-card-group>
+                `;
+            }
+            return this._renderTaskCard(t);
+        };
+
         return html`
             <sutram-board>
                 <sutram-column titleText="Active">
-                    ${activeTasks.map(t => this._renderTaskCard(t))}
+                    ${topActive.map(t => renderGroupedTask(t))}
                 </sutram-column>
                 <sutram-column titleText="Open">
-                    ${openTasks.map(t => this._renderTaskCard(t))}
+                    ${topOpen.map(t => renderGroupedTask(t))}
                 </sutram-column>
                 <sutram-column titleText="Closed" intentColor="var(--intent-success)">
-                    ${closedTasks.map(t => this._renderTaskCard(t))}
+                    ${topClosed.map(t => renderGroupedTask(t))}
                 </sutram-column>
             </sutram-board>
         `;
@@ -1656,10 +1687,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
             </insetu-card>
         `;
     }
-    _renderHierarchyView() {
-        if (!this._hierarchyTask) return '';
-        const allTasks = KanbanStore.getState().tasks;
-        const childMap = allTasks.reduce((acc, t) => {
+    _renderTaskTree(rootTask, taskList, returnFlagProperty, isTemplate = false) {
+        const state = KanbanStore.getState();
+        const allSchemas = [...(state.systemSchemas || []), ...(state.settings?.kanban_profiles || [])];
+        const repoMap = state.settings?.kanban_repo_map || {};
+
+        const childMap = taskList.reduce((acc, t) => {
             if (t.parentId) {
                 if (!acc[t.parentId]) acc[t.parentId] = [];
                 acc[t.parentId].push(t);
@@ -1668,9 +1701,14 @@ export class InSetuExtTrackerModals extends InSetuElement {
         }, {});
 
         const renderNode = (taskId, depth = 0, isLast = true) => {
-            const task = allTasks.find(t => t.id === taskId);
+            const task = taskList.find(t => t.id === taskId);
             if (!task) return '';
             const children = childMap[taskId] || [];
+
+            const schemaId = repoMap[task.repo] || 'agile_basic';
+            const schema = allSchemas.find(s => s.id === schemaId) || {};
+            const nextTier = task.tier < 3 ? task.tier + 1 : null;
+            const nextTierLabel = nextTier ? (schema[`t${nextTier}_label`] || `Tier ${nextTier}`) : null;
 
             return html`
                 <div style="position: relative; display: flex; flex-direction: column; padding-left: ${depth > 0 ? 30 : 0}px;">
@@ -1684,20 +1722,48 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     ` : ''}
 
                     ${this._renderTaskCard(task, () => {
+                        this._templatesBrowserOpen = false;
                         this._hierarchyModalOpen = false;
-                        this._returnToHierarchy = true;
+                        this[returnFlagProperty] = true;
                         this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
                     }, childMap)}
 
-                    ${children.length > 0 ? html`
+                    ${(children.length > 0 || nextTier) ? html`
                         <div style="position: relative; display: flex; flex-direction: column; margin-left: ${depth === 0 ? 10 : 0}px;">
-                            ${children.map((c, i) => renderNode(c.id, depth + 1, i === children.length - 1))}
+                            ${children.map((c, i) => renderNode(c.id, depth + 1, i === children.length - 1 && !nextTier))}
+                            ${nextTier ? html`
+                                <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
+                                    <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
+                                    <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
+
+                                    <button class="btn-sm" style="background: var(--input-bg); color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin: 0; z-index: 2;"
+                                        @click=${() => {
+                                            this._templatesBrowserOpen = false;
+                                            this._hierarchyModalOpen = false;
+                                            this[returnFlagProperty] = true;
+                                            const prefill = { parentId: task.id, tier: nextTier, repo: task.repo };
+                                            if (isTemplate) prefill.status = 'template';
+                                            this.dispatch('insetu:tracker:open-new-task', { 
+                                                activeTab: 'todos', 
+                                                prefill 
+                                            });
+                                        }}>
+                                        ➕ New ${nextTierLabel}
+                                    </button>
+                                </div>
+                            ` : ''}
                         </div>
                     ` : ''}
                 </div>
             `;
         };
 
+        return renderNode(rootTask.id, 0, true);
+    }
+
+    _renderHierarchyView() {
+        if (!this._hierarchyTask) return '';
+        const allTasks = KanbanStore.getState().tasks;
         const rootDisplayTitle = this._hierarchyTask.title ? this._hierarchyTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
 
         return html`
@@ -1706,7 +1772,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     <h3 style="margin: 0; color: var(--text);">Hierarchy: ${rootDisplayTitle}</h3>
                 </div>
                 <div>
-                    ${renderNode(this._hierarchyTask.id, 0, true)}
+                    ${this._renderTaskTree(this._hierarchyTask, allTasks, '_returnToHierarchy', false)}
                 </div>
             </div>
         `;
@@ -1719,13 +1785,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const allSchemas = [...(state.systemSchemas || []), ...(state.settings?.kanban_profiles || [])];
         const repoMap = state.settings?.kanban_repo_map || {};
 
-        const childMap = filteredTasks.reduce((acc, t) => {
-            if (t.parentId) {
-                if (!acc[t.parentId]) acc[t.parentId] = [];
-                acc[t.parentId].push(t);
-            }
-            return acc;
-        }, {});
         if (this._activeTemplateRoot) {
             // TREE VIEW
             const rootTask = filteredTasks.find(t => t.id === this._activeTemplateRoot);
@@ -1734,54 +1793,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 return this.requestUpdate();
             }
             const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-            const renderNode = (taskId, depth = 0, isLast = true) => {
-                const task = filteredTasks.find(t => t.id === taskId);
-                if (!task) return '';
-                const children = childMap[taskId] || [];
-                const schemaId = repoMap[task.repo] || 'agile_basic';
-                const schema = allSchemas.find(s => s.id === schemaId) || {};
-                const nextTier = task.tier < 3 ? task.tier + 1 : null;
-                const nextTierLabel = nextTier ? (schema[`t${nextTier}_label`] || `Tier ${nextTier}`) : null;
-
-                return html`
-                    <div style="position: relative; display: flex; flex-direction: column; padding-left: ${depth > 0 ? 30 : 0}px;">
-                        ${depth > 0 ? html`
-                            ${!isLast ? html`
-                                <div style="position: absolute; left: 10px; top: -15px; bottom: 0; width: 2px; background: var(--border); z-index: 1;"></div>
-                            ` : html`
-                                <div style="position: absolute; left: 10px; top: -15px; height: 53px; width: 2px; background: var(--border); z-index: 1;"></div>
-                            `}
-                            <div style="position: absolute; left: 10px; top: 36px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
-                        ` : ''}
-
-                        ${this._renderTaskCard(task, null, childMap)}
-
-                        ${(children.length > 0 || nextTier) ? html`
-                            <div style="position: relative; display: flex; flex-direction: column; margin-left: ${depth === 0 ? 10 : 0}px;">
-                                ${children.map((c, i) => renderNode(c.id, depth + 1, i === children.length - 1 && !nextTier))}
-                                ${nextTier ? html`
-                                    <div style="position: relative; display: flex; flex-direction: column; padding-left: 30px; padding-bottom: 12px;">
-                                        <div style="position: absolute; left: 10px; top: -15px; height: 35px; width: 2px; background: var(--border); z-index: 1;"></div>
-                                        <div style="position: absolute; left: 10px; top: 18px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
-
-                                        <button class="btn-sm" style="background: var(--input-bg); color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin: 0; z-index: 2;"
-                                            @click=${() => {
-                                                this._templatesBrowserOpen = false;
-                                                this._returnToTemplatesBrowser = true;
-                                                this.dispatch('insetu:tracker:open-new-task', { 
-                                                    activeTab: 'todos', 
-                                                    prefill: { parentId: task.id, tier: nextTier, repo: task.repo, status: 'template' } 
-                                                });
-                                            }}>
-                                            ➕ New ${nextTierLabel}
-                                        </button>
-                                    </div>
-                                ` : ''}
-                            </div>
-                        ` : ''}
-                    </div>
-                `;
-            };
 
             return html`
                 <div style="display: flex; flex-direction: column; gap: 20px;">
@@ -1790,12 +1801,20 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
                     </div>
                     <div>
-                        ${renderNode(rootTask.id, 0, true)}
+                        ${this._renderTaskTree(rootTask, filteredTasks, '_returnToTemplatesBrowser', true)}
                     </div>
                 </div>
             `;
         }
         // LIST VIEW
+        const childMap = filteredTasks.reduce((acc, t) => {
+            if (t.parentId) {
+                if (!acc[t.parentId]) acc[t.parentId] = [];
+                acc[t.parentId].push(t);
+            }
+            return acc;
+        }, {});
+
         const currentRepo = this._templateRepoFilter || (this.ecosystem.allRepos.length > 0 ? this.ecosystem.allRepos[0] : 'ALL');
         const repoFiltered = (() => {
             if (currentRepo !== 'ALL') {
@@ -1821,8 +1840,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${roots.length > 0 
                         ? roots.map(t => {
-                            const hasChildren = childMap[t.id] && childMap[t.id].length > 0;
-                            return this._renderTaskCard(t, hasChildren ? () => { this._activeTemplateRoot = t.id; this.requestUpdate(); } : null, childMap);
+                            return this._renderTaskCard(t, () => { this._activeTemplateRoot = t.id; this.requestUpdate(); }, childMap);
                         }) 
                         : html`<sutram-empty-state text="No templates found for this repository's schema."></sutram-empty-state>`
                     }
@@ -2339,10 +2357,9 @@ export class InSetuExtTrackerSettings extends InSetuElement {
                                                     </div>
                                                 `;
                                             }
-
                                             const availableTypes = this._getTypesForScope(v.target_schema, v.target_tier);
                                             const currentTypes = v.filters?.ticket_types === 'NONE' ? [] : (v.filters?.ticket_types ? v.filters.ticket_types.split(',').map(s=>s.trim()) : availableTypes);
-                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived', 'template'];
+                                            const allStatuses = ['open', 'active', 'closed', 'logged', 'archived'];
                                             const currentStatuses = v.filters?.statuses === 'NONE' ? [] : (v.filters?.statuses ? v.filters.statuses.split(',').map(s=>s.trim()) : allStatuses);
 
                                             return html`

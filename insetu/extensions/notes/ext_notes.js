@@ -317,7 +317,7 @@ export class InSetuExtNotes extends InSetuElement {
 
         this.registerGlobalListener('insetu:notes:new', window, () => NotesStore.setState({ newNoteModalOpen: true }));
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         NotesStore.getState().fetchNotes();
     }
     onForceRefresh() {

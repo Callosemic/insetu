@@ -106,7 +106,7 @@ export class InSetuExtPrompts extends InSetuElement {
 
         PromptsStore.getState().fetchPrompts();
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         PromptsStore.getState().fetchPrompts();
     }
     onForceRefresh() {

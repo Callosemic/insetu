@@ -15,6 +15,7 @@ export const UpdateStore = createExtensionStore('Update', {
     pypiPublished: false,
     packageName: '',
     repoBuildCommand: 'python -m build',
+    repoPrereleaseToken: 'rc',
     repoVcsRelease: true,
     hasToken: true,
     hasPypiToken: false,
@@ -30,10 +31,12 @@ export const UpdateStore = createExtensionStore('Update', {
     previewCaption: '',
     distributionTarget: 'python_pypi',
     lastPublishTime: 0,
+    latestBuildArtifact: null,
+    isPrerelease: false,
 
-    _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption) => {
+    _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption, extraPayload = {}) => {
         if (!repo) return;
-        const res = await window.inSetu.api.post(endpoint, { repo });
+        const res = await window.inSetu.api.post(endpoint, { repo, ...extraPayload });
         if (res.status === 202) {
             const data = await res.json();
             return new Promise((resolve, reject) => {
@@ -67,7 +70,8 @@ export const UpdateStore = createExtensionStore('Update', {
         return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_first_release', 'first_release', 'No changes to release.', 'N/A (Initial Release Phase)', 'full', 'This is a dry run of the initial release. If you proceed, the package will be built and distributed.');
     },
     previewBump: async (repo) => {
-        return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_bump', 'bump', 'No changes to release.', 'No changelog notes generated.', 'changelog', 'This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed.');
+        const isPrerelease = UpdateStore.getState().isPrerelease;
+        return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_bump', 'bump', 'No changes to release.', 'No changelog notes generated.', 'changelog', 'This is a dry run of the next release. If you proceed, the changelog will be committed and a new version tag will be pushed.', { prerelease: isPrerelease });
     },
     previewPublish: async (repo) => {
         return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_publish', 'publish', 'No publish operations required.', 'N/A (Publish Phase)', 'full', 'This is a dry run of the publish phase. If you proceed, the package will be uploaded to the target distribution registry.');
@@ -124,6 +128,8 @@ export const UpdateStore = createExtensionStore('Update', {
                 const data = await res.json();
                 window.inSetu.utils.pollJob(data.job_id, {
                     onComplete: (statusData) => {
+                        const versionStr = statusData.artifact.version || '';
+                        const isExistingPrerelease = Boolean(versionStr && (versionStr.includes('-') || /[a-zA-Z]/.test(versionStr)));
                         UpdateStore.setState({ 
                             repoVersion: statusData.artifact.version, 
                             repoConfigured: statusData.artifact.configured,
@@ -134,11 +140,14 @@ export const UpdateStore = createExtensionStore('Update', {
                             pypiPackageExists: statusData.artifact.pypi_package_exists === true,
                             packageName: statusData.artifact.package_name || '',
                             repoBuildCommand: statusData.artifact.build_command ?? 'python -m build',
+                            repoPrereleaseToken: statusData.artifact.prerelease_token || 'rc',
                             repoVcsRelease: statusData.artifact.vcs_release !== false,
                             hasToken: statusData.artifact.has_token !== false,
                             hasPypiToken: statusData.artifact.has_pypi_token === true,
                             distributionTarget: statusData.artifact.distribution_target || 'python_pypi',
+                            latestBuildArtifact: statusData.artifact.latest_build_artifact || null,
                             lastPublishTime: statusData.artifact.last_publish_time || 0,
+                            isPrerelease: isExistingPrerelease,
                             repoLoading: false
                         });
                     },
@@ -184,10 +193,10 @@ export const UpdateStore = createExtensionStore('Update', {
             alert(`Network error: ${e.message}`);
         }
     },
-    updateTomlConfig: async (repo, buildCommand, vcsRelease) => {
+    updateTomlConfig: async (repo, buildCommand, vcsRelease, prereleaseToken) => {
         if (!repo) return;
         try {
-            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand, vcs_release: vcsRelease });
+            const res = await window.inSetu.api.post('update/update_toml_config', { repo, build_command: buildCommand, vcs_release: vcsRelease, prerelease_token: prereleaseToken });
             if (res.status === 202) {
                 const data = await res.json();
                 return new Promise((resolve, reject) => {
@@ -249,6 +258,47 @@ export const UpdateStore = createExtensionStore('Update', {
             alert(`Network error: ${e.message}`);
         }
     },
+    runManualBuild: async (repo, buildCommand) => {
+        if (!repo) return;
+        try {
+            const res = await window.inSetu.api.post('update/manual_build', { repo, build_command: buildCommand });
+            if (res.status === 202) {
+                const data = await res.json();
+                window.inSetu.utils.pollJob(data.job_id, {
+                    onProgress: (msg) => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                    },
+                    onComplete: (statusData) => {
+                        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`✅ Manual build complete.`, 2000);
+                        UpdateStore.setState({ 
+                            previewOutput: statusData.artifact.output || 'No output.',
+                            previewChangelog: 'Manual Build Execution Log',
+                            previewActionType: 'log_view',
+                            previewModalOpen: true,
+                            previewTab: 'full',
+                            previewCaption: 'Execution log output for the manual build action.'
+                        });
+                        UpdateStore.getState().fetchRepoStatus(repo);
+                    },
+                    onError: (err) => {
+                        alert(`Build Error: ${err.message}`);
+                        UpdateStore.setState({ 
+                            previewOutput: err.message || 'No output.',
+                            previewChangelog: 'Manual Build Execution Log (Failed)',
+                            previewActionType: 'log_view',
+                            previewModalOpen: true,
+                            previewTab: 'full',
+                            previewCaption: 'Execution log output for the failed manual build action.'
+                        });
+                        UpdateStore.getState().fetchRepoStatus(repo);
+                    }
+                });
+            }
+        } catch (e) {
+            alert(`Network error: ${e.message}`);
+        }
+    },
+
     scaffoldRepo: async (repo, initialVersion) => {
         if (!repo) return;
         try {
@@ -296,6 +346,7 @@ export class InSetuExtUpdate extends InSetuElement {
         pypiPackageExists: { type: Boolean },
         packageName: { type: String },
         repoBuildCommand: { type: String },
+        repoPrereleaseToken: { type: String },
         repoVcsRelease: { type: Boolean },
         hasToken: { type: Boolean },
         hasPypiToken: { type: Boolean },
@@ -311,7 +362,9 @@ export class InSetuExtUpdate extends InSetuElement {
         previewTab: { type: String },
         previewActionType: { type: String },
         previewCaption: { type: String },
-        lastPublishTime: { type: Number }
+        lastPublishTime: { type: Number },
+        latestBuildArtifact: { type: String },
+        isPrerelease: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow-y: auto; background: var(--bg); box-sizing: border-box; padding: 20px; }
@@ -328,6 +381,7 @@ export class InSetuExtUpdate extends InSetuElement {
         this.hasRelease = false;
         this.pypiPackageExists = false;
         this.repoBuildCommand = 'python -m build';
+        this.repoPrereleaseToken = 'rc';
         this.repoVcsRelease = true;
         this.hasToken = true;
         this.hasPypiToken = false;
@@ -343,6 +397,8 @@ export class InSetuExtUpdate extends InSetuElement {
         this.previewActionType = 'bump';
         this.previewCaption = '';
         this.lastPublishTime = 0;
+        this.latestBuildArtifact = null;
+        this.isPrerelease = false;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -359,6 +415,7 @@ export class InSetuExtUpdate extends InSetuElement {
             this.pypiPackageExists = state.pypiPackageExists === true;
             this.packageName = state.packageName || '';
             this.repoBuildCommand = state.repoBuildCommand ?? 'python -m build';
+            this.repoPrereleaseToken = state.repoPrereleaseToken || 'rc';
             this.repoVcsRelease = state.repoVcsRelease !== false;
             this.hasToken = state.hasToken !== false;
             this.hasPypiToken = state.hasPypiToken === true;
@@ -374,6 +431,8 @@ export class InSetuExtUpdate extends InSetuElement {
             this.previewActionType = state.previewActionType || 'bump';
             this.previewCaption = state.previewCaption || '';
             this.lastPublishTime = state.lastPublishTime || 0;
+            this.latestBuildArtifact = state.latestBuildArtifact || null;
+            this.isPrerelease = state.isPrerelease || false;
             this.requestUpdate();
 
             // Fetch status when the selected repo changes
@@ -404,7 +463,7 @@ export class InSetuExtUpdate extends InSetuElement {
             }
         });
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         if (this.targetRepo) {
             UpdateStore.getState().fetchRepoStatus(this.targetRepo);
         }
@@ -610,7 +669,7 @@ export class InSetuExtUpdate extends InSetuElement {
                             <div style="display: flex; align-items: center; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'};">
                                 <sutram-toggle .checked=${this.repoVcsRelease} ?disabled=${!this.isClean} ?flush=${true}
                                     @sutram-input-changed=${(e) => {
-                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.detail.value);
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, e.detail.value, this.repoPrereleaseToken);
                                     }}></sutram-toggle>
                                 <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Release via GitHub API (<code>vcs_release</code>)</span>
                             </div>
@@ -626,7 +685,7 @@ export class InSetuExtUpdate extends InSetuElement {
                                     @sutram-input-changed=${(e) => {
                                         const enabled = e.detail.value;
                                         const cmd = enabled ? (this.repoBuildCommand || 'python -m build') : '';
-                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease);
+                                        UpdateStore.getState().updateTomlConfig(this.targetRepo, cmd, this.repoVcsRelease, this.repoPrereleaseToken);
                                     }}></sutram-toggle>
                                 <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Trigger Build Command on Bump</span>
                             </div>
@@ -647,12 +706,45 @@ export class InSetuExtUpdate extends InSetuElement {
                                         ?disabled=${!this.isClean}
                                         style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
                                         .onClick=${async () => {
-                                            await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease);
+                                            await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken);
+                                        }}>
+                                    </sutram-async-btn>
+                                    <sutram-async-btn 
+                                        label="▶️ Run Manually" 
+                                        intent="neutral" 
+                                        style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
+                                        .onClick=${async () => {
+                                            await UpdateStore.getState().runManualBuild(this.targetRepo, this.repoBuildCommand);
                                         }}>
                                     </sutram-async-btn>
                                 </div>
                             ` : ''}
                             <span style="font-size: 0.75rem; color: var(--text-muted); margin-left: 24px;">Executed by Semantic Release before tagging. Changes are committed to <code>pyproject.toml</code> natively.</span>
+                        </div>
+
+                        <div style="display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;">
+                            <span style="font-size: 0.85rem; font-weight: bold; color: var(--text);">Default Pre-release Token (<code>prerelease_token</code>)</span>
+                            <div style="display: flex; gap: 8px; opacity: ${!this.isClean ? '0.6' : '1'}; align-items: center;">
+                                <sutram-input 
+                                    style="width: 180px; margin-bottom: 0; --bg-input: var(--bg);"
+                                    .value=${this.repoPrereleaseToken || 'rc'}
+                                    ?disabled=${!this.isClean}
+                                    placeholder="e.g., rc, beta, alpha"
+                                    @sutram-input-changed=${(e) => {
+                                        UpdateStore.setState({ repoPrereleaseToken: e.detail.value });
+                                    }}>
+                                </sutram-input>
+                                <sutram-async-btn 
+                                    label="💾 Save Token" 
+                                    intent="success" 
+                                    ?disabled=${!this.isClean}
+                                    style="margin: 0; --btn-padding: 8px 12px; --btn-font-size: 0.85rem;"
+                                    .onClick=${async () => {
+                                        await UpdateStore.getState().updateTomlConfig(this.targetRepo, this.repoBuildCommand, this.repoVcsRelease, this.repoPrereleaseToken);
+                                    }}>
+                                </sutram-async-btn>
+                            </div>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">Token identifier used when Pre-release Mode is toggled ON (e.g., <code>beta</code> produces <code>v1.0.0-beta.1</code>).</span>
                         </div>
                     </div>
 
@@ -666,7 +758,15 @@ export class InSetuExtUpdate extends InSetuElement {
                                 ?disabled=${!this.repoConfigured || !this.isClean}
                                 .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
                             </sutram-async-btn>
-                            <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3;">
+                            <sutram-toggle 
+                                .checked=${this.isPrerelease} 
+                                ?disabled=${!this.repoConfigured || !this.isClean}
+                                ?flush=${true}
+                                @sutram-input-changed=${e => UpdateStore.setState({ isPrerelease: e.detail.value })} 
+                                label="Pre-release Mode (e.g., -${this.repoPrereleaseToken || 'rc'}.1)"
+                                style="margin-top: 4px;">
+                            </sutram-toggle>
+                            <div style="font-size: 0.75rem; color: var(--text-muted); text-align: left; line-height: 1.3; margin-top: 4px;">
                                 <strong>Phase 1 (Code & Git Preparation):</strong>
                                 <ol style="margin: 4px 0 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px;">
                                     <li>Analyzes commit logs (<code>feat:</code>, <code>fix:</code>) to pick next version.</li>
@@ -678,31 +778,51 @@ export class InSetuExtUpdate extends InSetuElement {
                         </div>
                         <!-- Step 2 Column -->
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
-                            ${(this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) ? html`
-                                <sutram-async-btn 
-                                    style="width: 100%;" 
-                                    label="${this.distributionTarget === 'python_pypi' ? `🚀 Publish v${this.repoVersion || '0.1.0'} to PyPI` : `🏷️ Release v${this.repoVersion || '0.1.0'} to VCS`}" 
-                                    intent="highlight" 
-                                    ?disabled=${!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)}
-                                    .disabled=${!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)}
-                                    .onClick=${async () => {
-                                        if (!this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken)) return;
-                                        await UpdateStore.getState().previewFirstRelease(this.targetRepo);
-                                    }}>
-                                </sutram-async-btn>
-                            ` : html`
-                                <sutram-async-btn 
-                                    style="width: 100%;" 
-                                    label="${this.distributionTarget === 'python_pypi' ? '🚀 Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? '🚫 Publishing Disabled' : '🚀 Step 2: Push VCS Release')}" 
-                                    intent="highlight" 
-                                    ?disabled=${!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled'}
-                                    .disabled=${!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled'}
-                                    .onClick=${async () => {
-                                        if (!this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled') return;
-                                        await UpdateStore.getState().previewPublish(this.targetRepo);
-                                    }}>
-                                </sutram-async-btn>
-                            `}
+                            ${(() => {
+                                let buildMismatch = false;
+                                if (this.distributionTarget === 'python_pypi' && this.repoBuildCommand && this.repoVersion) {
+                                    if (!this.latestBuildArtifact || !this.latestBuildArtifact.includes(this.repoVersion)) {
+                                        buildMismatch = true;
+                                    }
+                                }
+                                const step2Disabled = !this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled' || buildMismatch;
+                                const buildLabel = this.latestBuildArtifact ? html`<span style="font-size: 0.75rem; color: var(--intent-success); font-family: var(--font-mono); text-align: center; display: block; margin-top: 4px;">📦 Active Artifact: ${this.latestBuildArtifact}</span>` : '';
+                                const mismatchLabel = buildMismatch ? html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">⚠️ Build artifact missing or version mismatch. Ensure Step 1 succeeded.</span>` : '';
+
+                                if (this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) {
+                                    return html`
+                                        <sutram-async-btn 
+                                            style="width: 100%;" 
+                                            label="${this.distributionTarget === 'python_pypi' ? '🚀 Publish v' + (this.repoVersion || '0.1.0') + ' to PyPI' : '🏷️ Release v' + (this.repoVersion || '0.1.0') + ' to VCS'}" 
+                                            intent="highlight" 
+                                            ?disabled=${step2Disabled}
+                                            .disabled=${step2Disabled}
+                                            .onClick=${async () => {
+                                                if (step2Disabled) return;
+                                                await UpdateStore.getState().previewFirstRelease(this.targetRepo);
+                                            }}>
+                                        </sutram-async-btn>
+                                        ${buildLabel}
+                                        ${mismatchLabel}
+                                    `;
+                                } else {
+                                    return html`
+                                        <sutram-async-btn 
+                                            style="width: 100%;" 
+                                            label="${this.distributionTarget === 'python_pypi' ? '🚀 Step 2: Publish Release' : (this.distributionTarget === 'disabled' ? '🚫 Publishing Disabled' : '🚀 Step 2: Push VCS Release')}" 
+                                            intent="highlight" 
+                                            ?disabled=${step2Disabled}
+                                            .disabled=${step2Disabled}
+                                            .onClick=${async () => {
+                                                if (step2Disabled) return;
+                                                await UpdateStore.getState().previewPublish(this.targetRepo);
+                                            }}>
+                                        </sutram-async-btn>
+                                        ${buildLabel}
+                                        ${mismatchLabel}
+                                    `;
+                                }
+                            })()}
                             ${this.distributionTarget === 'python_pypi' && !this.hasPypiToken ? html`
                                 <span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">
                                     ⚠️ API token is missing. Please configure 'PyPI Distribution Token' in Workspace Settings.
@@ -789,7 +909,35 @@ export class InSetuExtUpdate extends InSetuElement {
                             const endpoint = this.previewActionType === 'publish' ? 'publish' : (this.previewActionType === 'first_release' ? 'first_release' : 'bump');
                             const msg = this.previewActionType === 'publish' ? 'Publish' : (this.previewActionType === 'first_release' ? 'First Release' : 'Bump');
 
-                            const action = this._getReleaseAction(endpoint, msg, this.previewActionType === 'first_release');
+                            // Inject the prerelease flag strictly for the bump route
+                            const extraPayload = this.previewActionType === 'bump' ? { prerelease: this.isPrerelease } : {};
+
+                            const action = this.api.bindJobAction(endpoint, { repo: this.targetRepo, ...extraPayload }, {
+                                onProgress: (msg) => {
+                                    this.setStatus(`⏳ ${msg}`, null);
+                                },
+                                onComplete: (statusData) => {
+                                    const output = statusData.artifact?.output || statusData.message;
+                                    if (this.previewActionType === 'first_release') {
+                                        UpdateStore.setState({ lastReleaseLog: output });
+                                        this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
+                                        UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                                        UpdateStore.getState().fetchEligibleRepos();
+                                    } else {
+                                        this.setStatus(`✅ ${msg} complete.`, 2000);
+                                        UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                                    }
+                                },
+                                onError: (err) => {
+                                    if (this.previewActionType === 'first_release') {
+                                        const logText = `❌ First Release Error:\n\n${err.message}`;
+                                        UpdateStore.setState({ lastReleaseLog: logText });
+                                        this.setStatus(`❌ First release failed. See log below.`, 5000, true);
+                                    } else {
+                                        this.setStatus(`❌ ${msg} failed: ${err.message}`, 5000, true);
+                                    }
+                                }
+                            });
                             await action();
                         }}></sutram-async-btn>
                     ` : ''}

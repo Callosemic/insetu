@@ -116,7 +116,7 @@ export class InSetuExtResearch extends InSetuElement {
             console.error("Failed to fetch research state:", e);
         }
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         this.fetchState();
     }
     onForceRefresh() {

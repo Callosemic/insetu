@@ -82,7 +82,7 @@ export class InSetuExtFlow extends InSetuElement {
         this.allRepos = [];
         this._applyVisibilityFilter = true;
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         FlowStore.getState().fetchBatches();
     }
     onForceRefresh() {

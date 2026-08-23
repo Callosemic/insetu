@@ -70,9 +70,8 @@ def _clean_semantic_release_logs(log_text):
     clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', log_text.strip())
     clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
     return re.sub(r' +', ' ', clean_log)
-
 @update_bp.worker("bump_task")
-def _background_bump_task(ctx, repo):
+def _background_bump_task(ctx, repo, prerelease=False):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""
     repo_path = ctx.get_repo_path(repo)
     if not os.path.exists(repo_path):
@@ -91,6 +90,9 @@ def _background_bump_task(ctx, repo):
     env["PSR_COMMIT_PARSER"] = parser_style
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     cmd = ['semantic-release', 'version']
+
+    if prerelease:
+        cmd.append('--prerelease')
 
     if dist_target == "disabled":
         cmd.extend(['--no-push', '--skip-build'])
@@ -307,7 +309,7 @@ def _background_publish_task(ctx, repo):
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
         raise RuntimeError(f"Semantic Release Publish Failed:\n{err_msg}")
 @update_bp.worker("preview_bump_task")
-def _background_preview_bump_task(ctx, repo):
+def _background_preview_bump_task(ctx, repo, prerelease=False):
     import subprocess
     import os
 
@@ -323,9 +325,14 @@ def _background_preview_bump_task(ctx, repo):
     parser_style = ctx.settings.get("commit_parser", "conventional")
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
+
+    cmd = ['semantic-release', '-v', '--noop', 'version']
+    if prerelease:
+        cmd.append('--prerelease')
+
     try:
         res = subprocess.run(
-            ['semantic-release', '-v', '--noop', 'version'], 
+            cmd, 
             cwd=repo_path, 
             capture_output=True, 
             text=True, 
@@ -345,23 +352,26 @@ def _background_preview_bump_task(ctx, repo):
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
         raise RuntimeError(f"Semantic Release Preview Failed:\n{err_msg}")
-
 @update_bp.route('preview_bump', methods=['POST'])
 def api_update_preview_bump(ctx):
-    repo = ctx.req.json.get('repo')
+    data = ctx.req.get_json(silent=True) or {}
+    repo = data.get('repo')
+    prerelease = data.get('prerelease', False)
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("preview_bump_task", repo=repo)
+    job_id = ctx.jobs.submit("preview_bump_task", repo=repo, prerelease=prerelease)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('bump', methods=['POST'])
 def api_update_bump(ctx):
-    repo = ctx.req.json.get('repo')
+    data = ctx.req.get_json(silent=True) or {}
+    repo = data.get('repo')
+    prerelease = data.get('prerelease', False)
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
-    
-    job_id = ctx.jobs.submit("bump_task", repo=repo)
+
+    job_id = ctx.jobs.submit("bump_task", repo=repo, prerelease=prerelease)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("preview_publish_task")
 def _background_preview_publish_task(ctx, repo):
@@ -464,10 +474,22 @@ def _background_status_task(ctx, repo):
     b_match = re.search(r'^build_command\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     build_command = b_match.group(1) if b_match else ""
 
+    pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
+    prerelease_token = pr_match.group(1) if pr_match else "rc"
+
     vcs_match = re.search(r'^vcs_release\s*=\s*(true|false)', content, re.MULTILINE | re.IGNORECASE)
     vcs_release = vcs_match.group(1).lower() == 'true' if vcs_match else True
     has_pypi_token = bool(ctx.settings.get("pypi_token") or os.getenv("TWINE_PASSWORD") or os.getenv("PYPI_TOKEN"))
     has_token = bool(has_pypi_token or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN"))
+
+    # Check for existing build artifacts to validate Phase 1 success
+    latest_build_artifact = None
+    if dist_target == "python_pypi":
+        dist_dir = Path(repo_path) / "dist"
+        if dist_dir.exists():
+            wheels = list(dist_dir.glob("*.whl"))
+            if wheels:
+                latest_build_artifact = max(wheels, key=lambda p: p.stat().st_mtime).name
 
     # 2. If configured, let the CLI take precedence (as it resolves Git tags accurately)
     if configured:
@@ -513,15 +535,16 @@ def _background_status_task(ctx, repo):
         "pypi_published": pypi_published,
         "pypi_package_exists": pypi_package_exists,
         "build_command": build_command,
+        "prerelease_token": prerelease_token,
+        "latest_build_artifact": latest_build_artifact,
         "vcs_release": vcs_release,
         "has_pypi_token": has_pypi_token,
         "has_token": has_token,
         "distribution_target": dist_target,
         "last_publish_time": ctx.store.get(f"update_{repo}.json", "last_publish_time", 0.0)
     }}
-
 @update_bp.worker("update_toml_config_task")
-def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None):
+def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None):
     import os
     import re
     from pathlib import Path
@@ -541,6 +564,12 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
         else:
             new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nbuild_command = "' + build_command + '"', new_content)
 
+    if prerelease_token is not None:
+        if re.search(r'^prerelease_token\s*=', new_content, re.MULTILINE):
+            new_content = re.sub(r'^prerelease_token\s*=\s*[\'"][^\'"]*[\'"]', f'prerelease_token = "{prerelease_token}"', new_content, flags=re.MULTILINE)
+        else:
+            new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nprerelease_token = "' + prerelease_token + '"', new_content)
+
     if vcs_release is not None:
         vcs_str = "true" if vcs_release else "false"
         if re.search(r'^vcs_release\s*=', new_content, re.MULTILINE):
@@ -558,16 +587,56 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
         execute_git(repo_path, ['commit', '-m', f'chore: update semantic_release config in pyproject.toml [skip ci]'], check=False)
 
     return {"message": "Configuration updated successfully.", "artifact": {"build_command": build_command, "vcs_release": vcs_release}}
-
 @update_bp.route('update_toml_config', methods=['POST'])
 def api_update_toml_config(ctx):
-    repo = ctx.req.json.get('repo')
-    build_command = ctx.req.json.get('build_command')
-    vcs_release = ctx.req.json.get('vcs_release')
+    data = ctx.req.get_json(silent=True) or {}
+    repo = data.get('repo')
+    build_command = data.get('build_command')
+    vcs_release = data.get('vcs_release')
+    prerelease_token = data.get('prerelease_token')
     if not repo:
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release)
+    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release, prerelease_token=prerelease_token)
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+@update_bp.worker("manual_build_task")
+def _background_manual_build(ctx, repo, build_command):
+    import subprocess
+    import os
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError(f"Target repository path not found: {repo}")
+
+    if not build_command:
+        build_command = "python -m build"
+
+    ctx.jobs.update_progress(f"Executing manual build: {build_command}...")
+
+    try:
+        res = subprocess.run(
+            build_command, 
+            shell=True,
+            cwd=repo_path, 
+            capture_output=True, 
+            text=True, 
+            check=False
+        )
+        output = f"=== COMMAND: {build_command} ===\n\n=== STDOUT ===\n{res.stdout}\n=== STDERR ===\n{res.stderr}"
+        if res.returncode != 0:
+            raise RuntimeError(f"Manual build failed with exit code {res.returncode}:\n{output}")
+
+        return {"message": "Manual build completed.", "artifact": {"output": output}}
+    except Exception as e:
+        raise RuntimeError(f"Manual Build Failed:\n{str(e)}")
+
+@update_bp.route('manual_build', methods=['POST'])
+def api_update_manual_build(ctx):
+    repo = ctx.req.json.get('repo')
+    build_command = ctx.req.json.get('build_command')
+    if not repo:
+        return jsonify({"error": "Repo required"}), 400
+
+    job_id = ctx.jobs.submit("manual_build_task", repo=repo, build_command=build_command)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('status', methods=['POST'])
@@ -656,6 +725,7 @@ version_toml = [
 ]
 commit_parser = "conventional"
 vcs_release = false
+prerelease_token = "rc"
 {allow_zero}
 [tool.semantic_release.changelog]
 exclude_commit_patterns = [
@@ -701,6 +771,7 @@ version_toml = [
 commit_parser = "conventional"
 vcs_release = false
 build_command = ""
+prerelease_token = "rc"
 {'allow_zero_version = true\nmajor_on_zero = false' if initial_version.startswith('0.') else ''}
 '''
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging

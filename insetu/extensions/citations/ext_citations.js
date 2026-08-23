@@ -110,7 +110,7 @@ export class InSetuExtCitations extends InSetuElement {
         this.allRepos = aState.allRepos || [];
         this.loadMainLibrary();
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         this.loadMainLibrary();
     }
 

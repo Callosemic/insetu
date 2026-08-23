@@ -97,7 +97,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         });
         this.loadIgnored();
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         this.loadIgnored();
     }
     onForceRefresh() {

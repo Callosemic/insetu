@@ -96,7 +96,7 @@ export class InSetuExtHooks extends InSetuElement {
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
     }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         HooksStore.setState({ rules: [], logs: [] });
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();

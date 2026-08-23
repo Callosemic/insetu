@@ -147,7 +147,7 @@ export class InSetuExtFavorites extends InSetuElement {
         FavoritesStore.getState().fetchFavorites();
     }
     // InSetuElement SDK lifecycle hook for stateless tenant swaps
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         FavoritesStore.getState().fetchFavorites();
     }
 

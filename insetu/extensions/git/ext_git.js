@@ -181,7 +181,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
 disconnectedCallback() {
         super.disconnectedCallback();
 }
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
     }
@@ -551,8 +551,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
         GitStore.getState().fetchStatus();
         this._loadSettings();
     }
-
-    onWorkspaceChanged(newWorkspaceId) {
+    onWorkspaceLoad(workspaceId) {
         GitStore.getState().fetchStatus();
         this._loadSettings();
     }

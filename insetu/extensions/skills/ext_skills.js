@@ -166,14 +166,12 @@ export class InSetuExtSkills extends InSetuElement {
                 this._editGroup = '';
             }
         });
-        this.subscribe(AppStore, state => state.activeWorkspace, () => {
-            this._reloadAll();
-        });
-
-        this._reloadAll();
     }
     disconnectedCallback() {
         super.disconnectedCallback();
+    }
+    onWorkspaceLoad(workspaceId) {
+        this._reloadAll();
     }
     onForceRefresh() {
         SkillsStore.getState().fetchPlaylist(true);
