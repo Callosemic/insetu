@@ -89,9 +89,16 @@ def _background_bump_task(ctx, repo, prerelease=False):
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
+
+    pyproject_content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    import re
+    pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
+    prerelease_token = pr_match.group(1) if pr_match else "rc"
+
     cmd = ['semantic-release', 'version']
+
     if prerelease:
-        cmd.append('--as-prerelease')
+        cmd.extend(['--as-prerelease', '--prerelease-token', prerelease_token])
 
     if dist_target == "disabled":
         cmd.extend(['--no-push', '--skip-build'])
@@ -311,6 +318,7 @@ def _background_publish_task(ctx, repo):
 def _background_preview_bump_task(ctx, repo, prerelease=False):
     import subprocess
     import os
+    import re
 
     repo_path = ctx.get_repo_path(repo)
     if not os.path.exists(repo_path):
@@ -324,9 +332,14 @@ def _background_preview_bump_task(ctx, repo, prerelease=False):
     parser_style = ctx.settings.get("commit_parser", "conventional")
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
+
+    pyproject_content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
+    prerelease_token = pr_match.group(1) if pr_match else "rc"
+
     cmd = ['semantic-release', '-v', '--noop', 'version']
     if prerelease:
-        cmd.append('--as-prerelease')
+        cmd.extend(['--as-prerelease', '--prerelease-token', prerelease_token])
 
     try:
         res = subprocess.run(
@@ -337,12 +350,14 @@ def _background_preview_bump_task(ctx, repo, prerelease=False):
             check=True,
             env=env
         )
-        import re
         clean_log = _clean_semantic_release_logs(res.stderr)
 
         # Extract the release notes / changelog block
-        changelog_match = re.search(r'with the following notes:\s*\n(.*?)(?=\n\s*(?:INFO|\[🛡 NOP\]|Next Version:|$))', clean_log, re.DOTALL)
-        changelog = changelog_match.group(1).strip() if changelog_match else "No changelog notes generated for this release."
+        changelog_match = re.search(r'(?:with the following notes|release notes|changelog):\s*\n(.*?)(?=\n\s*(?:INFO|\[🛡 NOP\]|Next Version:|$))', clean_log, re.DOTALL | re.IGNORECASE)
+        if changelog_match and changelog_match.group(1).strip():
+            changelog = changelog_match.group(1).strip()
+        else:
+            changelog = clean_log if clean_log else f"Next Version: {res.stdout.strip()}"
 
         # Combine stderr (evaluation logs) and stdout (raw version)
         combined_output = f"{clean_log}\n\nNext Version: {res.stdout.strip()}".strip()
