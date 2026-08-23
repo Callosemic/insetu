@@ -90,9 +90,8 @@ def _background_bump_task(ctx, repo, prerelease=False):
     env["PSR_COMMIT_PARSER"] = parser_style
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     cmd = ['semantic-release', 'version']
-
     if prerelease:
-        cmd.append('--prerelease')
+        cmd.append('--as-prerelease')
 
     if dist_target == "disabled":
         cmd.extend(['--no-push', '--skip-build'])
@@ -325,10 +324,9 @@ def _background_preview_bump_task(ctx, repo, prerelease=False):
     parser_style = ctx.settings.get("commit_parser", "conventional")
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
-
     cmd = ['semantic-release', '-v', '--noop', 'version']
     if prerelease:
-        cmd.append('--prerelease')
+        cmd.append('--as-prerelease')
 
     try:
         res = subprocess.run(
