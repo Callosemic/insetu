@@ -63,9 +63,6 @@ insetu/
 │   │       ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
 │   │       └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
 │   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
-├── extensions/                     # Tier 3 Domain Extensions (Opt-in functionality).
-│   └── update/                     # Automated Python semantic versioning and PyPI distribution.
-│       └── ext_update.js           # Release preview and publish UI.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]
