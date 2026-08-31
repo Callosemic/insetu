@@ -59,7 +59,6 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`
 * **Injection Surfaces:**
     * Polymorphic Cards: Registers `format-code` action.
-
 ### P. Document Publishing (`engine_publish.py`)
 * **Status:** Active Extension (Extracted from Format).
 * **Role:** Document compilation (Pandoc) to PDF, Word, HTML.
@@ -67,6 +66,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Data Containment:** Ephemeral.
 * **Injection Surfaces:**
     * Broadcasts `pre_compile_document` to intercept bibliography mappings.
+    * Listens to `@hooks.on('vfs_resolve_file')` to resolve compiled publish artifacts via VFS.
 ### F. Prompts & Workflows (`engine_prompts.py` & `engine_flow.py`)
 * **Status:** Active Extensions (`prompts` upgraded to SDK V2).
 * **Role:** Manage prompt resolution, LLM execution pipelines, and automated context batching.
@@ -87,7 +87,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Data Containment:** Global SQLite ledger (`~/.insetu/skills.db`) and localized markdown files.
 ### I. Terminal Interface (`engine_term.py`)
 * **Status:** Active Extension (Fully Graduated to SDK V2).
-* **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js. Exposes `status` endpoint for runtime dependency check.
+* **Role:** Manages native full-duplex PTY WebSocket sessions directly inside the event loop using flask-sock and Xterm.js. Features virtual keyboard action controls, touch gesture navigation (swipes, long-press, double-tap), context menu actions (`tc-copy`, `tc-paste`, `tc-sigint`), and explicit `status` endpoint checks.
 * **Dependencies (`__depends__`):** `None` (`__external_depends__`: `["flask-sock"]`)
 * **Data Containment:** Ephemeral stream contexts.
 * **Injection Surfaces:**

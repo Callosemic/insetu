@@ -49,11 +49,16 @@ Hardcoding hidden `<div style="display: none">` modals or menus in `index.html` 
 * **The Standard Toolbar Primitive (`<yenvui-toolbar>`):** To eliminate sticky header, search bar, and filter dropdown layout duplication across views, horizontal search and filter headers must consume the `<yenvui-toolbar>` primitive, which standardizes padding, border lines, and search event emissions (`search-changed`).
 
 * **Slotted Modal Action Uniformity (`slot="footer"`):** To prevent structural layout padding drift, view panels must pass footer action controls directly into the `<button slot="footer">` configuration track rather than enclosing rows within custom layout `div` blocks. The modal shadow DOM isolates button grid alignment, uniform text transformations, and lateral dividing borders automatically.
+## 7. Non-Destructive Loading States
+Data fetching, background compilation, and soft refreshes must be entirely non-destructive to the current view. 
+* **No DOM Eviction**: Completely replacing a list of cards or a workspace view with a loading spinner causes jarring Layout Shifts and destroys the user's spatial memory.
+* **Graceful Degradation**: When a component is busy processing or syncing, it must maintain its existing structural DOM. Indicate processing states by projecting an inline banner (e.g., `<sutram-spinner>`) at the top of the view, dimming the stale content via `opacity: 0.6`, and temporarily disabling interactions using `pointer-events: none`.
 
-## 7. The Component Graduation Checklist (Compliance Guardrails)
+## 8. The Component Graduation Checklist (Compliance Guardrails)
 Before a Web Component is considered fully compliant and "Graduated", it must pass the following strict constraints:
 1. **Zero DOM Reading:** No `document.getElementById` or `querySelector` calls attempting to read state from the UI. Bind to Lit properties.
 2. **Shadow DOM Encapsulation:** Components must utilize native Shadow DOM with `sharedStyles` injected, completely isolating their structural footprint.
 3. **Teardown Hygiene:** Components must clean up all Zustand store subscriptions (`this._unsub()`) and global `window` event listeners during `disconnectedCallback` to prevent multi-tenant data contamination.
 4. **Declarative Purity:** Extensions must be stripped of self-executing imperative initialization code. Use `ExtensionRegistry.registerExtension` with static `layoutSlots`.
 5. **DOM Annihilation Prevention:** The `render()` method must utilize `lit-html` templates to surgically diff the UI, avoiding `innerHTML` or `replaceChildren()`.
+6. **Non-Destructive Loading:** The component must never unmount its primary content structure to show a loading state, ensuring absolute layout stability during network or compute delays.

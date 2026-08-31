@@ -57,10 +57,13 @@ The frontend chassis must remain a "dumb" visual grid, isolating business logic 
 *   **Layout Padding & Geometry Hacks**
     *   ❌ **Noncompliant:** Using negative margins (e.g., `margin: -20px -20px 0 -20px;`) to defeat a parent container's padding, which causes layout blowouts on mobile viewports.
     *   ✅ **Gold Standard:** Using the declarative `?flush=${true}` property on `<sutram-modal>` or `<sutram-collapsible>` to natively remove Shadow DOM padding, allowing child elements to flow cleanly edge-to-edge.
-
 *   **API Network Gateway (ADR 0016)**
     *   ❌ **Noncompliant:** Using raw `fetch()` or manually constructing API paths like `/api/${workspaceId}/...`.
     *   ✅ **Gold Standard:** Routing entirely through `this.api.get()`, `this.api.post()`, or `this.api.postJson()`, which natively handle tenant scope isolation and security token handshakes.
+
+*   **Non-Destructive Loading States**
+    *   ❌ **Noncompliant:** Completely unmounting DOM lists or replacing the active view with a `<div class="spinner">` during data refreshes, triggering severe Layout Shifts and obliterating spatial memory.
+    *   ✅ **Gold Standard:** Maintaining the existing DOM structure, projecting a localized `<sutram-spinner>` banner, and securing the stale content using `opacity` fades and `pointer-events: none`.
 
 ---
 

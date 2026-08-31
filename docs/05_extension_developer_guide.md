@@ -74,11 +74,15 @@ Progress must be reported explicitly through the `ctx.jobs.update_progress()` in
 ```python
 @my_ext_bp.worker("sync_task")
 def background_sync(ctx, force_all=False):
-    ctx.jobs.update_progress("Initializing remote synchronization loop...")
-    # Execute off-thread operations safely using context boundaries
-    return {"status": "completed", "message": "Synchronization complete."}
+ctx.jobs.update_progress("Initializing remote synchronization loop...")
+# Execute off-thread operations safely using context boundaries
+return {"status": "completed", "message": "Synchronization complete."}
+
 ```
 
+When scheduling background tasks in the worker ledger, use the explicit function matching your lifecycle intent:
+* **Recurring Metronome Tasks**: Use `submit_job(job_id, ext_name, callback_name, interval_ms, ...)` where `interval_ms > 0`.
+* **One-Shot Delayed Tasks**: Use `submit_one_shot_job(job_id, ext_name, callback_name, delay_ms, ...)` for tasks that execute once after `delay_ms` elapses and self-destruct from the ledger upon completion.
 ### 2.5 Multi-Track Event Parity
 When building performance-optimized extensions that cache filesystem metadata into an SQLite layer (CQRS), do not assume all workspace updates arrive in batch arrays. 
 Cache-rebuilding functions must listen to the unified VFS lifecycle hook:
