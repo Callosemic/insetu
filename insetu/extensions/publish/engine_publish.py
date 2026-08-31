@@ -7,6 +7,7 @@ import shutil
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.kernel.workers import register_ephemeral_artifact
+from insetu.kernel.hooks import hooks
 
 publish_bp = InSetuExtension(
     'publish',
@@ -15,6 +16,15 @@ publish_bp = InSetuExtension(
     description="Document compilation via Pandoc (PDF, DOCX, HTML)."
 )
 __depends__ = []
+
+@hooks.on('vfs_resolve_file')
+def resolve_publish_artifacts(filename=None, workspace_id=None, **kwargs):
+    if not filename: return None
+    ctx = publish_bp.get_context(workspace_id)
+    cand = Path(ctx.paths["artifacts_base"]).joinpath(Path(filename).name).as_posix()
+    if os.path.exists(cand):
+        return cand, True
+    return None
 
 @publish_bp.worker("compile_task")
 def _background_compile(ctx, filepath, target_format, job_id=None):

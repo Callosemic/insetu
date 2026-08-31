@@ -120,7 +120,7 @@ export class InSetuExtResearch extends InSetuElement {
         this.fetchState();
     }
     onForceRefresh() {
-        ResearchStore.setState({ isTabActive: true, jobs: [], inbox: [] });
+        ResearchStore.setState({ isTabActive: true });
         this.fetchState();
     }
     async startJob(e) {

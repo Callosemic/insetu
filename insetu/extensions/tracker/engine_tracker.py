@@ -199,7 +199,9 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
             elif "template" in status: status = "template"
             else: status = "open"
         repo = yaml_data.get('repo', rel_path.split('/')[0] if '/' in rel_path else "unknown")
-        tier = _resolve_tier(ctx, repo, ticket_type)
+        tier = yaml_data.get('tier')
+        if tier is None:
+            tier = _resolve_tier(ctx, repo, ticket_type)
         parent_id = yaml_data.get('parent_id') or yaml_data.get('parent')
         if str(parent_id).lower() in ('null', 'none', ''): parent_id = None
         depends_on = _parse_list_field(yaml_data.get('depends_on', '[]'))
@@ -384,16 +386,18 @@ def get_tracker_path(repo, ticket_type, status):
     # Smart pluralization: avoid double 's' and handle known uncountables dynamically
     folder_type = ticket_type if ticket_type.endswith('s') or ticket_type == 'queue' else f"{ticket_type}s"
     return f"{base}/{folder_type}/{status}"
-def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, parent_id=None, depends_on="", priority="", size="", ticket_id=None):
+def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", sub_bucket="None", delivery_date=None, parent_id=None, depends_on="", priority="", size="", ticket_id=None, tier=None):
     """Generates the physical Markdown file with YAML frontmatter."""
     from insetu.core.utils_core import update_frontmatter
-    tier = _resolve_tier(ctx, repo, ticket_type)
+    if tier is None:
+        tier = _resolve_tier(ctx, repo, ticket_type)
+
+    now = datetime.now()
 
     if not ticket_id:
         repo_prefix = repo.split("-")[-1].upper()[:3] if "-" in repo else repo.upper()[:3]
         if not repo_prefix: repo_prefix = "TKT"
 
-        now = datetime.now()
         timestamp = now.strftime("%Y%m%d_%H%M%S") # Include seconds to prevent rapid-fire collisions
         import random
         entropy = f"{random.getrandbits(16):04x}".upper()
@@ -406,7 +410,6 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
 
     tags_list = [t.strip() for t in tags.split(',') if t.strip()]
     deps_list = [d.strip() for d in depends_on.split(',') if d.strip()]
-
     yaml_data = {
         "repo": repo,
         "type": ticket_type,
@@ -415,7 +418,8 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
         "title": title.replace('"', "'"),
         "created_at": now.isoformat(timespec='seconds'),
         "closed_at": "null",
-        "sub_bucket": sub_bucket
+        "sub_bucket": sub_bucket,
+        "tier": int(tier)
     }
     if priority: yaml_data["priority"] = priority.upper()
     if size: yaml_data["size"] = size.upper()
@@ -884,7 +888,8 @@ def _background_spawn_template(ctx, target_repo, template_id, variables):
             depends_on=",".join(new_deps),
             priority=t['priority'] or "",
             size=t['size'] or "",
-            ticket_id=new_id
+            ticket_id=new_id,
+            tier=t['tier']
         )
 
     return {"message": f"Successfully spawned template instance with {len(tree_tickets)} tasks.", "artifact": {}}
@@ -1015,7 +1020,8 @@ def api_tracker_new(ctx):
             parent_id=data.get('parent_id'),
             depends_on=data.get('depends_on', ''),
             priority=data.get('priority', ''),
-            size=data.get('size', '')
+            size=data.get('size', ''),
+            tier=data.get('tier')
         )
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:

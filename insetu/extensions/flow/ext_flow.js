@@ -86,12 +86,18 @@ export class InSetuExtFlow extends InSetuElement {
         FlowStore.getState().fetchBatches();
     }
     onForceRefresh() {
-        FlowStore.setState({ batches: [] });
         if (this.sys && this.sys.refreshManifest) this.sys.refreshManifest();
         FlowStore.getState().fetchBatches();
     }
     connectedCallback() {
         super.connectedCallback();
+        this._debouncedManifestRefresh = this._debouncedManifestRefresh || this.utils.debounce(() => {
+            if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
+        }, 1000);
+        this._debouncedFetchBatches = this._debouncedFetchBatches || this.utils.debounce(() => {
+            FlowStore.getState().fetchBatches();
+        }, 500);
+
         this.subscribe(FlowStore, state => {
             this.batches = state.batches;
             this.loading = state.loading;
@@ -101,12 +107,9 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
         });
-        this.subscribe(AppStore, state => state.manifest, () => FlowStore.getState().fetchBatches());
-        this.registerGlobalListener('git-diffs-refreshed', window, async () => {
-            if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                await window.inSetu.sys.refreshManifest();
-            }
-            FlowStore.getState().fetchBatches();
+        this.subscribe(AppStore, state => state.manifest, () => this._debouncedFetchBatches());
+        this.registerGlobalListener('git-diffs-refreshed', window, () => {
+            this._debouncedManifestRefresh();
         });
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
@@ -118,24 +121,12 @@ export class InSetuExtFlow extends InSetuElement {
                 FlowStore.getState().fetchBatches();
             }
         });
-
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
             const promptTouched = payload.mutations.some(m => m.filepath && (m.filepath.includes('prompts/') || m.filepath.endsWith('.md') || m.filepath.endsWith('.txt')));
             if (promptTouched) {
                 this.dispatch('insetu:flow:refresh-prompt');
-            }
-            const contextOrDiffTouched = payload.mutations.some(m => m.filepath && (
-                m.filepath.includes('diffs/') || 
-                m.filepath.includes('contexts/') || 
-                m.filepath.includes('workflows/') ||
-                m.filepath.endsWith('_diffs.txt') ||
-                m.filepath.endsWith('_context.txt')
-            ));
-            if (contextOrDiffTouched) {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) window.inSetu.sys.refreshManifest();
-                FlowStore.getState().fetchBatches();
             }
         });
 
@@ -376,9 +367,10 @@ export class InSetuExtFlow extends InSetuElement {
                     </div>
                 </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-        ${this.loading ? html`<insetu-spinner text="Loading batches..."></insetu-spinner>` : ''}
-                    <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
+                ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Loading batches..."></sutram-spinner></div>` : ''}
+                <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                         ${this.batches.length === 0 ? html`<div style="padding: 20px;"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
+                        ${this.batches.length > 0 && filteredBatches.length === 0 ? html`<div style="padding: 20px;"><sutram-empty-state text="All workflows hidden by current filters."></sutram-empty-state></div>` : ''}
                         ${(() => {
                             const groups = {};
                             filteredBatches.forEach(b => {
@@ -424,9 +416,10 @@ export class InSetuExtFlow extends InSetuElement {
                                                         .entityData=${{  
                                                             ...b, 
                                                             filepath: filename, 
-                                                            suppress: ['file-browse', 'file-edit'], 
+                                                            suppress: ['file-edit'], 
                                                             chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}
+                                                        has-actions
                                                         @card-clicked=${() => this.openBatchModal(b)}>
                                                 </insetu-card>
                                             `;

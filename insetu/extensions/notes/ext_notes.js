@@ -346,9 +346,9 @@ export class InSetuExtNotes extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 20px;">
-                ${this.loading ? html`<insetu-spinner text="Loading notes..."></insetu-spinner>` : ''}
+                ${this.loading ? html`<sutram-spinner text="Loading notes..."></sutram-spinner>` : ''}
 
-                <div style="display: flex; flex-direction: column; gap: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                     ${filteredNotes.length === 0 && !this.loading ? html`<insetu-empty-state text="No notes found. Click '☰' to create one."></insetu-empty-state>` : ''}
 
                     ${filteredNotes.map(n => html`

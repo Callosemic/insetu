@@ -781,7 +781,16 @@ export class InSetuExtUpdate extends InSetuElement {
                             ${(() => {
                                 let buildMismatch = false;
                                 if (this.distributionTarget === 'python_pypi' && this.repoBuildCommand && this.repoVersion) {
-                                    if (!this.latestBuildArtifact || !this.latestBuildArtifact.includes(this.repoVersion)) {
+                                    const normalizeVer = (v) => (v || '').toLowerCase()
+                                        .replace(/-?beta\.?/g, 'b')
+                                        .replace(/-?alpha\.?/g, 'a')
+                                        .replace(/-?rc\.?/g, 'rc')
+                                        .replace(/[^a-z0-9]/g, '');
+
+                                    const normArtifact = normalizeVer(this.latestBuildArtifact);
+                                    const normVersion = normalizeVer(this.repoVersion);
+
+                                    if (!this.latestBuildArtifact || !normArtifact.includes(normVersion)) {
                                         buildMismatch = true;
                                     }
                                 }

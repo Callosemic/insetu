@@ -415,8 +415,8 @@ export class InSetuExtCitations extends InSetuElement {
                 </div>
             </sutram-toolbar>
             <div>
-                ${this.mainLoading ? html`<div class="spinner" style="display: block;">Loading library...</div>` : ''}
-                <div style="display: flex; flex-direction: column; gap: 10px;">
+                ${this.mainLoading ? html`<sutram-spinner text="Loading library..."></sutram-spinner>` : ''}
+                <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.mainLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.mainLoading ? 'none' : 'auto'};">
                     ${filtered.length === 0 ? html`<p style="color: var(--text-muted); font-style: italic;">No results.</p>` : filtered.map(c => this._renderCard(c, false))}
                 </div>
             </div>

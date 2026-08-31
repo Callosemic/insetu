@@ -12,11 +12,26 @@ export class InSetuExtTerm extends InSetuElement {
     get extName() { return 'term'; }
     static properties = {
         _hasSock: { type: Boolean },
-        _supportPty: { type: Boolean }
+        _supportPty: { type: Boolean },
+        _ctrlLatched: { type: Boolean },
+        _shiftLatched: { type: Boolean },
+        _actionBarVisible: { type: Boolean },
+        _contextMenuOpen: { type: Boolean },
+        _contextMenuX: { type: Number },
+        _contextMenuY: { type: Number },
+        _contextMenuTransX: { type: String },
+        _contextMenuTransY: { type: String }
     };
     static styles = css`
-        :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); }
-        #terminal-container { flex: 1; overflow: hidden; width: 100%; height: 100%; }
+        :host { display: flex; flex-direction: column; height: 100%; padding: 10px; box-sizing: border-box; overflow: hidden; background: var(--console-bg, #0f172a); position: relative; }
+        #terminal-container { flex: 1; overflow: hidden; width: 100%; height: 100%; position: relative; }
+        /* FOUC Prevention: Target only the measurement string, leaving the input textarea fully interactive */
+        .xterm-char-measure-element {
+            position: absolute !important;
+            top: -9999px !important;
+            left: -9999px !important;
+            visibility: hidden !important;
+        }
     `;
     constructor() {
         super();
@@ -26,11 +41,98 @@ export class InSetuExtTerm extends InSetuElement {
         this._hasSock = true;
         this._supportPty = true;
         this._initSequence = 0;
+
+        // Virtual Keyboard & Gesture Tracking
+        this._ctrlLatched = false;
+        this._shiftLatched = false;
+        this._actionBarVisible = true;
+        this._contextMenuOpen = false;
+        this._contextMenuX = 0;
+        this._contextMenuY = 0;
+
+        this._touchStartX = null;
+        this._touchStartY = null;
+        this._lastTapTime = 0;
+        this._longPressTimer = null;
     }
+    _trackPointerDown = (e) => {
+        const cx = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        const cy = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+
+        if (cx !== undefined && cy !== undefined) {
+            this._latestX = cx;
+            this._latestY = cy;
+        }
+
+        if (e.type === 'touchstart' && e.touches.length === 1) {
+            this._touchStartX = cx;
+            this._touchStartY = cy;
+            clearTimeout(this._longPressTimer);
+            this._longPressTimer = setTimeout(() => {
+                // Explicitly pass the cached touch coordinates to avoid event recycling
+                this._openContextMenu(cx, cy);
+            }, 600);
+        }
+    };
+
+    _trackPointerMove = (e) => {
+        const cx = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        const cy = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+        if (cx !== undefined && cy !== undefined) {
+            this._latestX = cx;
+            this._latestY = cy;
+        }
+
+        if (this._touchStartX !== null && e.type === 'touchmove') {
+            const dx = cx - this._touchStartX;
+            const dy = cy - this._touchStartY;
+            if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                clearTimeout(this._longPressTimer);
+            }
+        }
+    };
+
+    _trackPointerUp = (e) => {
+        clearTimeout(this._longPressTimer);
+        if (e.type === 'touchend' && this._touchStartX !== null) {
+            const cx = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientX : this._latestX;
+            const cy = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientY : this._latestY;
+            const dx = cx - this._touchStartX;
+            const dy = cy - this._touchStartY;
+
+            if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+                if (dx > 0) this._sendData('\t'); 
+                else this._sendData('\x17'); 
+            } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+                const now = Date.now();
+                if (now - this._lastTapTime < 300) {
+                    this._actionBarVisible = !this._actionBarVisible;
+                    this.updateComplete.then(() => {
+                        if (this._handleResize) this._handleResize();
+                        if (this._term) this._term.focus();
+                    });
+                }
+                this._lastTapTime = now;
+            }
+            this._touchStartX = null;
+        }
+    };
+
     connectedCallback() {
         super.connectedCallback();
         this._checkStatus();
         this.registerGlobalListener('resize', window, this._handleResize);
+
+        // The "Invisible Overlay" (Capture Phase) - Guaranteed to fire before xterm.js
+        this.addEventListener('pointerdown', this._trackPointerDown, { capture: true, passive: true });
+        this.addEventListener('touchstart', this._trackPointerDown, { capture: true, passive: true });
+
+        this.addEventListener('pointermove', this._trackPointerMove, { capture: true, passive: true });
+        this.addEventListener('touchmove', this._trackPointerMove, { capture: true, passive: true });
+
+        this.addEventListener('pointerup', this._trackPointerUp, { capture: true, passive: true });
+        this.addEventListener('touchend', this._trackPointerUp, { capture: true, passive: true });
+
         this._themeObserver = new MutationObserver(() => this._applyTheme());
         this._themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
         // Decouple from static uiHooks DOM sniffing
@@ -42,38 +144,70 @@ export class InSetuExtTerm extends InSetuElement {
                 this._handleResize();
             }
         }, 50));
-        this.registerGlobalListener('insetu:term:restart', window, () => {
-            this.onWorkspaceLoad(this.workspaceId);
+        this.registerGlobalListener('insetu:term:toggle-keyboard', window, () => {
+            this._actionBarVisible = !this._actionBarVisible;
+            this.updateComplete.then(() => {
+                this._handleResize();
+                if (this._term) this._term.focus();
+            });
         });
     }
     firstUpdated() {
         const container = this.shadowRoot.getElementById('terminal-container');
         if (container) {
-            this._visibilityObserver = new IntersectionObserver(this.utils.debounce((entries) => {
-                if (entries[0].isIntersecting && this.isConnected) {
-                    if (!this._term) {
-                        this._initTerminal();
-                    } else {
-                        this._handleResize();
-                    }
-                }
-            }, 50));
-            this._visibilityObserver.observe(this);
-
             this._resizeObserver = new ResizeObserver(this.utils.debounce(() => this._handleResize(), 50));
-            this._resizeObserver.observe(this);
+            this._resizeObserver.observe(container);
         }
+    }
+    onViewActivated() {
+        setTimeout(() => {
+            if (!this.isConnected) return;
+            if (!this._term) {
+                this._initTerminal();
+            } else {
+                this._handleResize();
+                if (this._term) this._term.focus();
+                if (!this._ws || this._ws.readyState === WebSocket.CLOSED) {
+                    this._connectWebSocket();
+                }
+            }
+        }, 50);
     }
     onForceRefresh() {
         this.onWorkspaceLoad(this.workspaceId);
     }
+    _destroyTerminal() {
+        if (!this._term) return;
+        try {
+            const core = this._term._core;
+            if (core) {
+                // Aggressively cancel internal Xterm requestAnimationFrames to prevent 
+                // uncaught dimensions TypeErrors after the renderer is disposed.
+                if (core.viewport && core.viewport._refreshAnimationFrame) {
+                    window.cancelAnimationFrame(core.viewport._refreshAnimationFrame);
+                }
+                if (core._renderService && core._renderService._renderDebouncer && core._renderService._renderDebouncer._animationFrame) {
+                    window.cancelAnimationFrame(core._renderService._renderDebouncer._animationFrame);
+                }
+            }
+            this._term.dispose();
+        } catch (e) {}
+        this._term = null;
+    }
     disconnectedCallback() {
         super.disconnectedCallback();
         this._isUnmounted = true;
+
+        this.removeEventListener('pointerdown', this._trackPointerDown, { capture: true });
+        this.removeEventListener('touchstart', this._trackPointerDown, { capture: true });
+        this.removeEventListener('pointermove', this._trackPointerMove, { capture: true });
+        this.removeEventListener('touchmove', this._trackPointerMove, { capture: true });
+        this.removeEventListener('pointerup', this._trackPointerUp, { capture: true });
+        this.removeEventListener('touchend', this._trackPointerUp, { capture: true });
+
         window.removeEventListener('resize', this._handleResize);
         if (this._themeObserver) this._themeObserver.disconnect();
         if (this._resizeObserver) this._resizeObserver.disconnect();
-        if (this._visibilityObserver) this._visibilityObserver.disconnect();
         if (this._ws) {
             this._ws.onopen = null;
             this._ws.onmessage = null;
@@ -82,10 +216,7 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws.close();
             this._ws = null;
         }
-        if (this._term) {
-            this._term.dispose();
-            this._term = null;
-        }
+        this._destroyTerminal();
     }
     async _checkStatus() {
         try {
@@ -106,52 +237,59 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws.close();
             this._ws = null;
         }
-        if (this._term) {
-            try { this._term.dispose(); } catch (e) {}
-            this._term = null;
-        }
+        this._destroyTerminal();
 
         // Use an incrementing sequence token to orphan previous pending builds
         this._initSequence = (this._initSequence || 0) + 1;
         const currentSeq = this._initSequence;
 
         if (!this.isExtensionActive()) return;
-
         // Defer complete terminal recreation to avoid race conditions during DOM teardown
         setTimeout(() => {
-            if (!this.isConnected || this._initSequence !== currentSeq) return;
+            requestAnimationFrame(() => {
+                if (!this.isConnected || this._initSequence !== currentSeq) return;
 
-            if (this._ws) {
-                this._ws.onopen = null;
-                this._ws.onmessage = null;
-                this._ws.onerror = null;
-                this._ws.onclose = null;
-                this._ws.close();
-                this._ws = null;
-            }
-            if (this._term) {
-                try { this._term.dispose(); } catch (e) {}
-                this._term = null;
-            }
-            const container = this.shadowRoot.getElementById('terminal-container');
-            if (container) {
-                while (container.firstChild) container.removeChild(container.firstChild);
-            }
-            this._initTerminal();
+                if (this._ws) {
+                    this._ws.onopen = null;
+                    this._ws.onmessage = null;
+                    this._ws.onerror = null;
+                    this._ws.onclose = null;
+                    this._ws.close();
+                    this._ws = null;
+                }
+                this._destroyTerminal();
+                const container = this.shadowRoot.getElementById('terminal-container');
+                if (container) {
+                    while (container.firstChild) container.removeChild(container.firstChild);
+                }
+                this._initTerminal();
+            });
         }, 300);
     }
     _handleResize = () => {
-        if (this._fitAddon && this._term && this.isConnected && this.clientWidth > 0) {
-            try {
-                // Guardrail: Ensure Xterm's internal renderer has successfully booted 
-                // before attempting to calculate fit geometry
-                if (this._term._core && this._term._core._renderService) {
-                    this._fitAddon.fit();
-                    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-                        this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
-                    }
-                }
-            } catch (e) {}
+        if (!this.isConnected) return;
+
+        const container = this.shadowRoot.getElementById('terminal-container');
+        // Native layout check: abort instantly if the container is hidden
+        if (!container || container.clientWidth === 0 || container.clientHeight === 0) return;
+
+        if (!this._term) {
+            this._initTerminal();
+            return;
+        }
+
+        if (!this._fitAddon) return;
+
+        try {
+            const core = this._term._core;
+            if (!core || !core._renderService || !core._renderService._renderer || !core._renderService._renderer.value) return;
+
+            this._fitAddon.fit();
+            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+                this._ws.send(JSON.stringify({ type: 'resize', cols: this._term.cols, rows: this._term.rows }));
+            }
+        } catch (e) {
+            console.warn("[Terminal] Resize logic swallowed an internal Xterm exception:", e);
         }
     };
     _initTerminal() {
@@ -159,8 +297,8 @@ export class InSetuExtTerm extends InSetuElement {
         if (this._term) return; // Prevent double-initialization on load
 
         const container = this.shadowRoot.getElementById('terminal-container');
-        // Must have physical pixel dimensions painted to the screen
-        if (!container || container.clientWidth === 0) return; 
+        // Strict visibility check: abort if the element or an ancestor is display: none
+        if (!container || container.clientWidth === 0 || container.clientHeight === 0) return; 
 
         this._term = new Terminal({
             cursorBlink: true,
@@ -175,6 +313,8 @@ export class InSetuExtTerm extends InSetuElement {
 
         // Provide immediate visual feedback so the screen is never blank
         this._term.writeln('\x1b[36mInitializing terminal session...\x1b[0m');
+        this._term.focus();
+
         // Wait slightly for DOM to settle before fitting
         const currentSeq = this._initSequence || 0;
         setTimeout(() => {
@@ -182,11 +322,29 @@ export class InSetuExtTerm extends InSetuElement {
             this._handleResize();
             this._connectWebSocket();
         }, 50);
-
         this._term.onData(data => {
-            if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-                this._ws.send(data);
+            if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+            let finalData = data;
+
+            // Latching Evaluation
+            if (this._ctrlLatched && data.length === 1) {
+                const charCode = data.charCodeAt(0);
+                if (charCode >= 97 && charCode <= 122) finalData = String.fromCharCode(charCode - 96);
+                else if (charCode >= 65 && charCode <= 90) finalData = String.fromCharCode(charCode - 64);
             }
+            if (this._shiftLatched && data.length === 1) {
+                const charCode = data.charCodeAt(0);
+                if (charCode >= 97 && charCode <= 122) finalData = String.fromCharCode(charCode - 32);
+            }
+
+            // Auto-unlatch after modifier consumed
+            if (this._ctrlLatched || this._shiftLatched) {
+                this._ctrlLatched = false;
+                this._shiftLatched = false;
+                this.requestUpdate();
+            }
+
+            this._ws.send(finalData);
         });
     }
     _connectWebSocket() {
@@ -255,6 +413,81 @@ export class InSetuExtTerm extends InSetuElement {
             };
         }
     }
+    _sendData(data) {
+        if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+            this._ws.send(data);
+        }
+    }
+    _handleTouchStart(e) {
+        if (e.touches.length !== 1) return;
+        this._touchStartX = e.touches[0].clientX;
+        this._touchStartY = e.touches[0].clientY;
+
+        // Cache the coordinates immediately because the browser will wipe 
+        // the TouchEvent object from memory before the timeout resolves.
+        const cx = this._touchStartX;
+        const cy = this._touchStartY;
+
+        this._longPressTimer = setTimeout(() => {
+            this._openContextMenu(cx, cy);
+        }, 600);
+    }
+
+    _handleTouchEnd(e) {
+        clearTimeout(this._longPressTimer);
+        if (this._touchStartX === null) return;
+
+        const touchEndX = e.changedTouches[0].clientX;
+        const touchEndY = e.changedTouches[0].clientY;
+        const dx = touchEndX - this._touchStartX;
+        const dy = touchEndY - this._touchStartY;
+
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+            // Evaluated Swipes
+            if (dx > 0) this._sendData('\t'); // Rightward: Tab
+            else this._sendData('\x17'); // Leftward: Ctrl+W
+        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+            // Evaluated Double Tap
+            const now = Date.now();
+            if (now - this._lastTapTime < 300) {
+                this._actionBarVisible = !this._actionBarVisible;
+                this.updateComplete.then(() => {
+                    if (this._handleResize) this._handleResize();
+                    if (this._term) this._term.focus();
+                });
+            }
+            this._lastTapTime = now;
+        }
+        this._touchStartX = null;
+    }
+    _openContextMenu(x, y) {
+        this._menuOpenTime = Date.now();
+
+        // Prioritize explicitly passed coordinates from the triggering event, fallback to tracker
+        const targetX = (typeof x === 'number' && !isNaN(x)) ? x : (this._latestX || 0);
+        const targetY = (typeof y === 'number' && !isNaN(y)) ? y : (this._latestY || 0);
+
+        const rect = this.getBoundingClientRect();
+
+        // Convert absolute viewport coordinates to host-local coordinates
+        let localX = targetX - rect.left;
+        let localY = targetY - rect.top;
+
+        // Clamp securely to prevent the menu from rendering outside the host boundaries
+        localX = Math.max(0, Math.min(localX, rect.width));
+        localY = Math.max(0, Math.min(localY, rect.height));
+
+        this._contextMenuX = localX;
+        this._contextMenuY = localY;
+
+        // Prevent clipping by flipping direction if past halfway
+        this._contextMenuTransX = localX > (rect.width / 2) ? '-100%' : '0';
+        this._contextMenuTransY = localY > (rect.height / 2) ? '-100%' : '0';
+
+        this._contextMenuOpen = true;
+        this.requestUpdate();
+    }
+
     render() {
         if (!this._hasSock) {
             return html`
@@ -267,13 +500,45 @@ export class InSetuExtTerm extends InSetuElement {
         }
         return html`
             <link rel="stylesheet" href="/static/extensions/term/vendor/xterm.css" />
-            <div id="terminal-container"></div>
+            ${this._actionBarVisible ? html`
+                <div style="padding: 4px; background: var(--input-bg); border-bottom: 1px solid var(--border); display: flex; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; gap: 4px; z-index: 10;">
+                    <sutram-entity-actions
+                        ?scrollable=${true}
+                        .entityType=${'virtual_keyboard'}
+                        .entityData=${{ filepath: 'terminal', term: this, ctrlLatched: this._ctrlLatched, shiftLatched: this._shiftLatched }}>
+                    </sutram-entity-actions>
+                </div>
+            ` : ''}
+            <div id="terminal-container"
+                @contextmenu=${(e) => { e.preventDefault(); this._openContextMenu(); }}>
+            </div>
+            ${this._contextMenuOpen ? html`
+                <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 9999;" 
+                    @mousedown=${(e) => e.preventDefault()}
+                    @pointerdown=${(e) => e.preventDefault()}
+                    @click=${() => { 
+                        if (Date.now() - (this._menuOpenTime || 0) < 250) return; // Prevent synthesized touch 'ghost clicks' from immediately closing the menu
+                        this._contextMenuOpen = false; 
+                        if (this._term) this._term.focus(); 
+                    }} 
+                    @contextmenu=${(e) => { e.preventDefault(); this._openContextMenu(); }}>
+                    <div style="position: absolute; top: ${this._contextMenuY || 0}px; left: ${this._contextMenuX || 0}px; transform: translate(${this._contextMenuTransX || '0'}, ${this._contextMenuTransY || '0'}); background: var(--pane-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); padding: 5px; display: flex; flex-direction: column; min-width: 200px;"
+                        @click=${(e) => e.stopPropagation()}
+                        @contextmenu=${(e) => e.stopPropagation()}>
+                        <sutram-entity-actions
+                            .entityType=${'terminal_context'}
+                            .entityData=${{ filepath: 'terminal', term: this }}
+                            style="display: flex; flex-direction: column; gap: 4px; align-items: stretch;">
+                        </sutram-entity-actions>
+                    </div>
+                </div>
+            ` : ''}
         `;
     }
 }
 customElements.define('insetu-ext-term', InSetuExtTerm);
-
 export class InSetuExtTermActions extends InSetuElement {
+    static get extensionName() { return 'term'; }
     static styles = [css`
         button {
             background: transparent; color: var(--text); border: 1px solid var(--border);
@@ -285,18 +550,61 @@ export class InSetuExtTermActions extends InSetuElement {
     `];
     render() {
         return html`
-            <button title="Restart Terminal" @click=${() => {
-                this.dispatch('insetu:term:restart');
-            }}>🔄</button>
+            <button title="Toggle Keyboard Bar" @click=${() => {
+                window.inSetu.events.emit('insetu:term:toggle-keyboard');
+            }}>⌨️</button>
         `;
     }
 }
 customElements.define('insetu-ext-term-actions', InSetuExtTermActions);
-
 window.ExtensionRegistry.registerExtension('term', {
-    name: "Terminal Interface",
-    version: "2.0.0",
-    layoutSlots: [
+        name: "Terminal Interface",
+        version: "2.0.0",
+        entityActions: [
+                // Virtual Keyboard Plugin System
+                { targetEntity: 'virtual_keyboard', id: 'vk-tab', label: 'Tab', icon: '⇥', intent: 'neutral', order: 10, onClick: (data) => { if(data.term) { data.term._sendData('\t'); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-ctrl', label: 'Ctrl', icon: '⌃', intent: 'neutral', order: 20, 
+                    isActive: (data) => data.ctrlLatched,
+                    onClick: (data) => { if(data.term) { data.term._ctrlLatched = !data.term._ctrlLatched; data.term.requestUpdate(); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-shift', label: 'Shift', icon: '⇧', intent: 'neutral', order: 30, 
+                    isActive: (data) => data.shiftLatched,
+                    onClick: (data) => { if(data.term) { data.term._shiftLatched = !data.term._shiftLatched; data.term.requestUpdate(); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-up', label: '▲', icon: '', intent: 'neutral', order: 40, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[A'); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-down', label: '▼', icon: '', intent: 'neutral', order: 50, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[B'); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-left', label: '◀', icon: '', intent: 'neutral', order: 60, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[D'); if(data.term._term) data.term._term.focus(); } } },
+                { targetEntity: 'virtual_keyboard', id: 'vk-right', label: '▶', icon: '', intent: 'neutral', order: 70, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[C'); if(data.term._term) data.term._term.focus(); } } },
+
+                // Terminal Context Menu
+                { targetEntity: 'terminal_context', id: 'tc-copy', label: 'Copy Buffer', icon: '📋', intent: 'neutral', order: 10, onClick: (data) => { 
+                    const el = data.term;
+                    if(el && el._term) {
+                        let text = el._term.getSelection();
+                        if (!text) {
+                            el._term.selectAll();
+                            text = el._term.getSelection();
+                            el._term.clearSelection();
+                        }
+                        if (text) window.inSetu.utils.copyRawText(text.trim());
+                    }
+                    if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                } },
+                { targetEntity: 'terminal_context', id: 'tc-paste', label: 'Paste Clipboard', icon: '📝', intent: 'neutral', order: 20, onClick: async (data) => { 
+                        const el = data.term;
+                        try {
+                                const text = await navigator.clipboard.readText();
+                                if(el) el._sendData(text);
+                        } catch(e) { 
+                                if(window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Clipboard read failed", 3000, true); 
+                        }
+                        if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                } },
+                { targetEntity: 'terminal_context', id: 'tc-sigint', label: 'Send SIGINT (Ctrl+C)', icon: '🛑', intent: 'danger', order: 30, onClick: (data) => { 
+                        const el = data.term;
+                        if(el) el._sendData('\x03');
+                        if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
+                } }
+        ],
+        layoutSlots: [
         {
             slot: "slots:primary-navigation",
             id: "ctrl",
@@ -320,3 +628,4 @@ window.ExtensionRegistry.registerExtension('term', {
         }
     ]
 });
+

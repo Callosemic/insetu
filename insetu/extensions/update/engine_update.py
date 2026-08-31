@@ -62,14 +62,30 @@ update_bp = InSetuExtension(
 __depends__ = ['git']
 __external_depends__ = ['semantic_release', 'build', 'twine']
 __external_binaries__ = ['git']
-
 def _clean_semantic_release_logs(log_text):
-    """Helper to strip timestamps and file references from raw semantic-release output."""
+    """Helper to strip timestamps, file references, and commit parsing verbosity from semantic-release output."""
     if not log_text: return ""
     import re
-    clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', log_text.strip())
+
+    noise_patterns = [
+        r'^\s*INFO\s+parsing commit',
+        r'^\s*INFO\s+\[.*?\]\s+(?:adding|excluding) commit',
+        r'^\s*INFO\s+Excluding commit',
+        r'^\s*INFO\s+found \d+ previous tags',
+        r'^\s*WARNING\s+Token value is missing!',
+        r'^\s*INFO\s+Forcing use of .* as the prerelease token'
+    ]
+    combined_noise = re.compile('|'.join(noise_patterns), re.IGNORECASE)
+
+    filtered_lines = [
+        line for line in log_text.splitlines() 
+        if not combined_noise.search(line)
+    ]
+
+    clean_log = "\n".join(filtered_lines)
+    clean_log = re.sub(r'\[\d{2}:\d{2}:\d{2}\]\s*', '', clean_log)
     clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
-    return re.sub(r' +', ' ', clean_log)
+    return re.sub(r'\n{3,}', '\n\n', clean_log).strip()
 @update_bp.worker("bump_task")
 def _background_bump_task(ctx, repo, prerelease=False):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""

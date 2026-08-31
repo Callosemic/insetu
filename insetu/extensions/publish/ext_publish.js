@@ -84,8 +84,15 @@ export class InSetuExtPublishModals extends InSetuElement {
                     <insetu-job-tracker 
                         .jobId=${this.activePublishJobId} 
                         @job-complete=${async (e) => {
+                            const artifact = e.detail.artifact;
+                            if (this.vfs && this.vfs.downloadFile) {
+                                try {
+                                    await this.vfs.downloadFile(artifact.download_url, artifact.filename);
+                                } catch (err) {
+                                    this.setStatus("Download failed: " + err.message, 3000, true);
+                                }
+                            }
                             PublishStore.setState({ activePublishJobId: null, publishModalOpen: false });
-                            if (this.vfs && this.vfs.downloadFile) await this.vfs.downloadFile(e.detail.artifact.download_url, e.detail.artifact.filename);
                         }}
                         @job-error=${() => PublishStore.setState({ activePublishJobId: null })}>
                     </insetu-job-tracker>

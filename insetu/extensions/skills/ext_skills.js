@@ -411,7 +411,8 @@ export class InSetuExtSkills extends InSetuElement {
 
         return html`
             <div style="display: flex; flex-direction: column; gap: 20px;">
-                ${this.loading ? html`<div class="spinner" style="display:block; margin-top: 0;">Sweeping session items...</div>` : ''}
+                ${this.loading ? html`<sutram-spinner text="Sweeping session items..."></sutram-spinner>` : ''}
+                <div style="display: flex; flex-direction: column; gap: 20px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                 <div style="display: flex; justify-content: flex-end; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-top: -10px;">
                     <button class="btn-sm" style="background: var(--intent-success); font-weight: bold;" @click=${() => { this._newSkillDomain = Object.keys(this.domainConfig)[0] || ''; SkillsStore.setState({ newSkillModalOpen: true }); }}>➕ New Skill Item</button>
                 </div>
@@ -476,6 +477,7 @@ export class InSetuExtSkills extends InSetuElement {
                         `}
                     </div>
                 ` : this._renderGroupsTab()}
+            </div>
             </div>
             <sutram-modal
                 ?open=${!!this.selectedItem && this.modalMode === 'train'}

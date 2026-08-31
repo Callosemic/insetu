@@ -142,20 +142,19 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     render() {
         return html`
-            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0;" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
-                ${this.loading ? html`<div class="spinner" style="display:block; padding: 20px;">Loading prompts...</div>` : html`
-                    <insetu-file-tree    
-                        style="flex: 1;"
-                        .files=${this.prompts} 
-                        stripPrefix=".insetu/prompts/"
-                        basePath=".insetu/prompts/"
-                        .enableSearch=${true}
-                        searchPlaceholder="🔍 Fuzzy search prompts..."
-                        .currentPath=${this.globalBrowsePath}
-                        entityType="file:prompt"
-                        @path-changed=${(e) => AppStore.setState({ globalBrowsePath: e.detail.path })}>
-                    </insetu-file-tree>
-                `}
+            <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0; position: relative;" @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}>
+                ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Loading prompts..."></sutram-spinner></div>` : ''}
+                <insetu-file-tree    
+                    style="flex: 1; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};"
+                    .files=${this.prompts} 
+                    stripPrefix=".insetu/prompts/"
+                    basePath=".insetu/prompts/"
+                    .enableSearch=${true}
+                    searchPlaceholder="🔍 Fuzzy search prompts..."
+                    .currentPath=${this.globalBrowsePath}
+                    entityType="file:prompt"
+                    @path-changed=${(e) => AppStore.setState({ globalBrowsePath: e.detail.path })}>
+                </insetu-file-tree>
             </div>
         `;
     }

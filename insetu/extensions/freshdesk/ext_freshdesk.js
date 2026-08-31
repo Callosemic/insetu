@@ -101,7 +101,6 @@ export class InSetuExtFreshdesk extends InSetuElement {
         this.loadIgnored();
     }
     onForceRefresh() {
-        FreshdeskStore.setState({ tickets: [] });
         this.fetchTickets();
     }
     _ticketMatchesFilters(t, filterStatus, filterAssignee, myAgentId) {
@@ -250,7 +249,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
         // Never fetch a page we've already fetched in this session
         const nextPage = loadMore ? Math.max((state.lastFetchedPage || 0) + 1, heuristicPage) : 1;
 
-        if (!loadMore) FreshdeskStore.setState({ tickets: [], lastFetchedPage: 0 });
+        if (!loadMore) FreshdeskStore.setState({ lastFetchedPage: 0 });
 
         // We will fetch a 2-page spread
         FreshdeskStore.setState({ 
@@ -411,10 +410,10 @@ export class InSetuExtFreshdesk extends InSetuElement {
                     </div>
                 </div>
             ` : ''}
-
             <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 15px;">
-                ${(this.tickets.length === 0 && this.activeJobId) ? html`<div class="spinner" style="display:block; padding: 20px;">${this.loadingMsg || 'Fetching Freshdesk tickets...'}</div>` : ''}
+                ${this.activeJobId ? html`<sutram-spinner text=${this.loadingMsg || 'Fetching Freshdesk tickets...'}></sutram-spinner>` : ''}
                 ${(this.tickets.length === 0 && !this.activeJobId) ? html`<p style="color: var(--text-muted); font-style: italic; padding: 20px;">No active tickets found.</p>` : ''}
+                <div style="display: flex; flex-direction: column; gap: 10px; opacity: ${this.activeJobId ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.activeJobId ? 'none' : 'auto'};">
                 ${this.tickets.filter(t => {
                     if (this.ignoredTickets?.includes(t.id)) return false;
                     return this._ticketMatchesFilters(t, this.filterStatus, this.filterAssignee, this.myAgentId);
@@ -440,12 +439,7 @@ export class InSetuExtFreshdesk extends InSetuElement {
                         }}>
                     </insetu-card>
                 `})}
-                ${(this.tickets.length > 0 && this.activeJobId) ? html`
-                    <div style="display: flex; align-items: center; justify-content: center; gap: 10px; padding: 15px; color: var(--text-muted); font-size: 0.9rem; font-style: italic; opacity: 0.8;">
-                        <span class="spinner" style="display: inline-block; width: 14px; height: 14px; margin: 0; border-width: 2px;"></span>
-                        Hydrating stream: ${this.loadingMsg}
-                    </div>
-                ` : ''}
+                </div>
                 ${(!this.activeJobId && this.tickets.length > 0) ? html`
                     <button class="btn-sm" style="background: var(--intent-primary); width: 100%; margin-top: 10px; padding: 12px; font-weight: bold;" @click=${() => this.fetchTickets(true)}>
                         ⬇️ Load Older Tickets (Pages ${Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1)} & ${Math.max((this.lastFetchedPage || 0) + 1, Math.floor(this.contiguousCount / 100) + 1) + 1})

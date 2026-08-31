@@ -170,11 +170,12 @@ export class InSetuExtFavorites extends InSetuElement {
         }
     }
     render() {
-        if (this.loading) return html`<div class="favorites-body"><div class="spinner" style="display:block; margin-top: 0;">Loading bookmarks...</div></div>`;
-        if (this.items.length === 0) return html`<div class="favorites-body"><p style="color: var(--text-muted); font-style: italic; margin: 0;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></div>`;
+        if (this.items.length === 0 && !this.loading) return html`<div class="favorites-body"><p style="color: var(--text-muted); font-style: italic; margin: 0;">No favorited nodes pinned yet. Pin nodes from the file tree views!</p></div>`;
 
         return html`
             <div class="favorites-body" style="display: flex; flex-direction: column; gap: 8px;">
+                ${this.loading ? html`<sutram-spinner text="Loading bookmarks..."></sutram-spinner>` : ''}
+                <div style="display: flex; flex-direction: column; gap: 8px; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                 ${this.items.map(item => {
                     const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
                     const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
@@ -192,6 +193,7 @@ export class InSetuExtFavorites extends InSetuElement {
                     </insetu-card>
                     `;
                 })}
+                </div>
             </div>
         `;
     }

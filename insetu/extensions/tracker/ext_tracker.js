@@ -132,6 +132,104 @@ export const KanbanStore = createExtensionStore('Kanban', {
 window.inSetu.stores.Kanban = KanbanStore;
 import { LitElement, html, css } from 'lit';
 import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+export class InSetuTrackerTicket extends InSetuElement {
+    static properties = {
+        task: { type: Object },
+        allTasks: { type: Array }
+    };
+    static styles = [sharedStyles];
+
+    render() {
+        const t = this.task;
+        if (!t) return html``;
+
+        const dateStr = this.utils.formatDate(t.timestamp);
+        const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
+        const descText = `${t.repo}${bucketStr} | ${dateStr}`;
+        const childTasks = (this.allTasks || []).filter(c => c.parentId === t.id);
+        const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
+
+        const downstreamTasks = (this.allTasks || []).filter(x => {
+            if (!x.dependsOn || x.dependsOn.length === 0) return false;
+            return x.dependsOn.some(dep => {
+                const parts = dep.split('/');
+                const dRepo = parts.length > 1 ? parts[0] : x.repo;
+                const dId = parts.length > 1 ? parts[1] : dep;
+                return dRepo === t.repo && dId === t.id;
+            });
+        });
+
+        const typeStr = (t.ticket_type || '').toLowerCase();
+        const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
+        const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
+
+        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
+        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
+        const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
+        const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+
+        return html`
+            <insetu-card
+                data-task-id=${t.id}
+                .filename=${t.filepath}
+                .titleText=${displayTitle}
+                .descriptionText=${descText}
+                .intentColor=${intentColor}
+                .icon=${icon}
+                entityType="file:task"
+                .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
+                @card-clicked=${() => this.dispatchEvent(new CustomEvent('ticket-clicked', { bubbles: true, composed: true }))}>
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
+                    ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
+                    ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
+                    ${allKidsDone && t.status !== 'closed' ? html`<sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>` : ''}
+                    ${t.dependsOn && t.dependsOn.length > 0 ? (() => {
+                        const allTasks = KanbanStore.getState().tasks || [];
+                        const upstreamTasks = t.dependsOn.map(dep => {
+                            const { dRepo, dId } = (() => {
+                                if (dep.includes('/')) {
+                                    const parts = dep.split('/');
+                                    return { dRepo: parts[0], dId: parts[1] };
+                                }
+                                return { dRepo: t.repo, dId: dep };
+                            })();
+                            return allTasks.find(x => x.id === dId && x.repo === dRepo) || { id: dId, repo: dRepo, status: 'unknown' };
+                        });
+                        const activeUpstream = upstreamTasks.filter(x => !['closed', 'logged', 'archived'].includes(x.status));
+                        const resolvedCount = upstreamTasks.length - activeUpstream.length;
+                        const activeCount = activeUpstream.length;
+
+                        return html`
+                            <sutram-tag 
+                                intent="${activeCount === 0 ? 'success' : 'danger'}" 
+                                style="cursor: pointer;"
+                                @click=${(e) => {
+                                    e.stopPropagation();
+                                    window.inSetu.events.emit('insetu:tracker:open-deps', { task: t, mode: 'upstream' });
+                                }}>
+                                ${activeCount === 0 ? '✅' : '🔒'} Blockers: ${resolvedCount} resolved, ${activeCount} active
+                            </sutram-tag>
+                        `;
+                    })() : ''}
+                    ${downstreamTasks.length > 0 ? html`
+                        <sutram-tag 
+                            intent="warning" 
+                            style="cursor: pointer;"
+                            @click=${(e) => {
+                                e.stopPropagation();
+                                window.inSetu.events.emit('insetu:tracker:open-deps', { task: t, mode: 'downstream' });
+                            }}>
+                            🚧 Blocks ${downstreamTasks.length} Ticket(s)
+                        </sutram-tag>
+                    ` : ''}
+                    ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>` : ''}
+                </div>
+            </insetu-card>
+        `;
+    }
+}
+customElements.define('insetu-tracker-ticket', InSetuTrackerTicket);
+
 export class InSetuExtTracker extends InSetuElement {
     static get extensionName() { return 'tracker'; }
     get extName() { return 'tracker'; }
@@ -227,7 +325,6 @@ constructor() {
         KanbanStore.getState().fetchSettings();
     }
     onForceRefresh() {
-        KanbanStore.setState({ tasks: [] });
         KanbanStore.getState().fetchTasks();
         KanbanStore.getState().fetchSettings();
     }
@@ -254,60 +351,11 @@ constructor() {
         }
         return this._childMapCache;
     }
-
     _getResolvedTierLabel(repo, tierNumber) {
         const globalLabels = this.settings?.hierarchy_labels || {};
         const repoLabels = this.settings?.[repo]?.hierarchy_labels || {};
         const activeLabels = { ...globalLabels, ...repoLabels };
         return activeLabels[`tier_${tierNumber}`] || `Tier ${tierNumber}`;
-    }
-    _renderTaskCard(t, overrideClick = null) {
-        const dateStr = this.utils.formatDate(t.timestamp);
-        const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
-        const descText = `${t.repo}${bucketStr} | ${dateStr}`;
-
-        // Child Completion Check for Tier 1 & 2 Parents
-        const childTasks = this._getChildTasksMap()[t.id] || [];
-        const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
-
-        // Dynamic intent inference based on vocabulary heuristics
-        const typeStr = (t.ticket_type || '').toLowerCase();
-        const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
-        const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
-
-        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
-        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
-        const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
-        const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-
-        return html`
-            <insetu-card
-                data-task-id=${t.id}
-                .filename=${t.filepath}
-                .titleText=${displayTitle}
-                .descriptionText=${descText}
-                .intentColor=${intentColor}
-                .icon=${icon}
-                entityType="file:task"
-                .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
-                @card-clicked=${overrideClick ? overrideClick : () => this.vfs.viewSourceFile(t.filepath, true)}>
-                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
-                    ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
-                    ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
-
-                    ${allKidsDone && t.status !== 'closed' ? html`
-                        <sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>
-                    ` : ''}
-
-                    ${t.dependsOn && t.dependsOn.length > 0 ? t.dependsOn.map(dep => html`
-                        <sutram-tag intent="warning">🔗 ${dep}</sutram-tag>
-                    `) : ''}
-                    ${t.deliveryDate ? html`
-                        <sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>
-                    ` : ''}
-                </div>
-            </insetu-card>
-        `;
     }
     _renderStackedView(targetTier, filteredTasks, filters) {
         const typeFilter = t => {
@@ -349,7 +397,7 @@ constructor() {
                                 .entityData=${{ ...parent, isFS: true, suppressCopy: true, suppressDownload: true }}
                                 @card-clicked=${() => this.vfs.viewSourceFile(parent.filepath, true)}>
                             </insetu-card>
-                            ${childTasks.map(child => this._renderTaskCard(child))}
+                            ${childTasks.map(child => html`<insetu-tracker-ticket .task=${child} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(child.filepath, true)}></insetu-tracker-ticket>`)}
                         </sutram-card-group>
                     `;
                 })}
@@ -387,18 +435,17 @@ constructor() {
         const topActive = filterTopLevel(activeTasks);
         const topOpen = filterTopLevel(openTasks);
         const topClosed = filterTopLevel(closedTasks);
-
         const renderGroupedTask = (t) => {
             const childTasks = this.tasks.filter(child => child.status !== 'template' && (child.parentId === t.id || (child.dependsOn && child.dependsOn.includes(`${t.repo}::${t.id}`))));
             if (childTasks.length > 0) {
                 return html`
                     <sutram-card-group ?stacked=${true} ?accordion=${true}>
-                        ${this._renderTaskCard(t)}
-                        ${childTasks.map(child => this._renderTaskCard(child))}
+                        <insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>
+                        ${childTasks.map(child => html`<insetu-tracker-ticket .task=${child} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(child.filepath, true)}></insetu-tracker-ticket>`)}
                     </sutram-card-group>
                 `;
             }
-            return this._renderTaskCard(t);
+            return html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`;
         };
 
         return html`
@@ -434,7 +481,7 @@ constructor() {
                     @sutram-collapsible-toggled=${(e) => toggleLog('closed', e.detail.open)}>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Recently resolved tickets in their grace period)</p>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${closed.length > 0 ? closed.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No closed tickets in grace period.</span>`}
+                        ${closed.length > 0 ? closed.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No closed tickets in grace period.</span>`}
                     </div>
                 </sutram-collapsible>
 
@@ -445,7 +492,7 @@ constructor() {
                     @sutram-collapsible-toggled=${(e) => toggleLog('logged', e.detail.open)}>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px; font-style: italic;">(Swept to the log directory, awaiting archive)</p>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${logged.length > 0 ? logged.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No logged tickets.</span>`}
+                        ${logged.length > 0 ? logged.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No logged tickets.</span>`}
                     </div>
                 </sutram-collapsible>
 
@@ -456,7 +503,7 @@ constructor() {
                     @sutram-collapsible-toggled=${(e) => toggleLog('archived', e.detail.open)}>
                     <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0; margin-bottom: 15px;">(Historical context permanently preserved on disk)</p>
                     <div style="display: flex; flex-direction: column; gap: 10px;">
-                        ${archived.length > 0 ? archived.map(t => this._renderTaskCard(t)) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No archived tickets fetched. Ensure "Include Archived in UI Log" is enabled in settings.</span>`}
+                        ${archived.length > 0 ? archived.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${this.tasks} @ticket-clicked=${() => this.vfs.viewSourceFile(t.filepath, true)}></insetu-tracker-ticket>`) : html`<span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">No archived tickets fetched. Ensure "Include Archived in UI Log" is enabled in settings.</span>`}
                     </div>
                 </sutram-collapsible>
             </div>
@@ -839,7 +886,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
         _returnToTemplatesBrowser: { type: Boolean },
         _hierarchyModalOpen: { type: Boolean },
         _hierarchyTask: { type: Object },
-        _returnToHierarchy: { type: Boolean }
+        _returnToHierarchy: { type: Boolean },
+        _depsModalOpen: { type: Boolean },
+        _depsTask: { type: Object },
+        _depsMode: { type: String }
     };
     static styles = [sharedStyles, css`
         :host { display: contents; }
@@ -873,7 +923,10 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this._returnToTemplatesBrowser = false;
         this._hierarchyModalOpen = false;
         this._hierarchyTask = null;
-        this._returnToHierarchy = false;
+
+        this._depsModalOpen = false;
+        this._depsTask = null;
+        this._depsMode = 'upstream';
     }
     connectedCallback() {
         super.connectedCallback();
@@ -924,6 +977,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
         this.registerGlobalListener('insetu:tracker:open-hierarchy', window, (e) => {
             this._hierarchyTask = e.detail.task;
             this._hierarchyModalOpen = true;
+            this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:tracker:open-deps', window, (e) => {
+            this._depsTask = e.detail.task;
+            this._depsMode = e.detail.mode;
+            this._depsModalOpen = true;
             this.requestUpdate();
         });
     }
@@ -1054,9 +1113,12 @@ export class InSetuExtTrackerModals extends InSetuElement {
             }
             return 'open';
         })();
-
         state.setNewTaskField('status', defaultStatus);
         state.setNewTaskField('deliveryDate', '');
+        state.setNewTaskField('parentId', '');
+        state.setNewTaskField('dependsOn', []);
+        state.setNewTaskField('priority', '');
+        state.setNewTaskField('size', '');
 
         // Smart Bucket Resolution from active bucket filters
         const targetBucket = (() => {
@@ -1114,7 +1176,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         state.setModal('new', true);
     }
     async _saveNewTask() {
-        const { repo, type, status, title, tags, desc, bucket, deliveryDate, parentId, dependsOn, priority, size } = KanbanStore.getState().newTaskForm;
+        const { repo, tier, type, status, title, tags, desc, bucket, deliveryDate, parentId, dependsOn, priority, size } = KanbanStore.getState().newTaskForm;
         const sub_bucket = bucket || 'None';
 
         if (!title) {
@@ -1122,7 +1184,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
             throw new Error("Title is required.");
         }
         await this.api.postJson('new', {
-            repo, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate,
+            repo, tier, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate,
             parent_id: parentId, depends_on: (dependsOn || []).join(', '), priority, size
         });
         KanbanStore.getState().setModal('new', false);
@@ -1205,6 +1267,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
         const updatedYaml = {
             ...currentYaml,
             repo: form.repo,
+            tier: form.tier,
             type: form.type,
             status: form.status,
             id: ticketId,
@@ -1261,11 +1324,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 titleText="Create New Ticket"
                 @sutram-modal-closed=${() => {
                     KanbanStore.getState().setModal('new', false);
-                    if (this._returnToTemplatesBrowser) {
-                        this._returnToTemplatesBrowser = false;
-                        this._templatesBrowserOpen = true;
-                        this.requestUpdate();
-                    }
                 }}>
                 <div slot="body" style="display: contents;">
                     <div class="meta-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 15px;">
@@ -1356,15 +1414,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 @sutram-modal-closed=${() => { 
                     KanbanStore.getState().setModal('edit', false); 
                     this._originalTaskSnapshot = null; 
-                    if (this._returnToTemplatesBrowser) {
-                        this._returnToTemplatesBrowser = false;
-                        this._templatesBrowserOpen = true;
-                        this.requestUpdate();
-                    } else if (this._returnToHierarchy) {
-                        this._returnToHierarchy = false;
-                        this._hierarchyModalOpen = true;
-                        this.requestUpdate();
-                    }
                 }}>
 
                 <div slot="body" style="display: contents;">
@@ -1478,6 +1527,58 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 ` : ''}
             </sutram-modal>
+
+            <!-- Spawn Modal -->
+            <sutram-modal 
+                ?open=${this._spawnModalOpen}
+                titleText="Spawn Template: ${this._spawnDisplayName}"
+                @sutram-modal-closed=${() => { this._spawnModalOpen = false; this._spawnTask = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column; gap: 15px;">
+                    <sutram-select 
+                        label="Target Repository"
+                        .value=${this._spawnTargetRepo}
+                        .options=${this._spawnCompatibleRepos.map(r => ({value: r, label: r}))}
+                        @sutram-input-changed=${e => { this._spawnTargetRepo = e.detail.value; this.requestUpdate(); }}>
+                    </sutram-select>
+                    ${this._spawnVariables.length > 0 ? html`
+                        <h4 style="margin: 10px 0 5px 0;">Template Variables</h4>
+                        ${this._spawnVariables.map(v => html`
+                            <sutram-input 
+                                label=${v}
+                                .value=${this._spawnForm[v] || ''}
+                                @sutram-input-changed=${e => { this._spawnForm[v] = e.detail.value; this.requestUpdate(); }}>
+                            </sutram-input>
+                        `)}
+                    ` : ''}
+                </div>
+                <sutram-async-btn slot="footer" label="🚀 Spawn Template" intent="primary" .onClick=${async () => {
+                    try {
+                        const res = await this.api.post('spawn_template', {
+                            target_repo: this._spawnTargetRepo,
+                            template_id: this._spawnTask.id,
+                            variables: this._spawnForm
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            window.inSetu.utils.pollJob(data.job_id, {
+                                onComplete: () => {
+                                    KanbanStore.getState().fetchTasks();
+                                    if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus("🚀 Template spawned successfully!", 3000);
+                                },
+                                onError: (err) => alert(`Failed to spawn template: ${err.message}`)
+                            });
+                        } else {
+                            alert('Failed to start template spawn task.');
+                        }
+                    } catch (e) {
+                        alert(`Error spawning template: ${e.message}`);
+                    } finally {
+                        this._spawnModalOpen = false;
+                        this._spawnTask = null;
+                    }
+                }}></sutram-async-btn>
+            </sutram-modal>
+
             <!-- Quick Convert Modal -->
             <sutram-modal 
                 ?open=${this._convertOpen}
@@ -1612,7 +1713,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     </div>
                 ` : ''}
             </sutram-modal>
-
             <!-- Hierarchy Modal -->
             <sutram-modal 
                 ?open=${this._hierarchyModalOpen}  
@@ -1623,71 +1723,76 @@ export class InSetuExtTrackerModals extends InSetuElement {
                     ${this._renderHierarchyView()}
                 </div>
             </sutram-modal>
+
+            <!-- Dependencies Modal -->
+            <sutram-modal 
+                ?open=${this._depsModalOpen}  
+                ?fullscreen=${true}
+                titleText=${this._depsMode === 'upstream' ? '🔒 Blocked By (Upstream)' : '🚧 Blocking (Downstream)'}
+                @sutram-modal-closed=${() => { this._depsModalOpen = false; this._depsTask = null; }}>
+                <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 10px; gap: 15px;">
+                    ${(() => {
+                        if (!this._depsTask) return '';
+                        const allTasks = KanbanStore.getState().tasks || [];
+                        const taskTitle = this._depsTask.title ? this._depsTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, '$1') : this._depsTask.id;
+
+                        if (this._depsMode === 'upstream') {
+                            const upstreamTasks = (this._depsTask.dependsOn || []).map(dep => {
+                                const parts = dep.split('/');
+                                const dRepo = parts.length > 1 ? parts[0] : this._depsTask.repo;
+                                const dId = parts.length > 1 ? parts[1] : dep;
+                                return allTasks.find(x => x.id === dId && x.repo === dRepo) || { id: dId, repo: dRepo, status: 'unknown' };
+                            });
+                            const resolved = upstreamTasks.filter(x => ['closed', 'logged', 'archived'].includes(x.status));
+                            const active = upstreamTasks.filter(x => !['closed', 'logged', 'archived'].includes(x.status));
+
+                            return html`
+                                <div style="margin-bottom: 10px; color: var(--text-muted); font-size: 0.9rem;">
+                                    Tickets blocking <b>${taskTitle}</b>:
+                                </div>
+                                ${active.length > 0 ? html`
+                                    <h4 style="margin: 0 0 5px 0; color: var(--intent-danger);">🔒 Active Blockers</h4>
+                                    <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px;">
+                                        ${active.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
+                                    </div>
+                                ` : ''}
+                                ${resolved.length > 0 ? html`
+                                    <h4 style="margin: 0 0 5px 0; color: var(--intent-success);">✅ Resolved Blockers</h4>
+                                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                                        ${resolved.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
+                                    </div>
+                                ` : ''}
+                            `;
+                        } else {
+                            const downstreamTasks = allTasks.filter(x => {
+                                if (!x.dependsOn || x.dependsOn.length === 0) return false;
+                                return x.dependsOn.some(dep => {
+                                    const parts = dep.split('/');
+                                    const dRepo = parts.length > 1 ? parts[0] : x.repo;
+                                    const dId = parts.length > 1 ? parts[1] : dep;
+                                    return dRepo === this._depsTask.repo && dId === this._depsTask.id;
+                                });
+                            });
+
+                            return html`
+                                <div style="margin-bottom: 10px; color: var(--text-muted); font-size: 0.9rem;">
+                                    Tickets blocked by <b>${taskTitle}</b>:
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    ${downstreamTasks.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
+                                </div>
+                            `;
+                        }
+                    })()}
+                </div>
+            </sutram-modal>
 `;
     }
-    _renderTaskCard(t, overrideClick = null, childMap = {}) {
-        const dateStr = this.utils.formatDate(t.timestamp);
-        const bucketStr = (t.subBucket && t.subBucket !== 'None') ? ` | 🗂️ ${t.subBucket}` : '';
-        const descText = `${t.repo}${bucketStr} | ${dateStr}`;
-
-        const childTasks = childMap[t.id] || [];
-        const allKidsDone = childTasks.length > 0 && childTasks.every(c => ['closed', 'archived', 'logged'].includes(c.status));
-
-        const typeStr = (t.ticket_type || '').toLowerCase();
-        const isDanger = typeStr.includes('bug') || typeStr.includes('error') || typeStr.includes('hotfix');
-        const isHighlight = typeStr.includes('queue') || typeStr.includes('review') || typeStr.includes('draft');
-
-        const intentColor = isDanger ? 'var(--intent-danger)' : (isHighlight ? 'var(--intent-highlight)' : 'var(--intent-success)');
-        const icon = t.tier === 1 ? '🎯' : (t.tier === 2 ? '📦' : (isDanger ? '🐛' : '✨'));
-        const isOverdue = t.deliveryDate && new Date(t.deliveryDate) < new Date() && t.status !== 'closed';
-        const displayTitle = t.title ? t.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
-
-        return html`
-            <insetu-card
-                data-task-id=${t.id}
-                .filename=${t.filepath}
-                .titleText=${displayTitle}
-                .descriptionText=${descText}
-                .intentColor=${intentColor}
-                .icon=${icon}
-                entityType="file:task"
-                .entityData=${{ ...t, isFS: true, repoDir: t.repo, suppressCopy: true, suppressDownload: true }}
-                @card-clicked=${overrideClick ? overrideClick : () => {
-                    if (this._templatesBrowserOpen) {
-                        this._templatesBrowserOpen = false;
-                        this._returnToTemplatesBrowser = true;
-                        this.dispatch('insetu:tracker:open-edit-task', { filepath: t.filepath });
-                    } else {
-                        if (this.vfs && this.vfs.viewSourceFile) this.vfs.viewSourceFile(t.filepath, true);
-                    }
-                }}>
-                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;">
-                    ${t.priority ? html`<sutram-tag>${t.priority === 'P0' ? '🔴' : '⚡'} ${t.priority}</sutram-tag>` : ''}
-                    ${t.size ? html`<sutram-tag>📏 ${t.size}</sutram-tag>` : ''}
-                    ${allKidsDone && t.status !== 'closed' ? html`<sutram-tag intent="success">🔔 All Sub-tasks Complete</sutram-tag>` : ''}
-                    ${t.dependsOn && t.dependsOn.length > 0 ? t.dependsOn.map(dep => {
-                        const { dRepo, dId } = (() => {
-                            if (dep.includes('/')) {
-                                const parts = dep.split('/');
-                                return { dRepo: parts[0], dId: parts[1] };
-                            }
-                            return { dRepo: t.repo, dId: dep };
-                        })();
-
-                        const depTask = this.tasks.find(x => x.id === dId && x.repo === dRepo);
-                        const isResolved = !depTask || ['closed', 'logged', 'archived'].includes(depTask.status);
-                        return html`
-                            <sutram-tag intent="${isResolved ? 'success' : 'danger'}" title="${isResolved ? 'Resolved' : 'Blocking'}">
-                                ${isResolved ? '✅' : '🔒'} ${dep}
-                            </sutram-tag>
-                        `;
-                    }) : ''}
-                    ${t.deliveryDate ? html`<sutram-tag intent="${isOverdue ? 'danger' : ''}">📅 Due: ${t.deliveryDate}</sutram-tag>` : ''}
-                </div>
-            </insetu-card>
-        `;
+    _handleCardClick(task) {
+        this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
     }
-    _renderTaskTree(rootTask, taskList, returnFlagProperty, isTemplate = false) {
+
+    _renderTaskTree(rootTask, taskList, isTemplate = false) {
         const state = KanbanStore.getState();
         const allSchemas = [...(state.systemSchemas || []), ...(state.settings?.kanban_profiles || [])];
         const repoMap = state.settings?.kanban_repo_map || {};
@@ -1720,13 +1825,11 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         `}
                         <div style="position: absolute; left: 10px; top: 36px; width: 20px; height: 2px; background: var(--border); z-index: 1;"></div>
                     ` : ''}
-
-                    ${this._renderTaskCard(task, () => {
-                        this._templatesBrowserOpen = false;
-                        this._hierarchyModalOpen = false;
-                        this[returnFlagProperty] = true;
-                        this.dispatch('insetu:tracker:open-edit-task', { filepath: task.filepath });
-                    }, childMap)}
+                    <insetu-tracker-ticket 
+                        .task=${task} 
+                        .allTasks=${KanbanStore.getState().tasks || []} 
+                        @ticket-clicked=${() => this._handleCardClick(task)}>
+                    </insetu-tracker-ticket>
 
                     ${(children.length > 0 || nextTier) ? html`
                         <div style="position: relative; display: flex; flex-direction: column; margin-left: ${depth === 0 ? 10 : 0}px;">
@@ -1738,9 +1841,6 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
                                     <button class="btn-sm" style="background: var(--input-bg); color: var(--text-muted); border: 1px dashed var(--border); width: fit-content; margin: 0; z-index: 2;"
                                         @click=${() => {
-                                            this._templatesBrowserOpen = false;
-                                            this._hierarchyModalOpen = false;
-                                            this[returnFlagProperty] = true;
                                             const prefill = { parentId: task.id, tier: nextTier, repo: task.repo };
                                             if (isTemplate) prefill.status = 'template';
                                             this.dispatch('insetu:tracker:open-new-task', { 
@@ -1760,20 +1860,57 @@ export class InSetuExtTrackerModals extends InSetuElement {
 
         return renderNode(rootTask.id, 0, true);
     }
-
     _renderHierarchyView() {
         if (!this._hierarchyTask) return '';
         const allTasks = KanbanStore.getState().tasks;
-        const rootDisplayTitle = this._hierarchyTask.title ? this._hierarchyTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+        const rootTask = this._hierarchyTask;
+        const rootDisplayTitle = rootTask.title ? rootTask.title.replace(/\{\{\s*([^}|]+)(?:\|([^}]+))?\s*\}\}/g, (m, key, def) => def ? def.trim() : key.trim()) : '';
+
+        const upstreamTasks = (rootTask.dependsOn || []).map(dep => {
+            const parts = dep.split('/');
+            const dRepo = parts.length > 1 ? parts[0] : rootTask.repo;
+            const dId = parts.length > 1 ? parts[1] : dep;
+            return allTasks.find(x => x.id === dId && x.repo === dRepo);
+        }).filter(Boolean);
+
+        const downstreamTasks = allTasks.filter(x => {
+            if (!x.dependsOn || x.dependsOn.length === 0) return false;
+            return x.dependsOn.some(dep => {
+                const parts = dep.split('/');
+                const dRepo = parts.length > 1 ? parts[0] : x.repo;
+                const dId = parts.length > 1 ? parts[1] : dep;
+                return dRepo === rootTask.repo && dId === rootTask.id;
+            });
+        });
 
         return html`
             <div style="display: flex; flex-direction: column; gap: 20px;">
                 <div style="display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--border); padding-bottom: 15px;">
-                    <h3 style="margin: 0; color: var(--text);">Hierarchy: ${rootDisplayTitle}</h3>
+                    <h3 style="margin: 0; color: var(--text);">Hierarchy & Dependencies: ${rootDisplayTitle}</h3>
                 </div>
+
+                ${upstreamTasks.length > 0 ? html`
+                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px dashed var(--intent-danger);">
+                        <h4 style="margin: 0 0 10px 0; color: var(--intent-danger);">🔒 Blocked By (Upstream)</h4>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            ${upstreamTasks.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
+                        </div>
+                    </div>
+                ` : ''}
+
                 <div>
-                    ${this._renderTaskTree(this._hierarchyTask, allTasks, '_returnToHierarchy', false)}
+                    <h4 style="margin: 0 0 10px 0; color: var(--text);">🌳 Task Tree</h4>
+                    ${this._renderTaskTree(this._hierarchyTask, allTasks, false)}
                 </div>
+
+                ${downstreamTasks.length > 0 ? html`
+                    <div style="background: var(--input-bg); padding: 15px; border-radius: 6px; border: 1px dashed var(--intent-warning); margin-top: 10px;">
+                        <h4 style="margin: 0 0 10px 0; color: var(--intent-warning);">🚧 Blocking (Downstream)</h4>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            ${downstreamTasks.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${allTasks} @ticket-clicked=${() => this._handleCardClick(t)}></insetu-tracker-ticket>`)}
+                        </div>
+                    </div>
+                ` : ''}
             </div>
         `;
     }
@@ -1801,7 +1938,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                         <h3 style="margin: 0; color: var(--text);">Template Editor: ${rootDisplayTitle}</h3>
                     </div>
                     <div>
-                        ${this._renderTaskTree(rootTask, filteredTasks, '_returnToTemplatesBrowser', true)}
+                        ${this._renderTaskTree(rootTask, filteredTasks, true)}
                     </div>
                 </div>
             `;
@@ -1839,9 +1976,7 @@ export class InSetuExtTrackerModals extends InSetuElement {
                 </div>
                 <div style="display: flex; flex-direction: column; gap: 10px;">
                     ${roots.length > 0 
-                        ? roots.map(t => {
-                            return this._renderTaskCard(t, () => { this._activeTemplateRoot = t.id; this.requestUpdate(); }, childMap);
-                        }) 
+                        ? roots.map(t => html`<insetu-tracker-ticket .task=${t} .allTasks=${KanbanStore.getState().tasks || []} @ticket-clicked=${() => { this._activeTemplateRoot = t.id; this.requestUpdate(); }}></insetu-tracker-ticket>`) 
                         : html`<sutram-empty-state text="No templates found for this repository's schema."></sutram-empty-state>`
                     }
                 </div>

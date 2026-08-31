@@ -372,9 +372,9 @@ disconnectedCallback() {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-            ${this.activeDiffJobId ? html`<div class="spinner" style="display: block; padding: 20px;">${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}</div>` : ''}
-            ${this.diffJobError ? html`<div style="color: var(--intent-danger); margin-top: 15px; padding: 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-            <div style="display: flex; flex-direction: column;">
+            ${this.activeDiffJobId ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}></sutram-spinner></div>` : ''}
+            ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
+            <div style="display: flex; flex-direction: column; opacity: ${this.activeDiffJobId ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.activeDiffJobId ? 'none' : 'auto'};">
                 ${sortedCats.map(catName => html`
                     <sutram-collapsible 
                         titleText=${catName} 
@@ -482,13 +482,18 @@ disconnectedCallback() {
             </div>
             <sutram-modal ?open=${this.pushModalOpen} ?fullscreen=${true} titleText="🚀 Commit & Push" @sutram-modal-closed=${() => this.pushModalOpen = false}>
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
-                    <sutram-select 
-                        label="Recent Changelogs"
-                        .value=${this.gitPushMessage}
-                        .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
-                        @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
-                    </sutram-select>
-                    <sutram-textarea 
+                    ${(() => {
+                        const selectValue = this.pushChangelogs.some(cl => cl.title === this.gitPushMessage) ? this.gitPushMessage : '';
+                        return html`
+                            <sutram-select 
+                                label="Recent Changelogs"
+                                .value=${selectValue}
+                                .options=${[{ value: '', label: '-- Type a custom message below --' }, ...this.pushChangelogs.map(cl => ({ value: cl.title, label: cl.title }))]}
+                                @sutram-input-changed=${(e) => this.gitPushMessage = e.detail.value}>
+                            </sutram-select>
+                        `;
+                    })()}
+                    <sutram-textarea  
                         label="Commit Message"
                         placeholder="Enter commit message..."
                         .value=${this.gitPushMessage}
