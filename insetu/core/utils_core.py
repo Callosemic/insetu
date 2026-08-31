@@ -399,19 +399,30 @@ def resolve_logical_path(path, workspace_id=None):
     direct_cand = ws_root_path.joinpath(norm_path).resolve()
     if direct_cand.exists():
         return direct_cand.as_posix()
-
-    # Pass 2: Try prefixing with each target repo to rescue implicit paths ({repo}/path)
+    # Pass 2: Map logical workspace bounds ({repo}/path) to physical disk paths
     for repo in target_repos:
         repo_dir = repo.get("repo_dir")
+        if not repo_dir: continue
+
         p_path = repo.get("physical_path")
         repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
 
+        # If the path explicitly starts with the repo boundary, map it directly
+        if norm_path == repo_dir or norm_path.startswith(f"{repo_dir}/"):
+            downstream = norm_path[len(repo_dir):].lstrip('/')
+            mapped_cand = repo_base.joinpath(downstream).resolve()
+
+            # For new file creation within an absolute repo, we MUST return this mapped candidate 
+            # rather than falling through to the workspace root fallback.
+            if mapped_cand.exists() or p_path:
+                return mapped_cand.as_posix()
+
+        # Rescue implicit downstream paths
         repo_cand = repo_base.joinpath(norm_path).resolve()
         if repo_cand.exists():
             return repo_cand.as_posix()
 
-    # Fallback for new file creation: Rely on the exact provided string relative to the workspace root.
-    # We deliberately omit the dangerous "strip prefix" heuristic that caused ghost package boundaries.
+    # Fallback for new file creation outside of absolute repos: relative to workspace root.
     return direct_cand.as_posix()
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
     if not exts:

@@ -155,26 +155,15 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
                     events.append(oe)
         except Exception:
             pass
-    # Write a standard delayed job scheduled 12 seconds in the future
-    run_at = time.time() + 12.0
     args_json = json.dumps({
         "force_full": False,
         "ledger_events": events
     })
 
-    conn.execute("""
-        INSERT OR REPLACE INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
-        VALUES (?, 'gather', 'execute_delayed_compile', 0, 0, ?, 'pending', ?)
-    """, (job_id, run_at, args_json))
-    conn.commit()
+    from insetu.kernel.workers import submit_one_shot_job
+    submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
 def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=None, **kwargs):
-    from insetu.kernel.db import get_connection
     ctx = gather_bp.get_context(workspace_id)
-
-    # Self-destruct the one-off scheduled job so the metronome doesn't infinitely loop it
-    w_conn = get_connection('workers', workspace_id=workspace_id)
-    w_conn.execute("DELETE FROM jobs WHERE id=?", (f"cmp_del_{workspace_id}",))
-    w_conn.commit()
 
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
@@ -400,7 +389,8 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             }
         def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path, current_repo_dir):
             def _gen():
-                if not data["files"]: return None
+                if not data["files"]:
+                    return {"header": "", "blocks": [], "files": []}
                 vfs = VFSTransaction(workspace_id)
                 filepaths = data["files"]
                 header_str = "="*60 + f"\nINSETU TOPOLOGY ({b_title.upper()})\n" + "="*60 + "\n" + generate_ascii_tree(filepaths) + "\n\n"
@@ -503,8 +493,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         for f in files:
             parts = f.split('/', 1)
             if len(parts) > 0: affected_repos.add(parts[0])
-
-        ledger_events = [{"filepath": f, "mutation_type": "unknown"} for f in files]
+        ledger_events = kwargs.get("ledger_events")
+        if not ledger_events:
+            ledger_events = [{"filepath": f, "mutation_type": "unknown"} for f in files]
         # Collect context declarations across the OS
         declarations = []
         for res in ctx.emit('gather_declare_topology', ledger_events=ledger_events):
@@ -791,12 +782,11 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
         if not needs_full_compile and not forced_repos:
             try:
-
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing
                     changed_files = [e["filepath"] for e in ledger_events]
                     ctx.jobs.update_progress(f"Surgically evaluating {len(changed_files)} mutated file(s)...")
-                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None)
+                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None, ledger_events=ledger_events)
                 else:
                     ctx.jobs.update_progress("No pending changes. Syncing extensions...")
                     _surgically_update_manifest(workspace_id=ctx.workspace_id, files=[], filepath=None)

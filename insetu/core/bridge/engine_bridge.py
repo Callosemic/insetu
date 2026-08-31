@@ -79,10 +79,9 @@ def bridge_revert(ctx):
         for target in targets:
             filepath = target['filepath']
             target_ts = target['timestamp']
-
             # 1. Find nearest preceding snapshot
-            snap_op = "<" if is_initial else "<="
-            snap = ctx.db.execute(f"SELECT timestamp, compressed_state FROM bridge_ledger WHERE filepath=? AND is_snapshot=1 AND timestamp {snap_op} ? ORDER BY timestamp DESC LIMIT 1", (filepath, target_ts)).fetchone()
+            # Bugfix: Always use '<=' because the target transaction itself may contain the pre-patch snapshot.
+            snap = ctx.db.execute("SELECT timestamp, compressed_state FROM bridge_ledger WHERE filepath=? AND is_snapshot=1 AND timestamp <= ? ORDER BY timestamp DESC LIMIT 1", (filepath, target_ts)).fetchone()
 
             if snap and snap['compressed_state']:
                 content = zlib.decompress(snap['compressed_state']).decode('utf-8')
