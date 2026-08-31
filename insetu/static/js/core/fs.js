@@ -183,13 +183,22 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
             shareFilesArray.push(new File([blob], filename, { type: mime }));
         }
 
-        if (navigator.canShare({ files: shareFilesArray })) {
+        if (navigator.canShare && navigator.canShare({ files: shareFilesArray })) {
             await navigator.share({ files: shareFilesArray });
         } else {
             throw new Error("File sharing not supported by this browser.");
         }
     } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (err.name === 'AbortError') return;
+
+        if (err.name === 'NotAllowedError' || err.message.includes('Permission') || err.message.includes('activation')) {
+            if (window.inSetu?.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⚠️ Files ready. Please click Share again.", 4000);
+            }
+            return;
+        }
+
+        if (window.inSetu?.ui?.setGlobalStatus) {
             window.inSetu.ui.setGlobalStatus(`❌ Share Error: ${err.message}`, 3000, true);
         }
     }
@@ -616,25 +625,25 @@ export class InSetuVFSExplorer extends InSetuElement {
                 AppStore.setState({ globalBrowsePath: e.detail.path });
         }
         render() {
-            if (this.loading) {
-                return html`<div style="padding: 20px;"><insetu-spinner text="Refreshing file system..."></insetu-spinner></div>`;
-            }
-            if (this.manifestFiles.length === 0) {
+            if (this.manifestFiles.length === 0 && !this.loading) {
                 return html`<p style="padding: 15px; color: var(--text-muted);">No repositories configured.</p>`;
             }
             return html`
-                <insetu-file-tree    
-                    style="flex: 1;"
-                    @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
-                    basePath=""
-                    .files=${this.manifestFiles}
-                    .currentPath=${this.globalBrowsePath}
-                    .hidePath=${false}
-                    .enableSearch=${true}
-                    searchPlaceholder="🔍 Fuzzy search files..."
-                    entityType="file"
-                    @path-changed=${this._handlePathChange}>
-                </insetu-file-tree>
+                <div style="flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative;">
+                    ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Refreshing file system..."></sutram-spinner></div>` : ''}
+                    <insetu-file-tree    
+                        style="flex: 1; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};"
+                        @card-clicked=${(e) => { if(e.detail.isSource && window.inSetu.vfs.viewSourceFile) window.inSetu.vfs.viewSourceFile(e.detail.filename, true); }}
+                        basePath=""
+                        .files=${this.manifestFiles}
+                        .currentPath=${this.globalBrowsePath}
+                        .hidePath=${false}
+                        .enableSearch=${true}
+                        searchPlaceholder="🔍 Fuzzy search files..."
+                        entityType="file"
+                        @path-changed=${this._handlePathChange}>
+                    </insetu-file-tree>
+                </div>
             `;
         }
 }
@@ -762,7 +771,7 @@ window.ExtensionRegistry.registerExtension('files', {
             }
         },
         {
-            targetEntity: 'file:context',
+            targetEntity: 'context',
             id: 'file-browse',
             label: 'Browse',
             icon: '📁',
@@ -786,7 +795,7 @@ window.ExtensionRegistry.registerExtension('files', {
                 // Only render if the device natively supports Web Sharing
                 return !!navigator.share && !!navigator.canShare;
             },
-            asyncAction: async (data, e) => {
+            onClick: async (data, e) => {
                 if (data.fromModal) {
                     const state = FsStore.getState().fileModal;
                     const blob = new Blob([state.content], { type: 'text/plain' });
@@ -1398,7 +1407,7 @@ export class InSetuFileModal extends InSetuElement {
                     </div>
                     <div class="modal-footer" @mouseenter=${() => this._editorFocused = false} style="padding: 12px 20px; gap: 12px; border-top: 1px solid var(--border); background: var(--input-bg); display: flex; flex-shrink: 0; width: 100%; box-sizing: border-box;">
                         <sutram-entity-actions 
-                            .entityType=${'file'} 
+                            .entityType=${(m.filename && (m.filename.startsWith('ctx://') || m.filename.endsWith('_context.txt') || m.filename.endsWith('_diffs.txt') || m.filename.includes('workflow_'))) ? 'file:context' : 'file'} 
                             .entityData=${{ 
                                 filepath: m.filename, 
                                 isFS: m.isFS,
@@ -1742,7 +1751,7 @@ export class InSetuVFSModals extends InSetuElement {
                     </div>
                 </div>
             </sutram-modal>
-<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:'))} @sutram-modal-closed=${closeBrowseModal}>
+<sutram-modal .open=${m.browser?.open} ?open=${m.browser?.open} titleText=${m.browser?.title || 'Browse'} ?fullscreen=${true} ?flush=${true} @sutram-modal-closed=${closeBrowseModal}>
     <div slot="body" style="display: flex; flex-direction: column; overflow-y: hidden; flex: 1; padding: 0;">
         ${(m.browser?.isParts || m.browser?.title?.startsWith('Parts:')) ? html`
             <div style="display: flex; flex-direction: column; overflow-y: auto; flex: 1;">

@@ -494,15 +494,13 @@ export class InSetuExtBridge extends InSetuElement {
                             else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = '⏭️'; }
 
                             const targetEntityFile = filePatches[0]?.resolved_file || file;
-
                             return html`
                                 <insetu-card 
                                     titleText="${icon} ${file}" 
                                     detailText="${filePatches.length} Patch${filePatches.length !== 1 ? 'es' : ''}" 
                                     intentColor="${intentColor}"
                                     entityType="file"
-                                    .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}
-                                    has-actions>
+                                    .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}>
 
                                     <div style="padding: 2px 0; font-size: 0.9rem; color: var(--text);">
                                         ${filePatches.map((p, idx) => html`
@@ -880,7 +878,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             intentColor="var(--intent-primary)"
                             entityType="yomama-turn"
                             .entityData=${{ transaction_id: txId, records: txData.records }}
-                            has-actions
                             style="display: block;">
                         </insetu-card>
                         ${txData.records.map((record, idx) => {
@@ -900,7 +897,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
-                                has-actions
                                 style="display: block;">
                             </insetu-card>
                             `;
@@ -1001,7 +997,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             icon: '📋',
             intent: 'neutral',
             order: 10,
-            asyncAction: async (data) => {
+            onClick: async (data) => {
                 const text = `<<<<<<< FILE: ${data.file}\n${data.content}`;
                 if (window.inSetu && window.inSetu.utils && window.inSetu.utils.copyRawText) {
                     await window.inSetu.utils.copyRawText(text);
@@ -1078,7 +1074,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             icon: '📋',
             intent: 'neutral',
             order: 20,
-            asyncAction: async (data) => {
+            onClick: async (data) => {
                 let sandwich = "<<<<<<< FILE: " + data.filepath + "\n";
                 let chunks = data.chunks || data.patches;
                 if (!chunks && data.chunks_json) {

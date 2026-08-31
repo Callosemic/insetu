@@ -120,7 +120,8 @@ export class InSetuExtGather extends InSetuElement {
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
         _showFilters: { type: Boolean },
-        _expandedCats: { type: Object }
+        _expandedCats: { type: Object },
+        _syncState: { type: String }
     };
     static styles = [
         sharedStyles,
@@ -128,7 +129,6 @@ export class InSetuExtGather extends InSetuElement {
             :host { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; background: var(--bg); box-sizing: border-box; container-type: inline-size; }
         `
     ];
-
     constructor() {
         super();
         this.loading = false;
@@ -136,9 +136,11 @@ export class InSetuExtGather extends InSetuElement {
         this.manifestFiles = [];
         this.searchQuery = '';
         this._expandedCats = {};
+        this._syncState = 'synced';
     }
     onWorkspaceLoad(workspaceId) {
-        this.loadContext(false);
+        // Rely purely on the core OS background heartbeat to hydrate the manifest.
+        // Do not force a compilation pipeline trigger just because the view mounted.
     }
     connectedCallback() {
         super.connectedCallback();
@@ -152,9 +154,12 @@ export class InSetuExtGather extends InSetuElement {
             this.manifestFiles = Object.keys(state.manifest?.ctx || {});
             this.requestUpdate();
         });
-
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
             if (tick) this.loadContext(false);
+        });
+        this.registerGlobalListener('sutram-sync-status', window, (e) => {
+            this._syncState = e.detail.state;
+            this.requestUpdate();
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
@@ -254,8 +259,18 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${this.loading ? html`<div class="spinner" style="display:block; padding: 15px; margin-top: 0;">${this.loadingMessage}</div>` : ''}
-                <div style="display: ${this.loading ? 'none' : 'flex'}; flex-direction: column;">
+                ${this._syncState === 'pending' && !this.loading ? html`
+                    <div style="background: var(--intent-warning); color: #000; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); font-size: 0.85rem; flex-shrink: 0;">
+                        <div><strong>⚠️ Contexts Stale:</strong> Pending changes are waiting for the compilation slew limiter.</div>
+                        <button class="btn-sm" style="background: #000; color: var(--intent-warning); margin: 0; border: 1px solid #000; font-weight: bold; padding: 4px 10px;" @click=${() => this.loadContext(false)}>Compile Now</button>
+                    </div>
+                ` : ''}
+                ${this.loading ? html`
+                    <div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;">
+                        <sutram-spinner text=${this.loadingMessage}></sutram-spinner>
+                    </div>
+                ` : ''}
+                <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
                     ${(() => {
                         const groups = {};
                         filteredFiles.forEach(f => {
@@ -468,6 +483,5 @@ window.ExtensionRegistry.registerExtension('gather', {
                 }
             }
         }
-    ],
-    uiHooks: {}
+    ]
 });

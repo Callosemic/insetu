@@ -175,7 +175,6 @@ export class InSetuElement extends SutramElement {
                 }
             }
         });
-
         // Wire up the lazy-load visibility lifecycle method
         this.registerGlobalListener('insetu:tab-changed', window, (e) => {
             if (typeof this.onViewActivated === 'function') {
