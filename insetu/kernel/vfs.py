@@ -271,22 +271,20 @@ class VFSTransaction:
         self._buffer = []
     def walk(self, directory_path, exts=None):
         """Safely sweeps a directory within the workspace bounds, yielding strict workspace-relative file paths."""
-        from insetu.kernel.utils import get_workspace_physics, resolve_sandbox_path
+        from insetu.kernel.utils import resolve_sandbox_path
         import os
         from pathlib import Path
-        
+
         # Let Tier 2 intercept and resolve complex logical paths via the event bus
         from insetu.kernel.hooks import hooks
         overrides = hooks.emit('vfs_resolve_path', filepath=directory_path, workspace_id=self.workspace_id)
         resolved_dir = next((r for r in overrides if r), None)
-        
+
         if not resolved_dir:
             resolved_dir = resolve_sandbox_path(directory_path, self.workspace_id)
-            
+
         if not os.path.exists(resolved_dir):
             return
-
-        _, ws_root, _ = get_workspace_physics(self.workspace_id)
 
         for root, dirs, files in os.walk(resolved_dir):
             # Ignore standard noise at the kernel level
@@ -294,9 +292,14 @@ class VFSTransaction:
             for file in files:
                 if exts and not any(file.endswith(ext) for ext in exts):
                     continue
-                    
+
                 abs_path = Path(root).joinpath(file).as_posix()
-                try:
-                    yield os.path.relpath(abs_path, ws_root).replace('\\', '/')
-                except ValueError:
-                    yield abs_path
+                rel_to_resolved = os.path.relpath(abs_path, resolved_dir).replace('\\', '/')
+
+                if rel_to_resolved == '.':
+                    yield directory_path
+                elif not directory_path:
+                    yield rel_to_resolved
+                else:
+                    sep = "" if directory_path.endswith('/') else "/"
+                    yield f"{directory_path}{sep}{rel_to_resolved}"

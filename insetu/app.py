@@ -439,11 +439,9 @@ def recovery_ui():
     <body style="font-family: monospace; background: #0f172a; color: #f8fafc; text-align: center; padding-top: 100px;">
         <h2 style="color: #ef4444;">🆘 Manual Recovery Console</h2>
         <p>Use this page to manually trigger a kernel panic and boot into the Lifeboat FS.</p>
-        <form method="POST" action="/api/system/panic">
-            <button type="submit" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
-                Boot Immutable Recovery OS
-            </button>
-        </form>
+        <button onclick="fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.reload(), 3000);" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
+            Boot Immutable Recovery OS
+        </button>
     </body>
     </html>
     """

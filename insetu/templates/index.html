@@ -14,11 +14,9 @@
                     <h2 style="color: #ef4444;">⚠️ Fatal UI Crash Detected</h2>
                     <p>A JavaScript error prevented the OS from booting.</p>
                     <code style="display: block; background: #1e293b; padding: 15px; margin: 20px auto; max-width: 600px; text-align: left; color: #fca5a5;">${e.message}</code>
-                    <form method="POST" action="/api/system/panic">
-                        <button type="submit" style="background: #ef4444; color: white; padding: 12px 24px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px;">
-                            🆘 Force Kernel Panic (Boot Lifeboat)
-                        </button>
-                    </form>
+                    <button onclick="fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.reload(), 3000);" style="background: #ef4444; color: white; padding: 12px 24px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px;">
+                        🆘 Force Kernel Panic (Boot Lifeboat)
+                    </button>
                 </div>
             `;
         });

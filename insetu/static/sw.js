@@ -28,14 +28,19 @@ self.addEventListener('fetch', (e) => {
     if (e.request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname === '/submit' || url.pathname.startsWith('/download/')) {
         return; // Bypass the service worker completely for stateful multi-tenant data loops
     }
-
+    // Stale-While-Revalidate Strategy
     e.respondWith(
-        fetch(e.request)
-        .then((response) => {
-            const resClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(e.request, resClone));
-            return response;
+        caches.match(e.request).then((cachedResponse) => {
+            const networkFetch = fetch(e.request).then((response) => {
+                const resClone = response.clone();
+                caches.open(CACHE_NAME).then((cache) => cache.put(e.request, resClone));
+                return response;
+            }).catch(() => {
+                // Network failed silently, handled by returning cachedResponse below
+            });
+
+            // Return cache instantly if available, otherwise wait for network
+            return cachedResponse || networkFetch;
         })
-        .catch(() => caches.match(e.request))
     );
 });

@@ -468,13 +468,22 @@ async function executeBootSequence() {
         const prevTab = state.activeTab;
         const prevSub = state.activeSubTabs[tab];
 
-        AppStore.getState().setActiveRoute(tab, sub, deepPath.length > 0 ? deepPath : null);
+        let resolvedSub = sub;
+        if (!resolvedSub && window.ExtensionRegistry) {
+            const slots = window.ExtensionRegistry.getLayoutSlots().filter(s => s.slot === 'slots:sub-navigation' && s.targetParent === tab);
+            if (slots.length > 0) {
+                slots.sort((a, b) => (a.order || 50) - (b.order || 50));
+                resolvedSub = slots[0].id;
+            }
+        }
+
+        AppStore.getState().setActiveRoute(tab, resolvedSub, deepPath.length > 0 ? deepPath : null);
         // Emit standard non-refresh events upon actual navigation
         if (tab !== prevTab) {
             window.inSetu.events.emitHook('insetu:tab-changed', tab);
         }
-        if (sub && sub !== prevSub) {
-            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tab, subId: sub, forceRefresh: false });
+        if (resolvedSub && resolvedSub !== prevSub) {
+            window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tab, subId: resolvedSub, forceRefresh: false });
         }
         lastRouteHash = window.location.hash;
     };
@@ -514,13 +523,23 @@ async function executeBootSequence() {
         const { tabId, isAlreadyActive } = e.detail;
         const state = AppStore.getState();
 
+        let activeSub = state.activeSubTabs[tabId];
+        // If there's no saved subtab state, dynamically resolve the default first subtab from the layout topology
+        if (!activeSub && window.ExtensionRegistry) {
+            const slots = window.ExtensionRegistry.getLayoutSlots().filter(s => s.slot === 'slots:sub-navigation' && s.targetParent === tabId);
+            if (slots.length > 0) {
+                slots.sort((a, b) => (a.order || 50) - (b.order || 50));
+                activeSub = slots[0].id;
+                // Silently patch the AppStore so the URL hash aligns with reality
+                AppStore.setState({ activeSubTabs: { ...state.activeSubTabs, [tabId]: activeSub } });
+            }
+        }
+
         if (isAlreadyActive) {
-            const activeSub = state.activeSubTabs[tabId];
             window.inSetu.events.emitHook('insetu:force-refresh', { parentId: tabId, subId: activeSub });
         } else {
-            AppStore.getState().setActiveRoute(tabId, state.activeSubTabs[tabId] || null);
+            AppStore.getState().setActiveRoute(tabId, activeSub || null);
             window.inSetu.events.emitHook('insetu:tab-changed', tabId);
-            const activeSub = state.activeSubTabs[tabId];
             if (activeSub) {
                 window.inSetu.events.emitHook('insetu:subtab-changed', { parentId: tabId, subId: activeSub });
             }

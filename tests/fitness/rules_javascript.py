@@ -57,6 +57,7 @@ def check_javascript_files():
     open_virtual_file_pattern = re.compile(r'\b(?:this\.vfs|window\.inSetu\.vfs|vfs)\.openVirtualFile\s*\(')
     registry_debounce_pattern = re.compile(r'(?:window\.)?ExtensionRegistry\.utils\.debounce')
     banned_ui_zones_pattern = re.compile(r'\buiHooks\s*:|[\'"]zone:[a-zA-Z0-9_-]+[\'"]')
+    banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
     for filepath in collect_unique_files([FRONTEND_DIR, BACKEND_DIR / "extensions"], [".js"]):
         file = filepath.name
         is_extension = file.startswith("ext_") or "extensions" in filepath.parts
@@ -78,6 +79,8 @@ def check_javascript_files():
             report_violation("LIT_TEMPLATE_VIOLATION", filepath, 1, "Insetu extensions must utilize Lit templates rather than raw innerHTML string overwrites.")
         if dom_content_loaded_registration_pattern.search(full_content):
             report_violation("DOMCONTENTLOADED_REGISTRATION_BAN", filepath, 1, "Extensions must invoke ExtensionRegistry.registerExtension at top-level module scope to guarantee deterministic registration during boot.")
+        if "navigator.share(" in full_content and "navigator.canShare" not in full_content:
+            report_violation("WEB_SHARE_GUARD_MANDATE", filepath, 1, "Invocation of navigator.share() detected without a defensive navigator.canShare check.")
 
         if file not in ["app.js", "ui_dropdowns.js", "ui_file_tree.js"]:
             if "addEventListener('click'" in full_content or 'addEventListener("click"' in full_content:
@@ -191,6 +194,9 @@ def check_javascript_files():
                 report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
             if is_extension and banned_ui_zones_pattern.search(line):
                 report_violation("BANNED_UI_ZONES", filepath, line_num, "The 'uiHooks' object and 'zone:*' string hooks are permanently deprecated (ADR 0041). Use declarative customEditors, expanded layoutSlots, native InSetuElement lifecycles, or the Typed Event Bus.")
+
+            if banned_has_actions_pattern.search(line):
+                report_violation("BANNED_HAS_ACTIONS_ATTRIBUTE", filepath, line_num, "The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.")
 
             if is_extension and subtab_leak_pattern.search(line):
                 report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")

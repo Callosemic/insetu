@@ -17,13 +17,20 @@ class FileMutationPayload(TypedDict):
     filepath: FilePath
     operation: str  # 'save' | 'delete' | 'move'
     ignore_ledger: bool
-
 class JobProgressPayload(TypedDict, total=False):
     """Payload tracking background worker progress."""
     job_id: str
     status: str  # 'pending' | 'processing' | 'completed' | 'failed'
     status_message: Optional[str]
     artifact_json: Optional[str]
+
+class JobSchedulePayload(TypedDict, total=False):
+    """Payload defining a scheduled background job."""
+    job_id: str
+    ext_name: str
+    callback_name: str
+    interval_ms: int  # 0 indicates a one-shot delayed job; >0 indicates recurring
+    delay_ms: Optional[int]
 
 class WorkspacePathsDict(TypedDict):
     """Spatial path mappings for an active tenant workspace."""

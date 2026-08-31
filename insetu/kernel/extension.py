@@ -23,6 +23,15 @@ class JobManager:
             job_id, self.ext_name, task_name, args_json, self.workspace_id, coalesce=coalesce
         )
 
+    def submit_one_shot(self, task_name, delay_ms, **kwargs):
+        import uuid, json
+        from insetu.kernel.workers import submit_one_shot_job
+        job_prefix = self.ext_name[:3].lower()
+        job_id = f"{job_prefix}_{uuid.uuid4().hex[:8]}"
+        args_json = json.dumps(kwargs)
+        submit_one_shot_job(job_id, self.ext_name, task_name, delay_ms, args_json, self.workspace_id)
+        return job_id
+
     def is_in_flight(self, task_name):
         """SDK Helper: Checks if a specific background worker task is currently queued or processing."""
         from insetu.kernel.db import get_connection
@@ -413,6 +422,15 @@ class ExtensionContext:
         Handles folder traversal and manifest chunk expansion.
         """
         from insetu.kernel.vfs import VFSTransaction
+        from insetu.kernel.hooks import hooks
+
+        # Fetch the SSOT list of tracked VFS files to prevent recursive folder 
+        # traversals from sweeping up untracked noise (like .DS_Store or ignored extensions)
+        vfs_manifest_res = hooks.emit('request_vfs_manifest', workspace_id=self.workspace_id)
+        vfs_manifest = next((m for m in vfs_manifest_res if m), {})
+        tracked_files = set()
+        for bucket in vfs_manifest.values():
+            tracked_files.update(bucket.get('files', []))
 
         files = []
         with VFSTransaction(self.workspace_id) as vfs:
@@ -420,7 +438,6 @@ class ExtensionContext:
                 if 'filepath' in item:
                     filepath = item['filepath']
                     if filepath.startswith("ctx://"):
-                        from insetu.kernel.hooks import hooks
                         responses = hooks.emit('resolve_payload_chunks', uri=filepath, workspace_id=self.workspace_id)
                         chunks = next((r for r in responses if r), [filepath])
                         files.extend(chunks)
@@ -428,7 +445,8 @@ class ExtensionContext:
                         files.append(filepath)
                 elif 'folderpath' in item:
                     for f in vfs.walk(item['folderpath']):
-                        files.append(f)
+                        if f in tracked_files:
+                            files.append(f)
 
         unique_files = []
         seen = set()

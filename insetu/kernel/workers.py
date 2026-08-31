@@ -30,9 +30,14 @@ def _prepare_job_payload(args_json, workspace_id):
     except Exception:
         pass
     return workspace_id, conn, now, args_json
-
 def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", jitter_ms=0, workspace_id=None):
-    """Writes a background task to the SQLite Ledger securely tracking tenant contexts."""
+    """
+    Schedules a recurring background task in the SQLite Ledger.
+
+    Note: `interval_ms` must be > 0 for recurring tasks. If `interval_ms == 0`, 
+    the job is treated as a one-shot task and will be deleted after its first execution.
+    For clarity, prefer `submit_one_shot_job()` when scheduling one-time delayed tasks.
+    """
     if _shutdown_event.is_set():
         return False
 
@@ -42,6 +47,26 @@ def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", jit
 INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, interval_ms, jitter_ms, now, args_json))
+    conn.commit()
+
+
+def submit_one_shot_job(job_id, ext_name, callback_name, delay_ms, args_json="{}", workspace_id=None):
+    """
+    Schedules a one-time delayed task.
+    The task will execute once when `delay_ms` elapses and will be automatically deleted from the ledger.
+    """
+    if _shutdown_event.is_set():
+        return False
+
+    now = time.time()
+    next_run = now + (delay_ms / 1000.0)
+
+    workspace_id, conn, _, args_json = _prepare_job_payload(args_json, workspace_id)
+    conn.execute("""
+        INSERT OR REPLACE 
+        INTO jobs (id, ext_name, callback_name, interval_ms, jitter_ms, next_run_at, status, args_json)
+        VALUES (?, ?, ?, 0, 0, ?, 'pending', ?)
+    """, (job_id, ext_name, callback_name, next_run, args_json))
     conn.commit()
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None, coalesce=False):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
@@ -190,10 +215,12 @@ def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_j
             actual_interval = interval_ms
             if jitter_ms and jitter_ms > 0:
                 actual_interval += random.randint(-jitter_ms, jitter_ms)
-
             conn = get_connection("workers", workspace_id=target_ws)
-            next_run = time.time() + (actual_interval / 1000.0)
-            conn.execute("UPDATE jobs SET status='pending', next_run_at=? WHERE id=?", (next_run, job_id))
+            if interval_ms > 0:
+                next_run = time.time() + (actual_interval / 1000.0)
+                conn.execute("UPDATE jobs SET status='pending', next_run_at=? WHERE id=?", (next_run, job_id))
+            else:
+                conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
             conn.commit()
         except Exception:
             pass

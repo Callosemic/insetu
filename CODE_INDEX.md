@@ -62,7 +62,8 @@ insetu/
 │   │       ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
 │   │       ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
 │   │       └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
-│   └── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
+│   ├── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
+│   └── sutram_contracts.md         # Sutram Platform API & Interface Contracts.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── app.py                      # [Micro-Kernel & Extension Bootloader]

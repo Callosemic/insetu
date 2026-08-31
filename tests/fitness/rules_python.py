@@ -297,6 +297,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     f"Hardcoded reference to deprecated 'workspaces.json' detected in string literal '{node.value}'. "
                     "Use load_config(), get_all_workspace_ids(), or '.insetu/system.json' instead."
                 )
+            if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename != "workers.py":
+                report_violation(
+                    "DIRECT_JOB_TABLE_MUTATION_BAN",
+                    self.filepath,
+                    node.lineno,
+                    "Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from insetu.kernel.workers instead."
+                )
         self.generic_visit(node)
 
     def _check_sqlite_import(self, node):
