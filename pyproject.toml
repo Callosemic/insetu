@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "insetu"
-version = "0.16.1-beta.1"
+version = "0.17.0-beta.1"
 description = "A local-first AI Developer OS, Context Gatherer, and Kanban Tracker."
 readme = "README.md"
 authors = [{ name = "inSetu Contributors", email = "hello@insetu.dev" }]

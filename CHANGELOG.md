@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.17.0-beta.1 (2026-08-31)
+
+### Bug Fixes
+
+- **core**: Resolve bridge revert snapshot lookup and external repo logical path mapping
+  ([`dcca1ff`](https://github.com/Callosemic/insetu/commit/dcca1ff706e9bfd90c5b2322fa7fc2d4882ceb40))
+
+### Features
+
+- Add explicit one-shot job scheduling, Stale-While-Revalidate caching, and sub-navigation fallback
+  resolution
+  ([`3f91277`](https://github.com/Callosemic/insetu/commit/3f91277a546f18a1325cb94e42f03ea8e4744be2))
+
+- Standardize extension spinners, add terminal gestures, and enhance tracker dependencies
+  ([`11ac2f7`](https://github.com/Callosemic/insetu/commit/11ac2f7cd0e567a331bcb7457146da5303b6f959))
+
+### Refactoring
+
+- **client-sdk**: Enforce non-destructive loading, Web Share API resilience, and ADR 0041 entity
+  action purity
+  ([`f577531`](https://github.com/Callosemic/insetu/commit/f577531cb453defe4cacd511d62124a1ed48c0e1))
+
+
 ## v0.16.1-beta.1 (2026-08-22)
 
 ### Bug Fixes
