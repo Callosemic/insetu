@@ -483,8 +483,8 @@ export class InSetuExtUpdate extends InSetuElement {
             },
             onComplete: (statusData) => {
                 const output = statusData.artifact?.output || statusData.message;
+                UpdateStore.setState({ lastReleaseLog: output });
                 if (isFirstRelease) {
-                    UpdateStore.setState({ lastReleaseLog: output });
                     this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
                     UpdateStore.getState().fetchRepoStatus(this.targetRepo);
                     UpdateStore.getState().fetchEligibleRepos();
@@ -494,9 +494,9 @@ export class InSetuExtUpdate extends InSetuElement {
                 console.log(`${successMessage} Output:\n`, output);
             },
             onError: (err) => {
+                const logText = `❌ ${successMessage} Error:\n\n${err.message}`;
+                UpdateStore.setState({ lastReleaseLog: logText });
                 if (isFirstRelease) {
-                    const logText = `❌ First Release Error:\n\n${err.message}`;
-                    UpdateStore.setState({ lastReleaseLog: logText });
                     this.setStatus(`❌ First release failed. See log below.`, 5000, true);
                 } else {
                     this.setStatus(`❌ ${successMessage} failed: ${err.message}`, 5000, true);
@@ -794,11 +794,12 @@ export class InSetuExtUpdate extends InSetuElement {
                                         buildMismatch = true;
                                     }
                                 }
-                                const step2Disabled = !this.repoConfigured || !this.isClean || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled' || buildMismatch;
+                                const isFirstReleasePhase = this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease;
+                                const step2Disabled = !this.repoConfigured || (isFirstReleasePhase && !this.isClean) || (this.distributionTarget === 'python_pypi' && !this.hasPypiToken) || this.distributionTarget === 'disabled' || buildMismatch;
                                 const buildLabel = this.latestBuildArtifact ? html`<span style="font-size: 0.75rem; color: var(--intent-success); font-family: var(--font-mono); text-align: center; display: block; margin-top: 4px;">📦 Active Artifact: ${this.latestBuildArtifact}</span>` : '';
                                 const mismatchLabel = buildMismatch ? html`<span style="font-size: 0.75rem; color: var(--intent-warning); font-style: italic; text-align: center; display: block; margin-top: 4px;">⚠️ Build artifact missing or version mismatch. Ensure Step 1 succeeded.</span>` : '';
 
-                                if (this.distributionTarget === 'python_pypi' ? !this.pypiPackageExists : !this.hasRelease) {
+                                if (isFirstReleasePhase) {
                                     return html`
                                         <sutram-async-btn 
                                             style="width: 100%;" 
@@ -927,8 +928,8 @@ export class InSetuExtUpdate extends InSetuElement {
                                 },
                                 onComplete: (statusData) => {
                                     const output = statusData.artifact?.output || statusData.message;
+                                    UpdateStore.setState({ lastReleaseLog: output });
                                     if (this.previewActionType === 'first_release') {
-                                        UpdateStore.setState({ lastReleaseLog: output });
                                         this.setStatus(`🎉 Initial release v${statusData.artifact?.version || ''} published!`, 5000);
                                         UpdateStore.getState().fetchRepoStatus(this.targetRepo);
                                         UpdateStore.getState().fetchEligibleRepos();
@@ -938,9 +939,9 @@ export class InSetuExtUpdate extends InSetuElement {
                                     }
                                 },
                                 onError: (err) => {
+                                    const logText = `❌ ${msg} Error:\n\n${err.message}`;
+                                    UpdateStore.setState({ lastReleaseLog: logText });
                                     if (this.previewActionType === 'first_release') {
-                                        const logText = `❌ First Release Error:\n\n${err.message}`;
-                                        UpdateStore.setState({ lastReleaseLog: logText });
                                         this.setStatus(`❌ First release failed. See log below.`, 5000, true);
                                     } else {
                                         this.setStatus(`❌ ${msg} failed: ${err.message}`, 5000, true);

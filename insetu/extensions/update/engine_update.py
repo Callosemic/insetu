@@ -50,6 +50,15 @@ UPDATE_SETTINGS_SCHEMA = [
         "secure": True,
         "default": "",
         "description": "Token utilized for authentication during the PyPI publishing phase."
+    },
+    {
+        "id": "github_token",
+        "label": "GitHub Personal Access Token",
+        "type": "password",
+        "scope": "workspace",
+        "secure": True,
+        "default": "",
+        "description": "Token utilized to authenticate with the GitHub API for Release card creation."
     }
 ]
 update_bp = InSetuExtension(
@@ -62,6 +71,20 @@ update_bp = InSetuExtension(
 __depends__ = ['git']
 __external_depends__ = ['semantic_release', 'build', 'twine']
 __external_binaries__ = ['git']
+
+def _get_valid_repo_path(ctx, repo):
+    """Helper to resolve and validate physical repository boundaries."""
+    repo_path = ctx.get_repo_path(repo)
+    if not os.path.exists(repo_path):
+        raise ValueError(f"Target repository path not found: {repo}")
+    return repo_path
+
+def _require_clean_tree(repo_path, action_name):
+    """Helper to enforce strict working tree cleanliness."""
+    status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
+    if status_check.stdout.strip():
+        raise RuntimeError(f"Working tree is not clean. Please commit or stash your changes before {action_name}.")
+
 def _clean_semantic_release_logs(log_text):
     """Helper to strip timestamps, file references, and commit parsing verbosity from semantic-release output."""
     if not log_text: return ""
@@ -89,15 +112,18 @@ def _clean_semantic_release_logs(log_text):
 @update_bp.worker("bump_task")
 def _background_bump_task(ctx, repo, prerelease=False):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""
-    repo_path = ctx.get_repo_path(repo)
-    if not os.path.exists(repo_path):
-        raise ValueError(f"Target repository path not found: {repo}")
+    import shutil
+    from pathlib import Path
+
+    repo_path = _get_valid_repo_path(ctx, repo)
 
     ctx.jobs.update_progress("Validating working tree integrity...")
-    # Pre-flight Validation: Block execution if uncommitted changes exist
-    status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
-    if status_check.stdout.strip():
-        raise RuntimeError("Working tree is not clean. Please commit or stash your changes before initiating a release bump.")
+    _require_clean_tree(repo_path, "initiating a release bump")
+
+    dist_dir = Path(repo_path) / "dist"
+    if dist_dir.exists():
+        shutil.rmtree(dist_dir)
+
     ctx.jobs.update_progress("Calculating semantic version and bumping repository...")
     # Environment Variable Injection for Parser Settings
     env = os.environ.copy()
@@ -152,6 +178,27 @@ def _background_bump_task(ctx, repo, prerelease=False):
         ctx.jobs.submit("publish_task", repo=repo)
         output += "\n\nAuto-publish workflow triggered."
     return {"message": "Version bumped successfully.", "artifact": {"output": output}}
+def _execute_twine_upload(ctx, repo, repo_path, base_env):
+    """Helper function to standardize PyPI distribution via Twine."""
+    import sys
+    import os
+    import subprocess
+
+    ctx.jobs.update_progress("Uploading to PyPI via twine...")
+    env = base_env.copy()
+
+    pypi_token = ctx.settings.get("pypi_token", "") or os.getenv("TWINE_PASSWORD", "") or os.getenv("PYPI_TOKEN", "")
+    if pypi_token:
+        env["TWINE_PASSWORD"] = pypi_token
+        env["TWINE_USERNAME"] = "__token__"
+
+    upload_res = subprocess.run([sys.executable, "-m", "twine", "upload", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False, env=env)
+
+    log = f"=== TWINE UPLOAD STDOUT ===\n{upload_res.stdout}\n=== TWINE UPLOAD STDERR ===\n{upload_res.stderr}"
+    if upload_res.returncode != 0:
+        raise RuntimeError(f"PyPI upload failed:\n{upload_res.stderr or upload_res.stdout}")
+
+    return log
 
 def _build_and_validate_distribution(ctx, repo_path):
     import sys, zipfile, shutil
@@ -188,7 +235,6 @@ def _build_and_validate_distribution(ctx, repo_path):
         raise RuntimeError(f"Twine validation failed:\n{twine_check.stderr or twine_check.stdout}")
 
     return log_lines
-
 @update_bp.worker("first_release_task")
 def _background_first_release_task(ctx, repo):
     """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
@@ -196,31 +242,16 @@ def _background_first_release_task(ctx, repo):
     import tarfile
     from pathlib import Path
 
-    repo_path = ctx.get_repo_path(repo)
-    if not os.path.exists(repo_path):
-        raise ValueError(f"Target repository path not found: {repo}")
-
+    repo_path = _get_valid_repo_path(ctx, repo)
     log_lines = []
 
     ctx.jobs.update_progress("Validating working tree cleanliness...")
-    status_check = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
-    if status_check.stdout.strip():
-        raise RuntimeError("Working tree is not clean. Please commit or stash your changes before issuing the initial release.")
+    _require_clean_tree(repo_path, "issuing the initial release")
+
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
     if dist_target == "python_pypi":
         log_lines.extend(_build_and_validate_distribution(ctx, repo_path))
-
-        ctx.jobs.update_progress("Uploading initial release to PyPI...")
-        env = os.environ.copy()
-        pypi_token = ctx.settings.get("pypi_token", "") or os.getenv("TWINE_PASSWORD", "") or os.getenv("PYPI_TOKEN", "")
-        if pypi_token:
-            env["TWINE_PASSWORD"] = pypi_token
-            env["TWINE_USERNAME"] = "__token__"
-
-        upload_res = subprocess.run([sys.executable, "-m", "twine", "upload", "dist/*"], cwd=repo_path, capture_output=True, text=True, check=False, env=env)
-        log_lines.append(f"=== TWINE UPLOAD STDOUT ===\n{upload_res.stdout}\n=== TWINE UPLOAD STDERR ===\n{upload_res.stderr}")
-        if upload_res.returncode != 0:
-            raise RuntimeError(f"PyPI upload failed:\n{upload_res.stderr or upload_res.stdout}")
+        log_lines.append(_execute_twine_upload(ctx, repo, repo_path, os.environ.copy()))
     else:
         log_lines.append(f"=== BUILD & UPLOAD [SKIPPED] ===\nDistribution target is set to '{dist_target}'.")
 
@@ -289,7 +320,6 @@ def api_update_preview_first_release(ctx):
 
     job_id = ctx.jobs.submit("preview_first_release_task", repo=repo)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @update_bp.worker("publish_task")
 def _background_publish_task(ctx, repo):
     """Phase 2: Distributes the updated package to configured registries."""
@@ -305,27 +335,40 @@ def _background_publish_task(ctx, repo):
 
     env = os.environ.copy()
     pypi_token = ctx.settings.get("pypi_token", "")
+    gh_token = ctx.settings.get("github_token", "")
+
     if pypi_token and dist_target == "python_pypi":
-        # Map the UI token to the standard twine/PSR environment variable
         env["TWINE_PASSWORD"] = pypi_token
         env["TWINE_USERNAME"] = "__token__"
 
-    cmd = ['semantic-release', 'publish']
+    if gh_token:
+        env["GH_TOKEN"] = gh_token
+
     try:
-        res = subprocess.run(
-            cmd, 
+        log_lines = []
+
+        if dist_target == "python_pypi":
+            log_lines.append(_execute_twine_upload(ctx, repo, repo_path, env))
+
+        # Let PSR handle any subsequent VCS/GitHub Release actions if configured
+        ctx.jobs.update_progress("Executing semantic-release publish...")
+        vcs_res = subprocess.run(
+            ['semantic-release', 'publish'], 
             cwd=repo_path, 
             capture_output=True, 
             text=True, 
-            check=True,
+            check=False,
             env=env
         )
+        clean_log = _clean_semantic_release_logs(vcs_res.stderr)
+        if clean_log or vcs_res.stdout.strip():
+            log_lines.append(f"=== VCS PUBLISH ===\n{clean_log}\n{vcs_res.stdout.strip()}".strip())
 
         import time
         if dist_target == "python_pypi":
             ctx.store.set(f"update_{repo}.json", "last_publish_time", time.time())
 
-        return {"message": "Package distributed successfully.", "artifact": {"output": res.stdout.strip()}}
+        return {"message": "Package distributed successfully.", "artifact": {"output": "\n\n".join(log_lines)}}
 
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
@@ -505,11 +548,10 @@ def _background_status_task(ctx, repo):
 
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
-
     vcs_match = re.search(r'^vcs_release\s*=\s*(true|false)', content, re.MULTILINE | re.IGNORECASE)
     vcs_release = vcs_match.group(1).lower() == 'true' if vcs_match else True
     has_pypi_token = bool(ctx.settings.get("pypi_token") or os.getenv("TWINE_PASSWORD") or os.getenv("PYPI_TOKEN"))
-    has_token = bool(has_pypi_token or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN"))
+    has_token = bool(ctx.settings.get("github_token") or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN"))
 
     # Check for existing build artifacts to validate Phase 1 success
     latest_build_artifact = None
