@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.17.0 (2026-08-31)
+
+### Features
+
+- **update**: Add GitHub token support and standardize release execution helpers
+  ([`7a8d3b6`](https://github.com/Callosemic/insetu/commit/7a8d3b61fb034d42a6ee64c70fd09bb30f5f1abc))
+
+
 ## v0.17.0-beta.1 (2026-08-31)
 
 ### Bug Fixes
