@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.18.0 (2026-09-04)
+
+### Features
+
+- Implement offline outbox reconciliation, SW core vendorization, and security gate UI
+  ([`fdf6ac6`](https://github.com/Callosemic/insetu/commit/fdf6ac698f81a05e2e1fd4c4459d41be85ea97dd))
+
+- **client**: Implement offline SDK wrap, Sutram offline provider, and offline management engine
+  ([`d917ebf`](https://github.com/Callosemic/insetu/commit/d917ebf0c865ae0cc1c7d16402ca98c89ab0c299))
+
+- **extensions**: Standardize offline resilience, namespaced event dispatches, dev logs, and publish
+  compilation
+  ([`46c3462`](https://github.com/Callosemic/insetu/commit/46c34625160f404ee6dd3ee20697128c2faba13a))
+
+- **kernel**: Add offline engine substrate, topology directory expansion, and content-hash gather
+  idempotency
+  ([`f0e501a`](https://github.com/Callosemic/insetu/commit/f0e501af41a7629a676a24454f8b4016190e1482))
+
+
 ## v0.17.0 (2026-08-31)
 
 ### Features
