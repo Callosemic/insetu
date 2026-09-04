@@ -1,18 +1,20 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "active"
+status: "closed"
 id: "INS-QUEUE-20260704_1700_OFFLINE_TYPEWRITER"
 title: "The Offline Typewriter: IndexedDB Mutation Queue for Citations & VFS"
 created_at: "2026-07-04T17:00:00"
-closed_at: null
+closed_at: "2026-09-02T15:14:15"
 sub_bucket: "None"
 delivery_date: "2026-08-09"
-tags: ["Architecture", "Offline", "Service-Worker", "Epic"]
+tags: "['Architecture', 'Offline', 'Service-Worker', 'Epic']"
 ---
 
 ## Description
-To support true "off-the-grid" academic writing and development (per ADR 0008), the OS must gracefully support localized Markdown editing and Citation management without an active network socket to the backend daemon.
+*(Note: This ticket has been closed. Its execution blueprint has been merged into ADR 0008[span_0](start_span)[span_0](end_span) and `axoneme-ecosystem/docs/standups/offline_architecture_blueprint.md`[span_1](start_span)[span_1](end_span) as of 2026-09-02).*
+
+To support true "off-the-grid" academic writing and development (per ADR 0008)[span_2](start_span)[span_2](end_span), the OS must gracefully support localized Markdown editing and Citation management without an active network socket to the backend daemon[span_3](start_span)[span_3](end_span).
 
 ### The Boundaries
 * **Supported Offline:** Browsing the local citation library, manually adding/editing CSL-JSON metadata, opening existing Markdown files, writing text, inserting `[@cite]` tags, and "saving" files to a local queue.
