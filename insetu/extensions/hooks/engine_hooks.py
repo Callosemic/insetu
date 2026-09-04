@@ -47,7 +47,7 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     # Enforce non-interactive environment
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    
+    print(f"🚀 [HOOKS WORKER] Executing command: {expanded_cmd} (cwd: {exec_cwd})")
     try:
         res = subprocess.run(
             expanded_cmd, 
@@ -55,24 +55,33 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
             cwd=exec_cwd, 
             capture_output=True, 
             text=True, 
-            env=env
+            env=env,
+            timeout=300
         )
         if res.returncode == 0:
             out_summary = res.stdout.strip() or "Execution finished successfully."
+            print(f"✅ [HOOKS WORKER] Command Succeeded:\n{out_summary}")
             return {"message": f"Hook [{rule_name}] succeeded.", "artifact": {"output": out_summary}}
         else:
             err_summary = res.stderr.strip() or res.stdout.strip() or f"Exit code {res.returncode}"
+            print(f"❌ [HOOKS WORKER] Command Failed:\n{err_summary}")
             raise RuntimeError(f"Command failed:\n{err_summary}")
+    except subprocess.TimeoutExpired as e:
+        print(f"❌ [HOOKS WORKER] Command Timed Out")
+        raise RuntimeError(f"Command timed out after 300 seconds:\n{e.stdout or ''}\n{e.stderr or ''}".strip())
     except Exception as e:
+        print(f"❌ [HOOKS WORKER] Execution Error: {str(e)}")
         raise RuntimeError(f"Execution Error: {str(e)}")
 @hooks.on('topology_resolved', priority=100)
 def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None, events=None, **kwargs):
     """Event Bus Hook: Evaluates active automation rules based on resolved topology boundaries."""
+    print(f"🔎 [HOOKS TELEMETRY] process_vfs_triggers triggered. dirty_repos: {dirty_repos}, events count: {len(events) if events else 0}")
     if not events:
         return
     # Security/Noise Guardrail: Do not trigger automations for system-level ledger-ignored writes
     # (e.g. CODE_INDEX.md cartography, or contexts/ payload generation)
     has_valid_event = any(not e.get("ignore_ledger") for e in events)
+    print(f"🔎 [HOOKS TELEMETRY] has_valid_event: {has_valid_event}")
     if not has_valid_event:
         return
 
@@ -83,7 +92,9 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
         active_rules = ctx.db.execute(
             "SELECT * FROM hooks_rules WHERE enabled = 1"
         ).fetchall()
-    except Exception:
+        print(f"🔎 [HOOKS TELEMETRY] Found {len(active_rules)} active rules.")
+    except Exception as e:
+        print(f"🔎 [HOOKS TELEMETRY] Failed to fetch active rules: {e}")
         return
 
     if not active_rules:
@@ -104,6 +115,9 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
         elif r_type == 'repo_bucket_update':
             if r_target in touched_buckets or (r_target.startswith('ALL::') and any(b.endswith('::' + r_target.split('::')[1]) for b in touched_buckets)):
                 should_trigger = True
+
+        print(f"🔎 [HOOKS TELEMETRY] Evaluating Rule: '{rule['name']}'. Type: {r_type}, Target: {r_target}. should_trigger: {should_trigger}")
+
         if should_trigger:
             import time
             import insetu.kernel.db as kernel_db
@@ -111,18 +125,26 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
                 # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds      
                 # due to overlapping individual and transaction-level VFS hooks.
+                # Added a 300-second expiration to 'processing' locks to prevent eternal deadlocks if a process hangs.
                 recent = w_conn.execute("""
-                    SELECT id FROM immediate_jobs 
+                    SELECT id, status, created_at FROM immediate_jobs 
                     WHERE ext_name = 'hooks' 
                     AND callback_name = 'execute_rule_task' 
-                    AND (status IN ('pending', 'processing') OR created_at > ?)
+                    AND (
+                        (status IN ('pending', 'processing') AND created_at > ?) 
+                        OR created_at > ?
+                    )
                     AND args_json LIKE ?
-                """, (time.time() - 3.0, f'%"rule_id": "{rule["id"]}"%')).fetchone()
+                """, (time.time() - 300.0, time.time() - 3.0, f'%"rule_id": "{rule["id"]}"%')).fetchone()
+
                 if recent:
+                    print(f"🔎 [HOOKS TELEMETRY] Skipping Rule '{rule['name']}' due to active/recent lock: Job ID {recent['id']}, Status: {recent['status']}, Created: {recent['created_at']}")
                     continue
-            except Exception:
+            except Exception as db_err:
+                print(f"⚠️ [Hooks] Warning: Deduplication query failed: {db_err}")
                 pass
 
+            print(f"🔎 [HOOKS TELEMETRY] Submitting Rule '{rule['name']}' to worker queue.")
             ctx.jobs.submit(
                 "execute_rule_task", 
                 rule_id=rule['id'], 

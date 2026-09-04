@@ -86,16 +86,19 @@ def compile_document_payload(workspace_id, filepath, target_format):
                 compiler_flags.extend(res.get('compiler_flags', []))
     except Exception as e:
         print(f"Warning: Extension middleware failed during document compilation: {e}")
-
     temp_dir = tempfile.mkdtemp()
     try:
+        in_filename = "input.md"
+        in_path = Path(temp_dir).joinpath(in_filename).as_posix()
+        Path(in_path).write_text(content, encoding='utf-8')
+
         for filename, file_content in temp_files.items():
             Path(temp_dir).joinpath(filename).write_text(file_content, encoding='utf-8')
 
         out_filename = f"compiled_output.{target_format}"
         out_path = Path(temp_dir).joinpath(out_filename).as_posix()
 
-        cmd = ['pandoc', resolved_path, '-o', out_path]
+        cmd = ['pandoc', in_path, '-o', out_path]
         cmd.extend(compiler_flags)
 
         try:

@@ -47,7 +47,10 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         try {
             const res = await window.inSetu.api.post('favorites/add', newItem);
             if (res.ok) {
-                FavoritesStore.getState().fetchFavorites();
+                const data = await res.json().catch(()=>({}));
+                if (data.job_id !== 'offline_queue') {
+                    FavoritesStore.getState().fetchFavorites();
+                }
             } else {
                 FavoritesStore.setState(state => ({ items: state.items.filter(item => item.id !== tempId) }));
             }
@@ -144,6 +147,9 @@ export class InSetuExtFavorites extends InSetuElement {
             this.items = state.items;
             this.loading = state.loading;
         });
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            FavoritesStore.getState().fetchFavorites();
+        });
         FavoritesStore.getState().fetchFavorites();
     }
     // InSetuElement SDK lifecycle hook for stateless tenant swaps
@@ -204,6 +210,7 @@ customElements.define('insetu-ext-favorites', InSetuExtFavorites);
 window.ExtensionRegistry.registerExtension('favorites', {
     name: "Favorites Bar",
     version: "1.0.0",
+    offline_mode: "full",
     entityActions: [
         {
             targetEntity: 'file',

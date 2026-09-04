@@ -4,6 +4,7 @@ import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
     bridgeErrors: [],
+    backendLogs: '',
     lastUpdate: null,
     forceRefreshTick: 0
 });
@@ -185,6 +186,91 @@ export class InSetuExtDevDash extends InSetuElement {
     }
 }
 customElements.define('insetu-ext-dev-dash', InSetuExtDevDash);
+export class InSetuExtDevLogs extends InSetuElement {
+    static get extensionName() { return 'dev'; }
+    static properties = {
+        backendLogs: { type: String },
+        loading: { type: Boolean }
+    };
+    static styles = [sharedStyles, css`
+        :host { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 20px; box-sizing: border-box; background: var(--bg); }
+        pre { flex: 1; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; }
+    `];
+
+    constructor() {
+        super();
+        this.backendLogs = '';
+        this.loading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(DevStore, state => {
+            this.backendLogs = state.backendLogs || '';
+        });
+    }
+
+    onWorkspaceLoad() { this.fetchLogs(); }
+    onViewActivated() { this.fetchLogs(); }
+    onForceRefresh() { this.fetchLogs(); }
+    async fetchLogs() {
+        this.loading = true;
+        try {
+            const res = await this.api.get('logs');
+            if (res.ok) {
+                const data = await res.json();
+                DevStore.setState({ backendLogs: data.logs || '' });
+            }
+        } catch(e) {
+            DevStore.setState({ backendLogs: 'Failed to fetch logs: ' + e.message });
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    async copyLogs() {
+        if (!this.backendLogs) return;
+        try {
+            await navigator.clipboard.writeText(this.backendLogs);
+            if (window.inSetu?.ui?.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("📋 Logs copied to clipboard!", 2000);
+            }
+        } catch (err) {
+            console.error("Failed to copy logs:", err);
+        }
+    }
+
+    render() {
+        return html`
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-shrink: 0;">
+                <div>
+                    <h2 style="margin: 0; color: var(--text);">Daemon Logs</h2>
+                    <span style="font-size: 0.85rem; color: var(--text-muted);">Recent systemd output for insetu.service.</span>
+                </div>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    ${this.loading ? html`<sutram-spinner style="display:block; margin:0;" text="Fetching..."></sutram-spinner>` : ''}
+                    <button @click=${this.copyLogs} title="Copy to Clipboard" style="background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
+                        📋 Copy
+                    </button>
+                </div>
+            </div>
+            <pre style="border: 1px solid var(--border); background: var(--input-bg); border-radius: 4px; padding: 15px; color: var(--text-muted); opacity: ${this.loading ? 0.6 : 1};">${this.backendLogs || 'No logs available.'}</pre>
+        `;
+    }
+}
+customElements.define('insetu-ext-dev-logs', InSetuExtDevLogs);
+
+export class InSetuExtDevLogsActions extends InSetuElement {
+    static get extensionName() { return 'dev'; }
+    static styles = [sharedStyles, css`
+        button { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; font-weight: bold; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; padding: 0; font-size: 1.1rem; transition: background 0.2s; margin: 0; }
+        button:hover { background: var(--input-bg); }
+    `];
+    render() {
+        return html`<button title="Refresh Logs" @click=${() => this.dispatch('insetu:force-refresh', { parentId: 'dev', subId: 'logs' })}>🔄</button>`;
+    }
+}
+customElements.define('insetu-ext-dev-logs-actions', InSetuExtDevLogsActions);
 
 window.ExtensionRegistry.registerExtension('dev', {
     name: "Developer Tools",
@@ -203,6 +289,21 @@ window.ExtensionRegistry.registerExtension('dev', {
             label: "Dashboard",
             order: 1,
             component: "insetu-ext-dev-dash"
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "dev",
+            id: "logs",
+            label: "Daemon Logs",
+            order: 2,
+            component: "insetu-ext-dev-logs"
+        },
+        {
+            slot: "slots:sub-navigation-actions",
+            targetParent: "dev",
+            targetSub: "logs",
+            component: "insetu-ext-dev-logs-actions",
+            order: 1
         }
     ],
 });

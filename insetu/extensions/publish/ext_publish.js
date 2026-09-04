@@ -3,12 +3,12 @@ import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
 import { createExtensionStore, InSetuElement } from '../core/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
-
 export const PublishStore = createExtensionStore('Publish', {
     publishModalOpen: false,
     currentPublishTarget: '',
     publishMode: 'pdf',
-    activePublishJobId: null
+    activePublishJobId: null,
+    publishError: ''
 });
 
 window.inSetu.stores.Publish = PublishStore;
@@ -19,7 +19,8 @@ export class InSetuExtPublishModals extends InSetuElement {
         publishModalOpen: { type: Boolean },
         currentPublishTarget: { type: String },
         publishMode: { type: String },
-        activePublishJobId: { type: String }
+        activePublishJobId: { type: String },
+        publishError: { type: String }
     };
     static styles = [sharedStyles];
 
@@ -30,7 +31,6 @@ export class InSetuExtPublishModals extends InSetuElement {
         this.publishMode = 'pdf';
         this.activePublishJobId = null;
     }
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(PublishStore, state => {
@@ -38,32 +38,13 @@ export class InSetuExtPublishModals extends InSetuElement {
             this.currentPublishTarget = state.currentPublishTarget;
             this.publishMode = state.publishMode;
             this.activePublishJobId = state.activePublishJobId;
+            this.publishError = state.publishError;
         });
     }
-
     disconnectedCallback() {
         super.disconnectedCallback();
         if (window.inSetu?.extensions?.Registry?.executeUnload) {
             window.inSetu.extensions.Registry.executeUnload('publish');
-        }
-    }
-
-    async _executePublish() {
-        PublishStore.setState({ activePublishJobId: 'starting' });
-        try {
-            const res = await this.api.post('compile-document', { 
-                filepath: this.currentPublishTarget, 
-                format: this.publishMode 
-            });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.error || "Compilation request failed.");
-            }
-            const data = await res.json();
-            PublishStore.setState({ activePublishJobId: data.job_id });
-        } catch (e) {
-            PublishStore.setState({ activePublishJobId: null });
-            alert("Error starting publish job: " + e.message);
         }
     }
 
@@ -81,27 +62,44 @@ export class InSetuExtPublishModals extends InSetuElement {
                         ]}
                         @sutram-input-changed=${e => PublishStore.setState({ publishMode: e.detail.value })}>
                     </sutram-select>
-                    <insetu-job-tracker 
-                        .jobId=${this.activePublishJobId} 
-                        @job-complete=${async (e) => {
-                            const artifact = e.detail.artifact;
-                            if (this.vfs && this.vfs.downloadFile) {
-                                try {
-                                    await this.vfs.downloadFile(artifact.download_url, artifact.filename);
-                                } catch (err) {
-                                    this.setStatus("Download failed: " + err.message, 3000, true);
-                                }
-                            }
-                            PublishStore.setState({ activePublishJobId: null, publishModalOpen: false });
-                        }}
-                        @job-error=${() => PublishStore.setState({ activePublishJobId: null })}>
-                    </insetu-job-tracker>
+
+                    ${this.publishError ? html`
+                        <div style="margin-top: 15px; padding: 12px; background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 4px; color: var(--intent-danger); font-size: 0.85rem; font-family: var(--font-mono); white-space: pre-wrap;">
+                            <strong>Error:</strong> ${this.publishError}
+                        </div>
+                    ` : ''}
                 </div>
                 <div slot="footer">
-                    <button class="btn-sm" style="flex: 1; padding: 15px; background: var(--intent-primary); color: white; border: none; font-weight: bold; cursor: pointer;"
-                        ?disabled=${!!this.activePublishJobId} @click=${this._executePublish}>
-                        🚀 Compile & Download
-                    </button>
+                    <sutram-async-btn 
+                        label="🚀 Compile & Download" 
+                        intent="primary" 
+                        style="flex: 1; margin: 0; --btn-padding: 15px;"
+                        .onClick=${this.api.bindJobAction('compile-document', 
+                            () => {
+                                PublishStore.setState({ publishError: '' });
+                                return { filepath: this.currentPublishTarget, format: this.publishMode };
+                            }, 
+                            {
+                                onProgress: (msg) => this.setStatus(`⏳ ${msg}`, null),
+                                onComplete: async (statusData) => {
+                                    const artifact = statusData.artifact;
+                                    if (this.vfs && this.vfs.downloadFile) {
+                                        try {
+                                            await this.vfs.downloadFile(artifact.download_url, artifact.filename);
+                                        } catch (err) {
+                                            PublishStore.setState({ publishError: "Download failed: " + err.message });
+                                        }
+                                    }
+                                    PublishStore.setState({ publishModalOpen: false });
+                                    this.setStatus("✅ Compilation successful.", 2000);
+                                },
+                                onError: (err) => {
+                                    PublishStore.setState({ publishError: err.message });
+                                    this.setStatus("❌ Compile failed.", 5000, true);
+                                }
+                            }
+                        )}>
+                    </sutram-async-btn>
                 </div>
             </sutram-modal>
         `;
@@ -126,7 +124,7 @@ window.ExtensionRegistry.registerExtension('publish', {
                 return fp.endsWith('.md');
             },
             onClick: (data, e) => {
-                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, activePublishJobId: null });
+                PublishStore.setState({ publishModalOpen: true, currentPublishTarget: data.filepath, activePublishJobId: null, publishError: '' });
             }
         }
     ],

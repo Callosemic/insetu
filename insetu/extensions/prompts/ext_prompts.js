@@ -99,8 +99,10 @@ export class InSetuExtPrompts extends InSetuElement {
             const touchedPrompt = payload.mutations.some(m => isPromptPath(m.filepath));
             if (touchedPrompt) setTimeout(() => syncPromptsState(), 300);
         });
-
         this.registerGlobalListener('insetu:soft-refresh', window, () => {
+            syncPromptsState();
+        });
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
             syncPromptsState();
         });
 
@@ -220,6 +222,7 @@ function isPromptPath(filepath) {
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
+    offline_mode: "full",
     entityActions: [],
     layoutSlots: [
         {

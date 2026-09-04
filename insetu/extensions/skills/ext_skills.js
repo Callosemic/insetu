@@ -166,7 +166,11 @@ export class InSetuExtSkills extends InSetuElement {
                 this._editGroup = '';
             }
         });
-    }
+
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            this._reloadAll(true);
+        });
+}
     disconnectedCallback() {
         super.disconnectedCallback();
     }
@@ -207,8 +211,13 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: metrics
         };
         try {
-            await this.api.postJson('create', payload);
+            const res = await this.api.postJson('create', payload);
             SkillsStore.setState({ newSkillModalOpen: false });
+            if (res.job_id === 'offline_queue') {
+                const tempFilepath = `${domain}/${window.inSetu.utils.slugify(payload.name)}.md`;
+                const newItem = { ...payload, filepath: tempFilepath, id: 'SKL-' + Date.now() };
+                SkillsStore.setState(s => ({ allSkills: [...s.allSkills, newItem] }));
+            }
         } catch (err) {
             alert(`Failed to compile item structure: ${err.message}`);
         }
@@ -268,8 +277,15 @@ export class InSetuExtSkills extends InSetuElement {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            await this.api.postJson('delete', { filepath: this.selectedItem.filepath });
+            const res = await this.api.postJson('delete', { filepath: this.selectedItem.filepath });
+            const filepath = this.selectedItem.filepath;
             SkillsStore.setState({ selectedItem: null });
+            if (res.job_id === 'offline_queue') {
+                SkillsStore.setState(s => ({
+                    playlist: s.playlist.filter(p => p.filepath !== filepath),
+                    allSkills: s.allSkills.filter(p => p.filepath !== filepath)
+                }));
+            }
             alert("Track permanently wiped from file system.");
         } catch (err) {
             alert(`Failed to execute deletion sequence: ${err.message}`);
@@ -288,8 +304,15 @@ export class InSetuExtSkills extends InSetuElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            await this.api.postJson('update', payload);
+            const res = await this.api.postJson('update', payload);
+            const item = this.selectedItem;
             SkillsStore.setState({ selectedItem: null });
+            if (res.job_id === 'offline_queue') {
+                SkillsStore.setState(s => ({
+                    allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p),
+                    playlist: s.playlist.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p)
+                }));
+            }
             alert("Structural configuration updated successfully!");
         } catch (err) {
             alert(`Failed to save adjustments: ${err.message}`);
@@ -308,8 +331,15 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: this.formMetrics
         };
         try {
-            await this.api.postJson('log', payload);
+            const res = await this.api.postJson('log', payload);
+            const item = this.selectedItem;
             SkillsStore.setState({ selectedItem: null });
+            if (res.job_id === 'offline_queue') {
+                SkillsStore.setState(s => ({
+                    playlist: s.playlist.filter(p => p.id !== item.id),
+                    allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, status: payload.status, metrics: payload.metrics } : p)
+                }));
+            }
             alert("Practice entry committed atomically into text ledger!");
         } catch (err) {
             console.error("Practice logging failed:", err);
@@ -632,6 +662,7 @@ customElements.define('insetu-ext-skills', InSetuExtSkills);
 window.ExtensionRegistry.registerExtension('skills', {
     name: "Skills Tracker",
     version: "1.0.0",
+    offline_mode: "full",
     entityActions: [
         {
             targetEntity: 'skill',

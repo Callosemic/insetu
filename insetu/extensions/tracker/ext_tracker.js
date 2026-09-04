@@ -118,11 +118,14 @@ export const KanbanStore = createExtensionStore('Kanban', {
         const res = await window.inSetu.api.post('tracker/transition', { repo: task.repo, filepath: task.filepath, new_status: newStatus, new_type: newType });
         if (res.ok) {
             const data = await res.json();
-            KanbanStore.setState(state => ({
-                tasks: state.tasks.map(t => t.id === task.id ? {
-                    ...t, status: newStatus, filepath: data.new_filepath, ticket_type: newType || t.ticket_type
-                } : t)
-            }));
+            KanbanStore.setState(state => {
+                const nextPath = data.new_filepath || task.filepath.replace(`/${task.status}/`, `/${newStatus}/`);
+                return {
+                    tasks: state.tasks.map(t => t.id === task.id ? {
+                        ...t, status: newStatus, filepath: nextPath, ticket_type: newType || t.ticket_type
+                    } : t)
+                };
+            });
         } else {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.error || "Failed to transition task.");
@@ -303,11 +306,54 @@ constructor() {
         this.registerGlobalListener('insetu:tracker:load-board', window, () => {
             KanbanStore.getState().fetchTasks();
         });
-        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+        this.registerGlobalListener('insetu:vfs-mutated', window, async (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedTracker = payload.mutations.some(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
-            if (touchedTracker) KanbanStore.getState().fetchTasks();
+
+            const touchedTracker = payload.mutations.filter(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
+            if (touchedTracker.length > 0) {
+                const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
+                if (isOffline) {
+                    for (const m of touchedTracker) {
+                        if (m.operation === 'save') {
+                            try {
+                                const res = await window.inSetu.api.get(`fs/fetch?file=${encodeURIComponent(m.filepath)}`);
+                                if (res.ok) {
+                                    const content = await res.text();
+                                    const { meta } = window.inSetu.utils.parseFrontmatter(content);
+                                    KanbanStore.setState(state => {
+                                        const tasks = [...state.tasks];
+                                        const idx = tasks.findIndex(t => t.filepath === m.filepath);
+                                        if (idx !== -1) {
+                                            const old = tasks[idx];
+                                            tasks[idx] = {
+                                                ...old,
+                                                repo: meta.repo || old.repo,
+                                                ticket_type: meta.type || old.ticket_type,
+                                                status: meta.status || old.status,
+                                                title: meta.title || old.title,
+                                                subBucket: meta.sub_bucket || old.subBucket,
+                                                priority: meta.priority || old.priority,
+                                                size: meta.size || old.size,
+                                                parentId: meta.parent_id || meta.parent || old.parentId,
+                                                tier: meta.tier ? parseInt(meta.tier, 10) : old.tier,
+                                                deliveryDate: meta.delivery_date && meta.delivery_date !== 'null' ? meta.delivery_date : old.deliveryDate,
+                                                tags: meta.tags ? (typeof meta.tags === 'string' ? JSON.parse(meta.tags) : meta.tags) : old.tags,
+                                                dependsOn: meta.depends_on ? (typeof meta.depends_on === 'string' ? JSON.parse(meta.depends_on) : meta.depends_on) : old.dependsOn
+                                            };
+                                        }
+                                        return { tasks };
+                                    });
+                                }
+                            } catch (err) {
+                                console.warn("Optimistic task edit failed:", err);
+                            }
+                        }
+                    }
+                } else {
+                    KanbanStore.getState().fetchTasks();
+                }
+            }
         });
         if (KanbanStore?.getState?.()?.fetchTasks) {
             KanbanStore.getState().fetchTasks();
@@ -318,6 +364,9 @@ constructor() {
                 KanbanStore.getState().fetchTasks();
                 KanbanStore.getState().fetchSettings();
             }
+        });
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            KanbanStore.getState().fetchTasks();
         });
     }
     onWorkspaceLoad(workspaceId) {
@@ -1183,12 +1232,25 @@ export class InSetuExtTrackerModals extends InSetuElement {
             alert("Title is required.");
             throw new Error("Title is required.");
         }
-        await this.api.postJson('new', {
+        const res = await this.api.postJson('new', {
             repo, tier, type, status, title, tags, description: desc, sub_bucket, delivery_date: deliveryDate,
             parent_id: parentId, depends_on: (dependsOn || []).join(', '), priority, size
         });
         KanbanStore.getState().setModal('new', false);
-        KanbanStore.getState().fetchTasks();
+
+        if (res.job_id === 'offline_queue') {
+            const tempId = `TKT-OFFLINE-${Date.now()}`;
+            KanbanStore.setState(s => ({
+                tasks: [...s.tasks, {
+                    id: tempId, repo, tier, ticket_type: type, status, title, description: desc, 
+                    tags: tags ? tags.split(',').map(t=>t.trim()) : [], subBucket: sub_bucket, 
+                    timestamp: new Date().toISOString(), parentId, dependsOn: dependsOn || [], 
+                    priority, size, filepath: `${repo}/.tracker/${type}s/${status}/${tempId}.md`
+                }]
+            }));
+        } else {
+            KanbanStore.getState().fetchTasks();
+        }
     }
     _openEditTaskModal(filepath) {
         KanbanStore.getState().setEditTaskField('filepath', filepath);
@@ -1299,10 +1361,16 @@ export class InSetuExtTrackerModals extends InSetuElement {
         if (!confirm("Are you sure you want to permanently delete this ticket? This cannot be undone.")) return;
 
         await this.sys.executeWorkspaceMutation('fs/delete', { filepath }, {
-            onSuccess: () => {
+            onSuccess: (data) => {
                 KanbanStore.getState().setModal('edit', false);
                 this._originalTaskSnapshot = null;
-                KanbanStore.getState().fetchTasks();
+                if (data && data.job_id === 'offline_queue') {
+                    KanbanStore.setState(s => ({
+                        tasks: s.tasks.filter(t => t.filepath !== filepath)
+                    }));
+                } else {
+                    KanbanStore.getState().fetchTasks();
+                }
             }
         });
     }
@@ -2566,6 +2634,7 @@ customElements.define('insetu-ext-tracker-settings', InSetuExtTrackerSettings);
 window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
     version: "2.0.0",
+    offline_mode: "full",
     settingsActions: [
         {
             id: 'tracker_domain_vocab',

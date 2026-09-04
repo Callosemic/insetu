@@ -108,7 +108,7 @@ export class InSetuExtFlow extends InSetuElement {
             if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
         });
         this.subscribe(AppStore, state => state.manifest, () => this._debouncedFetchBatches());
-        this.registerGlobalListener('git-diffs-refreshed', window, () => {
+        this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             this._debouncedManifestRefresh();
         });
         this.subscribe(AppStore, state => {
@@ -128,6 +128,10 @@ export class InSetuExtFlow extends InSetuElement {
             if (promptTouched) {
                 this.dispatch('insetu:flow:refresh-prompt');
             }
+        });
+
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            FlowStore.getState().fetchBatches();
         });
 
         const as = AppStore.getState ? AppStore.getState() : {};
@@ -725,6 +729,7 @@ customElements.define('insetu-ext-flow-actions', InSetuExtFlowActions);
 window.ExtensionRegistry.registerExtension('flow', {
     name: "Workflows",
     version: "2.0.0",
+    offline_mode: "full",
     entityActions: [
         {
             targetEntity: 'workflow_batch',

@@ -113,6 +113,25 @@ def get_dev_metrics(ctx):
         "thrashing": thrashing_data,
         "bridge_errors": [dict(r) for r in error_rows]
     })
+@dev_bp.route('logs', methods=['GET'])
+def get_backend_logs(ctx):
+    import subprocess
+    try:
+        # Query the systemd journal for the user service if running in background
+        res = subprocess.run(
+            ["journalctl", "--user", "-u", "insetu.service", "-n", "200", "--no-pager"], 
+            capture_output=True, text=True, timeout=5
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return jsonify({"status": "success", "logs": res.stdout.strip()})
+        else:
+            return jsonify({
+                "status": "success", 
+                "logs": "No systemd logs found for 'insetu.service'.\nIf you are running via 'insetu serve' directly in your terminal, the logs will print there instead."
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "logs": f"Failed to fetch logs: {str(e)}"})
+
 # 4. Background Garbage Collection
 @dev_bp.worker("sweep_telemetry")
 def sweep_telemetry_worker(ctx, **kwargs):

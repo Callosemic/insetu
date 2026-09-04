@@ -46,14 +46,13 @@ export async function generateDiffs(force = false) {
             await window.inSetu.sys.executeSystemCompile((msg) => {
                 gitStoreObj.setState({ diffJobMessage: msg });
             }, false, 'git_diffs', targetRepos);
-
             gitStoreObj.setState({  
                 activeDiffJobId: null, 
                 dirtyDiffRepos: new Set(),
                 diffJobMessage: null,
                 diffJobError: null
             });
-            window.inSetu.events.emit('git-diffs-refreshed');
+            window.dispatchEvent(new CustomEvent('insetu:git:diffs-refreshed'));
         } catch (error) {
             gitStoreObj.setState({ activeDiffJobId: null, diffJobError: error.message });
         }
@@ -151,8 +150,8 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.categoryOrder = gatherState.categoryOrder || [];
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
         this.registerGlobalListener('insetu:git:generate-diffs', window, (e) => generateDiffs(e.detail?.force));
-        this.registerGlobalListener('open-push-modal', window, this._handleOpenPush.bind(this));
-        this.registerGlobalListener('git-diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
+        this.registerGlobalListener('insetu:git:open-push-modal', window, this._handleOpenPush.bind(this));
+        this.registerGlobalListener('insetu:git:diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
         this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
@@ -169,10 +168,14 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 }
                 return false;
             });
-
             if (reposChanged) {
                 GitStore.setState({ dirtyDiffRepos: newDirty });
             }
+        });
+
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            this._fetchSweepStatusSilent();
+            GitStore.getState().fetchStatus();
         });
 
         this._fetchSweepStatusSilent();
@@ -224,7 +227,7 @@ disconnectedCallback() {
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                 try { await this.compileSystem(); } catch (e) {}
-                window.inSetu.events.emit('insetu:git:generate-diffs', { force: true });
+                window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
             },
             onError: (err) => alert(`❌ Push failed:\n\n${err.message}`)
         });
@@ -281,7 +284,7 @@ disconnectedCallback() {
                 newDirty.add("ALL");
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
-                this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
+                this.compileSystem().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
             },
             onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
         });
@@ -302,7 +305,7 @@ disconnectedCallback() {
                 newDirty.add("ALL");
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
-                this.compileSystem().then(() => window.inSetu.events.emit('insetu:git:generate-diffs', { force: true }));
+                this.compileSystem().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
             },
             onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
         });
@@ -840,6 +843,7 @@ customElements.define('insetu-ext-git-ctrl', InSetuExtGitCtrl);
 window.ExtensionRegistry.registerExtension('git', {
     name: "Version Control",
     version: "2.0.0",
+    offline_mode: "read_only",
     entityActions: [
         {
             targetEntity: 'diff',
@@ -848,7 +852,7 @@ window.ExtensionRegistry.registerExtension('git', {
             icon: '🚀',
             intent: 'highlight',
             order: 10,
-            emitEvent: (data) => ({ name: 'open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } })
+            emitEvent: (data) => ({ name: 'insetu:git:open-push-modal', detail: { diffFile: data.filepath, repo: data.repoDir } })
         },
         {
             targetEntity: 'repo',

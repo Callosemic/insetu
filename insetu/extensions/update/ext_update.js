@@ -456,8 +456,7 @@ export class InSetuExtUpdate extends InSetuElement {
         }
         UpdateStore.getState().checkDependencies();
         UpdateStore.getState().fetchEligibleRepos();
-
-        this.registerGlobalListener('git-diffs-refreshed', window, () => {
+        this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             if (this.targetRepo) {
                 UpdateStore.getState().fetchRepoStatus(this.targetRepo);
             }
@@ -960,6 +959,7 @@ customElements.define('insetu-ext-update', InSetuExtUpdate);
 window.ExtensionRegistry.registerExtension('update', {
     name: "Semantic Update",
     version: "1.0.0",
+    offline_mode: "none",
     layoutSlots: [
         {
             slot: "slots:sub-navigation",

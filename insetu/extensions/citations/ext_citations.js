@@ -103,6 +103,7 @@ export class InSetuExtCitations extends InSetuElement {
         this.registerGlobalListener('insetu:citations:edit', window, (e) => this._openEditModal(e.detail.data));
         this.registerGlobalListener('insetu:citations:pin', window, (e) => this._openAttachModal(e.detail.data));
         this.registerGlobalListener('insetu:citations:import', window, (e) => this._importExploreCitation(e.detail.data));
+        this.registerGlobalListener('sutram-sync-complete', window, () => this.loadMainLibrary());
         const cState = CitationStore.getState();
         this.localLibrary = cState.localLibrary || [];
         const aState = AppStore.getState();
@@ -113,13 +114,12 @@ export class InSetuExtCitations extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         this.loadMainLibrary();
     }
-
     onForceRefresh() {
         CitationStore.setState({
             reposExpanded: false,
             bucketsExpanded: {}
         });
-        window.inSetu.events.emit('citations-load-main');
+        this.dispatch('insetu:citations:load-main');
         this.loadMainLibrary();
     }
 
@@ -280,8 +280,16 @@ export class InSetuExtCitations extends InSetuElement {
         try {
             const res = await this.api.post(`${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts });
             if (res.ok) {
+                const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeAttachCitation: { ...this.activeAttachCitation, _attachments: newAtts } });
-                this.loadMainLibrary();
+                if (data.job_id === 'offline_queue') {
+                    const id = this.activeAttachCitation.id;
+                    CitationStore.setState(s => ({
+                        localLibrary: s.localLibrary.map(c => c.id === id ? { ...c, _attachments: newAtts } : c)
+                    }));
+                } else {
+                    this.loadMainLibrary();
+                }
             } else {
                 throw new Error('Failed to save attachment.');
             }
@@ -314,8 +322,14 @@ export class InSetuExtCitations extends InSetuElement {
         try {
             const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`);
             if (res.ok) {
+                const data = await res.json().catch(()=>({}));
+                const id = this.activeEditCitation.id;
                 CitationStore.setState({ activeEditCitation: null });
-                this.loadMainLibrary();
+                if (data.job_id === 'offline_queue') {
+                    CitationStore.setState(s => ({ localLibrary: s.localLibrary.filter(c => c.id !== id) }));
+                } else {
+                    this.loadMainLibrary();
+                }
             } else {
                 throw new Error("Failed to delete citation.");
             }
@@ -350,8 +364,17 @@ export class InSetuExtCitations extends InSetuElement {
         try {
             const res = await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
             if (res.ok) {
+                const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeEditCitation: null });
-                this.loadMainLibrary();
+                if (data.job_id === 'offline_queue') {
+                    CitationStore.setState(s => {
+                        const exists = s.localLibrary.some(c => c.id === payload.id);
+                        if (exists) return { localLibrary: s.localLibrary.map(c => c.id === payload.id ? payload : c) };
+                        return { localLibrary: [...s.localLibrary, payload] };
+                    });
+                } else {
+                    this.loadMainLibrary();
+                }
             } else {
                 throw new Error("Failed to save citation.");
             }
@@ -710,6 +733,7 @@ customElements.define('insetu-ext-citations-modals', InSetuExtCitationsModals);
 window.ExtensionRegistry.registerExtension('citations', {
     name: "Reference Manager",
     version: "2.0.0",
+    offline_mode: "full",
     entityActions: [
         {
             targetEntity: 'citation',

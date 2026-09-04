@@ -32,17 +32,22 @@ export const NotesStore = createExtensionStore('Notes', {
     saveNewNote: async () => {
         const { title, repo, bucket, tags } = NotesStore.getState().noteForm;
         if (!title) return alert("Title is required.");
-
         try {
             const res = await window.inSetu.api.post('notes/new', { title, repo, sub_bucket: bucket, tags });
             if (res.ok) {
                 const data = await res.json();
+                let newFilepath = data.filepath;
+                if (data.job_id === 'offline_queue') {
+                    const slug = window.inSetu.utils.slugify(title);
+                    newFilepath = `.insetu/notes/${slug}-note-${Date.now()}.md`;
+                    NotesStore.setState(s => ({ notes: [{ filepath: newFilepath, title, repo, sub_bucket: bucket, tags: tags ? tags.split(',') : [], updated_at: new Date().toISOString() }, ...s.notes] }));
+                }
                 NotesStore.setState({ 
                     newNoteModalOpen: false, 
-                    editNoteFilepath: data.filepath,
+                    editNoteFilepath: newFilepath,
                     noteForm: { title: '', repo: 'global', bucket: 'None', tags: '' } 
                 });
-                NotesStore.getState().fetchNotes();
+                if (data.job_id !== 'offline_queue') NotesStore.getState().fetchNotes();
             } else {
                 const err = await res.json();
                 alert("Failed to create note: " + err.error);
@@ -195,9 +200,13 @@ export class InSetuExtNotesEditor extends InSetuElement {
         if (!confirm("Are you sure you want to permanently delete this note? This cannot be undone.")) return;
 
         await this.sys.executeWorkspaceMutation('fs/delete', { filepath: this.filepath }, {
-            onSuccess: () => {
+            onSuccess: (data) => {
                 NotesStore.setState({ editNoteFilepath: null });
-                NotesStore.getState().fetchNotes();
+                if (data && data.job_id === 'offline_queue') {
+                    NotesStore.setState(s => ({ notes: s.notes.filter(n => n.filepath !== this.filepath) }));
+                } else {
+                    NotesStore.getState().fetchNotes();
+                }
             }
         });
     }
@@ -314,8 +323,8 @@ export class InSetuExtNotes extends InSetuElement {
         });
 
         NotesStore.getState().fetchNotes();
-
         this.registerGlobalListener('insetu:notes:new', window, () => NotesStore.setState({ newNoteModalOpen: true }));
+        this.registerGlobalListener('sutram-sync-complete', window, () => NotesStore.getState().fetchNotes());
     }
     onWorkspaceLoad(workspaceId) {
         NotesStore.getState().fetchNotes();
@@ -393,6 +402,7 @@ customElements.define('insetu-ext-notes-actions', InSetuExtNotesActions);
 window.ExtensionRegistry.registerExtension('notes', {
     name: "Notes Library",
     version: "1.0.0",
+    offline_mode: "full",
     entityActions: [],
     layoutSlots: [
         {
