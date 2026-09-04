@@ -5,7 +5,7 @@ import json
 import threading
 import time
 from flask import Blueprint, request, jsonify
-from insetu.kernel.utils import load_config, save_json_file, get_workspace_physics, sniff_tenant_id
+from insetu.kernel.utils import load_config, save_json_file, load_json_file, get_workspace_physics, sniff_tenant_id
 import insetu.kernel.utils as utils
 from insetu.kernel.hooks import hooks
 from insetu.kernel.sync import get_system_deltas
@@ -51,6 +51,14 @@ _REGISTERED_SETTINGS_SCHEMAS['core_system'] = [
         "scope": "workspace",
         "default": "⚙️",
         "description": "The emoji used in the top-right application menu."
+    },
+    {
+        "id": "offline_cache_limit_mb",
+        "label": "Offline Cache Limit (MB)",
+        "type": "number",
+        "scope": "daemon",
+        "default": 250,
+        "description": "Maximum IndexedDB storage quota for VFS cache warming."
     }
 ]
 from insetu.kernel.extension import InSetuExtension
@@ -105,7 +113,7 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
 def get_system_config(workspace_id):
     data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
-    core_engines = {"bridge", "gather"}
+    from insetu.kernel.utils import CORE_MODULES
     available_ids = set()
     available = []
     extensions_dir = Path(script_dir).parent.joinpath("extensions").as_posix()
@@ -121,8 +129,7 @@ def get_system_config(workspace_id):
                     elif item.startswith("engine_") and item.endswith(".py"):
                             # Legacy flat topology
                             ext_name = item.replace("engine_", "").replace(".py", "")
-
-                    if ext_name and ext_name not in core_engines and ext_name not in available_ids:
+                    if ext_name and ext_name not in CORE_MODULES and ext_name not in available_ids:
                             available_ids.add(ext_name)
                             title = ext_name.replace('_', ' ').title()
                             desc = ""
@@ -191,14 +198,16 @@ def get_system_config(workspace_id):
     }
 def save_system_config(workspace_id, payload):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
+    existing_cfg = load_json_file(cfg_path, {})
+    merged_cfg = {**existing_cfg, **payload}
 
     # Security Guardrail: Enforce the core config UI is never locked out
-    if "extensions" in payload and "config" not in payload["extensions"]:
-        payload["extensions"].insert(0, "config")
+    if "extensions" in merged_cfg and "config" not in merged_cfg["extensions"]:
+        merged_cfg["extensions"].insert(0, "config")
     from insetu.core.utils_core import sanitize_workspace_config
 
-    payload = sanitize_workspace_config(payload)
-    save_json_file(cfg_path, payload, workspace_id)
+    merged_cfg = sanitize_workspace_config(merged_cfg)
+    save_json_file(cfg_path, merged_cfg, workspace_id)
 
     # Invalidate the mutated config cache so backend physics immediately see changes
     from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME

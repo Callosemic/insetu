@@ -9,13 +9,19 @@ import threading
 _NATIVE_VFS_WRITES = {}
 _WATCHDOG_TIMERS = {}
 _WATCHDOG_DEBOUNCE_WINDOW = 10.0
-
 @hooks.on('vfs_mutated')
 def _track_native_vfs_writes(mutations=None, **kwargs):
     """Records native VFS mutations to prevent watchdog double-fires and cancels pending watchdog events."""
     if not mutations: return
     import time
     now = time.time()
+
+    # Memory Leak Prevention: Prune timestamps older than the debounce window
+    if len(_NATIVE_VFS_WRITES) > 1000:
+        expired = [k for k, v in _NATIVE_VFS_WRITES.items() if now - v > _WATCHDOG_DEBOUNCE_WINDOW * 2]
+        for k in expired:
+            del _NATIVE_VFS_WRITES[k]
+
     for m in mutations:
         if not m.get("is_watchdog"):
             filepath = m.get("filepath")
@@ -52,22 +58,27 @@ def start_filesystem_observer(workspace_ids):
             self.target_path = target_path
             self.ignore_dirs = ignore_dirs
             self.ignore_patterns = ignore_patterns
-
-        def process_event(self, event, filepath_override=None, op_override=None):
-            if event.is_directory: return
-
+        def process_event(self, event, filepath_override=None, op_override=None, is_dir_override=None):
             src_path = filepath_override or event.src_path
+            is_dir = is_dir_override if is_dir_override is not None else getattr(event, 'is_directory', False)
+
             filename = Path(src_path).name
             if filename.startswith('.') or filename.endswith('~'): return
+
+            op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
 
             try:
                 rel_to_target = os.path.relpath(src_path, self.target_path).replace('\\', '/')
                 logical_path = f"{self.repo_dir}/{rel_to_target}"
+
+                if is_dir:
+                    logical_path += '/'
+
                 # CPU Optimization: Drop events for ignored directories/patterns before waking the Event Bus
-                parts = set(p.lower() for p in logical_path.split('/'))
+                parts = set(p.lower() for p in logical_path.strip('/').split('/'))
                 if parts.intersection(self.ignore_dirs): return
                 if any(pattern in logical_path for pattern in self.ignore_patterns): return
-                op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
+
                 import time
                 now = time.time()
 
@@ -109,9 +120,10 @@ def start_filesystem_observer(workspace_ids):
         def on_created(self, event): self.process_event(event)
         def on_deleted(self, event): self.process_event(event)
         def on_moved(self, event):
-            self.process_event(event, filepath_override=event.src_path, op_override='delete')
+            is_dir = getattr(event, 'is_directory', False)
+            self.process_event(event, filepath_override=event.src_path, op_override='delete', is_dir_override=is_dir)
             if hasattr(event, 'dest_path'):
-                self.process_event(event, filepath_override=event.dest_path, op_override='save')
+                self.process_event(event, filepath_override=event.dest_path, op_override='save', is_dir_override=is_dir)
 
     try:
         observer = Observer()

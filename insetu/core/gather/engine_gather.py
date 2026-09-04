@@ -60,9 +60,17 @@ def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
     return None
 def compile_context_payload(workspace_id, output_dir, base_filename, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
+    ctx = gather_bp.get_context(workspace_id)
     if max_kb is None:
-        ctx = gather_bp.get_context(workspace_id)
         max_kb = ctx.settings.get("max_context_size_kb", 0)
+
+    # 1. Physical Idempotency: Hash the raw content before volatile headers are applied
+    import hashlib
+    content_hash = hashlib.sha256("".join(text_blocks).encode('utf-8')).hexdigest()
+
+    existing_entry = ctx.manifest.get(base_filename)
+    if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
+        return existing_entry  # Skip all disk I/O. The content hasn't changed.
 
     vfs = VFSTransaction(workspace_id)
     max_bytes = (max_kb * 1024) if max_kb and max_kb > 0 else float('inf')
@@ -127,6 +135,7 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     }
     manifest_entry["meta"]["size_bytes"] = sum(chunk_sizes)
     manifest_entry["meta"]["chunk_sizes"] = chunk_sizes
+    manifest_entry["meta"]["content_hash"] = content_hash
     manifest_entry["meta"]["file"] = base_filename
     manifest_entry["meta"]["filename"] = base_filename
     manifest_entry["meta"]["filepath"] = base_filename
@@ -473,7 +482,6 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
 
 _COMPILER_LOCKS = {}
 _COMPILER_GLOBAL_LOCK = threading.Lock()
-
 def get_compiler_lock(wid):
     with _COMPILER_GLOBAL_LOCK:
         if wid not in _COMPILER_LOCKS:
@@ -481,21 +489,36 @@ def get_compiler_lock(wid):
         return _COMPILER_LOCKS[wid]
 def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **kwargs):
     """Differential Compiler: Iterates declared recall_callbacks to update dirty artifacts statelessly."""
-    if not files and not filepath: return
-    if filepath: files = [filepath]
-
     with get_compiler_lock(workspace_id or "default"):
         ctx = gather_bp.get_context(workspace_id)
         paths = ctx.paths
 
-        # Determine the affected scope
-        affected_repos = set()
-        for f in files:
-            parts = f.split('/', 1)
-            if len(parts) > 0: affected_repos.add(parts[0])
-        ledger_events = kwargs.get("ledger_events")
+        from insetu.core.topology.engine_topology import resolve_topology_buffer
+        drained = resolve_topology_buffer(workspace_id)
+
+        ledger_events = kwargs.get("ledger_events") or []
+        if files:
+            for f in files:
+                ledger_events.append({"filepath": f, "mutation_type": "save"})
+        if filepath:
+            ledger_events.append({"filepath": filepath, "mutation_type": "save"})
+
+        if drained:
+            seen_paths = {e['filepath'] for e in ledger_events if isinstance(e, dict) and 'filepath' in e}
+            for de in drained:
+                if de['filepath'] not in seen_paths:
+                    ledger_events.append(de)
+                    seen_paths.add(de['filepath'])
+
         if not ledger_events:
-            ledger_events = [{"filepath": f, "mutation_type": "unknown"} for f in files]
+            return
+
+        affected_repos = set()
+        for e in ledger_events:
+            fp = e.get('filepath', '') if isinstance(e, dict) else str(e)
+            clean_fp = fp.replace('vfs://', '').replace('ctx://', '').lstrip('/')
+            parts = clean_fp.split('/', 1)
+            if len(parts) > 0: affected_repos.add(parts[0])
         # Collect context declarations across the OS
         declarations = []
         for res in ctx.emit('gather_declare_topology', ledger_events=ledger_events):
@@ -552,13 +575,14 @@ def generate_context_file(workspace_id=None, target_repos=None):
     # Pre-flight purge: Preserve active ephemerals from garbage collection
     w_conn = get_connection("workers", workspace_id=workspace_id)
     active_ephemerals = [row['filepath'] for row in w_conn.execute("SELECT filepath FROM ephemeral_artifacts").fetchall()]
-
     # 1. Collect all topology declarations
     declarations = []
     for res in ctx.emit('gather_declare_topology', target_repos=target_repos):
         if res: declarations.extend(res)
 
-    manifest = {} if target_repos is None else ctx.manifest
+    # Granular Delta Enforcement: Start with a clean dictionary. 
+    # If target_repos is populated, we only want to save the deltas.
+    manifest = {}
     expected_artifacts = set()
     # 2. Execute generators in parallel
     def process_declaration(decl):
@@ -649,7 +673,6 @@ def _pack_selection_worker(ctx, items, job_id=None):
                 text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
 
     base_filename = f"quickpack_{int(time.time())}_context.txt"
-
     manifest_entry = compile_context_payload(
         ctx.workspace_id,
         ctx.paths["contexts_dir"],
@@ -659,9 +682,9 @@ def _pack_selection_worker(ctx, items, job_id=None):
         files,
         {"type": "gather", "title": "⚡ Quickpack", "domain": "Quickpacks", "desc": "Ad-hoc context export."}
     )
-    manifest_data = ctx.manifest
-    manifest_data[base_filename] = manifest_entry
-    ctx.save_manifest(manifest_data)
+
+    # Pure Granular Routing: Only save the specific quickpack to the ledger
+    ctx.save_manifest({base_filename: manifest_entry}, is_full_compile=False)
     ctx.sync_vfs_barrier()
 
     chunks = manifest_entry.get("chunks", [base_filename])
@@ -729,6 +752,18 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     try:
         # VFS Barrier: Wait for async physical disk moves/deletes in queue to complete
         ctx.sync_vfs_barrier()
+
+        # TOPOLOGY BARRIER: Wait for any active topology resolution tasks to settle
+        import time
+        from insetu.kernel.db import get_connection
+        w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
+        while True:
+            active_tpl = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'tpl_%' AND status IN ('pending', 'processing')").fetchone()
+            if not active_tpl:
+                break
+            ctx.jobs.update_progress("Waiting for topology to settle...")
+            time.sleep(0.5)
+
         # Topology Flush: Drain pending mutation events so topology_ledger reflects disk reality
         from insetu.core.topology.engine_topology import resolve_topology_buffer
         drained_events = resolve_topology_buffer(ctx.workspace_id)
@@ -803,15 +838,19 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
             generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
-
         # Allow simple extensions (Citations, Notes) to synchronously integrate their contexts
         ctx.jobs.update_progress("Integrating static ecosystems...")
-        working_manifest = ctx.manifest
-        ctx.emit('compile_contexts', manifest=working_manifest, is_full_sweep=needs_full_compile if not forced_repos else forced_repos)
 
-        ctx.save_manifest(working_manifest, is_full_compile=False)
+        # Pure Granular Routing: Extensions must inject updates into a clean delta payload.
+        # This eliminates the need to load, diff, or overwrite the global manifest.
+        delta_manifest = {}
+        ctx.emit('compile_contexts', manifest=delta_manifest, is_full_sweep=needs_full_compile if not forced_repos else forced_repos, ledger_events=ledger_events)
 
-        manifest_keys = list(working_manifest.keys())
+        if delta_manifest:
+            ctx.save_manifest(delta_manifest, is_full_compile=False)
+
+        # Retrieve the final unified keys directly from the SSOT database
+        manifest_keys = [r['filepath'] for r in get_connection("vfs_index", workspace_id=ctx.workspace_id).execute("SELECT filepath FROM manifest_ledger").fetchall()]
         if not manifest_keys and os.path.exists(paths["contexts_dir"]):
             manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
 
@@ -939,21 +978,34 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, **kwargs):
         return chunks
     except Exception:
         return [uri]
-
 @hooks.on('save_manifest')
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         now_ts = time.time()
 
+        # Fetch existing state for absolute DB-level idempotency
+        existing_rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger").fetchall()
+        existing_map = {r['filepath']: r['entry_json'] for r in existing_rows}
+
         if is_full_compile:
-            conn.execute("DELETE FROM manifest_ledger")
+            seen_paths = set()
             if manifest_data:
                 for fp, entry in manifest_data.items():
+                    seen_paths.add(fp)
+                    new_json = json.dumps(entry, sort_keys=True, separators=(',', ':'))
+                    if existing_map.get(fp) == new_json:
+                        continue # No semantic change, preserve the old timestamp
                     conn.execute(
                         "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
-                        (fp, json.dumps(entry), now_ts)
+                        (fp, new_json, now_ts)
                     )
+
+            # Global vacuum: delete anything no longer present in the full sweep
+            to_delete = [fp for fp in existing_map.keys() if fp not in seen_paths]
+            for fp in to_delete:
+                conn.execute("DELETE FROM manifest_ledger WHERE filepath = ?", (fp,))
+
             conn.execute(
                 "INSERT OR REPLACE INTO sync_metadata (key, value) VALUES ('last_full_compile_time', ?)",
                 (str(now_ts),)
@@ -964,9 +1016,12 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
                     if entry is None:
                         conn.execute("DELETE FROM manifest_ledger WHERE filepath = ?", (fp,))
                     else:
+                        new_json = json.dumps(entry, sort_keys=True, separators=(',', ':'))
+                        if existing_map.get(fp) == new_json:
+                            continue # No semantic change, preserve the old timestamp
                         conn.execute(
                             "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
-                            (fp, json.dumps(entry), now_ts)
+                            (fp, new_json, now_ts)
                         )
         conn.commit()
     except Exception as e:

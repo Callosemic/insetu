@@ -33,7 +33,6 @@ __depends__ = []
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight repository signatures for the vfs domain."""
-    resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.execute("SELECT repo, count(*) as cnt, max(timestamp) as max_ts FROM topology_ledger GROUP BY repo").fetchall()
     vfs_sigs = {}
@@ -41,11 +40,9 @@ def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs)
         repo = r['repo']
         vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}"
     return {"vfs": vfs_sigs}
-
 @topology_bp.route('vfs', methods=['GET'])
 def api_topology_vfs_repo(ctx):
     """Surgically fetches the VFS bucket structure for a specific repository."""
-    resolve_topology_buffer(ctx.workspace_id)
     repo = ctx.req.args.get('repo', '').strip()
     conn = ctx.db
     if repo:
@@ -98,7 +95,6 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
 @hooks.on('request_vfs_manifest')
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger."""
-    resolve_topology_buffer(workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.get_all("topology_ledger")
 
@@ -120,7 +116,6 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(Path(r['filepath']).name, r['filepath']) for r in rows]
-
 def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
     """SSOT accessor to retrieve ledger paths and format them cleanly for downstream modules."""
     resolve_topology_buffer(workspace_id)
@@ -141,6 +136,7 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations 
     and buffers them to absorb the I/O storm.
     """
+    print(f"🌍 [TOPOLOGY TELEMETRY] vfs_mutated caught {len(mutations) if mutations else 0} mutations: {[m.get('filepath') for m in (mutations or [])]}")
     if not mutations: return
 
     ctx = topology_bp.get_context(workspace_id)
@@ -167,8 +163,8 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
             (filepath, op, now)
         )
         buffered_count += 1
-
     if buffered_count == 0:
+        print(f"🌍 [TOPOLOGY TELEMETRY] 0 mutations buffered (filtered out as artifacts).")
         return
 
     conn.commit()
@@ -176,51 +172,72 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     # Dispatch the resolution worker. The `coalesce=True` flag ensures that if a storm 
     # of mutations arrives within the debounce window, they attach to the existing job.
     job_id = f"tpl_{uuid.uuid4().hex[:8]}"
+    print(f"🌍 [TOPOLOGY TELEMETRY] Submitting resolve_topology_task (job_id={job_id}).")
     submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=workspace_id, coalesce=True)
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
-
     events = conn.execute("SELECT filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
     if not events:
         return []
 
     conn.execute("DELETE FROM topology_event_buffer")
+    conn.commit()
 
     dirty_buckets = set()
     dirty_repos = set()
     target_repos = ctx.config.get("target_repos", [])
+    target_repos_map = {r.get("repo_dir"): r for r in target_repos if r and r.get("repo_dir")}
 
+    expanded_events = []
     for e in events:
         filepath = e["filepath"]
+        op = e["mutation_type"]
+        if op == "save" and filepath.endswith('/'):
+            repo_dir = filepath.split('/')[0] if '/' in filepath else "global"
+            repo_cfg = target_repos_map.get(repo_dir)
+            if repo_cfg:
+                from insetu.kernel.utils import get_workspace_physics
+                import os
+                _, ws_root, _ = get_workspace_physics(workspace_id)
+                physical_path = repo_cfg.get("physical_path")
+                repo_base = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root) / repo_dir
+                rel_dir = filepath[len(repo_dir)+1:].strip('/')
+                target_dir = repo_base / rel_dir if rel_dir else repo_base
+                if target_dir.exists() and target_dir.is_dir():
+                    for root, _, files in os.walk(target_dir):
+                        for f in files:
+                            f_path = Path(root).joinpath(f).as_posix()
+                            try:
+                                rel_file = os.path.relpath(f_path, repo_base).replace('\\', '/')
+                                expanded_events.append({"filepath": f"{repo_dir}/{rel_file}", "mutation_type": "save"})
+                            except ValueError:
+                                pass
+        else:
+            expanded_events.append({"filepath": filepath, "mutation_type": op})
+    for e in expanded_events:
+        raw_fp = e["filepath"]
+        filepath = raw_fp.replace('vfs://', '').replace('ctx://', '').lstrip('/')
         op = e["mutation_type"]
         repo_dir = filepath.split('/')[0] if '/' in filepath else "global"
         dirty_repos.add(repo_dir)
         if op == "delete":
-            conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
+            if filepath.endswith('/'):
+                conn.execute("DELETE FROM topology_ledger WHERE filepath LIKE ?", (filepath + "%",))
+            else:
+                conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
         else:
-            repo_cfg = next((r for r in target_repos if r.get("repo_dir") == repo_dir), None)
+            repo_cfg = target_repos_map.get(repo_dir)
 
             is_ignored = False
             rel_to_repo = filepath[len(repo_dir)+1:] if filepath.startswith(f"{repo_dir}/") else filepath
             if repo_cfg:
                 live_cfg = ctx.config
 
-                if repo_cfg.get("repo_ignore_dirs") is not None:
-                    ignore_dirs = set(repo_cfg.get("repo_ignore_dirs"))
-                else:
-                    ignore_dirs = set(live_cfg.get("ignore_dirs", []))
-
-                if repo_cfg.get("repo_ignore_files") is not None:
-                    ignore_files = set(repo_cfg.get("repo_ignore_files"))
-                else:
-                    ignore_files = set(live_cfg.get("ignore_files", []))
-
-                if repo_cfg.get("repo_ignore_patterns") is not None:
-                    ignore_patterns = repo_cfg.get("repo_ignore_patterns")
-                else:
-                    ignore_patterns = live_cfg.get("ignore_patterns", [])
+                ignore_dirs = set(repo_cfg.get("repo_ignore_dirs") if repo_cfg.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
+                ignore_files = set(repo_cfg.get("repo_ignore_files") if repo_cfg.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
+                ignore_patterns = repo_cfg.get("repo_ignore_patterns") if repo_cfg.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
 
                 filename = Path(filepath).name.lower()
                 if filename in ignore_files:
@@ -231,10 +248,7 @@ def resolve_topology_buffer(workspace_id):
                     is_ignored = True
                 else:
                     ext = Path(filepath).suffix.lower()
-                    if repo_cfg.get("exts") is not None:
-                        allowed_exts = set(repo_cfg.get("exts"))
-                    else:
-                        allowed_exts = set(live_cfg.get("include_extensions", []))
+                    allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
                     if ext not in allowed_exts and filename not in allowed_exts:
                         is_ignored = True
 
@@ -255,22 +269,28 @@ def resolve_topology_buffer(workspace_id):
                 (filepath, repo_dir, bucket_id, time.time())
             )
             dirty_buckets.add(f"{repo_dir}::{bucket_id}")
-
     conn.commit()
 
-    event_dicts = [dict(e) for e in events]
     hooks.emit(
         'topology_resolved', 
         workspace_id=workspace_id, 
         dirty_repos=list(dirty_repos), 
         dirty_buckets=list(dirty_buckets), 
-        events=event_dicts
+        events=expanded_events
     )
 
-    return event_dicts
+    return expanded_events
 @hooks.on('workspace_boot')
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
+    ctx = topology_bp.get_context(workspace_id)
+    try:
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_repo ON topology_ledger(repo)")
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_bucket ON topology_ledger(bucket_id)")
+        ctx.db.commit()
+    except Exception:
+        pass
+
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
     submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id)
 
@@ -280,18 +300,19 @@ def _background_boot_scan(ctx, job_id=None, **kwargs):
     force_topology_scan(workspace_id=ctx.workspace_id)
     from insetu.kernel.hooks import hooks
     hooks.emit_background('topology_boot_complete', workspace_id=ctx.workspace_id)
-
 @topology_bp.worker("resolve_topology_task")
 def _background_resolve_topology(ctx, job_id=None, **kwargs):
     """
     Processes the event buffer after physical disk I/O settles, updates the tracking 
     ledger, and emits `topology_resolved` to awaken downstream compilers.
     """
+    print(f"🌍 [TOPOLOGY TELEMETRY] Worker starting. Sleeping for 2s debounce...")
     # Absolute Settlement Barrier: 2.0 second debounce to outlast watchdog bursts (e.g. git checkout)
     time.sleep(2.0)
 
     ctx.jobs.update_progress("Resolving physical topology boundaries...")
     events = resolve_topology_buffer(ctx.workspace_id)
+    print(f"🌍 [TOPOLOGY TELEMETRY] Worker resolved {len(events) if events else 0} events. Emitted topology_resolved.")
     if not events:
         return {"message": "No topology events to resolve."}
 
@@ -304,20 +325,9 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
 
     live_cfg = load_config(workspace_id)
 
-    if config.get("repo_ignore_dirs") is not None:
-        ignore_dirs = set(config.get("repo_ignore_dirs"))
-    else:
-        ignore_dirs = set(live_cfg.get("ignore_dirs", []))
-
-    if config.get("repo_ignore_files") is not None:
-        ignore_files = set(config.get("repo_ignore_files"))
-    else:
-        ignore_files = set(live_cfg.get("ignore_files", []))
-
-    if config.get("repo_ignore_patterns") is not None:
-        ignore_patterns = config.get("repo_ignore_patterns")
-    else:
-        ignore_patterns = live_cfg.get("ignore_patterns", [])
+    ignore_dirs = set(config.get("repo_ignore_dirs") if config.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
+    ignore_files = set(config.get("repo_ignore_files") if config.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
+    ignore_patterns = config.get("repo_ignore_patterns") if config.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
 
     archive_type = config.get("archive_type", "repo")
 
@@ -362,7 +372,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
         if not target_f.is_file(): continue
         if target_f.name.lower() in ignore_files: continue
         if config.get("apply_ignore"):
-            if any(norm_path.startswith(exc) for exc in config.get("ignore_exceptions", [])):
+            if any(norm_path.startswith(exc) for exc in (config.get("ignore_exceptions") or [])):
                 pass
             else:
                 if set(p.lower() for p in norm_path.split('/')).intersection(ignore_dirs): continue
@@ -376,14 +386,11 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
         ext = target_f.suffix.lower()
         fname = target_f.name.lower()
 
-        if config.get("exts") is not None:
-            allowed_exts = set(config.get("exts"))
-        else:
-            allowed_exts = set(live_cfg.get("include_extensions", []))
+        allowed_exts = set(config.get("exts") if config.get("exts") is not None else (live_cfg.get("include_extensions") or []))
 
         if ext in allowed_exts or fname in allowed_exts: valid_files.add(norm_path)
 
-    for forced_file in config.get("force_include", []):
+    for forced_file in (config.get("force_include") or []):
         if (repo_p / forced_file).exists(): 
             valid_files.add(forced_file)
 

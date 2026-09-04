@@ -430,12 +430,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["status"] = "failed"
                     telemetry["message"] = f"Concurrency Guard Triggered: '{filepath}' was modified on disk during transaction evaluation."
                     break
-
     # Phase 4 & 5: Settlement and Ledger Staging
     if not dry_run and telemetry["can_commit"]:
         db_conn = ctx.db
         now_ts = time.time()
         ttl_48h = now_ts + 172800.0  # 48-hour TTL for metronome housekeeping
+        mutations = []
 
         for filepath, final_content in memory_buffers.items():
             orig_content = original_buffers.get(filepath, "")
@@ -487,9 +487,16 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 final_content = final_content.replace('\n', '\r\n')
 
             vfs.save(filepath, final_content)
+            mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
 
         db_conn.commit()
         telemetry["status"] = "committed"
+
+        # Broadcast the atomic transaction to the backend Event Bus
+        # This guarantees Topology and Hooks awaken even if the target folder isn't covered by the Filesystem Watchdog.
+        if mutations:
+            from insetu.kernel.hooks import hooks
+            hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
 
     elif dry_run:
         telemetry["status"] = "dry_run_evaluated"
