@@ -21,16 +21,18 @@ def _track_native_vfs_writes(mutations=None, **kwargs):
         expired = [k for k, v in _NATIVE_VFS_WRITES.items() if now - v > _WATCHDOG_DEBOUNCE_WINDOW * 2]
         for k in expired:
             del _NATIVE_VFS_WRITES[k]
-
     for m in mutations:
         if not m.get("is_watchdog"):
             filepath = m.get("filepath")
             if filepath:
-                _NATIVE_VFS_WRITES[filepath] = now
+                clean_fp = filepath.replace('\\', '/').strip('/')
+                if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
+                    clean_fp = f"vfs://{clean_fp}"
+                _NATIVE_VFS_WRITES[clean_fp] = now
                 # Cancel any pending watchdog timer since the VFS natively handled it
-                if filepath in _WATCHDOG_TIMERS:
-                    _WATCHDOG_TIMERS[filepath].cancel()
-                    del _WATCHDOG_TIMERS[filepath]
+                if clean_fp in _WATCHDOG_TIMERS:
+                    _WATCHDOG_TIMERS[clean_fp].cancel()
+                    del _WATCHDOG_TIMERS[clean_fp]
 
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
@@ -66,10 +68,9 @@ def start_filesystem_observer(workspace_ids):
             if filename.startswith('.') or filename.endswith('~'): return
 
             op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
-
             try:
                 rel_to_target = os.path.relpath(src_path, self.target_path).replace('\\', '/')
-                logical_path = f"{self.repo_dir}/{rel_to_target}"
+                logical_path = f"vfs://{self.repo_dir}/{rel_to_target}"
 
                 if is_dir:
                     logical_path += '/'
@@ -197,33 +198,83 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
     return load_json_file(wf_path, {"context_batches": []})
+import io
+import re
+
+try:
+    from ruamel.yaml import YAML
+    HAS_RUAMEL = True
+except ImportError:
+    HAS_RUAMEL = False
+    print("⚠️  [YAML] 'ruamel.yaml' is missing. Falling back to naive string parser. Run: pip install ruamel.yaml")
+
+def _get_yaml_engine():
+    if not HAS_RUAMEL:
+        return None
+    yaml = YAML(typ='rt')
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.width = 4096  # Prevent premature multi-line string wrapping
+    return yaml
+
 def parse_frontmatter(content):
-    import re
+    if not content:
+        return {}, "", None
+
     yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
     yaml_data = {}
     body = content
+
     if yaml_match:
-        for line in yaml_match.group(1).split('\n'):
-            if ':' in line:
-                k, v = line.split(':', 1)
-                yaml_data[k.strip()] = v.strip().strip('\'"')
+        raw_yaml = yaml_match.group(1)
         body = content[yaml_match.end():].strip()
+        
+        # Graceful fallback to legacy parsing if ruamel is missing
+        if not HAS_RUAMEL:
+            for line in raw_yaml.split('\n'):
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    yaml_data[k.strip()] = v.strip().strip('\'"')
+            return yaml_data, body, yaml_match
+
+        if raw_yaml.strip():
+            try:
+                engine = _get_yaml_engine()
+                parsed = engine.load(io.StringIO(raw_yaml))
+                if isinstance(parsed, dict):
+                    yaml_data = parsed
+            except Exception as e:
+                print(f"⚠️ [YAML Error] Frontmatter parse failure: {e}")
+
     return yaml_data, body, yaml_match
 
 def update_frontmatter(content, new_data):
-    yaml_data, body, yaml_match = parse_frontmatter(content)
-    yaml_data.update(new_data)
+    yaml_data, body, _ = parse_frontmatter(content)
+    
+    if isinstance(yaml_data, dict):
+        yaml_data.update(new_data)
+    else:
+        yaml_data = dict(new_data)
 
-    new_yaml = ["---"]
-    for k, v in yaml_data.items():
-        if v is None or str(v).lower() == 'null':
-            new_yaml.append(f"{k}: null")
-        elif isinstance(v, (int, float, bool)) or (isinstance(v, str) and (v.startswith('[') or v.startswith('{'))):
-            new_yaml.append(f"{k}: {v}")
-        else:
-            new_yaml.append(f'{k}: "{v}"')
-    new_yaml.append("---")
-    return "\n".join(new_yaml) + "\n\n" + body
+    # Graceful fallback to legacy serialization if ruamel is missing
+    if not HAS_RUAMEL:
+        new_yaml = ["---"]
+        for k, v in yaml_data.items():
+            if v is None or str(v).lower() == 'null':
+                new_yaml.append(f"{k}: null")
+            elif isinstance(v, (int, float, bool)) or (isinstance(v, str) and (v.startswith('[') or v.startswith('{'))):
+                new_yaml.append(f"{k}: {v}")
+            else:
+                new_yaml.append(f'{k}: "{v}"')
+        new_yaml.append("---")
+        return "\n".join(new_yaml) + "\n\n" + body
+
+    engine = _get_yaml_engine()
+    stream = io.StringIO()
+    engine.dump(yaml_data, stream)
+    formatted_yaml = stream.getvalue().strip()
+
+    return f"---\n{formatted_yaml}\n---\n\n{body}"
 
 def generate_text_chunks(blocks, chunk_limit=400000):
     current_chunk = []
@@ -365,6 +416,26 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
         expected_contexts.add(f"{out_dir}/{decl['filename']}")
 
     return expected_contexts
+def parse_uri(path_str):
+    """SDK Helper: Parses any scheme:// or relative path into (repo_dir, relative_path)."""
+    if not path_str:
+        return "", ""
+
+    str_path = str(path_str).replace('\\', '/').strip()
+
+    import re
+    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', str_path)
+    if match:
+        str_path = match.group(2)
+
+    str_path = str_path.lstrip('/')
+    parts = str_path.split('/', 1)
+
+    repo = parts[0] if len(parts) > 1 else ""
+    rel_path = parts[1] if len(parts) > 1 else str_path
+
+    return repo, rel_path
+
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
@@ -394,7 +465,6 @@ def resolve_logical_path(path, workspace_id=None):
     norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
     target_repos = cfg.get("target_repos", [])
-
     # Handle strict VFS logical boundary (vfs://repo/path)
     if norm_path.startswith("vfs://"):
         norm_path = norm_path.replace("vfs://", "", 1)
@@ -405,12 +475,15 @@ def resolve_logical_path(path, workspace_id=None):
                 if target_repo == repo.get("repo_dir"):
                     physical_path = repo.get("physical_path")
                     expanded_base = Path(physical_path).expanduser().resolve() if physical_path else (ws_root_path / target_repo).resolve()
+                    if not expanded_base.exists() and ws_root_path.name == target_repo:
+                        expanded_base = ws_root_path
                     return expanded_base.joinpath(downstream).resolve().as_posix()
 
     # Pass 1: Direct match relative to workspace root (SSOT)
     direct_cand = ws_root_path.joinpath(norm_path).resolve()
     if direct_cand.exists():
         return direct_cand.as_posix()
+
     # Pass 2: Map logical workspace bounds ({repo}/path) to physical disk paths
     for repo in target_repos:
         repo_dir = repo.get("repo_dir")
@@ -418,6 +491,8 @@ def resolve_logical_path(path, workspace_id=None):
 
         p_path = repo.get("physical_path")
         repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
+        if not repo_base.exists() and ws_root_path.name == repo_dir:
+            repo_base = ws_root_path
 
         # If the path explicitly starts with the repo boundary, map it directly
         if norm_path == repo_dir or norm_path.startswith(f"{repo_dir}/"):
@@ -428,6 +503,11 @@ def resolve_logical_path(path, workspace_id=None):
             # rather than falling through to the workspace root fallback.
             if mapped_cand.exists() or p_path:
                 return mapped_cand.as_posix()
+
+            # Fallback: Check if downstream exists directly under workspace_root
+            direct_downstream = ws_root_path.joinpath(downstream).resolve()
+            if direct_downstream.exists():
+                return direct_downstream.as_posix()
 
         # Rescue implicit downstream paths
         repo_cand = repo_base.joinpath(norm_path).resolve()

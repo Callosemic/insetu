@@ -140,11 +140,10 @@ def bridge_sync(ctx):
         "SELECT id FROM immediate_jobs WHERE ext_name='bridge' AND status IN ('pending', 'processing') AND args_json=?",
         (args_json,)
     ).fetchone()
-
     if existing_job:
         return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing transaction."}), 202
     job_id = f"brg_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "bridge", "sync_task", args_json, ctx.workspace_id)
+    submit_immediate_job(job_id, "bridge", "sync_task", args_json, workspace_id=ctx.workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 

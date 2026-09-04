@@ -158,10 +158,21 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
         try:
             old_args = json.loads(existing['args_json'])
             old_events = old_args.get('ledger_events', [])
-            seen_paths = {e['filepath'] for e in events}
+
+            def _get_fp(item):
+                raw_fp = item.get('filepath', '') if isinstance(item, dict) else str(item)
+                clean_fp = raw_fp.replace('\\', '/').strip('/')
+                if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
+                    clean_fp = f"vfs://{clean_fp}"
+                return clean_fp
+
+            seen_paths = {_get_fp(e) for e in events}
             for oe in old_events:
-                if oe['filepath'] not in seen_paths:
-                    events.append(oe)
+                oe_fp = _get_fp(oe)
+                if oe_fp and oe_fp not in seen_paths:
+                    m_type = oe.get('mutation_type', 'save') if isinstance(oe, dict) else 'save'
+                    events.append({"filepath": oe_fp, "mutation_type": m_type})
+                    seen_paths.add(oe_fp)
         except Exception:
             pass
     args_json = json.dumps({
@@ -311,12 +322,10 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     target_configs = [c for c in cfg.get("target_repos", []) if not c.get("exclude_from_context") and (not target_repos or c.get("repo_dir") in target_repos)]
 
     top_ctx = topology_bp.get_context(workspace_id)
-
     for config in target_configs:
         repo_dir = config.get("repo_dir")
         safe_r_dir = get_safe_repo_id(repo_dir)
-        physical_path = config.get("physical_path")
-        repo_path = os.path.abspath(os.path.expanduser(physical_path)) if physical_path else ctx.resolve_path(repo_dir)
+        repo_path = ctx.get_repo_path(repo_dir)
 
         if not os.path.exists(repo_path): 
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
@@ -329,7 +338,6 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         debug_log_lines.append(f"  - Total files from Topology Ledger: {len(final_list)}")
         if final_list:
             debug_log_lines.append(f"  - Sample raw files: {final_list[:5]}")
-
         archive_type = config.get("archive_type", "repo")
         if archive_type == "media-vault":
             vault_name = f"{repo_dir}_vault.json"
@@ -341,8 +349,8 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 return _gen
             def make_vault_recall(files, current_repo_dir):
                 def _recall(events):
-                    repo_prefix = (current_repo_dir + '/').lower()
-                    if any(e['filepath'].lower().startswith(repo_prefix) for e in events):
+                    vfs_prefix = f"vfs://{current_repo_dir.lower()}/"
+                    if any(e['filepath'].lower().startswith(vfs_prefix) for e in events):
                         return make_vault_gen(files, current_repo_dir)()
                     return None
                 return _recall
@@ -419,10 +427,11 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 return {"header": header_str, "blocks": text_blocks, "files": [f"{current_repo_dir}/{f}" for f in filepaths]}
             def _recall(events):
                 is_dirty = False
-                repo_prefix = (current_repo_dir + '/').lower()
+                vfs_prefix = f"vfs://{current_repo_dir.lower()}/"
                 for e in events:
-                    if e['filepath'].lower().startswith(repo_prefix):
-                        rel = e['filepath'][len(current_repo_dir)+1:]
+                    fp_lower = e['filepath'].lower()
+                    if fp_lower.startswith(vfs_prefix):
+                        rel = e['filepath'][len(vfs_prefix):]
                         if sub_buckets:
                             tb, tm = resolve_file_bucket(rel, sub_buckets, repo_dir=current_repo_dir)
                             if tb and tm and tm == b_id: is_dirty = True; break
@@ -496,19 +505,45 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         from insetu.core.topology.engine_topology import resolve_topology_buffer
         drained = resolve_topology_buffer(workspace_id)
 
-        ledger_events = kwargs.get("ledger_events") or []
+        raw_ledger_events = kwargs.get("ledger_events") or []
+        ledger_events = []
+        seen_paths = set()
+
+        def _to_canonical_event(item, default_op="save"):
+            raw_fp = item.get('filepath', '') if isinstance(item, dict) else str(item)
+            m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
+
+            clean_fp = raw_fp.replace('\\', '/').strip('/')
+            if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
+                clean_fp = f"vfs://{clean_fp}"
+
+            return {"filepath": clean_fp, "mutation_type": m_type}
+
+        for item in raw_ledger_events:
+            ev = _to_canonical_event(item)
+            if ev["filepath"] and ev["filepath"] not in seen_paths:
+                seen_paths.add(ev["filepath"])
+                ledger_events.append(ev)
+
         if files:
             for f in files:
-                ledger_events.append({"filepath": f, "mutation_type": "save"})
+                ev = _to_canonical_event(f)
+                if ev["filepath"] and ev["filepath"] not in seen_paths:
+                    seen_paths.add(ev["filepath"])
+                    ledger_events.append(ev)
+
         if filepath:
-            ledger_events.append({"filepath": filepath, "mutation_type": "save"})
+            ev = _to_canonical_event(filepath)
+            if ev["filepath"] and ev["filepath"] not in seen_paths:
+                seen_paths.add(ev["filepath"])
+                ledger_events.append(ev)
 
         if drained:
-            seen_paths = {e['filepath'] for e in ledger_events if isinstance(e, dict) and 'filepath' in e}
             for de in drained:
-                if de['filepath'] not in seen_paths:
-                    ledger_events.append(de)
-                    seen_paths.add(de['filepath'])
+                ev = _to_canonical_event(de)
+                if ev["filepath"] and ev["filepath"] not in seen_paths:
+                    seen_paths.add(ev["filepath"])
+                    ledger_events.append(ev)
 
         if not ledger_events:
             return

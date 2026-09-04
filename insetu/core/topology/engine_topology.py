@@ -68,17 +68,13 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     target_configs = ctx.config.get("target_repos", [])
     if target_repos:
         target_configs = [c for c in target_configs if c.get("repo_dir") in target_repos]
-
-    _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
-
     for repo_cfg in target_configs:
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir: continue
 
-        physical_path = repo_cfg.get("physical_path")
-        repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root) / repo_dir
+        repo_path = ctx.get_repo_path(repo_dir)
 
-        valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, workspace_id)
+        valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
         sub_buckets = repo_cfg.get("sub_buckets", [])
 
         conn.execute("DELETE FROM topology_ledger WHERE repo = ?", (repo_dir,))
@@ -147,20 +143,22 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     for m in mutations:
         if m.get("ignore_ledger"):
             continue
-
         filepath = m.get("filepath")
         if not filepath:
             continue
 
         # Gatekeeper: Filter out internal system artifacts and VFS context streams
-        norm_path = filepath.replace('\\', '/')
+        norm_path = filepath.replace('\\', '/').strip('/')
         if norm_path.startswith("ctx://") or "/data/contexts/" in norm_path or "/data/diffs/" in norm_path or "/data/workflows/" in norm_path or ".insetu/data/" in norm_path:
             continue
 
-        op = m.get("operation")
+        if not norm_path.startswith("vfs://"):
+            norm_path = f"vfs://{norm_path}"
+
+        op = m.get("operation", "save")
         conn.execute(
             "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
-            (filepath, op, now)
+            (norm_path, op, now)
         )
         buffered_count += 1
     if buffered_count == 0:
@@ -198,11 +196,8 @@ def resolve_topology_buffer(workspace_id):
             repo_dir = filepath.split('/')[0] if '/' in filepath else "global"
             repo_cfg = target_repos_map.get(repo_dir)
             if repo_cfg:
-                from insetu.kernel.utils import get_workspace_physics
                 import os
-                _, ws_root, _ = get_workspace_physics(workspace_id)
-                physical_path = repo_cfg.get("physical_path")
-                repo_base = Path(physical_path).expanduser().resolve() if physical_path else Path(ws_root) / repo_dir
+                repo_base = Path(ctx.get_repo_path(repo_dir))
                 rel_dir = filepath[len(repo_dir)+1:].strip('/')
                 target_dir = repo_base / rel_dir if rel_dir else repo_base
                 if target_dir.exists() and target_dir.is_dir():
@@ -211,19 +206,28 @@ def resolve_topology_buffer(workspace_id):
                             f_path = Path(root).joinpath(f).as_posix()
                             try:
                                 rel_file = os.path.relpath(f_path, repo_base).replace('\\', '/')
-                                expanded_events.append({"filepath": f"{repo_dir}/{rel_file}", "mutation_type": "save"})
+                                expanded_events.append({"filepath": f"vfs://{repo_dir}/{rel_file}", "mutation_type": "save"})
                             except ValueError:
                                 pass
         else:
             expanded_events.append({"filepath": filepath, "mutation_type": op})
+    from insetu.core.utils_core import parse_uri
+
     for e in expanded_events:
         raw_fp = e["filepath"]
-        filepath = raw_fp.replace('vfs://', '').replace('ctx://', '').lstrip('/')
+        repo_dir, rel_path = parse_uri(raw_fp)
+        repo_dir = repo_dir or "global"
+
+        clean_filepath = f"{repo_dir}/{rel_path}" if repo_dir != "global" else rel_path
+        vfs_fp = f"vfs://{clean_filepath}"
+
+        e["filepath"] = vfs_fp
+        filepath = clean_filepath
         op = e["mutation_type"]
-        repo_dir = filepath.split('/')[0] if '/' in filepath else "global"
+
         dirty_repos.add(repo_dir)
         if op == "delete":
-            if filepath.endswith('/'):
+            if raw_fp.endswith('/'):
                 conn.execute("DELETE FROM topology_ledger WHERE filepath LIKE ?", (filepath + "%",))
             else:
                 conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
