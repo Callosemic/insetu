@@ -110,7 +110,7 @@ export class InSetuSystemSettings extends InSetuElement {
         this.menuOpen = false; 
         this.modalOpen = true;
         try {
-            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this._sysConfigForm = data.config || {};
@@ -165,7 +165,7 @@ export class InSetuSystemSettings extends InSetuElement {
     }
     async _saveActiveExtensions() {
         try {
-            const res = await window.inSetu.api.system.post('config', this._sysConfigForm);
+            const res = await window.inSetu.api.workspace.post('system/config', this._sysConfigForm);
             if (res.ok) {
                 const data = await res.json();
                 if (data.requires_reboot) {
@@ -187,16 +187,27 @@ export class InSetuSystemSettings extends InSetuElement {
         const allSchemas = { ...window.inSetu.settingsSchemas, ...window.inSetu.serverSchemas };
         const coreList = [];
         const extList = [];
-        Object.entries(allSchemas).forEach(([ext, schema]) => {
-            if (ext === 'core_system') return; 
-            if (!schema || schema.length === 0) return;
+
+        // Create a union of all schemas and all registered frontend extensions
+        const allExtKeys = new Set([...Object.keys(allSchemas), ...Array.from(window.ExtensionRegistry?._manifests?.keys() || [])]);
+
+        allExtKeys.forEach(ext => {
+            // core_system and config actions are manually hardcoded in the system tab
+            if (ext === 'core_system' || ext === 'config') return; 
+
+            const schema = allSchemas[ext] || [];
+            const manifest = window.ExtensionRegistry?._manifests?.get(ext);
+            const hasActions = manifest?.settingsActions && manifest.settingsActions.length > 0;
+
+            // If an extension has neither a backend schema nor frontend UI actions, skip it
+            if ((!schema || schema.length === 0) && !hasActions) return;
 
             // Enforce ecosystem boundaries: hide settings for disabled domain extensions
             if (!window.inSetu.isCore(ext) && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(ext)) {
                 return;
             }
 
-            const title = (window.ExtensionRegistry?._manifests?.get(ext)?.name) || ext.charAt(0).toUpperCase() + ext.slice(1);
+            const title = manifest?.name || ext.charAt(0).toUpperCase() + ext.slice(1);
 
             if (window.inSetu.isCore(ext)) {
                 coreList.push({ id: ext, title });

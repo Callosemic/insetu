@@ -209,15 +209,14 @@ export class InSetuExtBridge extends InSetuElement {
         this.subscribe(window.inSetu.stores.Fs, (state) => {
             this._fileVerificationCache = state.fileVerificationCache || {};
         });
-
         // Event listeners for Yomama Actions
-        this.registerGlobalListener('bridge-cell-deleted', window, (e) => {
+        this.registerGlobalListener('insetu:bridge:cell-deleted', window, (e) => {
             if (this._editCellId === e.detail.id) {
                 this._editCellId = null;
                 this.requestUpdate();
             }
         });
-        this.registerGlobalListener('bridge-cell-swap', window, (e) => this._handleSwap(e.detail.id));
+        this.registerGlobalListener('insetu:bridge:cell-swap', window, (e) => this._handleSwap(e.detail.id));
 
         // Initial sync
         const bState = BridgeStore.getState();
@@ -237,17 +236,17 @@ export class InSetuExtBridge extends InSetuElement {
         const textToSwap = this._editCellId === id ? this._editContent : this.cells.find(c => c.id === id)?.content;
         if (!textToSwap) return;
 
-        const sIdx = textToSwap.indexOf('<<<<<<< SEARCH');
-        const mIdx = textToSwap.indexOf('=======', sIdx);
-        const eIdx = textToSwap.indexOf('>>>>>>> REPLACE', mIdx);
+        // Strict multiline matching: anchors to the start of the line to bypass inline '=======' in code strings
+        const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)[ \t]*\r?\n([\s\S]*?)^(>>>>>>> REPLACE)/m;
+        const match = textToSwap.match(blockRegex);
 
-        if (sIdx !== -1 && mIdx !== -1 && eIdx !== -1) {
-            const before = textToSwap.substring(0, sIdx);
-            const searchBlock = textToSwap.substring(sIdx + 14, mIdx).replace(/^\n/, '').replace(/\n$/, '');
-            const replaceBlock = textToSwap.substring(mIdx + 7, eIdx).replace(/^\n/, '').replace(/\n$/, '');
-            const after = textToSwap.substring(eIdx + 15);
+        if (match) {
+            const before = textToSwap.substring(0, match.index);
+            const searchBlock = match[2];
+            const replaceBlock = match[4];
+            const after = textToSwap.substring(match.index + match[0].length);
 
-            const swappedChunk = `${before}<<<<<<< SEARCH\n${replaceBlock}\n=======\n${searchBlock}\n>>>>>>> REPLACE${after}`;
+            const swappedChunk = `${before}<<<<<<< SEARCH\n${replaceBlock}=======\n${searchBlock}>>>>>>> REPLACE${after}`;
 
             if (this._editCellId === id) {
                 this._editContent = swappedChunk;
@@ -256,7 +255,7 @@ export class InSetuExtBridge extends InSetuElement {
                 BridgeStore.getState().updateCellContent(id, swappedChunk.trim());
             }
         } else {
-            alert("Could not cleanly parse SEARCH/REPLACE blocks to swap.");
+            alert("Could not cleanly parse SEARCH/REPLACE blocks to swap. Ensure '=======' is on its own line.");
         }
     }
 
@@ -385,17 +384,11 @@ export class InSetuExtBridge extends InSetuElement {
                             // Extract the true OS-resolved paths from the telemetry payload
                             const safePatches = tel.patches || [];
                             const resolvedFiles = Array.from(new Set(safePatches.map(p => p.resolved_file).filter(Boolean)));
-
                             BridgeStore.setState({ cells: [] });
-                            const mutations = resolvedFiles.map(f => ({ filepath: f, operation: 'save' }));
-                            window.inSetu.events.emitHook('zone:vfs-mutated', { mutations });
 
-                            // Reactivity: Auto-refresh the ledger UI after a commit
+                            // The backend Event Bus natively handles RAG RAG compilation and RAG RAG diffs via the Topology Slew Limiter.
+                            // We only need to refresh the ledger UI history locally.
                             BridgeStore.getState().fetchHistory();
-
-                            if (window.inSetu.sys.executeSystemCompile) {
-                                window.inSetu.sys.executeSystemCompile();
-                            }
                         }
                     } else {
                         BridgeStore.setState({ consoleOutput: statusData.message || "Unknown error" });
@@ -951,6 +944,7 @@ customElements.define('insetu-ext-bridge-history', InSetuExtBridgeHistory);
 window.ExtensionRegistry.registerExtension('bridge', {
     name: "Yomama Sync Bridge",
     version: "2.0.0",
+    offline_mode: "none",
     entityActions: [
         {
             targetEntity: 'yomama-turn',
@@ -1014,7 +1008,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             onClick: (data) => {
                 if (confirm("Remove this patch?")) {
                     window.inSetu.stores.Bridge.getState().removeCell(data.id);
-                    window.dispatchEvent(new CustomEvent('bridge-cell-deleted', { detail: { id: data.id } }));
+                    window.dispatchEvent(new CustomEvent('insetu:bridge:cell-deleted', { detail: { id: data.id } }));
                 }
             }
         },
@@ -1026,7 +1020,7 @@ window.ExtensionRegistry.registerExtension('bridge', {
             intent: 'warning',
             order: 40,
             onClick: (data) => {
-                window.dispatchEvent(new CustomEvent('bridge-cell-swap', { detail: { id: data.id } }));
+                window.dispatchEvent(new CustomEvent('insetu:bridge:cell-swap', { detail: { id: data.id } }));
             }
         },
         {

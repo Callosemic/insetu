@@ -145,7 +145,7 @@ export class InSetuExtConfig extends InSetuElement {
     async _testRepoBucketing(repoIdx, filterBucketId = null) {
         const repo = this.configForm.target_repos[repoIdx];
         try {
-            const res = await window.inSetu.api.system.post('config/test_bucketing', { repo_cfg: repo });
+            const res = await window.inSetu.api.workspace.post('system/config/test_bucketing', { repo_cfg: repo });
             if (res.ok) {
                 const data = await res.json();
                 let text = `Dry Run: Repository Bucketing for '${repo.repo_dir}'\n=======================================================\n\n`;
@@ -186,7 +186,7 @@ export class InSetuExtConfig extends InSetuElement {
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.configForm = data.config || {};
@@ -262,6 +262,7 @@ export class InSetuExtConfig extends InSetuElement {
                         </div>
                         <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
                             <sutram-input label="Description" .value=${b.description || ''} placeholder="What goes here?" @sutram-input-changed=${(e) => { b.description = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="flex: 1; min-width: 200px;"></sutram-input>
+                            <sutram-toggle label="Priority Cache Warming" .checked=${!!b.priority_bucket} @sutram-input-changed=${(e) => { b.priority_bucket = e.detail.value; this.requestUpdate(); }} ?flush=${true} style="margin-top: 24px;"></sutram-toggle>
                         </div>
                         <sutram-input label="Match Prefixes (comma separated)" .value=${(b.match_prefixes || []).join(', ')} placeholder="path/to/folder, other/path" @sutram-input-changed=${(e) => { b.match_prefixes = e.detail.value.split(',').map(s => s.trim()).filter(s => s); this.requestUpdate(); }}></sutram-input>
                     ` : html`
@@ -388,7 +389,8 @@ export class InSetuExtConfig extends InSetuElement {
                         <span style="font-size: 1.4rem;">📦</span>
                         <sutram-input .value=${repo.title || ''} placeholder="Display Title (e.g. My Repository)" style="flex: 1; margin: 0; --bg-input: var(--input-bg);" @sutram-input-changed=${(e) => { repo.title = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
                     </div>
-                    <sutram-collapsible 
+
+                    <sutram-collapsible   
                         titleText="Bucket 0 (Base Pipeline)" 
                         intent="primary"
                         .open=${this._repoSettingsExpanded}
@@ -438,7 +440,6 @@ export class InSetuExtConfig extends InSetuElement {
                             </div>
 
                             <sutram-input label="Path Prefix (Virtual Root Restriction)" .value=${repo.prefix || ''} placeholder="src/frontend/" @sutram-input-changed=${(e) => { repo.prefix = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-input>
-
                             <div style="display: flex; gap: 15px; flex-wrap: wrap; padding: 12px 15px; background: var(--input-bg); border-radius: 6px; border: 1px solid var(--border); align-items: center;">
                                 <sutram-toggle label="Apply Ignore Rules" .checked=${repo.apply_ignore !== false} @sutram-input-changed=${(e) => { repo.apply_ignore = e.detail.value; this.requestUpdate(); }} ?flush=${true}></sutram-toggle>
                                 ${(() => {
@@ -584,7 +585,7 @@ export class InSetuExtConfig extends InSetuElement {
     async _saveConfig() {
         try {
             // Config saves utilize explicit multi-tenant URL path boundaries
-            const res = await window.inSetu.api.system.post('config', this.configForm);
+            const res = await window.inSetu.api.workspace.post('system/config', this.configForm);
 
             if (res.ok) {
                 const data = await res.json();
@@ -640,6 +641,7 @@ if (!document.getElementById('insetu-config-root')) {
 window.ExtensionRegistry.registerExtension('config', {
     name: "Workspace Configuration",
     version: "2.0.0",
+    offline_mode: "read_only",
     shortcuts: [
         {
             context: 'modal:config-editor-modal',

@@ -374,6 +374,7 @@ customElements.define('insetu-ext-gather', InSetuExtGather);
 window.ExtensionRegistry.registerExtension('gather', {
     name: "Context Gatherer",
     version: "2.0.0",
+    offline_mode: "read_only",
     repoConfigOptions: [
         {
             id: 'gather-repo-exclude',

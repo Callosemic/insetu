@@ -64,6 +64,11 @@ export class InSetuElement extends SutramElement {
         return !!(window.ACTIVE_EXTENSIONS && window.ACTIVE_EXTENSIONS.includes(name));
     }
 
+    getOfflineMode(name = this.extName) {
+        const manifest = window.ExtensionRegistry?.getExtension(name);
+        return manifest?.offline_mode || 'full';
+    }
+
     setStatus(msg, timeout = 3000, isError = false) {
         if (window.inSetu?.ui?.setGlobalStatus) {
             window.inSetu.ui.setGlobalStatus(msg, timeout, isError);
@@ -87,11 +92,26 @@ export class InSetuElement extends SutramElement {
             timeAgo: window.inSetu.utils.timeAgo,
             clone: window.inSetu.utils.clone,
             debounce: window.ExtensionRegistry.utils.debounce,
-            formatArtifactSize: window.inSetu.utils.formatArtifactSize
+            formatArtifactSize: window.inSetu.utils.formatArtifactSize,
+            extractManifestFiles: window.inSetu.utils.extractManifestFiles,
+            parseFrontmatter: window.inSetu.utils.parseFrontmatter,
+            serializeFrontmatter: window.inSetu.utils.serializeFrontmatter,
+            getActiveWorkspace: window.inSetu.utils.getActiveWorkspace
         };
     }
     get api() {
         return {
+            request: (url, options = {}) => window.inSetu.api.request(url, options, this.workspaceId),
+            system: {
+                get: (path, options = {}) => window.inSetu.api.system.get(path, options),
+                post: (path, payload, options = {}) => window.inSetu.api.system.post(path, payload, options),
+                delete: (path, options = {}) => window.inSetu.api.system.delete(path, options)
+            },
+            workspace: {
+                get: (path, options = {}) => window.inSetu.api.workspace.get(path, options),
+                post: (path, payload, options = {}) => window.inSetu.api.workspace.post(path, payload, options),
+                delete: (path, options = {}) => window.inSetu.api.workspace.delete(path, options)
+            },
             pollJob: (jobId, options = {}) => window.inSetu.utils.pollJob(jobId, options),
             bindJobAction: (path, payloadGenerator, pollOptions = {}) => {
                 return async (e) => {
@@ -162,6 +182,13 @@ export class InSetuElement extends SutramElement {
         } else {
             super.dispatch(eventName, detail);
         }
+    }
+
+    emitHook(zoneName, payload = null) {
+        if (window.inSetu?.events?.emitHook) {
+            return window.inSetu.events.emitHook(zoneName, payload);
+        }
+        return null;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -235,7 +262,15 @@ export class InSetuElement extends SutramElement {
     onViewActivated() {}
 }
 // Safely initialize nested global namespaces individually
-export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer', 'core_text_blobs']);
+export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer', 'core_text_blobs', 'offline']);
+
+// Explicit list of Core OS modules that require frontend UI payloads to be mounted on boot
+export const CORE_UI_SCRIPTS = [
+    '/static/js/core/bridge.js',
+    '/static/js/core/gather.js',
+    '/static/js/core/config.js',
+    '/static/js/core/offline_ui.js'
+];
 
 window.inSetu = window.inSetu || {};
 window.inSetu.CORE_MODULES = CORE_MODULES;

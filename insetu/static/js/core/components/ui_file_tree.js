@@ -1,10 +1,11 @@
-import { LitElement, html, css } from 'lit';
+import { html, css } from 'lit';
 import { buildFileTree } from '../../../vendor/sutram/js/utils.js';
 import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
+import { InSetuElement } from '../sdk.js';
 
 export class InSetuCard extends SutramCard {}
-export class InSetuFileTree extends LitElement {
+export class InSetuFileTree extends InSetuElement {
     static properties = {
         files: { type: Array },
         currentPath: { type: Array },
@@ -15,7 +16,8 @@ export class InSetuFileTree extends LitElement {
         enableSearch: { type: Boolean },
         searchPlaceholder: { type: String },
         entityType: { type: String },
-        _searchQuery: { type: String }
+        _searchQuery: { type: String },
+        _pendingMutations: { type: Object }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
@@ -33,7 +35,15 @@ constructor() {
         this.searchPlaceholder = 'Search...';
         this._searchQuery = '';
         this._cachedTree = null;
+        this._pendingMutations = new Set();
 }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.subscribe(window.inSetu.stores.App, state => {
+            this._pendingMutations = state.pendingMutations || new Set();
+        });
+    }
 
     willUpdate(changedProperties) {
         if (changedProperties.has('files') || changedProperties.has('stripPrefix')) {
@@ -135,7 +145,7 @@ constructor() {
                             .titleText=${key}
                             descriptionText=""
                             intentColor="var(--intent-primary)"
-                            icon="📄"
+                            icon=${this._pendingMutations.has(fullFilepath) ? '🌩️' : '📄'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath: fullFilepath, isFS: true }}>
                         </insetu-card>
@@ -168,7 +178,7 @@ constructor() {
                             .titleText=${key}
                             descriptionText=""
                             intentColor="var(--intent-primary)"
-                            icon="📄"
+                            icon=${this._pendingMutations.has(filepath) ? '🌩️' : '📄'}
                             .entityType=${this.entityType || 'file'}
                             .entityData=${{ filepath, isFS: true }}>
                         </insetu-card>

@@ -114,11 +114,12 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
         let res;
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
         if (explicitUrl) {
-            res = await fetch(explicitUrl, { headers: window.inSetu.api._getHeaders(true) });
+            res = await window.inSetu.api.request(explicitUrl, {}, activeWs);
         } else {
             const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
-            if (overrideUrl) res = await fetch(overrideUrl);
+            if (overrideUrl) res = await window.inSetu.api.request(overrideUrl, {}, activeWs);
             if (!res) {
                 res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filePath)}`);
             }
@@ -166,7 +167,7 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
                     : `/download/${cleanPath.split('/').map(encodeURIComponent).join('/')}`;
             }
 
-            const res = await fetch(fetchUrl, { headers: window.inSetu.api._getHeaders(true) });
+            const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
             if (!res.ok) throw new Error(`File fetch failed for ${filepath}.`);
 
             const blob = await res.blob();
@@ -241,7 +242,8 @@ export async function viewAndCopy(filename) {
         closeBrowseModal();
     }
     try {
-        const res = await fetch(`/download/${encodeURIComponent(targetFile)}`, { headers: window.inSetu.api._getHeaders(true) });
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+        const res = await window.inSetu.api.request(`/download/${encodeURIComponent(targetFile)}`, {}, activeWs);
         if (!res.ok) throw new Error("Failed to fetch");
         const text = await res.text();
         injectTextToModal(text, isSupportedEditor, isMarkdown, false);
@@ -264,10 +266,12 @@ function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
     let changed = false;
     const newManifest = { vfs: { ...(manifest?.vfs || {}) }, ctx: { ...(manifest?.ctx || {}) } };
-
     const cleanPath = (p) => p ? p.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
     const normOldPath = cleanPath(oldPath);
     const normNewPath = cleanPath(newPath);
+
+    if (normOldPath) AppStore.getState().setResolvingLock(normOldPath, newPath ? 'move_source' : 'delete');
+    if (normNewPath) AppStore.getState().setResolvingLock(normNewPath, oldPath ? 'move_dest' : 'create');
 
     const _replacePathInArray = (arr) => {
         let mutated = false;
@@ -598,6 +602,11 @@ export class InSetuVFSExplorer extends InSetuElement {
                 this.subscribe(FsStore, (state) => {
                         this.searchQuery = state.searchQuery;
                 });
+                this.registerGlobalListener('sutram-sync-complete', window, () => {
+                    if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                        window.inSetu.sys.refreshManifest();
+                    }
+                });
 
                 // Trigger initial read
                 this._updateState(AppStore.getState());
@@ -701,6 +710,7 @@ customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
 window.ExtensionRegistry.registerExtension('files', {
     name: "Virtual File System",
     version: "2.0.0",
+    offline_mode: "full",
     shortcuts: [
         {
             id: 'file-modal-close',
