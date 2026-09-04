@@ -34,6 +34,7 @@ Extensions must expose a static configuration payload using the Declarative Sche
 window.ExtensionRegistry.registerExtension('ext_name', {
     name: "Extension Title",
     version: "2.0.0",
+    offline_mode: "full",
     entityActions: [
         {
             targetEntity: 'file',

@@ -29,6 +29,10 @@ Any system that requires live algorithmic validation or external network access 
 * **Context Compilation (RAG):** Requires sweeping the live Git tree.
 * **Research & Scraping:** Requires live internet (Jina API/BeautifulSoup) to resolve URLs.
 * **Git Operations:** Sweeps and pushes require the live daemon shell.
+### 4. Hybrid Token-Cache & Hash-Delta Sync (Updated 2026-09-02)
+To guarantee sandbox stability across PWA relaunches and iOS WebClip memory wipes, the bootloader utilizes a Hybrid Token-Cache. Authentication tokens are mirrored to `localStorage`. If the initial `/auth/bootstrap` network challenge fails, the OS intercepts the rejection, validates the cached token, sets the `isOffline` state, and gracefully hydrates the cached App Shell without halting.
+
+Additionally, rather than blindly syncing all files, the cache warmer utilizes a Hash-Delta Sync loop tethered to the CQRS metronome. It requests a lightweight `filepath -> SHA-256 hash` map and dispatches targeted background fetches only for altered files, adhering to an LRU eviction quota to protect browser limits.
 
 ## Consequences
 * **Positive:** Drastically improves the Developer Experience (DX) for off-the-grid academic writing and localized drafting.

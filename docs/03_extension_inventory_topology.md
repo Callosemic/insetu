@@ -13,6 +13,7 @@ The core OS is strictly domain-agnostic. It does not know what a "citation" or a
 * **`insetu/core/editor/engine_editor.py` (The Editor Engine):** Core extension managing global code and text editor preferences (`EDITOR_SCHEMA`) and per-file preferences (`file_preferences` SQLite schema).
 * **`app.py` / `insetu/core/bridge/engine_bridge.py` (The Sync Bridge):** The Yomama translation layer and physical atomic commit engine. Features Phase C JSON Telemetry rendering, interactive confirmation cards, and the Receipts history tab (`insetu-ext-bridge-history`) backing the Ephemeral Patch Ledger (`bridge_ledger`).
 * **`insetu/core/cartographer/cartographer.py` (The Cartographer):** Generates code indices and maps workspace topology.
+* **`insetu/core/offline/engine_offline.py` (The Offline Engine):** Tier 0 core engine managing local caching, IndexedDB state warming, and offline synchronization quotas.
 * **`insetu/kernel/hooks.py` (The Event Bus):** The API substrate allowing extensions to intercept RAG compilation, VFS commits, and OS process lifecycle events.
 * **`insetu.kernel.workers` (The Stateless Relay):** The centralized background task manager that sweeps switchboards and manages active SQLite worker threads across workspace swaps. It incorporates an integrated native filesystem watcher (`watchdog`) to automatically record unmanaged non-Git directory mutations into an SQLite fixture ledger for differential context compilation.
 
@@ -142,6 +143,15 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `update`), `zone:vfs-mutated` for debounced repo status refresh.
     * Event Bus: Emits `insetu:git:generate-diffs` on version scaffold/tag creation.
 
+### P. Offline Engine & HTTP Gateway (`offline_ui.js` & `api.js`)
+* **Status:** Core Engine / Active Extension (SDK V2).
+* **Role:** IndexedDB outbox mutation queueing, Stale-While-Revalidate blob caching, offline telemetry logging, and per-repository pre-caching.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** Browser IndexedDB (`SutramDB`).
+* **Injection Surfaces:**
+    * Network Interceptor: Wraps `window.inSetu.api` via `OfflineHttpProvider`.
+    * UI Slots: Primary Navigation Tab (`offline`) housing `ledger` and `log` sub-tabs, and global storage modal.
+
 ---
 
 ## 3. Pending Decoupling (The V2 Extractions)
@@ -216,3 +226,17 @@ To enforce **ADR 0002 (Domain Decoupling)**, extensions must never query each ot
 | `zone:vfs-mutated` | Emitted when VFS disk operations settle. | Triggers reactive cache updates across active extensions. |
 | `zone:new-file-options-lit` | Emitted inside the New File modal. | Allows extensions to inject custom toggles (e.g., "Import from URL") into the creation UI. |
 | `zone:post-import-url` | Emitted after the Web Scraper successfully downloads markdown. | Allows extensions to react to ingested content (e.g., auto-checking the "Add to Library" toggle based on URL signatures). |
+
+### 3.3 Frontend Event Bus (\`window.inSetu.events\`)
+With the deprecation of UI zones (ADR 0041), horizontal communication across the frontend chassis relies entirely on the \`CustomEvent\` substrate. Extensions should namespace events as \`insetu:<ext_name>:<action>\` to prevent collisions.
+
+| Event Name | Emitter / Trigger | Target Listener | Payload (\`detail\`) |
+| :--- | :--- | :--- | :--- |
+| \`insetu:vfs-mutated\` | \`routes_fs.py\`, \`app.js\`, \`fs.js\`, \`bridge.js\` | \`git\`, \`tracker\`, \`flow\`, \`notes\` | \`{ mutations: [{ filepath, operation, ignore_ledger }] }\` |
+| \`sutram-sync-complete\` | \`app.js\` (Offline Reconciler) | \`fs.js\`, \`ext_tracker.js\`, \`ext_git.js\`, \`ext_flow.js\` | None |
+| \`sutram-route-changed\` | \`app.js\` (\`AppStore.subscribe\`) | \`<sutram-app-shell>\`, Extensions | \`{ tab, subTabs }\` |
+| \`insetu:force-refresh\` | \`<sutram-app-shell>\` (Tab re-click) | \`InSetuElement.onForceRefresh\` | \`{ parentId, subId }\` |
+| \`insetu:git:generate-diffs\` | \`ext_git.js\` (Push/Sweep actions) | \`ext_git.js\` (\`generateDiffs()\`) | \`{ force: boolean }\` |
+| \`git-diffs-refreshed\` | \`ext_git.js\` (\`generateDiffs()\`) | \`ext_git.js\` (\`_fetchSweepStatusSilent\`) | None |
+| \`insetu:tracker:open-edit-task\` | \`tracker\` (Custom Editors) | \`InSetuExtTrackerModals\` | \`{ filepath }\` |
+| \`insetu:flow:refresh-prompt\` | \`ext_flow.js\` (\`vfs-mutated\` trap) | \`InSetuExtFlow\` | None |

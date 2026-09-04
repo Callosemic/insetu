@@ -21,6 +21,8 @@ This index serves as the centralized mapping for all active architectural decisi
 * **[ADR 0015: CodeMirror 6 Migration & Native ES Modules](adrs/0015-codemirror6-migration.md)** - Replaced EasyMDE with CodeMirror 6 imported natively via `esm.sh` to advance the zero-bundler architecture.
 * **[ADR 0021: Standardized Extension State Isolation & Lifecycle Governance](adrs/0021_standardized_state_isolation.md)** - Standardized frontend state into `createExtensionStore` Zustand slices that namespace properly and garbage-collect memory on workspace swaps.
 * **[ADR 0028: Zero-Bundler Native Hash Router & Fail-Safe Event Bus Substrate](adrs/0028-native-hash-routing-and-event-bus.md)** - Unified UI navigation under `window.location.hash` and established `window.inSetu.events` fail-safe hook emitters.
+* **[ADR 0043: Client Offline Provider, Service Worker Core, and Outbox Reconciliation](adrs/0043-client-offline-provider-and-offline-engine.md)** - Established offline shell hydration, SW core vendorization, and outbox reconciliation.
+* **[ADR 0043: Client-Side Offline Http Provider, SutramDB Integration, and Core Offline Engine](adrs/0043-client-offline-provider-and-offline-engine.md)** - Implemented client-side `OfflineHttpProvider` network interceptor, IndexedDB outbox queueing, and core `offline` management extension.
 
 ## Extension SDK & Network Gateway
 * **[ADR 0005: Transport Shell Decoupling & Pure Logic Extraction](adrs/archived/0005-transport-shell-decoupling.md)** - Separated HTTP REST controllers from pure domain logic functions to allow extension invocation without HTTP overhead.

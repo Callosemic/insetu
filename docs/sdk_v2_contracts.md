@@ -68,9 +68,12 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
 * **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`
+* **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 ### 3.2 Client Network Gateway (ADR 0016)
 
 Network synchronization must route through the client API abstraction to inherit multi-tenant isolation tokens natively. Raw `fetch()` is banned. All API methods enforce client-side extension enablement checks against `window.ACTIVE_EXTENSIONS` prior to network dispatch, returning a 403 Forbidden response if the target extension is disabled.
+* `this.api.request(url, options, scopeId)`
+* `this.api.workspace(path, options)` / `this.api.system(path, options)`
 * `this.api.get(path, options)`
 * `this.api.post(path, payload, options)`
 * `this.api.delete(path, options)`
@@ -98,7 +101,8 @@ Extensions do not imperatively append themselves to the DOM. They expose a layou
 window.ExtensionRegistry.registerExtension('my_ext', {
     name: "My Extension",
     version: "2.0.0",
-    
+    offline_mode: "full", // Options: "full", "read_only", "none"
+
     // Injects contextual buttons onto file/task cards
     entityActions: [{
         targetEntity: 'file', // Matches the entityType property of an <insetu-card>
