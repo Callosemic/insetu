@@ -57,6 +57,7 @@ insetu/
 │   │   ├── 0040-system-configuration-ssot-and-multi-scoped-settings.md # Centralized settings schema definition and hierarchical scope isolation (daemon, workspace, repo).
 │   │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │   │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
+│   │   ├── 0043-client-offline-provider-and-offline-engine.md # Client offline provider, SW core vendorization, and outbox reconciliation.
 │   │   └── archived/               # Superseded and historical ADR documents.
 │   │       ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │   │       ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
@@ -84,6 +85,9 @@ insetu/
 │   │   ├── gather/                 # RAG Context compiler and manifest synchronizer.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_gather.py    # [Context Compiler and Workflow Batch routing]
+│   │   ├── offline/                # Local offline data provider and sync reconciliation engine.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   └── engine_offline.py   # Offline data provider and sync reconciliation handlers.
 │   │   ├── routes_fs.py            # [VFS Substrate & File Mutations]
 │   │   ├── routes_system.py        # [Config & Workspace Transport]
 │   │   ├── sdk/                    # Developer SDK namespace.
@@ -94,11 +98,11 @@ insetu/
 │   │   └── utils_core.py           # [Workspace Physics & Universal Utils]
 │   ├── defaults/                   # Base templates for workspace scaffolding.
 │   │   ├── .gitkeep                # Git folder retention.
-│   │   ├── config_json.txt         # [comment required]
+│   │   ├── config_json.txt         # Default config.json template for new workspace scaffolding.
 │   │   ├── engine_template_py.txt  # Boilerplate Python engine template for new extensions.
 │   │   ├── ext_template_js.txt     # Boilerplate Lit component template for new extensions.
 │   │   ├── gitignore.txt           # Base .gitignore to protect local SQLite DBs and secrets.
-│   │   └── system_json.txt         # [comment required]
+│   │   └── system_json.txt         # Default system.json template for daemon scaffolding.
 │   ├── extensions/                 # Tier 3 Domain Extensions (Opt-in functionality).
 │   │   ├── __init__.py             # Module initialization.
 │   │   ├── citations/              # CSL-JSON Academic Reference Library.
@@ -192,6 +196,7 @@ insetu/
 │   │   │   │   ├── config.js       # UI for managing repository topologies and tracked buckets.
 │   │   │   │   ├── fs.js           # [Virtual File System Modals & UI]
 │   │   │   │   ├── gather.js       # [Context Batch & Workflow UI]
+│   │   │   │   ├── offline_ui.js   # Client offline status indicator and outbox telemetry UI.
 │   │   │   │   ├── sdk.js          # The InSetuElement base class and Zustand store factory.
 │   │   │   │   ├── shared_styles.js # Proxy export pointing to the Sutram micro-kernel.
 │   │   │   │   ├── store.js        # [Zustand Unified Data Flow (UDF) Store]
@@ -202,10 +207,13 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
+├── log.md                          # Service execution log and background daemon telemetry traces.
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
-│   └── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+│   ├── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+│   ├── vendor_lit.sh               # Local esbuild vendorization script for Lit library.
+│   └── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
 └── tests/                          # Automated testing suite.
     ├── fitness/                    # The AST and Regex architectural linter rules.
     │   ├── __init__.py             # Module initialization.

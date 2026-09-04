@@ -136,7 +136,6 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
             raise ValueError(f"Invalid JSON syntax: {str(e)}")
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, content, data))
     return {"status": "accepted", "message": f"File {filepath} queued for atomic background commit."}
-
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
     try:
         hooks.emit('pre_file_save', workspace_id=workspace_id, filepath=filepath, content=content, data=data)
@@ -157,9 +156,11 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
         try:
             with open(resolved_path, 'r', encoding='utf-8') as f:
                 if f.read() == content:
+                    print(f"💽 [VFS TELEMETRY] Silent drop (idempotent): {filepath}")
                     return  # Silently drop the transaction before touching disk or the event ledger
         except Exception:
             pass
+    print(f"💽 [VFS TELEMETRY] Writing to disk: {filepath}")
 
     target_dir = Path(resolved_path).parent.as_posix()
     if target_dir:
@@ -199,7 +200,7 @@ def execute_vfs_save_physical(workspace_id, filepath, content, data):
                     (delete_source, 'deleted', time.time())
                 )
                 db_conn.commit()
-
+    print(f"💽 [VFS TELEMETRY] Emitting vfs_mutated for {filepath} (ignore_ledger={ignore_ledger})")
     hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "save", "ignore_ledger": ignore_ledger}])
 class VFSTransaction:
     """Provides atomic-style batching and async queue dispatch for file mutations."""

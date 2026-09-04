@@ -3,9 +3,9 @@
 
 **inSetu** (from *in situ*, meaning "in position" or "on site", and *Setu* [सेतु], Sanskrit for "bridge") is a local-first AI Developer OS, Context Gatherer, and Kanban Tracker.  
 It bridges the gap between Large Language Models (LLMs) and your local file system by treating your codebase as the ultimate source of truth. Instead of pasting code snippets back and forth, inSetu compiles massive, repository-wide context payloads for your LLM, and uses a deterministic "Sync Bridge" to apply the LLM's structural patches directly to your disk.
-<!-- 60-Second Demo Video/GIF Slot -->
-![inSetu 60-Second Demo](docs/assets/demo.gif)
-*(Watch the 60-second demo: Yomama Sync Bridge, AST Pre-Flight Bouncer, and Emergency Lifeboat OS)*
+
+DEMO: https://youtu.be/FDgL6jveMHo?si=h35FuW_WC0VO1Wox
+*(Watch the 3-minute demo: Using inSetu to edit code on an inSetu extension - Yomama patcher, Gather context compilation, Virtual File System, Prompt templates, and more)*
 ## ✨ Core Substrate Engines & Extensions
 
 ### ⚙️ Core Substrate Modules (Tier 2)
@@ -44,14 +44,29 @@ It bridges the gap between Large Language Models (LLMs) and your local file syst
 
 * **Python 3.10+**
 * **Git** (*Required* for repository topology mapping, code indexing, diff generation, and release management)
-
 ### Optional System Binaries
 
 * **Node.js** (Optional: Enables pre-flight JavaScript/TypeScript AST syntax validation in the Yomama Sync Bridge)
-* **Pandoc & LaTeX** (Optional: Enables document compilation to PDF/DOCX via the `format` extension)
+* **Pandoc & LaTeX** (Optional: Enables document compilation to PDF/DOCX via the `publish` extension)
 * **Tailscale** (Optional: Enables zero-trust HTTPS network binding over private Tailnets)
 
 ## 🚀 Installation
+
+The inSetu Developer OS (v0.17.0+) is distributed officially via PyPI. You can install it directly into your environment using standard Python packaging tools:
+
+```bash
+pip install insetu
+```
+*(Optional)* To install the full extension suite (includes Playwright, BeautifulSoup, Mistune, etc.):
+```bash
+pip install insetu[all]
+
+# If using the Research/Scraping extension, install the required headless browsers:
+playwright install
+```
+
+### Installing from Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/Callosemic/insetu.git
@@ -59,11 +74,13 @@ cd insetu
 
 # Install base OS dependencies
 pip install -e .
-
-# (Optional) Install full extension suite (includes Playwright, BeautifulSoup, Mistune, etc.)
+# (Optional) Install full extension suite
 pip install -e .[all]
 
+# If using the Research/Scraping extension, install the required headless browsers:
+playwright install
 ```
+
 ## 💻 Usage & CLI Reference
 
 Once installed, the `insetu` command is available anywhere on your system.
@@ -148,13 +165,11 @@ ngrok http 5005
 *(Note: If using Ngrok, ensure you trust the network or use Ngrok's basic auth features, as inSetu has direct write access to your local filesystem).*
 
 ---
-
 ## 📚 Architectural Essays & Articles
 
 Read the long-form essays exploring the philosophy, sociology, and zero-bundler architecture behind inSetu:
-* **[The Habitus of the Machine](https://draftpunked.substack.com):** Why modern web frameworks are hostile to LLMs, and how to build a cognitive substrate that works.
-* **[The Lost Joy of the Refresh Button](https://draftpunked.substack.com):** Escaping massive compilation chains and reclaiming visceral developer feedback loops.
-* **[The UX of Resistance](https://draftpunked.substack.com):** Why friction is a feature in AI-assisted coding.
+* **[The Habitus of the Machine](https://draftpunked.substack.com/p/the-habitus-of-the-machine-coding):** Why modern web frameworks are hostile to LLMs, and how to build a cognitive substrate that works.
+* **[Holding the Opinion](https://draftpunked.substack.com/p/holding-the-opinion):** Maintaining human architectural intent and decision-making in the age of AI-generated syntax.
 
 ---
 ## 💬 Fractional Consulting & Advisory

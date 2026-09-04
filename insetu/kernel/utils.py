@@ -70,7 +70,7 @@ def get_workspace_physics(workspace_id=None):
         return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
 
     return resolved_cfg, _cwd, workflows_path
-CORE_MODULES = {'bridge', 'gather', 'cartographer', 'config', 'fs', 'system', 'workers', 'auth', 'security'}
+CORE_MODULES = {'bridge', 'gather', 'cartographer', 'config', 'fs', 'system', 'workers', 'auth', 'security', 'offline'}
 
 def is_core_module(ext_name):
     return ext_name in CORE_MODULES

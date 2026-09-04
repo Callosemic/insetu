@@ -1,20 +1,73 @@
 import { AppStore } from './core/store.js';
 import '../vendor/sutram/js/app_shell.js';
+function bootServiceWorker() {
+    if ('serviceWorker' in navigator) {
+        let isFirstInstall = !navigator.serviceWorker.controller;
 
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (isFirstInstall) {
+                isFirstInstall = false;
+                // Eagerly warm the cache with all dynamically imported ES modules from the boot sequence
+                const resources = window.performance.getEntriesByType('resource');
+                const urlsToCache = resources
+                    .filter(r => r.name.includes('/static/') && !r.name.includes('/api/'))
+                    .map(r => r.name);
+
+                urlsToCache.forEach(url => fetch(url, { priority: 'low' }).catch(()=>{}));
+                window.inSetu?.offlineLog?.(`First install: Warmed SW cache with ${urlsToCache.length} dynamic boot assets.`, 'success');
+            }
+        });
+
         navigator.serviceWorker.register('/sw.js').then(reg => {
+            // Ground-Zero Telemetry: Confirm SW registration in the current sandbox
+            if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("✅ Service Worker Active", 3000);
+            }
             reg.addEventListener('updatefound', () => {
                 const newWorker = reg.installing;
                 newWorker.addEventListener('statechange', () => {
-                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                        console.log('New update available. Refreshing...');
-                        window.location.reload();
+                    if (newWorker.state === 'installed') {
+                        if (navigator.serviceWorker.controller) {
+                            const isRec = window.inSetu?.stores?.App?.getState()?.isReconciling;
+                            if (isRec) {
+                                console.log('New update deferred until outbox drains...');
+                                window.addEventListener('sutram-sync-complete', () => {
+                                    newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                    window.location.reload();
+                                }, { once: true });
+                            } else {
+                                console.log('New update available. Refreshing...');
+                                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                window.location.reload();
+                            }
+                        } else {
+                            console.log('SW installed for the first time. Hydrating dynamic module cache...');
+                            setTimeout(() => window.location.reload(), 500);
+                        }
                     }
                 });
             });
-        }).catch(err => console.error('SW reg failed:', err));
-    });
+
+            // Keep SW informed of reconciliation state
+            if (window.inSetu?.stores?.App) {
+                window.inSetu.stores.App.subscribe(s => s.isReconciling, (isRec) => {
+                    if (navigator.serviceWorker.controller) {
+                        navigator.serviceWorker.controller.postMessage({ type: 'SET_RECONCILING', value: isRec });
+                    }
+                });
+            }
+        }).catch(err => {
+            alert("SW Registration Failed: " + err.message);
+        });
+    } else {
+        alert("⚠️ Offline mode disabled: Service Workers require a secure context (HTTPS or localhost).");
+    }
+}
+
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    bootServiceWorker();
+} else {
+    window.addEventListener('load', bootServiceWorker);
 }
 // Intercept window refreshes only if edits are actively staged or in progress
 window.addEventListener('beforeunload', (e) => {
@@ -24,9 +77,13 @@ window.addEventListener('beforeunload', (e) => {
     if (bridgeState && bridgeState.payloadText && bridgeState.payloadText.trim() !== '') {
         isDirty = true;
     }
-
     const fm = window.inSetu?.stores?.Fs?.getState()?.fileModal;
     if (fm && fm.open && fm.isFS && fm.content !== fm.originalContent) {
+        isDirty = true;
+    }
+
+    const appState = window.inSetu?.stores?.App?.getState();
+    if (appState && appState.outboxCount > 0) {
         isDirty = true;
     }
 
@@ -35,6 +92,7 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '';
     }
 });
+import { CORE_UI_SCRIPTS } from './core/sdk.js';
 import { initShortcutRouter } from '../vendor/sutram/js/shortcuts.js';
 import '../vendor/sutram/js/primitives.js';
 import '../vendor/sutram/js/inputs.js';
@@ -140,14 +198,12 @@ async function bootExtensions() {
         '/static/js/core/components/ui_filter_pills.js',
         '/static/js/core/components/ui_primitives.js'
     ];
-
     // Batch 1: Core OS Chassis Modules
-    const coreModules = ['bridge', 'gather', 'config'];
-    const coreUrls = coreModules.map(m => `/static/js/core/${m}.js`);
+    const coreUrls = CORE_UI_SCRIPTS;
 
     // Batch 2: Feature Extensions
     const extensionUrls = activeExts
-        .filter(ext => !(window.inSetu?.isCore ? window.inSetu.isCore(ext) : coreModules.includes(ext)))
+        .filter(ext => !(window.inSetu?.isCore && window.inSetu.isCore(ext)))
         .map(ext => `/static/js/extensions/ext_${ext}.js`);
 
     if (window.ExtensionRegistry && typeof window.ExtensionRegistry.loadBatches === 'function') {
@@ -165,11 +221,12 @@ async function bootExtensions() {
 let lastManifestSyncTs = 0;
 let localVfsSignatures = {};
 let localCtxSignatures = {};
-
+let warmedVfsSignatures = {};
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
+    if (window.inSetu?.stores?.App?.getState()?.isReconciling) return; // Wait for outbox drain
     try {
-        const deltaRes = await window.inSetu.api.system.get(`deltas?since=${lastManifestSyncTs}`);
+        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${lastManifestSyncTs}`);
         if (!deltaRes.ok) return;
 
         const deltaData = await deltaRes.json();
@@ -181,10 +238,27 @@ async function checkManifestVersion() {
             ctx: { ...(stateManifest.ctx || {}) } 
         };
 
+        const now = Date.now();
+        const currentLocks = AppStore.getState().resolvingLocks || {};
+        const locks = { ...currentLocks };
+        const lockedRepos = new Set();
+        let expiredLocks = false;
+
+        for (const [path, lock] of Object.entries(locks)) {
+            if (lock.expires > now) {
+                lockedRepos.add(path.split('/')[0]);
+            } else {
+                delete locks[path];
+                expiredLocks = true;
+            }
+        }
+        if (expiredLocks) AppStore.setState({ resolvingLocks: locks });
+
         const sigs = deltaData.signatures || {};
         // 1. Evaluate VFS Repo Signatures
         if (sigs.vfs) {
             for (const [repo, sig] of Object.entries(sigs.vfs)) {
+                if (lockedRepos.has(repo)) continue;
                 if (sig === null) {
                     // Tombstone: Remove repo buckets
                     Object.keys(currentManifest.vfs).forEach(key => {
@@ -211,6 +285,7 @@ async function checkManifestVersion() {
                 }
             }
         }
+        const pathsToWarm = [];
 
         // 2. Evaluate CTX Artifact Signatures
         if (sigs.ctx) {
@@ -230,6 +305,7 @@ async function checkManifestVersion() {
                         const entryData = await entryRes.json();
                         if (entryData.entry) {
                             currentManifest.ctx[path] = entryData.entry;
+                            pathsToWarm.push(`/download/${encodeURIComponent(path)}`);
                         } else {
                             delete currentManifest.ctx[path];
                         }
@@ -245,12 +321,53 @@ async function checkManifestVersion() {
         }
         if (manifestUpdated) {
             AppStore.setState({ manifest: currentManifest || { vfs: {}, ctx: {} } });
+            // Phase 4: Hash-Delta Cache Warmer (Background Priority Threads)
+            if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true) {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                // Warm offline-capable VFS files dynamically
+                const targetConfigs = AppStore.getState().targetConfigs || [];
+                const offlineRepos = targetConfigs.filter(c => c.offline_capable).map(c => c.repo_dir);
+                if (offlineRepos.length > 0 && currentManifest.vfs && sigs.vfs) {
+                    Object.entries(currentManifest.vfs).forEach(([key, bucket]) => {
+                        const repo = key.split('::')[0];
+                        const currentSig = sigs.vfs[repo];
+                        if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
+                            (bucket.files || []).forEach(f => {
+                                pathsToWarm.push(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}&t=${Date.now()}`);
+                            });
+                            warmedVfsSignatures[repo] = currentSig;
+                        }
+                    });
+                }
+
+                const uniquePaths = Array.from(new Set(pathsToWarm));
+                uniquePaths.forEach(p => {
+                    if (window.inSetu?.api?.request) {
+                        window.inSetu.api.request(p, { priority: 'low' }, activeWs).catch(() => {});
+                    } else {
+                        fetch(p, { priority: 'low' }).catch(() => {});
+                    }
+                });
+            }
         }
         if (deltaData.timestamp) {
             lastManifestSyncTs = deltaData.timestamp;
         }
         // 3. Dispatch Physical Mutations to Event Bus
         if (deltaData.mutations && deltaData.mutations.length > 0) {
+            const currentLocks = AppStore.getState().resolvingLocks || {};
+            let locksChanged = false;
+            const nextLocks = { ...currentLocks };
+
+            deltaData.mutations.forEach(m => {
+                const normPath = m.filepath ? m.filepath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/^\.\//, '') : '';
+                if (nextLocks[normPath]) {
+                    delete nextLocks[normPath];
+                    locksChanged = true;
+                }
+            });
+            if (locksChanged) AppStore.setState({ resolvingLocks: nextLocks });
+
             try {
                 window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: deltaData.mutations });
             } catch (e) {
@@ -272,10 +389,45 @@ async function checkManifestVersion() {
 }
 window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
+
+import { NetworkHysteresisManager } from '../vendor/sutram/js/offline.js';
+const hysteresisManager = new NetworkHysteresisManager('/?t={t}', 3);
+
+async function checkNetworkStatus() {
+    const appState = window.inSetu?.stores?.App?.getState();
+    if (!appState?.isOffline || appState?.isReconciling) {
+        hysteresisManager.reset();
+        return;
+    }
+
+    await hysteresisManager.check(async () => {
+        AppStore.setState({ isReconciling: true });
+        window.inSetu?.offlineLog?.("Network restored. Draining offline outbox queue...", "info");
+        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("🌐 Network restored. Syncing outbox...", null);
+
+        const { OutboxReconciler } = await import('../vendor/sutram/js/offline.js');
+        const activeWs = window.inSetu.utils.getActiveWorkspace();
+
+        await OutboxReconciler.drain(activeWs, async (path, method, payload, scopeId) => {
+            const reqScope = scopeId || activeWs;
+            const isFD = payload instanceof FormData;
+            const headers = isFD ? {} : { 'Content-Type': 'application/json' };
+            const body = isFD ? payload : (payload ? JSON.stringify(payload) : undefined);
+            return window.inSetu.api.request(path, { method, headers, body }, reqScope);
+        });
+
+        AppStore.setState({ isOffline: false, isReconciling: false, outboxCount: 0, pendingMutations: new Set() });
+        window.dispatchEvent(new CustomEvent('sutram-sync-complete'));
+        window.inSetu?.offlineLog?.("Outbox reconciliation complete. All queued mutations pushed.", "success");
+        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Outbox synced successfully.", 3000);
+    });
+}
+window.ExtensionRegistry.registerTick('network_ping', 5000, checkNetworkStatus);
+
 // Delegate execution to the Tier 1 agnostic metronome
 window.ExtensionRegistry.startMetronome(
     () => window.ACTIVE_EXTENSIONS || [],
-    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh', 'manifest_sync']
+    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh', 'manifest_sync', 'network_ping']
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/js/poller.js';
@@ -323,38 +475,91 @@ window.addEventListener('sutram:extension-registered', (e) => {
     const extName = e.detail?.extName || 'extension';
     updateBootProgress(`Loaded Extension: ${extName}`);
 });
-
 async function executeSecurityHandshake() {
-    // Attempt a seamless, zero-config Tailscale or Localhost handshake first
-    let res = await fetch('/auth/bootstrap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-    });
-
-    if (res.ok) {
-        const data = await res.json();
-        sessionStorage.setItem('insetu_boot_token', data.token);
-        AppStore.setState({ authToken: data.token });
-        return true;
+    // Fast-track offline boot if the browser natively reports no network connection
+    if (!navigator.onLine) {
+        window.inSetu?.offlineLog?.("Browser reports offline status. Fast-tracking offline boot.", "info");
+        const cachedToken = localStorage.getItem('insetu_boot_token');
+        if (cachedToken) {
+            AppStore.setState({ authToken: cachedToken, isOffline: true });
+            return true;
+        }
+        return false;
     }
 
-    // Fallback: Challenge issued, prompt client for static profile access token
-    if (res.status === 401) {
-        const userToken = prompt("🔑 inSetu Security Gate\nEnter the persistent 'auth_token' defined in your config.json:");
-        if (!userToken) return false;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000); // Fast 2s timeout for VPN blackholes
 
-        let retryRes = await fetch('/auth/bootstrap', {
+    try {
+        // Attempt a seamless, zero-config Tailscale or Localhost handshake first
+        let res = await fetch('/auth/bootstrap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: userToken.trim() })
+            body: JSON.stringify({}),
+            signal: controller.signal
         });
+        clearTimeout(timeoutId);
 
-        if (retryRes.ok) {
-            const data = await retryRes.json();
+        if (res.ok) {
+            const data = await res.json();
             sessionStorage.setItem('insetu_boot_token', data.token);
-            AppStore.setState({ authToken: data.token });
+            localStorage.setItem('insetu_boot_token', data.token);
+            AppStore.setState({ authToken: data.token, isOffline: false });
             return true;
+        }
+
+        // Fallback: Challenge issued, render HTML auth gate
+        if (res.status === 401) {
+            return new Promise((resolve) => {
+                document.body.innerHTML = `
+                    <div style="font-family:monospace; background:#0f172a; color:#f8fafc; padding:20px; text-align:center; height:100dvh; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+                        <h2 style="color:#10b981; margin-top:0;">🔑 inSetu Security Gate</h2>
+                        <p style="color:#94a3b8; margin-bottom:20px;">Enter the persistent 'auth_token' defined in your config.json:</p>
+                        <input type="password" id="auth-token-input" style="padding:12px; font-size:1.1rem; border-radius:4px; border:1px solid #334155; background:#1e293b; color:#fff; margin-bottom:15px; width:100%; max-width:300px; text-align:center;" />
+                        <button id="auth-submit-btn" style="background:#3b82f6; color:white; border:none; padding:12px 20px; border-radius:4px; font-size:1.1rem; font-weight:bold; cursor:pointer; width:100%; max-width:300px;">Authenticate</button>
+                    </div>
+                `;
+                const btn = document.getElementById('auth-submit-btn');
+                const input = document.getElementById('auth-token-input');
+
+                const submitToken = async () => {
+                    const userToken = input.value;
+                    if (!userToken) return;
+                    btn.innerText = 'Verifying...';
+                    try {
+                        let retryRes = await fetch('/auth/bootstrap', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ token: userToken.trim() })
+                        });
+                        if (retryRes.ok) {
+                            const data = await retryRes.json();
+                            sessionStorage.setItem('insetu_boot_token', data.token);
+                            localStorage.setItem('insetu_boot_token', data.token);
+                            AppStore.setState({ authToken: data.token, isOffline: false });
+                            window.location.reload(); // Reload to cleanly restore the boot screen
+                        } else {
+                            btn.innerText = '❌ Invalid Token';
+                            setTimeout(() => btn.innerText = 'Authenticate', 2000);
+                        }
+                    } catch (e) {
+                        btn.innerText = '❌ Network Error';
+                        setTimeout(() => btn.innerText = 'Authenticate', 2000);
+                    }
+                };
+
+                btn.addEventListener('click', submitToken);
+                input.addEventListener('keypress', (e) => { if (e.key === 'Enter') submitToken(); });
+            });
+        }
+    } catch (err) {
+        clearTimeout(timeoutId);
+        // Offline Fallback: If network fetch fails, inspect cached credentials
+        const cachedToken = localStorage.getItem('insetu_boot_token');
+        if (cachedToken) {
+            window.inSetu?.offlineLog?.("Network handshake failed. Hydrating offline OS shell.", "warning", err.message);
+            AppStore.setState({ authToken: cachedToken, isOffline: true });
+            return true; // Unblock boot sequence
         }
     }
     return false;
@@ -370,43 +575,140 @@ async function executeBootSequence() {
         document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
+    if (AppStore.getState().isOffline) {
+        updateBootProgress("Offline Mode — Hydrating Cached Shell...");
+        if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus("⚡ Running in Offline Mode", 4000);
+        }
+
+        // Hydrate offline UI shell state from local storage
+        const ws = localStorage.getItem('insetu_workspace') || 'default';
+        AppStore.setState({ activeWorkspace: ws });
+        window.inSetu?.offlineLog?.(`[BOOT] Initiating offline shell for workspace: ${ws}`, 'info');
+
+        try {
+            updateBootProgress("Loading Offline Workspaces...");
+            const wsStr = localStorage.getItem('insetu_offline_workspaces');
+            if (wsStr) {
+                const wsData = JSON.parse(wsStr);
+                if (wsData.workspaces) AppStore.setState({ workspaces: wsData.workspaces });
+            }
+        } catch(e) { console.warn("Offline Workspace Hydration Failed", e); }
+
+        try {
+            updateBootProgress("Loading Offline Config...");
+            const confStr = localStorage.getItem('insetu_offline_config');
+            if (confStr) {
+                const data = JSON.parse(confStr);
+                const config = data.config || {};
+                window.ACTIVE_EXTENSIONS = config.extensions || [];
+                window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
+                AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
+                const statusBar = document.querySelector('sutram-status-bar');
+                if (statusBar) statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                bootTotalSteps = 5 + window.ACTIVE_EXTENSIONS.length;
+                window.inSetu?.offlineLog?.(`[BOOT] Loaded Config (${window.ACTIVE_EXTENSIONS.length} extensions)`, 'success');
+            }
+        } catch(e) { console.warn("Offline Config Hydration Failed", e); }
+
+        try {
+            updateBootProgress("Loading Offline Topology...");
+            const topStr = localStorage.getItem('insetu_offline_topology');
+            if (topStr) {
+                const d = JSON.parse(topStr);
+                const tabOrder = d.tab_order || [];
+                AppStore.setState({ 
+                    allRepos: d.repos,
+                    targetConfigs: d.targets || [],
+                    configMissing: !!d.config_missing,
+                    tabOrder: tabOrder
+                });
+                if (window.ExtensionRegistry?.setTabOrder && tabOrder.length > 0) {
+                    window.ExtensionRegistry.setTabOrder(tabOrder);
+                }
+            }
+        } catch(e) { console.warn("Offline Topology Hydration Failed", e); }
+        try {
+            updateBootProgress("Loading Offline Manifest...");
+            // Pull the file manifest from the IDB cache interceptor
+            let mRes = await window.inSetu.api.workspace.get('system/manifest'); 
+            if (mRes.ok) {
+                AppStore.setState({ manifest: await mRes.json() });
+                window.inSetu?.offlineLog?.(`[BOOT] Loaded cached VFS manifest`, 'success');
+            }
+        } catch(e) { console.warn("Offline Manifest Hydration Failed", e); }
+
+    }
 
     // 1. Establish tenant workspace context FIRST so API calls route to the true active workspace
     console.log("[BOOT] Loading Workspaces...");
     updateBootProgress("Loading Workspaces...");
     await loadWorkspaces();
+        // 2. Fetch tenant configuration for the true active workspace
+        try {
+            console.log("[BOOT] Fetching system configuration...");
+            updateBootProgress("Fetching system config...");
+            const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+            console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
+            if (cRes.ok) {
+                const data = await cRes.json();
+                localStorage.setItem('insetu_offline_config', JSON.stringify(data)); // Save for offline boot
+                const config = data.config || {};
+                window.ACTIVE_EXTENSIONS = config.extensions || [];
+                window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
+                // Synchronize branding tokens while we have the config
+                AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
+                const statusBar = document.querySelector('sutram-status-bar');
+                if (statusBar) {
+                    statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                }
 
-    // 2. Fetch tenant configuration for the true active workspace
-    try {
-        console.log("[BOOT] Fetching system configuration...");
-        updateBootProgress("Fetching system config...");
-        const cRes = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
-        console.log("[BOOT] System configuration fetched. OK:", cRes.ok);
-        if (cRes.ok) {
-            const data = await cRes.json();
-            const config = data.config || {};
-            window.ACTIVE_EXTENSIONS = config.extensions || [];
-            window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
-            // Synchronize branding tokens while we have the config
-            AppStore.setState({ instanceEmoji: config.instance_emoji || "⚙️" });
-            const statusBar = document.querySelector('sutram-status-bar');
-            if (statusBar) {
-                statusBar.baseTitle = config.instance_title || "inSetu Developer OS";
+                // Recalculate total boot steps dynamically based on discovered extension count
+                bootTotalSteps = 5 + window.ACTIVE_EXTENSIONS.length;
             }
-
-            // Recalculate total boot steps dynamically based on discovered extension count
-            bootTotalSteps = 5 + window.ACTIVE_EXTENSIONS.length;
+        } catch (e) {
+            console.warn("Failed to fetch tenant configuration on boot.", e);
         }
-    } catch (e) {
-        console.warn("Failed to fetch tenant configuration on boot.", e);
-    }
-    console.log("[BOOT] Workspaces loaded.");
-    console.log("[BOOT] Initializing Workspace Topology...");
-    updateBootProgress("Initializing Topology...");
-    await initializeWorkspaceTopology();
-    console.log("[BOOT] Topology initialized.");
+        console.log("[BOOT] Workspaces loaded.");
+        console.log("[BOOT] Initializing Workspace Topology...");
+        updateBootProgress("Initializing Topology...");
+        await initializeWorkspaceTopology();
+        console.log("[BOOT] Topology initialized.");
+    console.log(`[BOOT TELEMETRY] ACTIVE_EXTENSIONS before boot:`, window.ACTIVE_EXTENSIONS);
+    console.log(`[BOOT TELEMETRY] tabOrder before boot:`, AppStore.getState().tabOrder);
+    window.inSetu?.offlineLog?.(`[BOOT TELEMETRY] ACTIVE_EXTENSIONS: ${JSON.stringify(window.ACTIVE_EXTENSIONS)}`, 'info');
+
     console.log("[BOOT] Booting Extensions...");
-    await bootExtensions();
+    try {
+        await bootExtensions();
+        console.log(`[BOOT TELEMETRY] bootExtensions completed successfully.`);
+    } catch (e) {
+        console.warn("⚠️ Non-fatal error during extension boot (likely missing offline cache). Proceeding with partial layout.", e);
+        window.inSetu?.offlineLog?.(`[BOOT TELEMETRY] Extension boot error: ${e.message}`, 'error');
+        autoWireSettingsSchemas();
+    }
+
+    // Always force layout compilation after extension boot sequence to ensure DOM hydration
+    if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+        const slots = window.ExtensionRegistry.getLayoutSlots();
+        console.log(`[BOOT TELEMETRY] Retrieved Layout Slots before compile:`, slots);
+        window.inSetu?.offlineLog?.(`[BOOT TELEMETRY] Layout Slots count: ${slots.length}`, 'info');
+        window.ExtensionRegistry.compileLayout();
+    }
+
+    // Safety Fallback: If topology failed to hydrate offline, build a default tab order
+    const currentTabOrder = AppStore.getState().tabOrder;
+    console.log(`[BOOT TELEMETRY] Post-compile Tab Order:`, currentTabOrder);
+    if (AppStore.getState().isOffline && (!currentTabOrder || currentTabOrder.length === 0)) {
+        console.log(`[BOOT TELEMETRY] Firing Safety Fallback for missing tab order!`);
+        const fallbackTabs = ['context', 'files', ...(window.ACTIVE_EXTENSIONS || [])];
+        AppStore.setState({ tabOrder: fallbackTabs });
+        if (window.ExtensionRegistry?.setTabOrder) {
+            window.ExtensionRegistry.setTabOrder(fallbackTabs);
+        }
+        window.inSetu?.offlineLog?.("No offline topology found. Generated fallback tab order.", "warning", fallbackTabs);
+    }
+
     // Native System Sync Indicator Hook
     window.inSetu.events.emitHook = window.inSetu.events.emitHook || function(){};
     window.addEventListener('insetu:vfs-mutated', (e) => {
@@ -432,6 +734,17 @@ async function executeBootSequence() {
     if (window.ExtensionRegistry?.setTabOrder && Array.isArray(initialTabOrder) && initialTabOrder.length > 0) {
         window.ExtensionRegistry.setTabOrder(initialTabOrder);
     }
+    // Sync UI to Offline State degradation natively via Sutram Environment
+    AppStore.subscribe(state => state.isOffline, (isOffline) => {
+        if (window.Sutram?.stores?.Environment) {
+            window.Sutram.stores.Environment.setState({ isOffline });
+        }
+        // Force the app shell to instantly re-evaluate tab visibility 
+        if (window.ExtensionRegistry && typeof window.ExtensionRegistry.compileLayout === 'function') {
+            window.ExtensionRegistry.compileLayout();
+        }
+    });
+
     // Sync pinned repos to the agnostic Sutram Status Bar
     const statusBar = document.querySelector('sutram-status-bar');
     if (statusBar) {
@@ -491,11 +804,17 @@ async function executeBootSequence() {
     window.addEventListener('hashchange', handleHashChange);
     // Bootstrap initial route from URL or set default
     const currentWs = window.inSetu.utils.getActiveWorkspace();
+    console.log(`[BOOT TELEMETRY] Bootstrapping Hash Route. Current WS: ${currentWs}, Hash: ${window.location.hash}`);
     if (!window.location.hash || window.location.hash === '#/' || window.location.hash === '#') {
         window.location.hash = `#/${encodeURIComponent(currentWs)}/context/`;
+        console.log(`[BOOT TELEMETRY] Set default hash: ${window.location.hash}`);
     }
     // Always trigger handleHashChange on startup to populate activeTab in AppStore
     handleHashChange();
+    console.log(`[BOOT TELEMETRY] AppStore state after handleHashChange:`, {
+        activeTab: AppStore.getState().activeTab,
+        activeSubTabs: AppStore.getState().activeSubTabs
+    });
     // UDF Subscription: State -> URL mapping
     AppStore.subscribe(
         state => [state.activeWorkspace, state.activeTab, state.activeSubTabs, state.globalBrowsePath],
@@ -585,9 +904,22 @@ async function executeBootSequence() {
         }
     }
 }
-
 // --- FAIL-SAFE EXTENSION ERROR GATEWAY ---
 // Intercepts unhandled extension runtime errors to prevent them from taking down the OS shell.
+window.addEventListener('unhandledrejection', (e) => {
+    if (!window.BOOT_COMPLETE) {
+        const errorMsg = e.reason?.message || String(e.reason);
+        console.error("⚠️ [BOOT FATAL] Unhandled Promise Rejection:", errorMsg);
+        window.inSetu?.offlineLog?.(`[BOOT FATAL] Promise Rejection: ${errorMsg}`, 'error');
+
+        // Paint the exact missing module error directly to the boot screen UI
+        const statusEl = document.getElementById('retro-status-msg');
+        if (statusEl) {
+            statusEl.innerHTML = `<span style="color:var(--intent-danger)">❌ Boot Error: ${errorMsg}</span>`;
+        }
+    }
+});
+
 window.addEventListener('error', (e) => {
     const isExtensionError = e.filename && (e.filename.includes('ext_') || e.filename.includes('extensions/'));
     if (window.BOOT_COMPLETE || isExtensionError) {
@@ -664,9 +996,15 @@ async function executeWorkspaceSwap(key, title) {
 }
 async function loadWorkspaces() {
     try {
+        console.log("[TELEMETRY] Requesting workspaces...");
         const res = await window.inSetu.api.system.get('workspaces?t=' + Date.now(), { cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok) {
+            console.warn(`[TELEMETRY] loadWorkspaces failed with status: ${res.status}`);
+            return;
+        }
         const data = await res.json();
+        console.log("[TELEMETRY] Workspaces loaded successfully.");
+        localStorage.setItem('insetu_offline_workspaces', JSON.stringify(data));
         if (data.workspaces) {
             let activeWs = window.inSetu.utils.getActiveWorkspace();
             if (!activeWs || (!data.workspaces[activeWs] && activeWs !== 'default')) {
@@ -817,7 +1155,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             }
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
-                const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
+                const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
                 if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
             } else {
@@ -836,7 +1174,7 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
 };
 export async function refreshManifest() {
     try {
-        const res = await window.inSetu.api.system.get('manifest?t=' + Date.now());
+        const res = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         if (res.ok) {
             const manifest = await res.json();
             AppStore.setState({ manifest });
@@ -849,6 +1187,8 @@ export async function refreshManifest() {
 }
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
+    sessionStorage.clear();
+    localStorage.removeItem('insetu_boot_token');
     const btn = document.getElementById('simulate-panic-btn');
     if (btn) btn.innerText = "⏳ Crashing...";
     // Declarative UI State Transition
@@ -860,7 +1200,7 @@ async function simulatePanic() {
             try {
                 // The lifeboat OS does not serve a manifest, so we ping the root HTML
                 const res = await fetch('/?t=' + Date.now(), { cache: 'no-store' });
-                if (res.ok) window.location.reload();
+                if (res.ok) window.location.reload(true);
             } catch(err) {}
         }, 1000);
     } catch (e) {
@@ -887,9 +1227,10 @@ async function performSoftRefresh() {
     });
     try {
         // 1. Update routing topology for the new tenant
-        const rRes = await window.inSetu.api.system.get('topology?t=' + Date.now());
+        const rRes = await window.inSetu.api.workspace.get('system/topology?t=' + Date.now());
         if (rRes.ok) {
             const d = await rRes.json();
+            localStorage.setItem('insetu_offline_topology', JSON.stringify(d));
             const tabOrder = d.tab_order || [];
 
             // Layout Guardrail: If the restored tab is no longer valid (e.g. extension disabled), fallback to the first available tab
@@ -917,9 +1258,10 @@ async function performSoftRefresh() {
             }
         }
         // 2. JIT Mount any missing JS extension payloads using explicit tenant routing
-        const cRes = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
+        const cRes = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
         if (cRes.ok) {
             const data = await cRes.json();
+            localStorage.setItem('insetu_offline_config', JSON.stringify(data));
             const config = data.config || {};
             window.ACTIVE_EXTENSIONS = config.extensions || [];
             window.inSetu.serverSchemas = data.meta?.settings_schemas || {};
@@ -978,7 +1320,7 @@ async function performSoftRefresh() {
         // 3. Hydrate the workspace instantly from cache, falling back to compile only if unbuilt
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
-        let mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
@@ -1020,9 +1362,31 @@ async function fullRefresh() {
                 localStorage.removeItem(k);
             }
         });
-        // We skip performSoftRefresh here because the hard reload will natively  
-        // fetch the correct tenant configuration on boot via the interceptor.
-        window.location.reload();
+        // Guardrail: Only purge caches if we have an active network connection.
+        // Ping the server to ensure we can actually fetch new assets before destroying the safety net.
+        let canReachServer = false;
+        try {
+            const ping = await fetch('/?t=' + Date.now(), { method: 'HEAD', cache: 'no-store' });
+            canReachServer = ping.ok;
+        } catch(e) {}
+
+        if (canReachServer) {
+            if ('caches' in window) {
+                try {
+                    const cacheKeys = await caches.keys();
+                    await Promise.all(cacheKeys.map(k => caches.delete(k)));
+                } catch(e) {}
+            }
+            // We skip performSoftRefresh here because the hard reload will natively  
+            // fetch the correct tenant configuration on boot via the interceptor.
+            window.location.reload(true);
+        } else {
+            if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                window.inSetu.ui.setGlobalStatus("⚠️ Offline: Cache preserved. Performing soft refresh.", 3000);
+            }
+            await performSoftRefresh();
+            if (btn) btn.innerText = "🔄 Full UI Refresh";
+        }
     } catch (error) {
         alert("Error during full refresh.");
         if (btn) btn.innerText = "🔄 Full UI Refresh";
@@ -1031,9 +1395,12 @@ async function fullRefresh() {
 async function initializeWorkspaceTopology() {
     // 1. Fetch Repository Configurations
     try {
-        const rRes = await window.inSetu.api.system.get('topology');
+        console.log("[TELEMETRY] Requesting topology...");
+        const rRes = await window.inSetu.api.workspace.get('system/topology');
         if (rRes.ok) {
             const d = await rRes.json();
+            console.log("[TELEMETRY] Topology loaded successfully.");
+            localStorage.setItem('insetu_offline_topology', JSON.stringify(d));
             const tabOrder = d.tab_order || [];
             AppStore.setState({ 
                 allRepos: d.repos,
@@ -1057,7 +1424,7 @@ async function initializeWorkspaceTopology() {
 } catch(e) { console.error("Topology fetch failed:", e); }
     // 2. Auto-Hydrate Manifest
     try {
-        let mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
+        let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
         const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
         if (isEmptyManifest) {
