@@ -17,7 +17,8 @@ export class InSetuFileTree extends InSetuElement {
         searchPlaceholder: { type: String },
         entityType: { type: String },
         _searchQuery: { type: String },
-        _pendingMutations: { type: Object }
+        _pendingMutations: { type: Object },
+        _deletedMutations: { type: Object }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; min-height: 0; width: 100%; container-type: inline-size; }
@@ -37,26 +38,33 @@ constructor() {
         this._cachedTree = null;
         this._pendingMutations = new Set();
 }
-
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(window.inSetu.stores.App, state => {
             this._pendingMutations = state.pendingMutations || new Set();
+            this._deletedMutations = state.deletedMutations || new Set();
         });
     }
 
     willUpdate(changedProperties) {
-        if (changedProperties.has('files') || changedProperties.has('stripPrefix')) {
+        if (changedProperties.has('files') || changedProperties.has('stripPrefix') || changedProperties.has('_pendingMutations') || changedProperties.has('_deletedMutations')) {
             this._cachedTree = null;
         }
     }
-
     _getTree() {
         if (!this._cachedTree) {
             const prefix = this.stripPrefix;
+            // CQRS Read-Path: Overlay pending offline mutations at render time
+            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string');
+            let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
+
+            if (this._deletedMutations && this._deletedMutations.size > 0) {
+                mergedFiles = mergedFiles.filter(f => !this._deletedMutations.has(f));
+            }
+
             const mappedFiles = prefix 
-                ? this.files.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
-                : this.files;
+                ? mergedFiles.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)
+                : mergedFiles;
             this._cachedTree = buildFileTree(mappedFiles);
         }
         return this._cachedTree;
@@ -81,10 +89,16 @@ constructor() {
         let current = null;
         let keys = [];
         let flatResults = [];
-
         // Short-circuit the hierarchical tree generation if we are actively searching
         if (isSearching) {
-            const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(this.files, this._searchQuery);
+            const pendingFiles = Array.from(this._pendingMutations || []).filter(f => f && typeof f === 'string');
+            let mergedFiles = Array.from(new Set([...this.files, ...pendingFiles]));
+
+            if (this._deletedMutations && this._deletedMutations.size > 0) {
+                mergedFiles = mergedFiles.filter(f => !this._deletedMutations.has(f));
+            }
+
+            const filteredFiles = window.inSetu.utils.fuzzyFilterObjects(mergedFiles, this._searchQuery);
             const prefix = this.stripPrefix;
             flatResults = prefix 
                 ? filteredFiles.map(f => f.startsWith(prefix) ? f.slice(prefix.length) : f)

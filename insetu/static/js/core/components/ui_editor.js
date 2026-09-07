@@ -263,9 +263,24 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         if (!this.filepath) return;
         this._loading = true;
         try {
-            const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(this.filepath)}`);
-            if (res.ok) {
-                const text = await res.text();
+            let text = null;
+            try {
+                const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(this.filepath)}`);
+                if (res.ok) text = await res.text();
+            } catch (e) {
+                // Network or cache miss, proceed to outbox rescue
+            }
+
+            // Always check the outbox for pending writes to prevent stale cache reads offline
+            const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
+            const pendingWrite = [...outbox].reverse().find(i => i.method === 'POST' && i.path.endsWith('fs/save') && i.payload?.filepath === this.filepath);
+            if (pendingWrite && pendingWrite.payload?.content !== undefined) {
+                text = pendingWrite.payload.content;
+            } else if (text === null) {
+                throw new Error("Failed to read file.");
+            }
+            if (text !== null) {
+                this._rawOriginalText = text;
                 const { meta, content } = window.inSetu.utils.parseFrontmatter(text);
                 this._yamlData = meta;
                 const docType = (meta.doctype || meta.doc_type || '').toLowerCase();
@@ -332,12 +347,24 @@ export class InSetuFrontmatterEditor extends InSetuElement {
         // Reconstruct the frontmatter using the centralized SDK utility
         const newFileText = window.inSetu.utils.serializeFrontmatter(latestYaml, this._content);
 
+        let baseHash = null;
+        if (this._rawOriginalText) {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this._rawOriginalText));
+            baseHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
         await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
             filepath: this.filepath,
-            content: newFileText
+            content: newFileText,
+            base_hash: baseHash
         }, {
+            collapseKey: `vfs:save:${this.filepath}`,
+            pendingMutations: [this.filepath],
+            cacheBlobUrl: `/api/${window.inSetu.utils.getActiveWorkspace()}/fs/fetch?file=${encodeURIComponent(this.filepath)}`,
+            cacheBlobContent: newFileText,
             loadingText: 'Saving...',
             onSuccess: () => {
+                this._rawOriginalText = newFileText;
                 this._yamlData = { ...latestYaml };
                 this._originalContent = this._content.trim();
                 this._originalYaml = JSON.stringify(latestYaml);

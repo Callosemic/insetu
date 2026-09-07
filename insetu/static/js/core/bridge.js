@@ -909,7 +909,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                             intentColor="var(--intent-primary)"
                             entityType="file"
                             .entityData=${{ filepath: filepath, isFS: true, suppress: ['file-browse'] }}
-                            has-actions
                             style="display: block;">
                         </insetu-card>
                         ${fileData.records.map((record, idx) => {
@@ -929,7 +928,6 @@ export class InSetuExtBridgeHistory extends InSetuElement {
                                 intentColor=${record.is_snapshot ? 'var(--intent-highlight)' : 'var(--intent-neutral)'}
                                 entityType="patch-receipt"
                                 .entityData=${record}
-                                has-actions
                                 style="display: block;">
                             </insetu-card>
                             `;

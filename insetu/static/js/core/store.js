@@ -31,6 +31,7 @@ export const AppStore = createExtensionStore('App', {
     isReconciling: false,
     outboxCount: 0,
     pendingMutations: new Set(),
+    deletedMutations: new Set(),
 
     activeTab: 'context',
     activeSubTabs: {},

@@ -343,7 +343,6 @@ export class InSetuExtConfig extends InSetuElement {
                             detailText=${repo.domain || 'Workspaces'}
                             icon="📦"
                             intentColor="var(--intent-highlight)"
-                            has-actions
                             ?disableSelection=${true}
                             style="cursor: pointer;"
                             @click=${() => { 

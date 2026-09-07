@@ -328,12 +328,12 @@ function updateManifestState(oldPath, newPath = null) {
                     break;
                 }
             }
-
-            if (!added && Object.keys(newManifest.vfs).length > 0) {
-                const firstKey = Object.keys(newManifest.vfs)[0];
+            if (!added) {
+                const firstKey = Object.keys(newManifest.vfs)[0] || `${repoDir}::main`;
                 newManifest.vfs[firstKey] = {
                     ...newManifest.vfs[firstKey],
-                    files: [...(newManifest.vfs[firstKey].files || []), normNewPath]
+                    meta: newManifest.vfs[firstKey]?.meta || { type: "vfs_bucket", repo: repoDir, bucket_id: "main" },
+                    files: [...(newManifest.vfs[firstKey]?.files || []), normNewPath]
                 };
                 changed = true;
             }
@@ -707,7 +707,7 @@ export class InSetuVFSExplorerActions extends InSetuElement {
     }
 }
 customElements.define('insetu-vfs-explorer-actions', InSetuVFSExplorerActions);
-window.ExtensionRegistry.registerExtension('files', {
+window.ExtensionRegistry.registerExtension('fs', {
     name: "Virtual File System",
     version: "2.0.0",
     offline_mode: "full",
@@ -948,7 +948,10 @@ async function saveNewFile() {
     }
     fileName = fileName.replace(/^\/+/, '');
     const filepath = basePath + fileName;
-    content = await window.inSetu.events.emitHook('insetu:pre-save-new-file', { fileName, content, filepath }) || content;
+    const hookRes = await window.inSetu.events.emitHook('insetu:pre-save-new-file', { fileName, content, filepath });
+    if (Array.isArray(hookRes) && hookRes.length > 0 && typeof hookRes[0] === 'string') {
+        content = hookRes[0];
+    }
 
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
         filepath,
@@ -956,6 +959,14 @@ async function saveNewFile() {
     }, {
         loadingText: 'Saving...',
         onSuccess: async () => {
+            // Optimistic outbox injection for immediate offline editor reads
+            if (window.inSetu?.stores?.Offline && typeof window.inSetu.stores.Offline.setState === 'function') {
+                const currentOutbox = window.inSetu.stores.Offline.getState().outboxItems || [];
+                window.inSetu.stores.Offline.setState({ 
+                    outboxItems: [...currentOutbox, { method: 'POST', path: 'fs/save', payload: { filepath, content } }] 
+                });
+            }
+
             FsStore.getState().setModal('newFile', { open: false });
             refreshActiveFileViews(null, filepath);
         }
@@ -1069,9 +1080,23 @@ export async function viewSourceFile(filepath, isFS = false, bypassHook = false)
 
     closeBrowseModal();
     try {
-        const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filepath)}`);
-        if (!res.ok) throw new Error("Failed to fetch");
-        const text = await res.text();
+        let text = null;
+        try {
+            const res = await window.inSetu.api.workspace.get(`fs/fetch?file=${encodeURIComponent(filepath)}`);
+            if (res.ok) text = await res.text();
+        } catch (e) {
+            // Network or cache miss, proceed to outbox rescue
+        }
+
+        // Always check the outbox for pending writes to prevent stale cache reads offline
+        const outbox = window.inSetu?.stores?.Offline?.getState()?.outboxItems || [];
+        const pendingWrite = [...outbox].reverse().find(i => i.method === 'POST' && i.path.endsWith('fs/save') && i.payload?.filepath === cleanPath);
+        if (pendingWrite && pendingWrite.payload?.content !== undefined) {
+            text = pendingWrite.payload.content;
+        } else if (text === null) {
+            throw new Error("Failed to fetch");
+        }
+
         injectTextToModal(text, isSupportedEditor, isMarkdown, isFS);
     } catch (e) {
         injectTextToModal("Error loading file content.", isSupportedEditor, isMarkdown, isFS);
@@ -1264,9 +1289,9 @@ export class InSetuFileModal extends InSetuElement {
         this._activeFileForPref = null;
         this._editorFocused = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
+        this.dataset.ext = 'fs';
         this.subscribe(FsStore, state => {
             this.fileModal = state.fileModal || {};
         });
@@ -1618,6 +1643,7 @@ export class InSetuVFSModals extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
+        this.dataset.ext = 'fs';
         this.subscribe(FsStore, state => {
             this.modals = state.modals;
             this.requestUpdate();

@@ -1,7 +1,8 @@
-// insetu/insetu/static/js/sdk.js
+// insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
 import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../../vendor/sutram/js/sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, formatDate, timeAgo } from '../../vendor/sutram/js/utils.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo } from '../../vendor/sutram/js/utils.js';
+import * as jsYaml from '../../vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
 export function createExtensionStore(name, initialState, persistKeys = []) {
@@ -92,6 +93,8 @@ export class InSetuElement extends SutramElement {
             timeAgo: window.inSetu.utils.timeAgo,
             clone: window.inSetu.utils.clone,
             debounce: window.ExtensionRegistry.utils.debounce,
+            coalescedAsync: window.inSetu.utils.coalescedAsync,
+            parseURI: window.inSetu.utils.parseURI,
             formatArtifactSize: window.inSetu.utils.formatArtifactSize,
             extractManifestFiles: window.inSetu.utils.extractManifestFiles,
             parseFrontmatter: window.inSetu.utils.parseFrontmatter,
@@ -417,6 +420,7 @@ window.inSetu.utils.fuzzyFilterObjects = fuzzyFilterObjects;
 window.inSetu.utils.normalizeAccentText = normalizeAccentText;
 window.inSetu.utils.formatDate = formatDate;
 window.inSetu.utils.timeAgo = timeAgo;
+window.inSetu.utils.coalescedAsync = coalescedAsync;
 
 window.inSetu.utils.formatArtifactSize = function(meta) {
     if (!meta) return "";
@@ -464,40 +468,64 @@ window.inSetu.utils.copyRawText = async function(text, successMsg = "✅ Copied!
         throw e;
     }
 };
+window.inSetu.utils.parseURI = function(pathStr) {
+    if (!pathStr) return { scheme: '', repo: '', relativePath: '', filename: '', raw: '' };
+
+    let str = String(pathStr).replace(/\\/g, '/').trim();
+    let scheme = '';
+
+    const schemeMatch = str.match(/^([a-zA-Z0-9_-]+):\/\/(.*)$/);
+    if (schemeMatch) {
+        scheme = schemeMatch[1];
+        str = schemeMatch[2];
+    }
+
+    str = str.replace(/^\/+/, '');
+    const parts = str.split('/');
+    const repo = parts.length > 1 ? parts[0] : '';
+    const relativePath = parts.length > 1 ? parts.slice(1).join('/') : str;
+    const filename = parts[parts.length - 1] || '';
+
+    return { scheme, repo, relativePath, filename, raw: pathStr };
+};
 
 window.inSetu.utils.parseFrontmatter = function(text) {
-    const match = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n/);
+    if (!text) return { meta: {}, content: '', rawFrontmatter: '' };
+
+    // Improved regex: handles EOF immediately after the closing ---
+    const match = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
     if (!match) return { meta: {}, content: text, rawFrontmatter: '' };
 
     const rawFrontmatter = match[1];
     const content = text.slice(match[0].length);
-    const meta = {};
+    let meta = {};
 
-    rawFrontmatter.split('\n').forEach(line => {
-        const parts = line.split(':');
-        if (parts.length >= 2) {
-            const key = parts[0].trim();
-            const val = parts.slice(1).join(':').trim().replace(/^['"](.*)['"]$/, '$1');
-            meta[key] = val;
+    try {
+        const parsed = jsYaml.load(rawFrontmatter);
+        if (typeof parsed === 'object' && parsed !== null) {
+            meta = parsed;
         }
-    });
+    } catch (e) {
+        console.warn("[SDK] Frontmatter YAML parse error:", e);
+    }
 
     return { meta, content, rawFrontmatter: match[0] };
 };
+
 window.inSetu.utils.serializeFrontmatter = function(yamlObj, markdownBody) {
     if (!yamlObj || Object.keys(yamlObj).length === 0) return markdownBody;
 
-    let text = '---\n';
-    for (const [k, v] of Object.entries(yamlObj)) {
-        let safeVal = v;
-        if (typeof v === 'string' && (v.includes(':') || v.includes('#') || v.includes('\n') || v.includes('{') || v.includes('['))) {
-            // Escape inner quotes and wrap the whole string
-            safeVal = `"${v.replace(/"/g, '\\"')}"`;
-        }
-        text += `${k}: ${safeVal}\n`;
+    try {
+        const yamlStr = jsYaml.dump(yamlObj, {
+            indent: 2,
+            noArrayIndent: true,
+            lineWidth: -1 // Disable line wrapping
+        });
+        return `---\n${yamlStr.trim()}\n---\n\n${markdownBody}`;
+    } catch (e) {
+        console.error("[SDK] Frontmatter YAML serialization error:", e);
+        return markdownBody;
     }
-    text += '---\n\n' + markdownBody;
-    return text;
 };
 /**
 * Normalizes polymorphic entity data objects onto the SSOT EntityData contract.

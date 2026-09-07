@@ -11,6 +11,9 @@ export const OfflineStore = createExtensionStore('Offline', {
     logs: [],
     loading: false,
     storageModalOpen: false,
+    storageUsage: 0,
+    storageQuota: 0,
+    storagePersisted: false,
     addLog: (message, type = 'info', details = null) => {
         const newEntry = {
             id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 5),
@@ -33,7 +36,28 @@ export const OfflineStore = createExtensionStore('Offline', {
                 SutramDB.getOutboxItems(ws),
                 SutramDB.getDeadLetters(ws)
             ]);
-            OfflineStore.setState({ cachedBlobs: blobs, outboxItems: outbox, deadLetters: dead });
+
+            let usage = 0;
+            let quota = 0;
+            let persisted = false;
+
+            if (navigator.storage && navigator.storage.estimate) {
+                try {
+                    const est = await navigator.storage.estimate();
+                    usage = est.usage || 0;
+                    quota = est.quota || 0;
+                    persisted = await navigator.storage.persisted();
+                } catch(err) {}
+            }
+
+            OfflineStore.setState({ 
+                cachedBlobs: blobs, 
+                outboxItems: outbox, 
+                deadLetters: dead,
+                storageUsage: usage,
+                storageQuota: quota,
+                storagePersisted: persisted
+            });
         } catch (e) {
             console.warn("Failed to read IndexedDB offline state", e);
         } finally {
@@ -42,12 +66,14 @@ export const OfflineStore = createExtensionStore('Offline', {
     }
 });
 window.inSetu.stores.Offline = OfflineStore;
-
 window.inSetu.offlineLog = (message, type = 'info', details = null) => {
     if (window.inSetu?.stores?.Offline) {
         window.inSetu.stores.Offline.getState().addLog(message, type, details);
     }
 };
+
+window.Sutram = window.Sutram || {};
+window.Sutram.offlineLog = window.inSetu.offlineLog;
 
 export class InSetuCoreOfflineLedger extends InSetuElement {
     static get extensionName() { return 'offline'; }
@@ -56,7 +82,10 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         outboxItems: { type: Array },
         deadLetters: { type: Array },
         searchQuery: { type: String },
-        loading: { type: Boolean }
+        loading: { type: Boolean },
+        storageUsage: { type: Number },
+        storageQuota: { type: Number },
+        storagePersisted: { type: Boolean }
     };
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); }
@@ -69,6 +98,9 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         this.deadLetters = [];
         this.searchQuery = '';
         this.loading = false;
+        this.storageUsage = 0;
+        this.storageQuota = 0;
+        this.storagePersisted = false;
     }
     connectedCallback() {
         super.connectedCallback();
@@ -77,6 +109,9 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
             this.outboxItems = state.outboxItems || [];
             this.deadLetters = state.deadLetters || [];
             this.loading = state.loading;
+            this.storageUsage = state.storageUsage || 0;
+            this.storageQuota = state.storageQuota || 0;
+            this.storagePersisted = state.storagePersisted || false;
             this.requestUpdate();
         });
         // Auto-refresh when outbox drains or fills
@@ -91,12 +126,68 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
         this.setStatus("🔄 Refreshing Offline Ledger...", 1500);
         OfflineStore.getState().fetchOfflineState(true);
     }
+
+    async _discardDeadLetter(item) {
+        if (!confirm("Are you sure you want to discard this failed mutation? The data will be permanently lost.")) return;
+        try {
+            await SutramDB.deleteDeadLetter(item._key);
+            OfflineStore.getState().fetchOfflineState();
+            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Discarded poison pill: [${item.method}] ${item.path}`, 'warning');
+        } catch (e) {
+            alert("Failed to delete record.");
+        }
+    }
+    async _retryDeadLetter(item) {
+        try {
+            await SutramDB.retryDeadLetter(item);
+            OfflineStore.getState().fetchOfflineState();
+            const count = await SutramDB.getOutboxCount(item.scope_id);
+
+            // Re-hydrate UDF pending sets so optimistic UI restores instantly
+            const pendingSet = new Set(window.inSetu.stores.App.getState().pendingMutations);
+            const deletedSet = new Set(window.inSetu.stores.App.getState().deletedMutations);
+
+            try {
+                const payload = item.bodyString ? JSON.parse(item.bodyString) : {};
+                const fp = payload.filepath || payload.dest_path;
+                if (fp) {
+                    const isDelete = item.method === 'DELETE' || (item.path && item.path.includes('fs/delete')) || (item.path && item.path.includes('fs/move'));
+                    if (isDelete) {
+                        deletedSet.add(fp);
+                    } else {
+                        pendingSet.add(fp);
+                    }
+                }
+            } catch (e) {}
+
+            window.inSetu.stores.App.setState({ outboxCount: count, pendingMutations: pendingSet, deletedMutations: deletedSet });
+            if (window.inSetu?.offlineLog) window.inSetu.offlineLog(`Re-queued poison pill for sync: [${item.method}] ${item.path}`, 'info');
+            if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus(`🌩️ Queued for sync (${count})`, 3000);
+        } catch (e) {
+            alert("Failed to re-queue record.");
+        }
+    }
     onViewActivated() { OfflineStore.getState().fetchOfflineState(); }
+    async _requestPersistentStorage() {
+        if (navigator.storage && navigator.storage.persist) {
+            const granted = await navigator.storage.persist();
+            if (granted) {
+                OfflineStore.setState({ storagePersisted: true });
+                if (this.ui?.setGlobalStatus) this.ui.setGlobalStatus("🔒 Persistent Storage Granted!", 3000);
+            } else {
+                alert("The browser denied persistent storage rights. You may need to interact with the site more or install it as a PWA to elevate your storage clearance.");
+            }
+        }
+    }
 
     render() {
         const filteredBlobs = this.searchQuery 
             ? this.utils.fuzzyFilterObjects(this.cachedBlobs, this.searchQuery) 
             : this.cachedBlobs;
+
+        const usageMB = (this.storageUsage / (1024 * 1024)).toFixed(2);
+        const quotaMB = (this.storageQuota / (1024 * 1024)).toFixed(2);
+        const usagePct = this.storageQuota > 0 ? Math.min(100, (this.storageUsage / this.storageQuota) * 100).toFixed(1) : 0;
 
         return html`
             <div style="max-width: 1200px; margin: 0 auto; width: 100%;">
@@ -109,6 +200,26 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                         @click=${() => this.onForceRefresh()}>
                         🔄 Refresh
                     </button>
+                </div>
+
+                <div style="background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; justify-content: space-between;">
+                    <div style="display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 250px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-weight: bold; font-size: 0.95rem; color: var(--text);">Browser Storage Quota</span>
+                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--text-muted);">${usageMB} MB / ${quotaMB} MB</span>
+                        </div>
+                        <div style="width: 100%; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; border: 1px solid var(--border);">
+                            <div style="width: ${usagePct}%; height: 100%; background: ${usagePct > 90 ? 'var(--intent-danger)' : (usagePct > 75 ? 'var(--intent-warning)' : 'var(--intent-success)')}; transition: width 0.3s ease;"></div>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: bold; padding: 6px 12px; border-radius: 4px; background: ${this.storagePersisted ? 'var(--intent-success)' : 'var(--bg)'}; color: ${this.storagePersisted ? 'white' : 'var(--text-muted)'}; border: 1px solid ${this.storagePersisted ? 'var(--intent-success)' : 'var(--border)'};">
+                            ${this.storagePersisted ? '🔒 Persisted (Safe from Eviction)' : '⚠️ Best Effort (At risk of eviction)'}
+                        </div>
+                        ${!this.storagePersisted ? html`
+                            <button class="btn-sm" style="background: var(--intent-highlight); margin: 0; font-weight: bold;" @click=${this._requestPersistentStorage}>Request Rights</button>
+                        ` : ''}
+                    </div>
                 </div>
 
                 ${this.loading ? html`<sutram-spinner text="Reading IndexedDB..."></sutram-spinner>` : ''}
@@ -133,7 +244,7 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                         <span style="font-weight: bold; color: var(--text);">${item.method} ${item.path.split('/api/')[1] || item.path}</span>
                                         <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(item.timestamp)}</span>
                                     </div>
-                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${JSON.stringify(item.payload, null, 2)}</pre>
+                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
                                 </div>
                             `)}
                         </div>
@@ -154,7 +265,11 @@ export class InSetuCoreOfflineLedger extends InSetuElement {
                                         <span style="font-weight: bold; color: var(--intent-danger);">${item.method} ${item.path.split('/api/')[1] || item.path} (HTTP ${item.error_status})</span>
                                         <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(item.failed_at)}</span>
                                     </div>
-                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${JSON.stringify(item.payload, null, 2)}</pre>
+                                    <pre style="margin: 0; font-size: 0.75rem; padding: 6px; max-height: 100px; overflow-y: auto;">${item.bodyString ? (item.bodyString.startsWith('{') || item.bodyString.startsWith('[') ? JSON.stringify(JSON.parse(item.bodyString), null, 2) : item.bodyString) : 'Empty Payload'}</pre>
+                                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                                        <button class="btn-sm" style="background: var(--intent-warning); color: #000; margin: 0;" @click=${() => this._retryDeadLetter(item)}>🔄 Retry</button>
+                                        <button class="btn-sm" style="background: transparent; border: 1px solid var(--intent-danger); color: var(--intent-danger); margin: 0;" @click=${() => this._discardDeadLetter(item)}>🗑️ Discard</button>
+                                    </div>
                                 </div>
                             `)}
                         </div>
