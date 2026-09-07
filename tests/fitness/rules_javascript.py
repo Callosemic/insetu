@@ -2,8 +2,9 @@ import os
 import re
 from pathlib import Path
 from .core import FRONTEND_DIR, BACKEND_DIR, report_violation, collect_unique_files
+
 def check_javascript_files():
-    print("🔍 Sweeping JavaScript Frontend (Regex Analysis)...")
+    print("🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...")
     shared_styles_pattern = re.compile(r'from\s+[\'"][^\'"]*shared_styles\.js[\'"]')
     dom_read_pattern = re.compile(r'document\.(?:getElementById|querySelector)\([^\)]+\)(?:\.(value|checked|classList)|\[[\'"](value|checked|classList)[\'"]\]|\.getAttribute\([\'"](value|checked|class)[\'"]\))')
     interval_pattern = re.compile(r'\bsetInterval\s*\(')
@@ -58,6 +59,20 @@ def check_javascript_files():
     registry_debounce_pattern = re.compile(r'(?:window\.)?ExtensionRegistry\.utils\.debounce')
     banned_ui_zones_pattern = re.compile(r'\buiHooks\s*:|[\'"]zone:[a-zA-Z0-9_-]+[\'"]')
     banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
+
+    # Initialize Tree-sitter for Hybrid Parsing
+    ts_available = False
+    parser = None
+    JS_LANG = None
+    try:
+        from tree_sitter import Language, Parser, Query, QueryCursor
+        import tree_sitter_javascript as ts_js
+        JS_LANG = Language(ts_js.language())
+        parser = Parser(JS_LANG)
+        ts_available = True
+    except ImportError:
+        print("⚠️ [WARNING] Tree-sitter not installed. Falling back to legacy regex. (Run `pip install -e .[syntax]`)")
+
     for filepath in collect_unique_files([FRONTEND_DIR, BACKEND_DIR / "extensions"], [".js"]):
         file = filepath.name
         is_extension = file.startswith("ext_") or "extensions" in filepath.parts
@@ -66,6 +81,52 @@ def check_javascript_files():
 
         is_lit_component = any(re.search(r'from\s+[\'"]lit[\'"]', l) for l in lines)
         full_content = "".join(lines)
+        # --- 1. TREE-SITTER AST STRUCTURAL PASS ---
+        if ts_available:
+            tree = parser.parse(bytes(full_content, "utf8"))
+            # UDF State Bleed
+            udf_query = Query(JS_LANG, '(program (lexical_declaration) @udf)')
+            for match in QueryCursor(udf_query).matches(tree.root_node):
+                for node in match[1].get("udf", []):
+                    if is_extension and full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8').startswith("let"):
+                        report_violation("UDF_STATE_BLEED", filepath, node.start_point[0] + 1, "Floating module-level global state detected. Migrate variable into the centralized Zustand AppStore.")
+
+            # Custom Event Dispatch
+            dispatch_query = Query(JS_LANG, '(call_expression function: (member_expression object: (identifier) @obj (#eq? @obj "window") property: (property_identifier) @prop (#eq? @prop "dispatchEvent"))) @call')
+            for match in QueryCursor(dispatch_query).matches(tree.root_node):
+                for node in match[1].get("call", []):
+                    if is_extension:
+                        report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, node.start_point[0] + 1, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
+
+            # Approved API Verbs & PollJob Warnings
+            api_query = Query(JS_LANG, '''
+                (call_expression
+                    function: (member_expression
+                        object: (member_expression object: (this) property: (property_identifier) @api_prop (#eq? @api_prop "api"))
+                        property: (property_identifier) @verb
+                    )
+                ) @api_call
+            ''')
+            allowed_verbs = {"get", "post", "delete", "getJson", "postJson", "deleteJson", "bindJobAction", "pollJob", "request", "workspace", "system"}
+            for match in QueryCursor(api_query).matches(tree.root_node):
+                for node in match[1].get("verb", []):
+                    verb_name = full_content.encode('utf8')[node.start_byte:node.end_byte].decode('utf8')
+                    line_n = node.start_point[0] + 1
+                    if verb_name not in allowed_verbs and file not in ["api.js", "sdk.js"]:
+                        report_violation("APPROVED_API_VERB_MANDATE", filepath, line_n, f"Unapproved method '.{verb_name}' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
+                    if verb_name == "pollJob" and is_extension and file != "ext_tracker.js":
+                        print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {filepath}:{line_n}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
+
+            # Debounce Mandate (clearTimeout)
+            debounce_query = Query(JS_LANG, '(call_expression function: (identifier) @func (#eq? @func "clearTimeout")) @call')
+            for match in QueryCursor(debounce_query).matches(tree.root_node):
+                for node in match[1].get("call", []):
+                    line_idx = node.start_point[0]
+                    line_text = lines[line_idx]
+                    if "utils.debounce bypass" not in line_text and "panicTimeout" not in line_text:
+                        report_violation("DEBOUNCE_MANDATE", filepath, line_idx + 1, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
+
+        # --- 2. GLOBAL & STRING PATTERNS ---
         if file in ["ext_tracker.js", "ext_research.js", "ext_config.js"] and "document.getElementById" in full_content:
             report_violation("GRADUATED_COMP_DOM_READ", filepath, 1, "Graduated components are forbidden from using document.getElementById (DOM Read Ban). Bind to reactive Lit properties instead.")
         if is_extension and "extends InSetuElement" in full_content and "static get extensionName()" not in full_content:
@@ -90,6 +151,7 @@ def check_javascript_files():
         if "localStorage.setItem('insetu_pinned_repos'" in full_content or 'localStorage.setItem("insetu_pinned_repos"' in full_content:
             report_violation("GLOBAL_LOCALSTORAGE_TENANT_LEAK", filepath, 1, "Un-suffixed localStorage write pattern detected. Force workspace-scoping (e.g., insetu_pinned_repos_${ws}).")
 
+        # --- 3. LINE-BY-LINE REGEX SCANNER ---
         for i, line in enumerate(lines):
             line_num = i + 1
             if line.strip().startswith("//"):
@@ -107,10 +169,22 @@ def check_javascript_files():
                 if hex_color_pattern.search(line):
                     if "style=" in line or "cssText" in line:
                         report_violation("THEME_TOKENS", filepath, line_num, f"Hardcoded HEX color found: {line.strip()}. Use CSS intent variables (e.g., var(--btn)).")
+            if not ts_available:
+                if clear_timeout_pattern.search(line):
+                    if "utils.debounce" not in line and "panicTimeout" not in line:
+                        report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
 
-            if clear_timeout_pattern.search(line):
-                if "utils.debounce" not in line and "panicTimeout" not in line:
-                    report_violation("DEBOUNCE_MANDATE", filepath, line_num, "Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.")
+                if is_extension and floating_global_pattern.match(line.strip()):
+                    report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
+
+                if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!(?:get|post|delete|getJson|postJson|deleteJson|bindJobAction|pollJob|request|workspace|system)\b)\w+', line):
+                    report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).")
+                
+                if is_extension and raw_poll_job_pattern.search(line) and file != "ext_tracker.js":
+                    print(f"⚠️ [WARNING: BIND_JOB_ACTION_PREFERENCE] {filepath}:{line_num}\n   ↳ Imperative this.api.pollJob detected. Prefer declarative this.api.bindJobAction when possible.")
+                    
+                if is_extension and is_lit_component and global_dispatch_pattern.search(line):
+                    report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, line_num, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
 
             if dom_annihilation_pattern.search(line):
                 report_violation("SURGICAL_DOM_MANDATE", filepath, line_num, "DOM annihilation detected. Use surgical reconciliation instead of clearing .innerHTML.")
@@ -123,9 +197,6 @@ def check_javascript_files():
                 report_violation("MODAL_FULLSCREEN_PROPERTY_MANDATE", filepath, line_num, "Deprecated maxWidth viewport attribute on <insetu-modal>. Use declarative ?fullscreen=${true} property instead.")
             if legacy_insetu_modal_pattern.search(line):
                 report_violation("LEGACY_INSETU_MODAL_BAN", filepath, line_num, "Deprecated <insetu-modal> tag or @modal-closed/@modal-closing event detected. Migrate to <yenvui-modal> and @yenvui-modal-closed / @yenvui-modal-closing.")
-
-            if is_extension and floating_global_pattern.match(line.strip()):
-                report_violation("UDF_STATE_BLEED", filepath, line_num, "Floating global state detected. Migrate variable into the centralized Zustand AppStore.")
 
             if naive_xss_pattern.search(line):
                 report_violation("XSS_VULNERABILITY", filepath, line_num, "Naive regex script stripping detected. Use DOMPurify.sanitize().")
@@ -163,9 +234,6 @@ def check_javascript_files():
                 report_violation("EXPLICIT_API_MANDATE", filepath, line_num, "Legacy window.inSetu.fetch() detected. Route through the explicit window.inSetu.api SDK (ADR 0016).")
             if file not in ["api.js", "sdk.js"] and legacy_api_routing_pattern.search(line):
                 report_violation("SEMANTIC_API_ROUTING_MANDATE", filepath, line_num, "Direct invocation of api.workspace() or api.system() detected. Route through the semantic .get() or .post() chains instead.")
-
-            if file not in ["api.js", "sdk.js"] and re.search(r'\bthis\.api\.(?!get|post|delete|getJson|postJson|deleteJson|bindJobAction|pollJob)\w+', line):
-                report_violation("APPROVED_API_VERB_MANDATE", filepath, line_num, "Unapproved method called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob).")
 
             if is_extension and re.search(r'class\s+\w+\s+extends\s+LitElement\b', line):
                 report_violation("SDK_ELEMENT_MANDATE", filepath, line_num, "Extension component extends raw LitElement. Inherit from InSetuElement to protect multi-tenant lifecycles.")
@@ -216,8 +284,6 @@ def check_javascript_files():
 
             if is_extension and is_lit_component and global_listener_pattern.search(line):
                 report_violation("GLOBAL_LISTENER_MANDATE", filepath, line_num, "Raw window.addEventListener detected. Use this.registerGlobalListener() to prevent memory leaks on component unmount.")
-            if is_extension and is_lit_component and global_dispatch_pattern.search(line):
-                report_violation("CUSTOM_EVENT_DISPATCH_MANDATE", filepath, line_num, "Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.")
             if is_extension and imperative_action_dispatch_pattern.search(line):
                 report_violation("DECLARATIVE_EMIT_EVENT_MANDATE", filepath, line_num, "Imperative CustomEvent dispatch in entityAction detected. Use declarative emitEvent: (data) => ({ name, detail }) instead.")
             if banned_localstorage_tab_pattern.search(line):
@@ -236,12 +302,9 @@ def check_javascript_files():
                 report_violation("DATE_FORMATTING_MANDATE", filepath, line_num, "Inline new Date().toLocaleString() detected in extension. Consume this.utils.formatDate() instead to ensure theme and locale consistency.")
             if is_extension and is_lit_component and sutram_form_control_pattern.search(line):
                 report_violation("SUTRAM_FORM_CONTROL_MANDATE", filepath, line_num, "Native HTML input/select/textarea tag detected in Lit extension template. Use <sutram-input>, <sutram-select>, <sutram-toggle>, or <sutram-textarea> instead.")
-            if is_extension and raw_poll_job_pattern.search(line):
-                report_violation("BIND_JOB_ACTION_PREFERENCE", filepath, line_num, "Imperative this.api.pollJob detected in extension. Prefer declarative this.api.bindJobAction or <sutram-async-btn> instead.")
             if is_extension and gather_repo_sub_pattern.search(line):
                 report_violation("ECOSYSTEM_ACCESSOR_MANDATE", filepath, line_num, "Direct GatherStore repository topology subscription detected in extension. Consume 'this.ecosystem' on InSetuElement instead.")
-
-            if "AppStore" in line and "manifest:" in line and not ("vfs:" in line or "ctx:" in line or "{}" in line):
+            if "AppStore" in line and re.search(r'manifest:\s*\{\s*[^\}]+\}', line) and not ("vfs:" in line or "ctx:" in line or "{}" in line):
                 report_violation("DUAL_ROOT_MANIFEST_MANDATE", filepath, line_num, "Monolithic or unpartitioned manifest initialization detected. Manifest must be initialized as { vfs: {}, ctx: {} } (ADR 0037).")
             if sutram_settings_event_pattern.search(line) and ("fetch(" in line or "window.fetch(" in line):
                 report_violation("SETTINGS_ACTION_EXPLICIT_API_MANDATE", filepath, line_num, "Event handler for sutram-settings-action/save uses raw fetch(). Route through window.inSetu.api.workspace instead.")

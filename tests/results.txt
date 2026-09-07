@@ -3,7 +3,155 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
-🔍 Sweeping JavaScript Frontend (Regex Analysis)...
+⚠️ [WARNING: IO_BLOCK_BAN] engine_dev.py:184
+   ↳ Subprocess call outside of designated engines (permitted but flagged).
+❌ [VIOLATION: SELECTION_EXPANSION_MANDATE] [workspace]/insetu/insetu/core/gather/engine_gather.py:163
+   ↳ Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.
+
+❌ [VIOLATION: SELECTION_EXPANSION_MANDATE] [workspace]/insetu/insetu/core/gather/engine_gather.py:513
+   ↳ Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.
+
+🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...
+❌ [VIOLATION: DUAL_ROOT_MANIFEST_MANDATE] [workspace]/insetu/insetu/static/js/app.js:641
+   ↳ Monolithic or unpartitioned manifest initialization detected. Manifest must be initialized as { vfs: {}, ctx: {} } (ADR 0037).
+
+❌ [VIOLATION: DUAL_ROOT_MANIFEST_MANDATE] [workspace]/insetu/insetu/static/js/app.js:1192
+   ↳ Monolithic or unpartitioned manifest initialization detected. Manifest must be initialized as { vfs: {}, ctx: {} } (ADR 0037).
+
+❌ [VIOLATION: BANNED_HAS_ACTIONS_ATTRIBUTE] [workspace]/insetu/insetu/static/js/core/bridge.js:912
+   ↳ The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.
+
+❌ [VIOLATION: BANNED_HAS_ACTIONS_ATTRIBUTE] [workspace]/insetu/insetu/static/js/core/bridge.js:932
+   ↳ The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.
+
+❌ [VIOLATION: BANNED_HAS_ACTIONS_ATTRIBUTE] [workspace]/insetu/insetu/static/js/core/config.js:346
+   ↳ The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] [workspace]/insetu/insetu/extensions/term/ext_term.js:70
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] [workspace]/insetu/insetu/extensions/term/ext_term.js:90
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] [workspace]/insetu/insetu/extensions/term/ext_term.js:96
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: DEBOUNCE_MANDATE] [workspace]/insetu/insetu/extensions/term/ext_term.js:437
+   ↳ Raw clearTimeout detected. Use window.inSetu.extensions.Registry.utils.debounce() for input throttling.
+
+❌ [VIOLATION: DRY_UTILITY_VIOLATION] [workspace]/insetu/insetu/extensions/term/ext_term.js:594
+   ↳ Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy, this.utils.copyToClipboard, this.utils.copyRawText, or fetchAndDownloadState) instead.
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/update/ext_update.js:479
+   ↳ Unapproved method '.nt, { repo: t' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/update/ext_update.js:924
+   ↳ Unapproved method '.        this.' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/dev/ext_dev.js:219
+   ↳ Unapproved method '.   ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/dev/ext_dev.js:316
+   ↳ Unapproved method '.   ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/dev/ext_dev.js:336
+   ↳ Unapproved method '.    ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: DRY_UTILITY_VIOLATION] [workspace]/insetu/insetu/extensions/dev/ext_dev.js:234
+   ↳ Manual clipboard or blob download stream manipulation detected. Utilize centralized core utilities (fetchAndCopy, this.utils.copyToClipboard, this.utils.copyRawText, or fetchAndDownloadState) instead.
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/citations/ext_citations.js:228
+   ↳ Unapproved method '.rt',' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/citations/ext_citations.js:281
+   ↳ Unapproved method '.code' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/citations/ext_citations.js:323
+   ↳ Unapproved method '.encode' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/citations/ext_citations.js:365
+   ↳ Unapproved method '.rt',' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/freshdesk/ext_freshdesk.js:147
+   ↳ Unapproved method '.dJobAction(`t' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/freshdesk/ext_freshdesk.js:169
+   ↳ Unapproved method '.obAction(`tic' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/freshdesk/ext_freshdesk.js:191
+   ↳ Unapproved method '.Action(`ticke' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/freshdesk/ext_freshdesk.js:227
+   ↳ Unapproved method '.on(`tickets/$' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/freshdesk/ext_freshdesk.js:263
+   ↳ Unapproved method '.ts/f' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/ingest/ext_ingest.js:62
+   ↳ Unapproved method '.dJobAction('u' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:240
+   ↳ Unapproved method '.('sw' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:267
+   ↳ Unapproved method '.JobAction('sw' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:295
+   ↳ Unapproved method '.ion('sweep/pu' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:569
+   ↳ Unapproved method '.   ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:584
+   ↳ Unapproved method '.         onPr' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:609
+   ↳ Unapproved method '.  onProgress:' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:629
+   ↳ Unapproved method '.his.previewRe' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:654
+   ↳ Unapproved method '.}, {
+        ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/git/ext_git.js:675
+   ↳ Unapproved method '.tiveRemoteRep' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/skills/ext_skills.js:280
+   ↳ Unapproved method '.delete',' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/skills/ext_skills.js:307
+   ↳ Unapproved method '.update',' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/skills/ext_skills.js:334
+   ↳ Unapproved method '.log', pa' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/publish/ext_publish.js:77
+   ↳ Unapproved method '.dJobAction('c' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/notes/ext_notes.js:454
+   ↳ Unapproved method '.etch?fi' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: CUSTOM_EVENT_DISPATCH_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:245
+   ↳ Raw window.dispatchEvent detected. Route through this.dispatch(eventName, detail) for streamlined multi-tenant boundaries.
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:953
+   ↳ Unapproved method '.es.j' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:956
+   ↳ Unapproved method '.       ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:1311
+   ↳ Unapproved method '.yDate,
+ ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:1696
+   ↳ Unapproved method '.    ' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
+❌ [VIOLATION: APPROVED_API_VERB_MANDATE] [workspace]/insetu/insetu/extensions/tracker/ext_tracker.js:2409
+   ↳ Unapproved method '.name' called on this.api. Use canonical verbs (.get, .post, .delete, .getJson, .postJson, .deleteJson, .bindJobAction, .pollJob, .request, .workspace, .system).
+
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-✅ SUCCESS: Codebase complies with all engineering standards.
+❌ FAILED: Found 48 architectural violations.

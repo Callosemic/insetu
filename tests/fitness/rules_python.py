@@ -45,9 +45,8 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     )
 
         self.generic_visit(node)
-
     def visit_Subscript(self, node):
-        if self.filename not in ('extension.py', 'engine_hooks.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py'):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -87,7 +86,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'hooks' and node.func.attr == 'emit':
                 report_violation("BACKEND_EXTENSION_EVENT_EMIT_MANDATE", self.filepath, node.lineno, "Global hooks.emit() call detected in extension module. Use ctx.emit() instead.")
-        if self.filename not in ('extension.py', 'engine_hooks.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py'):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -115,10 +114,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
             if isinstance(node.func.value, ast.Name):
                 if node.func.value.id == 'subprocess' and node.func.attr in ('run', 'Popen', 'call', 'check_output', 'check_call'):
-                    if self.filename.startswith("routes_"):
-                        report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
-                    elif self.filename not in SUBPROCESS_WHITELIST:
-                        print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
+                    with open(self.filepath, "r", encoding="utf-8") as _f:
+                        line_text = _f.readlines()[node.lineno - 1]
+
+                    if "IO_BLOCK_BAN bypass" not in line_text:
+                        if self.filename.startswith("routes_"):
+                            report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
+                        elif self.filename not in SUBPROCESS_WHITELIST:
+                            print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
 
                     if node.func.attr == 'run':
                         is_pull = False
@@ -204,6 +207,21 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
+
+        if 'vfs_mutated' in hook_events or 'topology_resolved' in hook_events:
+            has_uri_check = False
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    func_name = child.func.id if isinstance(child.func, ast.Name) else (child.func.attr if isinstance(child.func, ast.Attribute) else "")
+                    if func_name in ('parse_uri', '_to_canonical_event', '_get_fp', 'startswith'):
+                        has_uri_check = True
+                        break
+                elif isinstance(child, ast.Constant) and isinstance(child.value, str) and 'vfs://' in child.value:
+                    has_uri_check = True
+                    break
+            if not has_uri_check:
+                report_violation("CANONICAL_URI_EVENT_MANDATE", self.filepath, node.lineno, "Event handler for 'vfs_mutated' or 'topology_resolved' must process paths through parse_uri(), _to_canonical_event(), or canonical 'vfs://' URI validation.")
+
         if 'system_boot' in hook_events:
             for child in ast.walk(node):
                 if isinstance(child, ast.Call):

@@ -10,6 +10,11 @@
             "version": "4.5.2",
             "range": ">=4.0.0 && <5.0.0"
         },
+        "js-yaml": {
+            "path": "vendor/js-yaml/js-yaml.min.js",
+            "version": "4.1.0",
+            "range": ">=4.0.0 && <5.0.0"
+        },
         "lit": {
             "path": "vendor/lit/lit-core.min.js",
             "version": "3.1.0",

@@ -383,8 +383,191 @@
 
 - **update**: Add release notes parsing and modal tab switching to semantic update preview
   ([`75ad168`](https://github.com/Callosemic/insetu/commit/75ad1683a4be6dc2597237200d88d87a0a995ddf))
-
-
 ## v0.9.0 (2026-08-07)
 
 - Initial Release
+
+
+## v0.8.0 (2026-08-06)
+
+### Features
+
+- **client**: Implement client-side offline SDK wrap, Sutram offline provider, and offline UI engine
+- **kernel**: Add offline engine substrate, topology directory expansion, and content-hash gather idempotency
+- **extensions**: Standardize offline resilience, namespaced event dispatches, dev daemon logs, and publish pipeline hardening
+- **topology**: Establish decoupled topology core engine (`engine_topology.py`) as SSOT for physical workspace files
+- **manifest**: Add decentralized manifest signature sync, signature providers, and dual-root VFS manifest support
+- **gather**: Implement IoC topology declarations (`gather_declare_topology`), compilation step chaining, and Stage 2 slew limiter
+
+### Bug Fixes
+
+- **bridge**: Fix Yomama sync bridge chunk parsing, chevron delimiter checks, and anchor failure diff generation
+- **flow**: Implement context tombstoning and vacuuming for orphaned workflow artifacts
+- **git**: Implement diff vacuuming and manifest synchronization for stale diff files
+- **term**: Harden WebSocket error handling against BrokenPipeError on disconnects and resolve hot-swap race conditions
+
+### Refactoring
+
+- **sdk**: Implement client SDK API extension enablement gatekeeper and Sutram registry active extension filtering
+- **vfs**: Standardize virtual URI scheme normalization to `ctx://` and enforce transactional deletion
+- **workers**: Restore Watchdog filesystem observer with pre-event-bus pattern filtering and CPU optimization
+
+
+## v0.7.0 (2026-08-04)
+
+### Features
+
+- **tailscale**: Implement Tailscale Network Manager extension (`engine_tailscale.py`) for automated HTTPS port binding
+- **bridge**: Deploy Yomama Sync Bridge v3 pipeline, chevron healing, JSON telemetry, and forward-replay reversion API
+- **security**: Integrate Fernet master key management (`secrets.json`) and secure settings encryption vaulting
+- **ui**: Add system reboot action trigger, declarative reboot overlay, and frontmatter editor Lit component
+- **gather**: Add boot-time offline mutation guard heuristic to auto-heal context index after offline mutations
+
+### Bug Fixes
+
+- **bridge**: Clean trailing markdown/chevron decay and isolate contiguous anchor matching in fuzzy engine
+- **workers**: Refactor VFS barrier synchronization loop from rigid `queue.join()` to abortable polling loop
+
+### Refactoring
+
+- **sdk**: Standardize SDK V2 action binding (`this.api.bindJobAction`) and offload heavy tasks to background workers
+- **hooks**: Add thread-local re-entrancy tracking and enforce tenant hook authorization rules
+- **cli**: Add extension scaffolding CLI (`insetu create-extension <name>`)
+
+
+## v0.6.0 (2026-07-30)
+
+### Features
+
+- **vendor**: Vendorize Sutram micro-kernel presentation layer, app shell layout, Zustand store creation, and shortcut routing
+- **dev**: Create Developer Dashboard extension (`dev`) with real-time file telemetry and Yomama Sync Bridge error logging
+- **notes**: Introduce Notes extension (`notes`) with Markdown note indexing, RAG context compilation, and frontmatter editing
+- **auth**: Introduce API client gateway 401 re-authentication with session bootstrap retry
+- **recovery**: Add zero-JS recovery console (`/recovery`) and panic lock escape hatch
+
+### Bug Fixes
+
+- **vfs**: Inject idempotency gatekeeper in `execute_vfs_save_physical` to drop phantom writes before touching hardware storage
+- **term**: Add fatal exception wrapper in PTY WebSocket stream and mutex lock on socket sends
+- **bridge**: Integrate non-blocking background event emissions on patch anchoring and syntax validation errors
+
+### Refactoring
+
+- **kernel**: Extract Tier 1 framework chassis into `insetu/kernel/` (`auth`, `db`, `extension`, `hooks`, `utils`, `vfs`, `workers`)
+- **core**: Extract Tier 2 Developer OS physics into `insetu/core/` and core UI scripts into `insetu/static/js/core/`
+- **ui**: Migrate extension modals and presentation primitives from `<yenvui-*>` to vendorized `<sutram-*>` tags
+
+
+## v0.5.0 (2026-07-25)
+
+### Features
+
+- **router**: Deploy Zero-Bundler SPA Hash Router with URL hash state synchronization (`#/{workspace_id}/{tab}/{sub-tab}`)
+- **tray**: Implement Global Multi-Select Selection Tray ("Shopping Cart") and non-blocking selection worker
+- **auth**: Deploy unified security token gatehouse (`insetu/auth.py`) enforcing REST and WebSocket token validation
+- **events**: Centralize fail-safe event bus and hook broadcasting via `window.inSetu.events` substrate
+- **ui**: Add `<insetu-toast-container>` web component and missing configuration banner primitive
+
+### Bug Fixes
+
+- **favorites**: Fix folder favoriting and un-favoriting payload ambiguity
+- **modal**: Inject teardown event guards to prevent child component bubbling from closing parent modals
+- **vfs**: Refactor VFS commit pipeline drain safeguard to drain pending write queue before honoring shutdown signals
+
+### Refactoring
+
+- **actions**: Migrate extension entity actions to declarative `emitEvent` schema
+- **git**: Standardize polymorphic card URIs to `system://` / `ctx://` schemes and eliminate imperative DOM querying
+- **fitness**: Modularize architectural fitness subsystem into `tests/fitness/` package (`rules_python`, `rules_javascript`, `rules_css`)
+
+
+## v0.4.0 (2026-07-22)
+
+### Features
+
+- **hooks**: Deploy Automation Hooks extension (`engine_hooks.py` / `ext_hooks.js`) for VFS mutation triggered shell automation
+- **freshdesk**: Deploy Freshdesk Support extension (`engine_freshdesk.py` / `ext_freshdesk.js`) with async ticket streaming
+- **editor**: Add interactive markdown link widgets and hover tooltip overlays in CodeMirror 6
+- **ui**: Abstract `<insetu-standard-toolbar>` and full-width system action filter dropdowns
+
+### Bug Fixes
+
+- **git**: Fix false-positive prefix matching in diff context generation and sanitize quoted porcelain path lines
+- **bridge**: Refine patch chunk regex anchoring to enforce multiline line-boundary constraints
+- **term**: Safely sever WebSocket handlers upon element disconnection to prevent cross-tenant view leaks
+
+### Refactoring
+
+- **pathlib**: Systematically refactor all core chassis modules to comply with Pathlib Mandate (ADR 0013)
+- **sdk**: Eradicate ES6 cross-boundary imports across frontend extensions and migrate to structured SDK getters
+- **workers**: Migrate backend extensions to blueprint-level `@blueprint.worker` decorator tracking framework
+
+
+## v0.3.0 (2026-07-16)
+
+### Features
+
+- **registry**: Graduate extensions to Polymorphic Entity-Action Card Registry framework (ADR 0023)
+- **term**: Upgrade terminal interface to native PTY pipeline using `pty`, `select`, `fcntl`, and `flask_sock`
+- **vfs**: Establish unified OS Event Ledger (`vfs_event_log`) and off-thread multi-file upload subsystem
+- **cache**: Implement deep-copy configuration caching (`_MUTATED_CONFIG_CACHE`) to eliminate redundant config reads
+
+### Bug Fixes
+
+- **git**: Add pre-flight conflict controls and headless SSH batch configurations to prevent process deadlocks
+- **tracker**: Enforce workspace change state isolation to clear memory profiles during tenant hot-swaps
+- **bridge**: Split Yomama patch payloads into discrete, toggleable cells with individual chunk tracking
+
+### Refactoring
+
+- **editor**: Upgrade `<insetu-markdown-editor>` with dynamic CodeMirror 6 plugin dynamic loading
+- **spatial**: Isolate `SettingsManager` and `StoreManager` asset paths strictly to `get_tenant_control_dir()`
+
+
+## v0.2.0 (2026-07-10)
+
+### Features
+
+- **sdk**: Ship Extension SDK V2 (`InSetuExtension`, `InSetuElement`, `VFSTransaction`, `DatabaseWrapper`)
+- **api**: Establish explicit `window.inSetu.api` client gateway for workspace and system fetch capabilities
+- **db**: Implement auto-migrating declarative SQLite schemas (`register_schema`) on system boot
+- **jobs**: Offload heavy context compilation and quick-pack operations to SQLite `immediate_jobs` worker queue
+- **workspace**: Add GUI-driven workspace management via `<insetu-workspace-editor>` Lit component
+
+### Bug Fixes
+
+- **gather**: Re-anchor gather engine to listen to `post_file_save` and `post_file_delete` hooks for CQRS parity
+- **zustand**: Replace mutative reference assignments in frontend stores with pristine clones for UDF compliance
+- **terminal**: Fix connection-drop behaviors and WebSocket termination handlers on active tenant swaps
+
+### Refactoring
+
+- **editor**: Fully replace legacy EasyMDE/CM5 with modular CodeMirror 6 web component (`<insetu-markdown-editor>`)
+- **components**: Transition extension components to LitElement Web Components and `createExtensionStore`
+
+
+## v0.1.0 (2026-07-01)
+
+### Features
+
+- **components**: Deploy global `<insetu-card>`, `<insetu-file-tree>`, `<insetu-folder-browser>`, and `<insetu-modal>` LitElements
+- **bridge**: Implement Yomama sync bridge idempotency guardrails and async job offloading
+- **recovery**: Implement recovery bootloader and Lifeboat VFS escape hatch (`fallback_bridge.py`)
+- **fitness**: Introduce `tests/fitness_functions.py` AST/Regex compliance scanner and linter guardrails
+- **namespace**: Initialize unified `window.inSetu` namespace object for global state and UI factories
+
+### Bug Fixes
+
+- **security**: Replace naive regex script stripping with DOMPurify sanitization in markdown previews
+- **pathlib**: Convert string-based path concatenations across Python micro-kernel to POSIX `pathlib.Path`
+- **memory**: Replace `innerHTML = ''` clearing patterns across JavaScript modules with native `replaceChildren()`
+- **vfs**: Encapsulate file deletion, archiving, and movement within asynchronous `_VFS_WRITE_QUEUE`
+
+### Refactoring
+
+- **udf**: Complete Zustand UDF migration and eliminate direct DOM reading across extension stores
+- **tokens**: Replace hardcoded hexadecimal color values across JS payloads with CSS semantic tokens
+
+### Migration
+
+- Officially combined `gather` and `yomama` into inSetu in its own repo and project

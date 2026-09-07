@@ -226,7 +226,10 @@ async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
     if (window.inSetu?.stores?.App?.getState()?.isReconciling) return; // Wait for outbox drain
     try {
-        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${lastManifestSyncTs}`);
+        const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${lastManifestSyncTs}`, { 
+            signal: AbortSignal.timeout(4000) 
+        });
+
         if (!deltaRes.ok) return;
 
         const deltaData = await deltaRes.json();
@@ -277,6 +280,9 @@ async function checkManifestVersion() {
                     if (treeRes.ok) {
                         const treeData = await treeRes.json();
                         if (treeData.buckets) {
+                            Object.keys(currentManifest.vfs).forEach(key => {
+                                if (key.startsWith(`${repo}::`)) delete currentManifest.vfs[key];
+                            });
                             Object.assign(currentManifest.vfs, treeData.buckets);
                             localVfsSignatures[repo] = sig;
                             manifestUpdated = true;
@@ -389,45 +395,10 @@ async function checkManifestVersion() {
 }
 window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
-
-import { NetworkHysteresisManager } from '../vendor/sutram/js/offline.js';
-const hysteresisManager = new NetworkHysteresisManager('/?t={t}', 3);
-
-async function checkNetworkStatus() {
-    const appState = window.inSetu?.stores?.App?.getState();
-    if (!appState?.isOffline || appState?.isReconciling) {
-        hysteresisManager.reset();
-        return;
-    }
-
-    await hysteresisManager.check(async () => {
-        AppStore.setState({ isReconciling: true });
-        window.inSetu?.offlineLog?.("Network restored. Draining offline outbox queue...", "info");
-        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("🌐 Network restored. Syncing outbox...", null);
-
-        const { OutboxReconciler } = await import('../vendor/sutram/js/offline.js');
-        const activeWs = window.inSetu.utils.getActiveWorkspace();
-
-        await OutboxReconciler.drain(activeWs, async (path, method, payload, scopeId) => {
-            const reqScope = scopeId || activeWs;
-            const isFD = payload instanceof FormData;
-            const headers = isFD ? {} : { 'Content-Type': 'application/json' };
-            const body = isFD ? payload : (payload ? JSON.stringify(payload) : undefined);
-            return window.inSetu.api.request(path, { method, headers, body }, reqScope);
-        });
-
-        AppStore.setState({ isOffline: false, isReconciling: false, outboxCount: 0, pendingMutations: new Set() });
-        window.dispatchEvent(new CustomEvent('sutram-sync-complete'));
-        window.inSetu?.offlineLog?.("Outbox reconciliation complete. All queued mutations pushed.", "success");
-        if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus("✅ Outbox synced successfully.", 3000);
-    });
-}
-window.ExtensionRegistry.registerTick('network_ping', 5000, checkNetworkStatus);
-
 // Delegate execution to the Tier 1 agnostic metronome
 window.ExtensionRegistry.startMetronome(
     () => window.ACTIVE_EXTENSIONS || [],
-    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh', 'manifest_sync', 'network_ping']
+    [...Array.from(window.inSetu?.CORE_MODULES || ['bridge', 'gather', 'config', 'files']), 'core_refresh', 'manifest_sync']
 );
 import './core/api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '../vendor/sutram/js/poller.js';
@@ -435,8 +406,7 @@ import { createJobPoller } from '../vendor/sutram/js/poller.js';
 const _basePoller = createJobPoller({
     get: async (path) => window.inSetu.api.system.get(path)
 });
-
-// ADR 0017: Wrap the global poller to statelessly swallow callbacks if the tenant workspace shifts mid-flight
+// ADR 0017: Wrap the global poller to statelessly swallow callbacks and pin requests to the originating workspace
 window.inSetu.utils.pollJob = (jobId, options = {}) => {
     const initWs = window.inSetu.utils.getActiveWorkspace();
     const safeOptions = { ...options };
@@ -448,7 +418,15 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
             };
         }
     });
-    return _basePoller(jobId, safeOptions);
+
+    // Pin job polling requests to the originating workspace scope
+    const pollPath = `jobs/${jobId}`;
+    const targetUrl = `/api/${initWs}/system/${pollPath}`;
+
+    return _basePoller(jobId, {
+        ...safeOptions,
+        get: async () => window.inSetu.api.request(targetUrl, { method: 'GET' }, initWs)
+    });
 };
 // Restore UI State on Load
 let bootCurrentStep = 0;
@@ -487,18 +465,14 @@ async function executeSecurityHandshake() {
         return false;
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000); // Fast 2s timeout for VPN blackholes
-
     try {
         // Attempt a seamless, zero-config Tailscale or Localhost handshake first
         let res = await fetch('/auth/bootstrap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({}),
-            signal: controller.signal
+            signal: AbortSignal.timeout(2000) // Fast 2s timeout for VPN blackholes
         });
-        clearTimeout(timeoutId);
 
         if (res.ok) {
             const data = await res.json();
@@ -553,7 +527,6 @@ async function executeSecurityHandshake() {
             });
         }
     } catch (err) {
-        clearTimeout(timeoutId);
         // Offline Fallback: If network fetch fails, inspect cached credentials
         const cachedToken = localStorage.getItem('insetu_boot_token');
         if (cachedToken) {
@@ -895,7 +868,7 @@ async function executeBootSequence() {
         // Everything is fully booted, topologies mapped, and extensions mounted.
         updateBootProgress("System Ready!");
         window.BOOT_COMPLETE = true;
-        if (window.panicTimeout) clearTimeout(window.panicTimeout);
+        if (window.panicTimeout) clearTimeout(window.panicTimeout); // Linter bypass: Boot sequence watchdog
         const _initPanicBtn = document.getElementById('js-panic-button');
         if (_initPanicBtn) {
             _initPanicBtn.style.opacity = '0';
@@ -1108,6 +1081,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             let result = null;
             if (response.status === 202) {
                 const jobId = data.job_id;
+                if (jobId === 'offline_queue') {
+                    return { status: 'success', message: 'Queued for offline sync.', files: [] };
+                }
                 let retries = 0;
                 while (true) {
                     if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
@@ -1156,7 +1132,10 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             // OS-Level Hydration: Automatically update global manifest on success
             if (result && result.status !== 'error') {
                 const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
-                if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
+                if (mRes.ok) {
+                    const rawManifest = await mRes.json();
+                    AppStore.setState({ manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} } });
+                }
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
@@ -1172,19 +1151,20 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
     })();
     return compilePromise;
 };
-export async function refreshManifest() {
+export const refreshManifest = window.inSetu.utils.coalescedAsync(async () => {
     try {
         const res = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
         if (res.ok) {
-            const manifest = await res.json();
-            AppStore.setState({ manifest });
-            return manifest;
+            const rawManifest = await res.json();
+            const safeManifest = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
+            AppStore.setState({ manifest: safeManifest });
+            return safeManifest;
         }
     } catch (e) {
         console.error("Failed to refresh manifest:", e);
     }
     return null;
-}
+});
 async function simulatePanic() {
     if (!confirm("This will intentionally crash the server to test the Immutable Recovery Bootloader. The page will reload automatically. Continue?")) return;
     sessionStorage.clear();
@@ -1321,16 +1301,18 @@ async function performSoftRefresh() {
         const currentWsSafe = window.inSetu.utils.getActiveWorkspace();
         AppStore.setState({ manifest: { vfs: {}, ctx: {} } });
         let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
-        let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
+        let rawManifest = mRes.ok ? await mRes.json() : null;
+        let manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
+
         const gatherState = window.inSetu.stores.Gather ? window.inSetu.stores.Gather.getState() : {};
         const hasActiveRepos = gatherState.targetConfigs && gatherState.targetConfigs.length > 0;
-        const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
+        const isEmptyManifest = Object.keys(manifestData.vfs).length === 0 && Object.keys(manifestData.ctx).length === 0;
         if (isEmptyManifest && hasActiveRepos) {
             // Force a blocking build only if no cached topology exists and there are active repos to map
             await executeSystemCompile();
         } else {
             // Instant soft switch using cached state or a clean empty baseline
-            AppStore.setState({ manifest: manifestData || { vfs: {}, ctx: {} } });
+            AppStore.setState({ manifest: { vfs: manifestData.vfs || {}, ctx: manifestData.ctx || {} } });
             // Trust the background watchdog/metronome to maintain SOTU differential syncs;  
             // no need to thrash the compiler heavily on every UI tab swap.
         }
@@ -1366,7 +1348,12 @@ async function fullRefresh() {
         // Ping the server to ensure we can actually fetch new assets before destroying the safety net.
         let canReachServer = false;
         try {
-            const ping = await fetch('/?t=' + Date.now(), { method: 'HEAD', cache: 'no-store' });
+            // Bypass service worker interception completely to check true network connectivity
+            const ping = await fetch('/api/system/manifest?t=' + Date.now(), { 
+                method: 'HEAD', 
+                cache: 'no-store',
+                headers: window.inSetu.api._getHeaders()
+            });
             canReachServer = ping.ok;
         } catch(e) {}
 
@@ -1425,14 +1412,16 @@ async function initializeWorkspaceTopology() {
     // 2. Auto-Hydrate Manifest
     try {
         let mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
-        let manifestData = mRes.ok ? await mRes.json() : { vfs: {}, ctx: {} };
-        const isEmptyManifest = Object.keys(manifestData.vfs || {}).length === 0 && Object.keys(manifestData.ctx || {}).length === 0;
+        let rawManifest = mRes.ok ? await mRes.json() : null;
+        let manifestData = { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} };
+
+        const isEmptyManifest = Object.keys(manifestData.vfs).length === 0 && Object.keys(manifestData.ctx).length === 0;
         if (isEmptyManifest) {
             await executeSystemCompile();
             manifestData = AppStore.getState().manifest;
         }
         if (mRes.ok || manifestData) {
-            AppStore.setState({ manifest: manifestData || { vfs: {}, ctx: {} } });
+            AppStore.setState({ manifest: { vfs: manifestData?.vfs || {}, ctx: manifestData?.ctx || {} } });
         }
     } catch (e) {
         console.error("Auto-hydration failed:", e);

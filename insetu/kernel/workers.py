@@ -68,6 +68,17 @@ def submit_one_shot_job(job_id, ext_name, callback_name, delay_ms, args_json="{}
         VALUES (?, ?, ?, 0, 0, ?, 'pending', ?)
     """, (job_id, ext_name, callback_name, next_run, args_json))
     conn.commit()
+def cancel_job(job_id, workspace_id=None):
+    """Cancels and removes a scheduled background job from the Metronome ledger."""
+    if not workspace_id:
+        from insetu.kernel.utils import sniff_tenant_id
+        workspace_id = sniff_tenant_id()
+    workspace_id = workspace_id or "default"
+
+    conn = get_connection("workers", workspace_id=workspace_id)
+    conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+    conn.commit()
+
 def submit_immediate_job(job_id, ext_name, callback_name, args_json="{}", workspace_id=None, coalesce=False):
     """Drops a task directly into the active ThreadPoolExecutor and logs its lifecycle for UI polling."""
     if _shutdown_event.is_set():

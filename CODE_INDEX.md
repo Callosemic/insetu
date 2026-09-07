@@ -4,6 +4,7 @@ This index serves as the architectural map. It outlines the core directories and
 
 ```text
 insetu/
+├── .                               # [comment required]
 ├── .gitignore                      # Defines intentionally untracked files and volatile state to ignore.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
@@ -21,12 +22,9 @@ insetu/
 │   ├── 06_extension_compliance_checklist.md # Extension compliance checklist and audit guardrails.
 │   ├── ADR_INDEX.md                # Ledger of Logic for inSetu ADRs.
 │   ├── adrs/                       # Architectural Decision Records.
-│   │   ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
 │   │   ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
 │   │   ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
-│   │   ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
 │   │   ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
-│   │   ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
 │   │   ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
 │   │   ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
 │   │   ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
@@ -58,10 +56,14 @@ insetu/
 │   │   ├── 0041-deprecation-of-ui-zones-and-presentation-decoupling.md # Deprecation of UI zones and presentation decoupling.
 │   │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
 │   │   ├── 0043-client-offline-provider-and-offline-engine.md # Client offline provider, SW core vendorization, and outbox reconciliation.
+│   │   ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
 │   │   └── archived/               # Superseded and historical ADR documents.
 │   │       ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
+│   │       ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
 │   │       ├── 0003-stateless-multi-tenant-routing.md # Initial stateless request-scoped multi-tenant REST routing setup.
 │   │       ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
+│   │       ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
+│   │       ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
 │   │       └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
 │   ├── sdk_v2_contracts.md         # Interface contracts for the V2 extension SDK.
 │   └── sutram_contracts.md         # Sutram Platform API & Interface Contracts.
@@ -108,6 +110,11 @@ insetu/
 │   │   ├── citations/              # CSL-JSON Academic Reference Library.
 │   │   │   ├── engine_citations.py # [Local CSL Reference Manager]
 │   │   │   └── ext_citations.js    # [Citations Manager UI & Store]
+│   │   ├── cronic/                 # Scheduled cron task management extension.
+│   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── engine_cronic.py    # Cron scheduler and execution worker.
+│   │   │   ├── ext_cronic.js       # Cronic UI component and task store.
+│   │   │   └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   │   ├── dev/                    # Developer Dashboard for bridge telemetry and thrashing.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   ├── engine_dev.py       # Bridges and VFS performance logging.
@@ -207,11 +214,11 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
-├── log.md                          # Service execution log and background daemon telemetry traces.
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.
 │   ├── vendor_codemirror.sh        # Bundles CodeMirror 6 core and language modules locally via esbuild.
+│   ├── vendor_jsyaml.sh            # [comment required]
 │   ├── vendor_lit.sh               # Local esbuild vendorization script for Lit library.
 │   └── vendor_zustand.sh           # Local esbuild vendorization script for Zustand modules.
 └── tests/                          # Automated testing suite.

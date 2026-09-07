@@ -27,6 +27,7 @@ dependencies = [
     "Flask>=3.0.0",          # Tier 1 Kernel: REST routing & application engine
     "cryptography>=41.0.0",  # Tier 1 Kernel: Fernet encryption for secrets.json
     "watchdog>=3.0.0",      # Tier 1 VFS: Native filesystem event observer
+    "ruamel.yaml>=0.18.0",   # Tier 2 Core: Round-trip YAML frontmatter parser
 ]
 
 [project.urls]
@@ -36,6 +37,11 @@ Documentation = "https://github.com/Callosemic/insetu#readme"
 "Bug Tracker" = "https://github.com/Callosemic/insetu/issues"
 # Opt-in Extension Dependencies (Grouped by feature domain)
 [project.optional-dependencies]
+syntax = [
+    "tree-sitter>=0.22.0",            # engine_bridge: High-performance AST validation
+    "tree-sitter-python>=0.21.0",     # engine_bridge: Python grammar
+    "tree-sitter-javascript>=0.21.0"  # engine_bridge: JS/TS grammar
+]
 term = [
     "flask-sock>=0.6.0",      # engine_term: PTY WebSocket streaming
 ]
@@ -59,9 +65,11 @@ update = [
     "build>=1.0.0",                   # engine_update: PEP 517 package building
     "twine>=4.0.0",                   # engine_update: PyPI distribution
 ]
-
 # Full suite target: `pip install insetu[all]`
 all = [
+    "tree-sitter>=0.22.0",
+    "tree-sitter-python>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
     "flask-sock>=0.6.0",
     "mistune>=3.0.0",
     "beautifulsoup4>=4.12.0",

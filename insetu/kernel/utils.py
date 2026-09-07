@@ -166,9 +166,28 @@ def get_all_workspace_ids():
         except Exception:
             pass
     return workspace_ids
-
 def generate_idempotency_hash(payload: dict) -> str:
     return json.dumps(payload, sort_keys=True)
+
+def parse_uri(path_str):
+    """SDK Helper: Parses any scheme:// or relative path into (repo_dir, relative_path)."""
+    if not path_str:
+        return "", ""
+
+    str_path = str(path_str).replace('\\', '/').strip()
+
+    import re
+    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', str_path)
+    if match:
+        str_path = match.group(2)
+    str_path = str_path.lstrip('/')
+    str_path = re.sub(r'^\./+', '', str_path)
+    parts = str_path.split('/', 1)
+
+    repo = parts[0] if len(parts) > 1 else ""
+    rel_path = parts[1] if len(parts) > 1 else str_path
+
+    return repo, rel_path
 
 def slugify(text):
     if not text:

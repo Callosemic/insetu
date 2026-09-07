@@ -402,19 +402,23 @@ class ExtensionContext:
             if c.get("repo_dir") == repo_dir and c.get("physical_path"):
                 return os.path.abspath(os.path.expanduser(c.get("physical_path")))
         return self.resolve_path(repo_dir)
-
     @property
     def manifest(self):
         """Reads the centralized context manifest statelessly."""
         from insetu.kernel.hooks import hooks
-        manifests = hooks.emit('request_manifest', workspace_id=self.workspace_id)
-        return next((m for m in manifests if m), {})
+        ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=self.workspace_id) if m), {})
+        vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=self.workspace_id) if m), {})
+        return {"vfs": vfs_manifest, "ctx": ctx_manifest}
 
     def get_manifest_files(self, target_key=None):
         """SSOT Helper to extract polymorphic lists of files or chunks from the manifest."""
         from insetu.kernel.hooks import hooks
         chunks = hooks.emit('request_manifest_chunks', target_key=target_key, workspace_id=self.workspace_id)
         return next((c for c in chunks if c), [])
+    def parse_uri(self, path_str):
+        from insetu.kernel.utils import parse_uri
+        return parse_uri(path_str)
+
     def expand_selection(self, items):
         """
         SSOT: Expands polymorphic frontend selection items into a flat, 
