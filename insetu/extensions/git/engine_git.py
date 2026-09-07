@@ -77,11 +77,10 @@ def _register_git_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "git",
         "worker_name": "compile_diffs_task"
     }]
-
 @git_bp.worker("compile_diffs_task")
 def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs):
     ctx.jobs.update_progress("Evaluating Git diffs...")
-    manifest = ctx.manifest
+    manifest = ctx.manifest.get("ctx", {})
 
     if isinstance(force_full, list):
         target_repos = force_full
@@ -93,19 +92,16 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     from insetu.core.utils_core import get_safe_repo_id
     from insetu.core.topology.engine_topology import resolve_file_bucket
     import concurrent.futures
-
     ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
-    _, ws_root, _ = ctx.config.get("workspace_physics", (None, ctx.paths["workspace_root"], None))
     live_cfg = ctx.config
     safe_targets = [get_safe_repo_id(r) for r in target_repos] if target_repos else []
     diffs_dir_path = Path(paths["diffs_dir"])
     is_standalone = manifest_ref is None
-    working_manifest = manifest_ref if not is_standalone else ctx.manifest
+    working_manifest = manifest_ref if not is_standalone else ctx.manifest.get("ctx", {})
     diff_manifest = []
     manifest_deltas = {}
     active_generated_diffs = set()
-    ws_root_path = Path(ws_root).resolve()
 
     touched_diff_buckets = set(b.replace('_context.txt', '_diffs.txt') for b in touched_buckets) if touched_buckets is not None else None
 
@@ -119,12 +115,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         if config.get("archive_type", "repo") == "media-vault": return None
 
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
-        physical_path = config.get("physical_path")
+        repo_path = Path(ctx.get_repo_path(config.get("repo_dir")))
 
-        if physical_path:
-            repo_path = Path(physical_path).expanduser().resolve()
-        else:
-            repo_path = (ws_root_path / config["repo_dir"]).resolve()
         if not repo_path.exists(): return None
         try:
             # OPTIMIZATION 1: --no-optional-locks avoids heavy background index refreshes
@@ -349,7 +341,6 @@ def _background_sweep_status(ctx):
     from insetu.kernel.utils import get_workspace_physics
     from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
 
@@ -357,9 +348,7 @@ def _background_sweep_status(ctx):
 
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
-        repo_path = Path(ws_root).joinpath(repo).as_posix()
-        if c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
+        repo_path = ctx.get_repo_path(repo)
         if not os.path.exists(repo_path): continue
 
         try:
@@ -412,8 +401,6 @@ def _background_sweep_push(ctx, selections, message):
     import os
     import subprocess
     from insetu.kernel.utils import get_workspace_physics
-    cfg = ctx.config
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
     output_log = ""
 
     try:
@@ -421,11 +408,7 @@ def _background_sweep_push(ctx, selections, message):
             if not files: continue
             ctx.jobs.update_progress(f"Pushing {repo}...")
 
-            repo_path = Path(ws_root).joinpath(repo).as_posix()
-            for c in cfg.get("target_repos", []):
-                if c.get("repo_dir") == repo and c.get("physical_path"):
-                    repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-                    break
+            repo_path = ctx.get_repo_path(repo)
             if not os.path.exists(repo_path): continue
             # Guarantee topology is perfectly mapped before staging
             from insetu.core.cartographer.cartographer import map_repositories
@@ -482,14 +465,8 @@ def _background_git_push(ctx, repo, message, diff_file):
     from insetu.kernel.utils import get_workspace_physics
 
     ctx.jobs.update_progress(f"Preparing to push {repo}...")
-
     cfg = ctx.config
-    _, ws_root, _ = get_workspace_physics(ctx.workspace_id)
-    repo_path = Path(ws_root).joinpath(repo).as_posix()
-    for c in cfg.get("target_repos", []):
-        if c.get("repo_dir") == repo and c.get("physical_path"):
-            repo_path = os.path.abspath(os.path.expanduser(c.get("physical_path")))
-            break
+    repo_path = ctx.get_repo_path(repo)
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
     files_to_stage = set()
@@ -601,7 +578,7 @@ def provide_available_diffs(workspace_id=None, **kwargs):
         filename = context_path.split('/')[-1]
         expected_diffs.add(f"diffs/{filename.replace('_context.txt', '_diffs.txt')}")
     # 3. Include ad-hoc diffs currently tracked in the manifest
-    manifest = ctx.manifest
+    manifest = ctx.manifest.get("ctx", {})
     for key in manifest.keys():
         if key.endswith('_diffs.txt'):
             expected_diffs.add(f"diffs/{key}")
@@ -616,8 +593,7 @@ def api_git_status(ctx):
         repo_dir = c.get("repo_dir")
         if not repo_dir: continue
 
-        physical_path = c.get("physical_path")
-        repo_path = Path(physical_path).expanduser().resolve() if physical_path else Path(ctx.resolve_path(repo_dir))
+        repo_path = Path(ctx.get_repo_path(repo_dir))
         if not repo_path.exists(): continue
         try:
             check_git = execute_git(repo_path, ['rev-parse', '--is-inside-work-tree'], check=False)

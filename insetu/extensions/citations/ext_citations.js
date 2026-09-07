@@ -225,7 +225,7 @@ export class InSetuExtCitations extends InSetuElement {
             return { importingIds: newSet };
         });
         try {
-            await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
+            await this.api.post('import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
             this.loadMainLibrary();
         } catch (err) {
             alert("Error importing citation: " + err.message);
@@ -278,7 +278,7 @@ export class InSetuExtCitations extends InSetuElement {
     async _saveAttachmentList(newAtts) {
         if (!this.activeAttachCitation) return;
         try {
-            const res = await this.api.post(`${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts });
+            const res = await this.api.post(`${encodeURIComponent(this.activeAttachCitation.id)}/attach`, { attachments: newAtts }, { collapseKey: `citations:attach:${this.activeAttachCitation.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeAttachCitation: { ...this.activeAttachCitation, _attachments: newAtts } });
@@ -320,7 +320,7 @@ export class InSetuExtCitations extends InSetuElement {
         if (!this.activeEditCitation) return;
         if (!confirm(`Are you sure you want to completely delete this citation ([@${this.activeEditCitation.id}]) from your library?`)) return Promise.resolve();
         try {
-            const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`);
+            const res = await this.api.delete(`${encodeURIComponent(this.activeEditCitation.id)}`, { collapseKey: `citations:delete:${this.activeEditCitation.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 const id = this.activeEditCitation.id;
@@ -362,7 +362,7 @@ export class InSetuExtCitations extends InSetuElement {
         }
         if (payload.id !== this.activeEditCitation.id) payload.id = this.activeEditCitation.id;
         try {
-            const res = await this.api.post('import', { citations: [payload], strategy: 'overwrite' });
+            const res = await this.api.post('import', { citations: [payload], strategy: 'overwrite' }, { collapseKey: `citations:import:${payload.id}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 CitationStore.setState({ activeEditCitation: null });

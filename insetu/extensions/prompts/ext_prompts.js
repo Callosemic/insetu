@@ -181,11 +181,15 @@ export class InSetuExtPromptsActions extends InSetuElement {
         });
         this.globalBrowsePath = AppStore.getState().globalBrowsePath || [];
     }
-
     get _menuItems() {
+        const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
+        if (isOffline) {
+            return [{ label: 'Read-Only (Offline)', icon: '🔒', onClick: () => {} }];
+        }
+
         return [
             { 
-                label: 'New Folder', 
+                label: 'New Folder',  
                 icon: '📁', 
                 onClick: () => { 
                     const cpPath = this.globalBrowsePath || []; 
@@ -222,8 +226,26 @@ function isPromptPath(filepath) {
 window.ExtensionRegistry.registerExtension('prompts', {
     name: "Prompt Library",
     version: "2.0.0",
-    offline_mode: "full",
+    offline_mode: "read_only",
     entityActions: [],
+    customEditors: [
+        {
+            match: (filepath) => window.inSetu?.stores?.App?.getState()?.isOffline && isPromptPath(filepath),
+            onOpen: async (filepath) => {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const fetchUrl = `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(filepath)}`;
+                try {
+                    const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
+                    const text = res.ok ? await res.text() : "Offline cache miss. This prompt was not pre-cached.";
+                    if (window.inSetu.ui && window.inSetu.ui.viewTextBlob) {
+                        window.inSetu.ui.viewTextBlob(`[Read-Only] ${filepath.split('/').pop()}`, text, filepath.split('/').pop());
+                    }
+                } catch (e) {
+                    alert("Failed to load prompt offline.");
+                }
+            }
+        }
+    ],
     layoutSlots: [
         {
             slot: "slots:sub-navigation",
@@ -242,7 +264,7 @@ window.ExtensionRegistry.registerExtension('prompts', {
         }
     ]
 });
-async function syncPromptsState() {
+const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
     if (!window.ACTIVE_EXTENSIONS || !window.ACTIVE_EXTENSIONS.includes('prompts')) return;
     try {
         const res = await window.inSetu.api.get('prompts/list?t=' + Date.now(), { cache: 'no-store' });
@@ -254,6 +276,17 @@ async function syncPromptsState() {
                 return match ? match[1] : p.split('/').pop();
             });
             PromptsStore.setState({ prompts: cleanPrompts });
+            // Offline Cache Warming: Pre-fetch fully resolved prompt blobs silently
+            const appState = window.inSetu?.stores?.App?.getState();
+            if (appState && !appState.isOffline && navigator.connection?.saveData !== true) {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                cleanPrompts.forEach(p => {
+                    const fullPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p}`;
+                    // Fetch the *resolved* endpoint so the macro-expanded version is cached for offline use
+                    window.inSetu.api.request(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
+                });
+            }
+
             const gatherStore = window.inSetu?.stores?.Gather;
             if (gatherStore && typeof gatherStore.setState === 'function') {
                 gatherStore.setState(state => ({
@@ -268,4 +301,4 @@ async function syncPromptsState() {
     } catch (e) {
         console.warn("Headless prompt sync failed:", e);
     }
-}
+});

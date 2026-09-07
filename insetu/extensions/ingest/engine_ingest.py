@@ -106,8 +106,9 @@ def extract_markdown_from_url(target_url, method="jina"):
         first_line = clean_markdown.lstrip().split('\n')[0]
         if first_line.startswith('# '):
             extracted_title = first_line[2:].strip()
-
     import datetime
+    from insetu.core.utils_core import update_frontmatter
+
     now_str = datetime.datetime.now().isoformat(timespec='seconds')
     safe_title = extracted_title.replace('"', "'")
     # Binary/Garbage heuristics detection
@@ -115,17 +116,15 @@ def extract_markdown_from_url(target_url, method="jina"):
     if garbage_ratio > 0.01 or '\x00' in clean_markdown:
         clean_markdown = "> **[inSetu Engine Warning]** This file appears to contain compressed binary data or failed to decode cleanly. You may want to Re-Scrape or manually verify the source URL.\n\n" + clean_markdown
 
-    yaml_frontmatter = (
-        f"---\n"
-        f"title: \"{safe_title}\"\n"
-        f"source_url: \"{extracted_url}\"\n"
-        f"published_at: \"{published_time}\"\n"
-        f"imported_at: \"{now_str}\"\n"
-        f"---\n\n"
-        f"## Notes\n\n\n"
-        f"---\n\n"
-    )
-    final_markdown = yaml_frontmatter + clean_markdown
+    yaml_data = {
+        "title": safe_title,
+        "source_url": extracted_url,
+        "published_at": published_time,
+        "imported_at": now_str
+    }
+    raw_content = f"## Notes\n\n\n---\n\n{clean_markdown}"
+    final_markdown = update_frontmatter(raw_content, yaml_data)
+
     return {
         "title": extracted_title,
         "resolved_url": extracted_url,

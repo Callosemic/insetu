@@ -211,9 +211,12 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: metrics
         };
         try {
-            const res = await this.api.postJson('create', payload);
+            const res = await this.api.post('create', payload, {
+                collapseKey: `skills:create:${payload.name}`
+            });
+            const data = await res.json();
             SkillsStore.setState({ newSkillModalOpen: false });
-            if (res.job_id === 'offline_queue') {
+            if (data.job_id === 'offline_queue') {
                 const tempFilepath = `${domain}/${window.inSetu.utils.slugify(payload.name)}.md`;
                 const newItem = { ...payload, filepath: tempFilepath, id: 'SKL-' + Date.now() };
                 SkillsStore.setState(s => ({ allSkills: [...s.allSkills, newItem] }));
@@ -277,10 +280,14 @@ export class InSetuExtSkills extends InSetuElement {
         if (!this.selectedItem) return;
         if (!confirm(`⚠️ Are you absolutely sure you want to permanently delete "${this.selectedItem.name}"?\nThis action will destroy the markdown file on disk and cannot be undone.`)) return;
         try {
-            const res = await this.api.postJson('delete', { filepath: this.selectedItem.filepath });
+            const res = await this.api.post('delete', { filepath: this.selectedItem.filepath }, { 
+                collapseKey: `skills:delete:${this.selectedItem.filepath}`,
+                pendingMutations: [this.selectedItem.filepath]
+            });
+            const data = await res.json();
             const filepath = this.selectedItem.filepath;
             SkillsStore.setState({ selectedItem: null });
-            if (res.job_id === 'offline_queue') {
+            if (data.job_id === 'offline_queue') {
                 SkillsStore.setState(s => ({
                     playlist: s.playlist.filter(p => p.filepath !== filepath),
                     allSkills: s.allSkills.filter(p => p.filepath !== filepath)
@@ -291,7 +298,6 @@ export class InSetuExtSkills extends InSetuElement {
             alert(`Failed to execute deletion sequence: ${err.message}`);
         }
     }
-
     async _submitStructuralEdit() {
         if (!this.selectedItem) return;
         const payload = {
@@ -304,10 +310,14 @@ export class InSetuExtSkills extends InSetuElement {
             custom_steps: this.formMetrics.custom_steps || ''
         };
         try {
-            const res = await this.api.postJson('update', payload);
+            const res = await this.api.post('update', payload, { 
+                collapseKey: `skills:update:${this.selectedItem.filepath}`,
+                pendingMutations: [this.selectedItem.filepath]
+            });
+            const data = await res.json();
             const item = this.selectedItem;
             SkillsStore.setState({ selectedItem: null });
-            if (res.job_id === 'offline_queue') {
+            if (data.job_id === 'offline_queue') {
                 SkillsStore.setState(s => ({
                     allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p),
                     playlist: s.playlist.map(p => p.id === item.id ? { ...p, name: payload.name, tags: payload.tags, group_name: payload.group, status: payload.status, metrics: { ...p.metrics, parts: payload.parts, custom_steps: payload.custom_steps } } : p)
@@ -318,7 +328,6 @@ export class InSetuExtSkills extends InSetuElement {
             alert(`Failed to save adjustments: ${err.message}`);
         }
     }
-
     async _submitPracticeSession() {
         if (!this.selectedItem) return;
         const payload = {
@@ -331,10 +340,14 @@ export class InSetuExtSkills extends InSetuElement {
             metrics: this.formMetrics
         };
         try {
-            const res = await this.api.postJson('log', payload);
+            const res = await this.api.post('log', payload, { 
+                collapseKey: `skills:log:${this.selectedItem.filepath}`,
+                pendingMutations: [this.selectedItem.filepath]
+            });
+            const data = await res.json();
             const item = this.selectedItem;
             SkillsStore.setState({ selectedItem: null });
-            if (res.job_id === 'offline_queue') {
+            if (data.job_id === 'offline_queue') {
                 SkillsStore.setState(s => ({
                     playlist: s.playlist.filter(p => p.id !== item.id),
                     allSkills: s.allSkills.map(p => p.id === item.id ? { ...p, status: payload.status, metrics: payload.metrics } : p)

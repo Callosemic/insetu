@@ -80,7 +80,7 @@ def run_formatter():
     print("🧹 Booting native Python JS Formatter (Context-Bound)...")
     try:
         ctx = format_bp.get_context('default')
-        manifest = ctx.manifest
+        manifest = ctx.manifest.get("ctx", {})
     except Exception:
         print("❌ Error: Failed to load context manifest.")
         sys.exit(1)

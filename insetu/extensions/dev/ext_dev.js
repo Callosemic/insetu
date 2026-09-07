@@ -227,11 +227,10 @@ export class InSetuExtDevLogs extends InSetuElement {
             this.loading = false;
         }
     }
-
     async copyLogs() {
         if (!this.backendLogs) return;
         try {
-            await navigator.clipboard.writeText(this.backendLogs);
+            await this.utils.copyRawText(this.backendLogs);
             if (window.inSetu?.ui?.setGlobalStatus) {
                 window.inSetu.ui.setGlobalStatus("📋 Logs copied to clipboard!", 2000);
             }
@@ -272,6 +271,180 @@ export class InSetuExtDevLogsActions extends InSetuElement {
 }
 customElements.define('insetu-ext-dev-logs-actions', InSetuExtDevLogsActions);
 
+export class InSetuExtDevSql extends InSetuElement {
+    static get extensionName() { return 'dev'; }
+    static properties = {
+        databases: { type: Array },
+        selectedDb: { type: String },
+        query: { type: String },
+        result: { type: Object },
+        loading: { type: Boolean }
+    };
+    static styles = [
+        sharedStyles,
+        css`
+            :host { display: flex; flex-direction: column; height: 100%; padding: 20px; box-sizing: border-box; background: var(--bg); overflow-y: auto; }
+            .sql-controls { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+            .presets { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+            .preset-btn { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); padding: 4px 10px; border-radius: 4px; font-size: 0.8rem; cursor: pointer; font-family: var(--font-mono); }
+            .preset-btn:hover { background: var(--bg); border-color: var(--intent-primary); }
+            .results-table-wrapper { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); }
+            table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); }
+            th { position: sticky; top: 0; background: var(--bg); color: var(--intent-primary); text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); z-index: 10; white-space: nowrap; }
+            td { padding: 8px 12px; border-bottom: 1px solid var(--border); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            tr:hover td { background: rgba(255, 255, 255, 0.03); }
+        `
+    ];
+
+    constructor() {
+        super();
+        this.databases = ['workers', 'vfs_index', 'topology', 'tracker', 'dev'];
+        this.selectedDb = 'workers';
+        this.query = 'SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;';
+        this.result = null;
+        this.loading = false;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this._fetchDatabases();
+    }
+
+    async _fetchDatabases() {
+        try {
+            const res = await this.api.get('sql/databases');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.databases && data.databases.length > 0) {
+                    this.databases = data.databases;
+                    if (!this.databases.includes(this.selectedDb)) {
+                        this.selectedDb = this.databases[0];
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Failed to fetch database list", e);
+        }
+    }
+
+    async _executeQuery() {
+        if (!this.query.trim()) return;
+        this.loading = true;
+        this.result = null;
+        try {
+            const res = await this.api.post('sql/query', {
+                db_name: this.selectedDb,
+                query: this.query
+            });
+            const data = await res.json();
+            this.result = data;
+        } catch (e) {
+            this.result = { status: 'error', error: e.message };
+        } finally {
+            this.loading = false;
+        }
+    }
+
+    _applyPreset(queryStr, dbName = null) {
+        if (dbName && this.databases.includes(dbName)) {
+            this.selectedDb = dbName;
+        }
+        this.query = queryStr;
+        this.requestUpdate();
+    }
+
+    render() {
+        return html`
+            <div style="display: flex; flex-direction: column; height: 100%; max-width: 1200px; margin: 0 auto; width: 100%;">
+                <div style="border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h3 style="margin: 0; color: var(--text);">SQL Console</h3>
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">Execute queries directly against workspace SQLite databases.</span>
+                    </div>
+                </div>
+
+                <div class="sql-controls">
+                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                        <sutram-select 
+                            label="Target Database" 
+                            .value=${this.selectedDb} 
+                            .options=${this.databases.map(db => ({ value: db, label: `${db}.db` }))} 
+                            @sutram-input-changed=${e => this.selectedDb = e.detail.value}
+                            style="width: 220px;">
+                        </sutram-select>
+
+                        <div class="presets" style="flex: 1;">
+                            <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Quick Presets:</span>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}>Topology Ledger</button>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}>Manifest Ledger</button>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}>VFS Event Log</button>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}>Immediate Jobs</button>
+                        </div>
+                    </div>
+
+                    <sutram-textarea 
+                        label="SQL Query" 
+                        .value=${this.query} 
+                        ?monospace=${true} 
+                        @sutram-input-changed=${e => this.query = e.detail.value}>
+                    </sutram-textarea>
+
+                    <div style="display: flex; justify-content: flex-end;">
+                        <sutram-async-btn 
+                            label="▶ Execute Query" 
+                            intent="primary" 
+                            ?disabled=${this.loading} 
+                            .onClick=${() => this._executeQuery()}>
+                        </sutram-async-btn>
+                    </div>
+                </div>
+
+                ${this.loading ? html`<sutram-spinner text="Executing query..."></sutram-spinner>` : ''}
+
+                ${this.result ? html`
+                    <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; font-family: var(--font-mono);">
+                        ${this.result.status === 'success' ? html`
+                            <span style="color: var(--intent-success);">
+                                ✅ ${this.result.type === 'select' ? `${this.result.row_count} row(s) returned` : `${this.result.affected_rows} row(s) affected`} (${this.result.elapsed_ms}ms)
+                            </span>
+                        ` : html`
+                            <span style="color: var(--intent-danger);">❌ Query Error: ${this.result.error}</span>
+                        `}
+                    </div>
+
+                    ${this.result.status === 'success' && this.result.type === 'select' ? html`
+                        <div class="results-table-wrapper">
+                            ${this.result.rows.length === 0 ? html`
+                                <div style="padding: 20px; text-align: center; color: var(--text-muted); font-style: italic;">Query returned 0 rows.</div>
+                            ` : html`
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            ${this.result.columns.map(col => html`<th>${col}</th>`)}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${this.result.rows.map(row => html`
+                                            <tr>
+                                                ${this.result.columns.map(col => {
+                                                    const val = row[col];
+                                                    const displayVal = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val ?? '');
+                                                    return html`<td title="${displayVal}">${displayVal}</td>`;
+                                                })}
+                                            </tr>
+                                        `)}
+                                    </tbody>
+                                </table>
+                            `}
+                        </div>
+                    ` : ''}
+                ` : ''}
+            </div>
+        `;
+    }
+}
+customElements.define('insetu-ext-dev-sql', InSetuExtDevSql);
+
 window.ExtensionRegistry.registerExtension('dev', {
     name: "Developer Tools",
     version: "1.0.0",
@@ -304,6 +477,14 @@ window.ExtensionRegistry.registerExtension('dev', {
             targetSub: "logs",
             component: "insetu-ext-dev-logs-actions",
             order: 1
+        },
+        {
+            slot: "slots:sub-navigation",
+            targetParent: "dev",
+            id: "sql",
+            label: "SQL Console",
+            order: 3,
+            component: "insetu-ext-dev-sql"
         }
     ],
 });

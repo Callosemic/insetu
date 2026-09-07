@@ -14,7 +14,7 @@ export const GitStore = createExtensionStore('Git', {
     diffJobError: null,
     dirtyDiffRepos: new Set(["ALL"]),
     cachedDiffFiles: null,
-    fetchStatus: async () => {
+    fetchStatus: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         try {
             const res = await window.inSetu.api.get('git/status');
@@ -22,8 +22,10 @@ export const GitStore = createExtensionStore('Git', {
                 const data = await res.json();
                 GitStore.setState({ reposStatus: data.repos || {} });
             }
-        } catch(e) { console.error("Failed to fetch git status", e); }
-    }
+        } catch(e) { 
+            console.error("Failed to fetch git status", e); 
+        }
+    })
 });
 window.inSetu.stores.Git = GitStore;
 export async function generateDiffs(force = false) {
@@ -52,7 +54,7 @@ export async function generateDiffs(force = false) {
                 diffJobMessage: null,
                 diffJobError: null
             });
-            window.dispatchEvent(new CustomEvent('insetu:git:diffs-refreshed'));
+            window.inSetu.events.emit('insetu:git:diffs-refreshed');
         } catch (error) {
             gitStoreObj.setState({ activeDiffJobId: null, diffJobError: error.message });
         }
@@ -158,10 +160,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
             if (!payload || !payload.mutations) return;
             const { dirtyDiffRepos } = GitStore.getState();
             const newDirty = new Set(dirtyDiffRepos);
-
             const reposChanged = payload.mutations.some(m => {
                 if (!m.filepath) return false;
-                const repo = m.filepath.split('/')[0];
+                const { repo } = window.inSetu.utils.parseURI(m.filepath);
                 if (repo) {
                     newDirty.add(repo);
                     return true;
@@ -227,7 +228,7 @@ disconnectedCallback() {
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
                 try { await this.compileSystem(); } catch (e) {}
-                window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } }));
+                this.dispatch('insetu:git:generate-diffs', { force: true });
             },
             onError: (err) => alert(`❌ Push failed:\n\n${err.message}`)
         });
@@ -284,7 +285,7 @@ disconnectedCallback() {
                 newDirty.add("ALL");
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
-                this.compileSystem().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
+                this.compileSystem().then(() => this.dispatch('insetu:git:generate-diffs', { force: true }));
             },
             onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
         });
@@ -305,7 +306,7 @@ disconnectedCallback() {
                 newDirty.add("ALL");
                 GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
-                this.compileSystem().then(() => window.dispatchEvent(new CustomEvent('insetu:git:generate-diffs', { detail: { force: true } })));
+                this.compileSystem().then(() => this.dispatch('insetu:git:generate-diffs', { force: true }));
             },
             onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
         });

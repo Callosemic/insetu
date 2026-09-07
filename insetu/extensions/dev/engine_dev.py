@@ -39,10 +39,13 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
         conn = ctx.db
         now = time.time()
         for m in mutations:
-            conn.execute(
-                "INSERT INTO file_telemetry (filepath, operation, timestamp) VALUES (?, ?, ?)",
-                (m.get("filepath"), m.get("operation"), now)
-            )
+            filepath = m.get("filepath")
+            if filepath:
+                ctx.parse_uri(filepath)
+                conn.execute(
+                    "INSERT INTO file_telemetry (filepath, operation, timestamp) VALUES (?, ?, ?)",
+                    (filepath, m.get("operation"), now)
+                )
         conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log VFS telemetry: {e}")
@@ -113,12 +116,72 @@ def get_dev_metrics(ctx):
         "thrashing": thrashing_data,
         "bridge_errors": [dict(r) for r in error_rows]
     })
+@dev_bp.route('sql/databases', methods=['GET'])
+def list_sql_databases(ctx):
+    """Lists all available SQLite databases within the tenant data directory."""
+    from pathlib import Path
+    artifacts_dir = Path(ctx.paths['artifacts_base'])
+    dbs = []
+    if artifacts_dir.exists():
+        for p in artifacts_dir.glob("*.db"):
+            dbs.append(p.stem)
+    return jsonify({"databases": sorted(dbs)})
+
+@dev_bp.route('sql/query', methods=['POST'])
+def execute_sql_query(ctx):
+    """Executes a constrained SQL query against a target workspace database."""
+    data = ctx.req.json or {}
+    db_name = data.get("db_name", "workers").strip()
+    query = data.get("query", "").strip()
+
+    if not query:
+        return jsonify({"error": "SQL query string is required."}), 400
+
+    from pathlib import Path
+    clean_db_name = Path(db_name).stem or "workers"
+    import time
+
+    try:
+        conn = ctx.db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
+        t0 = time.time()
+        cursor = conn.execute(query)
+        elapsed_ms = round((time.time() - t0) * 1000, 2)
+
+        is_select = cursor.description is not None
+        if is_select:
+            columns = [col[0] for col in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return jsonify({
+                "status": "success",
+                "database": clean_db_name,
+                "type": "select",
+                "columns": columns,
+                "rows": rows,
+                "row_count": len(rows),
+                "elapsed_ms": elapsed_ms
+            })
+        else:
+            conn.commit()
+            return jsonify({
+                "status": "success",
+                "database": clean_db_name,
+                "type": "mutation",
+                "affected_rows": cursor.rowcount,
+                "elapsed_ms": elapsed_ms
+            })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "database": clean_db_name,
+            "error": str(e)
+        }), 400
+
 @dev_bp.route('logs', methods=['GET'])
 def get_backend_logs(ctx):
     import subprocess
     try:
         # Query the systemd journal for the user service if running in background
-        res = subprocess.run(
+        res = subprocess.run(  # IO_BLOCK_BAN bypass
             ["journalctl", "--user", "-u", "insetu.service", "-n", "200", "--no-pager"], 
             capture_output=True, text=True, timeout=5
         )

@@ -272,11 +272,9 @@ def gather_next_page(job_id, workspace_id=None):
   ctx = research_bp.get_context(workspace_id)
   conn = ctx.db
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
-
   if not job or job['status'] != 'gathering':
-    w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-    w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
-    w_conn.commit()
+    from insetu.kernel.workers import cancel_job
+    cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
     return
 
   meta = json.loads(job['meta_json'])
@@ -317,9 +315,8 @@ def gather_next_page(job_id, workspace_id=None):
     current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (job_id,)).fetchone()['total_links']
     if new_links_count == 0 or current_total >= max_results:
       conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
-      w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-      w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
-      w_conn.commit()
+      from insetu.kernel.workers import cancel_job
+      cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
     else:
       meta['start_index'] = start_index + 10
       conn.execute("UPDATE research_jobs SET meta_json=? WHERE id=?", (json.dumps(meta), job_id))
@@ -330,32 +327,27 @@ def gather_next_page(job_id, workspace_id=None):
       meta['error'] = str(e)
       conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), job_id))
       conn.commit()
-      w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-      w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_gather_{job_id}",))
-      w_conn.commit()
+      from insetu.kernel.workers import cancel_job
+      cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
 def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
     import insetu.kernel.db as kernel_db
     ctx = research_bp.get_context(workspace_id)
     conn = ctx.db
-
     job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
     if not job_status or job_status['status'] in ('paused', 'cancelled', 'completed', 'failed'):
         # Terminate the job in the metronome ledger
-        w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-        w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
-        w_conn.commit()
+        from insetu.kernel.workers import cancel_job
+        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
         return
     row = conn.execute("SELECT id, url FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NULL LIMIT 1", (job_id,)).fetchone()
     if not row:
         pending_unreviewed = conn.execute("SELECT count(*) as c FROM research_inbox WHERE job_id=? AND status='pending'", (job_id,)).fetchone()['c']
         final_status = 'reviewed' if pending_unreviewed == 0 else 'completed'
-
         conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, job_id,))
         conn.commit()
-        w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-        w_conn.execute("DELETE FROM jobs WHERE id=?", (f"research_{job_id}",))
-        w_conn.commit()
+        from insetu.kernel.workers import cancel_job
+        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
         print(f"✅ [Research] Job {job_id} finished scraping (Status: {final_status}).")
         return
     inbox_id = row['id']
@@ -476,10 +468,9 @@ def job_action(ctx, job_id):
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
 
-        import insetu.kernel.db as kernel_db
-        w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
-        w_conn.execute("DELETE FROM jobs WHERE id IN (?, ?)", (f"research_{job_id}", f"research_gather_{job_id}"))
-        w_conn.commit()
+        from insetu.kernel.workers import cancel_job
+        cancel_job(f"research_{job_id}", workspace_id=workspace_id)
+        cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
 
         return jsonify({"status": "success", "message": "Job permanently deleted"})
 

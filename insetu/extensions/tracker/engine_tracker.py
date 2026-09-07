@@ -34,23 +34,25 @@ DEFAULT_KANBAN_PROFILES = []
 DEFAULT_PARENT_TABS = [
     {"id": "tasks", "label": "Tasks"}
 ]
+def _normalize_status(raw_status, fallback="open"):
+    if not raw_status: return fallback
+    s = str(raw_status).lower()
+    if "active" in s: return "active"
+    if "clos" in s: return "closed"
+    if "archiv" in s: return "archived"
+    if "log" in s: return "logged"
+    if "template" in s: return "template"
+    return fallback
 
-def _parse_list_field(raw_val):
-    """Helper to safely parse comma-separated strings or JSON arrays into a standardized JSON string."""
-    try:
-        if isinstance(raw_val, list):
-            return json.dumps([str(d).strip() for d in raw_val if str(d).strip()])
-        elif isinstance(raw_val, str) and raw_val.startswith('['):
-            # Ensure valid JSON, then re-serialize to normalize spacing
-            return json.dumps(json.loads(raw_val))
-        elif isinstance(raw_val, str):
-            return json.dumps([d.strip() for d in raw_val.split(',') if d.strip()])
-    except Exception:
-        pass
-    return '[]'
-def _parse_string_enum(raw_val):
-    """Helper to safely parse and normalize string enumerations like priority and size."""
-    return str(raw_val).upper() if raw_val and str(raw_val).lower() not in ('null', 'none', '') else ''
+def _canonicalize_repo(ctx, repo_name):
+    if not repo_name or str(repo_name).lower() in ('null', 'none', ''):
+        return 'unknown'
+    repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
+    for r in repos:
+        if r.lower() == str(repo_name).lower():
+            return r
+    return str(repo_name)
+
 DEFAULT_GLOBAL_VIEWS = [
     { "_uuid": "sys_v1", "id": "epics", "label": "🎯 Epics", "target_tier": 1, "layout": "stacked", "filters": { "ticket_types": "epic, campaign", "statuses": "open, active" }, "repo_strategy": "global", "explicit_repos": [] },
     { "_uuid": "sys_v2", "id": "sprints", "label": "📦 Sprints", "target_tier": 2, "layout": "stacked", "filters": { "ticket_types": "sprint, article, video", "statuses": "open, active" }, "repo_strategy": "global", "explicit_repos": [] },
@@ -130,6 +132,17 @@ def schedule_tracker_archiving(workspace_id=None, **kwargs):
     # Schedule background archiving to run silently every 1 hour
     from insetu.kernel.workers import submit_job
     submit_job(f"trk_arch_{workspace_id}", "tracker", "archive_stale_task", interval_ms=3600000, jitter_ms=300000, workspace_id=workspace_id)
+
+    # Initialize hardware-accelerated query indexes on the tickets ledger
+    ctx = tracker_bp.get_context(workspace_id)
+    try:
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_repo ON tracker_tickets(repo)")
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_status ON tracker_tickets(status)")
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_tier ON tracker_tickets(tier)")
+        ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_sub_bucket ON tracker_tickets(sub_bucket)")
+        ctx.db.commit()
+    except Exception:
+        pass
 @hooks.on('vfs_mutated')
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
@@ -140,19 +153,22 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
         filepath = m.get("filepath", "")
         op = m.get("operation")
 
-        if ".tracker/" in filepath and filepath.endswith(".md"):
+        repo_dir, clean_rel = ctx.parse_uri(filepath)
+        canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
+
+        if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
             if op == "save":
-                abs_path = ctx.resolve_path(filepath)
+                abs_path = ctx.resolve_path(canonical_rel_path)
                 if os.path.exists(abs_path):
-                    _parse_and_upsert_ticket(abs_path, filepath, workspace_id)
+                    _parse_and_upsert_ticket(abs_path, canonical_rel_path, workspace_id)
                     # Offload single-file AST enforcement to prevent synchronous write-blocking
-                    ctx.jobs.submit("enforce_tickets_task", specific_file=filepath)
+                    ctx.jobs.submit("enforce_tickets_task", specific_file=canonical_rel_path)
             elif op == "delete":
-                ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (filepath,))
+                ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (canonical_rel_path,))
                 ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
-    from insetu.core.utils_core import parse_frontmatter
+    from insetu.core.utils_core import parse_frontmatter, clean_date_str, parse_list_field, parse_string_enum
     ctx = tracker_bp.get_context(workspace_id)
     try:
         content = ctx.vfs.read(rel_path)
@@ -165,14 +181,12 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
         title = yaml_data.get('title', filename)
         t_id = yaml_data.get('id', "UNKNOWN")
         created_at = yaml_data.get('created_at', "0000-00-00T00:00:00")
+        created_at = clean_date_str(yaml_data.get('created_at')) or yaml_data.get('created_at', "0000-00-00T00:00:00")
+        closed_at = clean_date_str(yaml_data.get('closed_at'))
+        delivery_date = clean_date_str(yaml_data.get('delivery_date'))
 
-        closed_at = yaml_data.get('closed_at')
-        if str(closed_at).lower() == 'null': closed_at = None
-
-        delivery_date = yaml_data.get('delivery_date')
-        if str(delivery_date).lower() == 'null': delivery_date = None
         sub_bucket = yaml_data.get('sub_bucket', "None")
-        tags = _parse_list_field(yaml_data.get('tags', '[]'))
+        tags = parse_list_field(yaml_data.get('tags', '[]'))
 
         desc = body
         if desc.startswith('## Description'):
@@ -181,32 +195,27 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
         if inferred.endswith("s"): inferred = inferred[:-1]
 
         ticket_type = yaml_data.get('type', inferred if inferred else "task").lower()
-        status = yaml_data.get('status')
-        if not status:
-            if "/open/" in rel_path: status = "open"
-            elif "/active/" in rel_path: status = "active"
-            elif "/closed/" in rel_path: status = "closed"
-            elif "/archived/" in rel_path: status = "archived"
-            elif "/log/" in rel_path: status = "logged"
-            elif "/template/" in rel_path: status = "template"
-            else: status = "unknown"
-        else:
-            status = status.lower()
-            if "active" in status: status = "active"
-            elif "clos" in status: status = "closed"
-            elif "archiv" in status: status = "archived"
-            elif "log" in status: status = "logged"
-            elif "template" in status: status = "template"
-            else: status = "open"
-        repo = yaml_data.get('repo', rel_path.split('/')[0] if '/' in rel_path else "unknown")
+        inferred_status = "unknown"
+        if "/open/" in rel_path: inferred_status = "open"
+        elif "/active/" in rel_path: inferred_status = "active"
+        elif "/closed/" in rel_path: inferred_status = "closed"
+        elif "/archived/" in rel_path: inferred_status = "archived"
+        elif "/log/" in rel_path: inferred_status = "logged"
+        elif "/template/" in rel_path: inferred_status = "template"
+
+        status = _normalize_status(yaml_data.get('status'), fallback=inferred_status)
+
+        repo_dir, _ = ctx.parse_uri(rel_path)
+        raw_repo = yaml_data.get('repo') or repo_dir or "unknown"
+        repo = _canonicalize_repo(ctx, raw_repo)
         tier = yaml_data.get('tier')
         if tier is None:
             tier = _resolve_tier(ctx, repo, ticket_type)
         parent_id = yaml_data.get('parent_id') or yaml_data.get('parent')
         if str(parent_id).lower() in ('null', 'none', ''): parent_id = None
-        depends_on = _parse_list_field(yaml_data.get('depends_on', '[]'))
-        priority = _parse_string_enum(yaml_data.get('priority'))
-        size = _parse_string_enum(yaml_data.get('size'))
+        depends_on = parse_list_field(yaml_data.get('depends_on', '[]'))
+        priority = parse_string_enum(yaml_data.get('priority'))
+        size = parse_string_enum(yaml_data.get('size'))
 
         conn = ctx.db
         conn.execute("""
@@ -270,20 +279,10 @@ def inject_tracker_config(cfg, workspace_id=None, **kwargs):
             domain = repo_cfg.get("domain", "Workspaces")
         elif strat == "custom" and custom_val:
             domain = custom_val
-
         repo_dir = repo_cfg.get("repo_dir", "")
-        kanban_repo_map = tracker_cfg.get("kanban_repo_map", {})
-        kanban_profiles = tracker_cfg.get("kanban_profiles", [])
-        schema_id = kanban_repo_map.get(repo_dir, "agile_basic")
+        schema = _get_schema(ctx, repo_dir)
+        valid_types = _get_valid_types(schema)
 
-        active_schemas = SYSTEM_SCHEMAS + kanban_profiles
-        schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
-
-        valid_types = []
-        if schema:
-            for t_key in ["t1_types", "t2_types", "t3_types"]:
-                valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
-        if not valid_types: valid_types = ["todo", "bug", "queue"]
         main_prefixes = []
         closed_prefixes = []
         for vt in valid_types:
@@ -358,17 +357,25 @@ SYSTEM_SCHEMAS = [
         "t3_label": "Tasks", "t3_types": "draft, edit, publish"
     }
 ]
-
-def _resolve_tier(ctx, repo, ticket_type):
-    """DRY Helper: Resolves the integer tier of a ticket based on active Kanban schemas."""
+def _get_schema(ctx, repo):
+    """DRY Helper: Retrieves the active merged schema for a given repository."""
     kanban_repo_map = ctx.settings.get("kanban_repo_map", {})
     kanban_profiles = ctx.settings.get("kanban_profiles", [])
     schema_id = kanban_repo_map.get(repo, "agile_basic")
-
-    # Safely merge System Schemas with the user's Custom Schemas
     active_schemas = SYSTEM_SCHEMAS + kanban_profiles
-    schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
+    return next((s for s in active_schemas if s.get("id") == schema_id), None)
 
+def _get_valid_types(schema):
+    """DRY Helper: Extracts all valid ticket types from a schema."""
+    valid_types = []
+    if schema:
+        for t_key in ["t1_types", "t2_types", "t3_types"]:
+            valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
+    return valid_types or ["todo", "bug", "queue"]
+
+def _resolve_tier(ctx, repo, ticket_type):
+    """DRY Helper: Resolves the integer tier of a ticket based on active Kanban schemas."""
+    schema = _get_schema(ctx, repo)
     if schema:
         t1 = [t.strip().lower() for t in schema.get("t1_types", "").split(",")]
         t2 = [t.strip().lower() for t in schema.get("t2_types", "").split(",")]
@@ -424,13 +431,12 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
     if priority: yaml_data["priority"] = priority.upper()
     if size: yaml_data["size"] = size.upper()
     if parent_id: yaml_data["parent_id"] = parent_id
-    if deps_list: yaml_data["depends_on"] = json.dumps(deps_list)
-    if tags_list: yaml_data["tags"] = json.dumps(tags_list)
+    if deps_list: yaml_data["depends_on"] = deps_list
+    if tags_list: yaml_data["tags"] = tags_list
     if delivery_date: yaml_data["delivery_date"] = delivery_date
-
     content = update_frontmatter(raw_content, yaml_data)
 
-    ticket_path = f"{target_dir}/{filename}"
+    ticket_path = Path(target_dir).joinpath(filename).as_posix()
 
     conn = ctx.db
     conn.execute("""
@@ -442,16 +448,6 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
 
     ctx.vfs.save(ticket_path, content)
     return ticket_path
-def _extract_closed_date(content):
-    """Helper to consistently extract and parse closed_at timestamps from raw ticket YAML."""
-    match = re.search(r"closed_at:\s*([^\n]+)", content)
-    if match and match.group(1).strip() != "null":
-        date_str = match.group(1).strip().strip('\'"')
-        try:
-            return datetime.fromisoformat(date_str).replace(tzinfo=None)
-        except (ValueError, TypeError):
-            return None
-    return None
 @tracker_bp.worker("harmonize_vocab_task")
 def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
     """Background Metronome job to migrate physical Markdown files to new semantic types."""
@@ -484,7 +480,7 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
                 # Recalculate target path
                 from pathlib import Path
                 filename = Path(old_rel_path).name
-                new_rel_path = f"{get_tracker_path(repo, new_type, status)}/{filename}"
+                new_rel_path = Path(get_tracker_path(repo, new_type, status)).joinpath(filename).as_posix()
                 # Reconstruct MaC payload (preserving structure, updating type)
                 from insetu.core.utils_core import update_frontmatter
                 new_content = update_frontmatter(content, yaml_data)
@@ -495,24 +491,25 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
     finally:
         # Release the UI Mutex lock reliably
         ctx.settings.set("tracker_is_migrating", False)
-
-
 def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
-    from insetu.core.utils_core import update_frontmatter, parse_frontmatter
+    from insetu.core.utils_core import update_frontmatter, parse_frontmatter, parse_list_field
 
-    content = ctx.vfs.read(current_rel_path)
+    repo_dir, clean_rel = ctx.parse_uri(current_rel_path)
+    canonical_current_rel = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
+
+    content = ctx.vfs.read(canonical_current_rel)
     if content is None:
-        raise FileNotFoundError(f"Ticket not found: {current_rel_path}")
+        raise FileNotFoundError(f"Ticket not found: {canonical_current_rel}")
 
-    filename = Path(current_rel_path).name
+    filename = Path(canonical_current_rel).name
     yaml_data, body, _ = parse_frontmatter(content)
     # SSOT: Read the active type directly from the file's declarative state
     ticket_type = yaml_data.get("type", "task").lower()
     if new_type: ticket_type = new_type
     if new_status in ["closed", "logged", "archived"]:
         # Evaluate Blockers
-        depends_str = _parse_list_field(yaml_data.get('depends_on', '[]'))
+        depends_str = parse_list_field(yaml_data.get('depends_on', '[]'))
         import json
         for dep in json.loads(depends_str):
             d_repo, d_id = dep.split("/", 1) if "/" in dep else (repo, dep)
@@ -522,14 +519,13 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
 
         if yaml_data.get("closed_at") in ["null", None, ""]:
             yaml_data["closed_at"] = datetime.now().isoformat(timespec='seconds')
-
     yaml_data["status"] = new_status
     if new_type: yaml_data["type"] = new_type
 
     content = update_frontmatter(content, yaml_data)
-    new_rel_path = f"{get_tracker_path(repo, ticket_type, new_status)}/{filename}"
+    new_rel_path = Path(get_tracker_path(repo, ticket_type, new_status)).joinpath(filename).as_posix()
 
-    ctx.vfs.save(new_rel_path, content, data={"delete_source": current_rel_path if current_rel_path != new_rel_path else None})
+    ctx.vfs.save(new_rel_path, content, data={"delete_source": canonical_current_rel if canonical_current_rel != new_rel_path else None})
     tier = _resolve_tier(ctx, repo, ticket_type)
 
     conn = ctx.db
@@ -537,7 +533,7 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
         UPDATE tracker_tickets 
         SET status = ?, filepath = ?, ticket_type = ?, closed_at = ?, tier = ?
         WHERE filepath = ?
-    """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, tier, current_rel_path))
+    """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, tier, canonical_current_rel))
     conn.commit()
 
     return new_rel_path
@@ -559,7 +555,6 @@ def manual_tracker_housekeeping(workspace_id=None, **kwargs):
     """Hydrates Tracker safely after Topology maps the workspace, or on manual refresh."""
     ctx = tracker_bp.get_context(workspace_id)
     ctx.jobs.submit("sync_cache_task")
-
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
     SSOT Enforcer: Sweeps all .tracker directories (or a specific file). 
@@ -567,6 +562,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     If the YAML is missing fields, the physical path infers them -> YAML is rewritten.
     """
     from insetu.core.topology.engine_topology import topology_bp
+    from insetu.core.utils_core import clean_date_str, parse_list_field, parse_string_enum
     ctx = tracker_bp.get_context(workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     cfg = ctx.config
@@ -582,7 +578,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
         valid_buckets_by_repo[r] = buckets
     target_files = []
     if specific_file:
-        target_files.append((specific_file.split('/')[0], specific_file))
+        repo_dir, rel_path = ctx.parse_uri(specific_file)
+        target_files.append((repo_dir, f"{repo_dir}/{rel_path}" if repo_dir else rel_path))
     else:
         from insetu.core.topology.engine_topology import get_topology_files_for_repo
         for current_repo in repos:
@@ -627,26 +624,15 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
 
                 from insetu.core.utils_core import parse_frontmatter, update_frontmatter
                 yaml_data, body, yaml_match = parse_frontmatter(content)
-
                 # Read declarative values or fallback to inferred values if missing
-                raw_repo = yaml_data.get('repo', current_repo)
-                decl_repo = raw_repo if raw_repo in repos else current_repo
+                raw_repo = yaml_data.get('repo')
+                decl_repo = _canonicalize_repo(ctx, raw_repo or current_repo)
                 hallucinated_tags = []
-                if raw_repo != decl_repo and raw_repo and raw_repo.lower() != 'none':
+                if raw_repo and decl_repo and raw_repo.lower() != decl_repo.lower() and raw_repo.lower() != 'none':
                     hallucinated_tags.append(raw_repo.replace(' ', '-').replace('"', ''))
-
                 # Dynamic validation: Clamp AI hallucinations back to the repository's configured vocabulary
-                kanban_repo_map = ctx.settings.get("kanban_repo_map", {})
-                kanban_profiles = ctx.settings.get("kanban_profiles", [])
-                schema_id = kanban_repo_map.get(decl_repo, "agile_basic")
-                active_schemas = SYSTEM_SCHEMAS + kanban_profiles
-                schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
-
-                valid_types = []
-                if schema:
-                    for t_key in ["t1_types", "t2_types", "t3_types"]:
-                        valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
-                if not valid_types: valid_types = ["todo", "bug", "queue"]
+                schema = _get_schema(ctx, decl_repo)
+                valid_types = _get_valid_types(schema)
 
                 # Attempt to rescue sub-bucket categorizations from messy AI-generated folders
                 inferred_sub_bucket = "None"
@@ -665,13 +651,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 else:
                     # Fallback to the primary Tier 3 type if the current type violates the active schema
                     decl_type = valid_types[0]
-                raw_status = yaml_data.get('status', inferred_status).lower()
-                if "active" in raw_status: decl_status = "active"
-                elif "clos" in raw_status: decl_status = "closed"
-                elif "archiv" in raw_status: decl_status = "archived"
-                elif "log" in raw_status: decl_status = "logged"
-                elif "template" in raw_status: decl_status = "template"
-                else: decl_status = "open"
+                decl_status = _normalize_status(yaml_data.get('status'), fallback=inferred_status)
                 decl_id = yaml_data.get('id', filename.replace('.md', ''))
                 decl_title = yaml_data.get('title', filename.replace('.md', ''))
                 # Query the SQLite cache ledger to evaluate historical context metrics
@@ -687,8 +667,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 cache_row = cache_ledger.get(decl_id)
                 if cache_row:
                     db_status = cache_row['status']
-                    db_created_at = cache_row['created_at']
-                    db_closed_at = cache_row['closed_at']
+                    db_created_at = clean_date_str(cache_row['created_at'])
+                    db_closed_at = clean_date_str(cache_row['closed_at'])
                     db_tier = cache_row['tier']
                     db_parent = cache_row['parent_id']
                     db_deps = cache_row['depends_on']
@@ -696,16 +676,16 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     db_size = cache_row['size'] or ""
 
                 # Lock down original creation metrics against LLM omissions or overwrites
+                file_created = clean_date_str(yaml_data.get('created_at'))
                 if db_created_at:
                     decl_created = db_created_at
+                elif file_created:
+                    decl_created = file_created
                 else:
-                    # Fall back to file frontmatter string, or stamp fresh system time if truly new
-                    file_created = yaml_data.get('created_at')
-                    if file_created and file_created.lower() != 'null':
-                        decl_created = file_created
-                    else:
-                        decl_created = datetime.now().isoformat(timespec='seconds')
+                    decl_created = datetime.now().isoformat(timespec='seconds')
+
                 # Enforce the System Clock as the single authority on closure timelines
+                file_closed = clean_date_str(yaml_data.get('closed_at'))
                 if decl_status in ('closed', 'logged', 'archived'):
                     if db_status in ('open', 'active'):
                         # State transition detected (Open -> Closed)! Force system clock to override LLM hallucinations.
@@ -713,13 +693,10 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     elif db_status in ('closed', 'logged', 'archived') and db_closed_at:
                         # Ticket was already closed historically; retain original system record
                         decl_closed = db_closed_at
+                    elif file_closed:
+                        decl_closed = file_closed
                     else:
-                        # db_status is None (Untracked from Git) OR missing date. Trust the file to preserve history.
-                        file_closed = yaml_data.get('closed_at')
-                        if file_closed and file_closed.lower() != 'null':
-                            decl_closed = file_closed
-                        else:
-                            decl_closed = datetime.now().isoformat(timespec='seconds')
+                        decl_closed = datetime.now().isoformat(timespec='seconds')
                 else:
                     decl_closed = 'null'
                 decl_sub = yaml_data.get('sub_bucket')
@@ -737,9 +714,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     if decl_sub and decl_sub.lower() != 'none':
                         hallucinated_tags.append(decl_sub.replace(' ', '-').replace('"', ''))
                     decl_sub = "None"
-
                 # Leverage the centralized parser, then decode to safely append hallucinated tags
-                decl_tags_str = _parse_list_field(yaml_data.get('tags', '[]'))
+                decl_tags_str = parse_list_field(yaml_data.get('tags', '[]'))
                 decl_tags_list = json.loads(decl_tags_str)
 
                 for ht in hallucinated_tags:
@@ -748,9 +724,16 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
                 # Determine if we need to rewrite YAML (fields missing or mismatched)
                 needs_rewrite = (
-                    'repo' not in yaml_data or 'type' not in yaml_data or 
-                    'status' not in yaml_data or yaml_data.get('closed_at', '').lower() != decl_closed.lower() or
-                    yaml_data.get('status') != decl_status or yaml_data.get('type') != decl_type
+                    'repo' not in yaml_data or
+                    yaml_data.get('repo') != decl_repo or
+                    'type' not in yaml_data or
+                    yaml_data.get('type') != decl_type or
+                    'status' not in yaml_data or
+                    yaml_data.get('status') != decl_status or
+                    'tier' not in yaml_data or
+                    int(yaml_data.get('tier', 0)) != int(decl_tier) or
+                    clean_date_str(yaml_data.get('created_at')) != decl_created or
+                    (clean_date_str(yaml_data.get('closed_at')) or 'null') != decl_closed
                 )
                 # Determine intended physical destination based on declarative state
                 intended_dir = get_tracker_path(decl_repo, decl_type, decl_status)
@@ -778,9 +761,9 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     # Extract and preserve structural attributes
                     decl_parent_id = yaml_data.get('parent_id') or yaml_data.get('parent') or db_parent
                     if str(decl_parent_id).lower() in ('null', 'none', ''): decl_parent_id = None
-                    decl_depends_on = _parse_list_field(yaml_data.get('depends_on', db_deps))
-                    decl_priority = _parse_string_enum(yaml_data.get('priority', db_prio))
-                    decl_size = _parse_string_enum(yaml_data.get('size', db_size))
+                    decl_depends_on = parse_list_field(yaml_data.get('depends_on', db_deps))
+                    decl_priority = parse_string_enum(yaml_data.get('priority', db_prio))
+                    decl_size = parse_string_enum(yaml_data.get('size', db_size))
                     # Reconstruct pristine YAML
                     from insetu.core.utils_core import update_frontmatter
                     new_data = {
@@ -791,7 +774,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                         "title": decl_title,
                         "created_at": decl_created,
                         "closed_at": decl_closed,
-                        "sub_bucket": decl_sub
+                        "sub_bucket": decl_sub,
+                        "tier": int(decl_tier)
                     }
                     if decl_priority: new_data["priority"] = decl_priority
                     if decl_size: new_data["size"] = decl_size
@@ -920,21 +904,11 @@ def archive_stale_tickets(workspace_id=None):
     date_grace = datetime.now() - timedelta(days=grace_days)
     date_archive = datetime.now() - timedelta(days=archive_days)
     archived_count = 0
-
-    kanban_repo_map = tracker_cfg.get("kanban_repo_map", {})
-    kanban_profiles = tracker_cfg.get("kanban_profiles", [])
-
     for repo in repos:
-        schema_id = kanban_repo_map.get(repo, "agile_basic")
-        active_schemas = SYSTEM_SCHEMAS + kanban_profiles
-        schema = next((s for s in active_schemas if s.get("id") == schema_id), None)
-
-        valid_types = []
-        if schema:
-            for t_key in ["t1_types", "t2_types", "t3_types"]:
-                valid_types.extend([x.strip().lower() for x in schema.get(t_key, "").split(",") if x.strip()])
-        if not valid_types: valid_types = ["todo", "bug", "queue"]
+        schema = _get_schema(ctx, repo)
+        valid_types = _get_valid_types(schema)
         folders_to_sweep = set([vt if vt.endswith('s') or vt == 'queue' else f"{vt}s" for vt in valid_types])
+        from insetu.core.utils_core import parse_frontmatter, update_frontmatter, clean_date_str
 
         # Sweep 1: Move >grace_period day closed tickets to log
         for folder_type in folders_to_sweep:
@@ -943,13 +917,20 @@ def archive_stale_tickets(workspace_id=None):
                 filename = Path(ws_rel_path).name
                 content = ctx.vfs.read(ws_rel_path)
                 if content:
-                    closed_date = _extract_closed_date(content)
-                    if closed_date and closed_date < date_grace:
-                        content = re.sub(r"status:\s*\"?closed\"?", 'status: "logged"', content)
-                        new_rel_path = f"{repo}/.tracker/log/{filename}"
-                        old_rel_path = f"{repo}/.tracker/{folder_type}/closed/{filename}"
-                        ctx.vfs.save(new_rel_path, content, data={"delete_source": old_rel_path})
-                        archived_count += 1
+                    yaml_data, _, _ = parse_frontmatter(content)
+                    closed_date_str = clean_date_str(yaml_data.get('closed_at'))
+                    if closed_date_str:
+                        try:
+                            closed_date = datetime.fromisoformat(closed_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                            if closed_date < date_grace:
+                                yaml_data['status'] = "logged"
+                                new_content = update_frontmatter(content, yaml_data)
+                                new_rel_path = Path(f"{repo}/.tracker/log").joinpath(filename).as_posix()
+                                ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
+                                archived_count += 1
+                        except Exception:
+                            pass
+
         # Sweep 2: Move >archive_days day logged tickets to archive
         if auto_archive:
             log_dir_rel = f"{repo}/.tracker/log"
@@ -961,13 +942,19 @@ def archive_stale_tickets(workspace_id=None):
 
                 content = ctx.vfs.read(ws_rel_path)
                 if content:
-                    closed_date = _extract_closed_date(content)
-                    if closed_date and closed_date < date_archive:
-                        content = re.sub(r"status:\s*\"?logged\"?", 'status: "archived"', content)
-                        new_rel_path = f"{repo}/.tracker/log/archived/{filename}"
-                        old_rel_path = f"{repo}/.tracker/log/{filename}"
-                        ctx.vfs.save(new_rel_path, content, data={"delete_source": old_rel_path})
-                        archived_count += 1
+                    yaml_data, _, _ = parse_frontmatter(content)
+                    closed_date_str = clean_date_str(yaml_data.get('closed_at'))
+                    if closed_date_str:
+                        try:
+                            closed_date = datetime.fromisoformat(closed_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                            if closed_date < date_archive:
+                                yaml_data['status'] = "archived"
+                                new_content = update_frontmatter(content, yaml_data)
+                                new_rel_path = Path(f"{repo}/.tracker/log/archived").joinpath(filename).as_posix()
+                                ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
+                                archived_count += 1
+                        except Exception:
+                            pass
 
     return archived_count
 @tracker_bp.route('system_schemas', methods=['GET'])
@@ -1026,6 +1013,42 @@ def api_tracker_new(ctx):
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@tracker_bp.route('index', methods=['GET'])
+def api_tracker_index(ctx):
+    """CQRS Aggregation Path: Leverages SQLite json_each to compile distinct tags and buckets in C."""
+    conn = ctx.db
+    try:
+        tag_rows = conn.execute("""
+            SELECT DISTINCT json_each.value 
+            FROM tracker_tickets, json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) 
+            WHERE status != 'archived' AND json_each.value IS NOT NULL AND json_each.value != '' 
+            ORDER BY 1
+        """).fetchall()
+        tags = [r[0] for r in tag_rows]
+
+        bucket_rows = conn.execute("""
+            SELECT DISTINCT sub_bucket 
+            FROM tracker_tickets 
+            WHERE status != 'archived' AND sub_bucket IS NOT NULL AND sub_bucket != 'None' 
+            ORDER BY 1
+        """).fetchall()
+        sub_buckets = [r[0] for r in bucket_rows]
+
+        status_rows = conn.execute("""
+            SELECT status, COUNT(*) 
+            FROM tracker_tickets 
+            WHERE status != 'archived' 
+            GROUP BY status
+        """).fetchall()
+        status_counts = {r[0]: r[1] for r in status_rows}
+
+        return jsonify({
+            "tags": tags,
+            "sub_buckets": sub_buckets,
+            "status_counts": status_counts
+        })
+    except Exception as e:
+        return jsonify({"tags": [], "sub_buckets": [], "status_counts": {}})
 
 @tracker_bp.route('files', methods=['GET'])
 def api_tracker_files(ctx):
@@ -1038,52 +1061,209 @@ def api_tracker_files(ctx):
             return jsonify({"tasks": [], "hydrating": True})
 
         include_archived = ctx.settings.get("include_archived_in_log", False)
-
-        # Ensure proper boolean conversion in case the JSON config stored it as a string
         if isinstance(include_archived, str):
             include_archived = include_archived.lower() == 'true'
 
-        if include_archived:
-            cursor = conn.execute("SELECT * FROM tracker_tickets")
-        else:
-            cursor = conn.execute("SELECT * FROM tracker_tickets WHERE status != 'archived'")
-        tasks = []
-        for row in cursor.fetchall():
-            tags_parsed = []
-            if row['tags']:
-                try:
-                    tags_parsed = json.loads(row['tags'])
-                    if not isinstance(tags_parsed, list):
-                        tags_parsed = [str(tags_parsed)]
-                except Exception:
-                    tags_parsed = [t.strip() for t in str(row['tags']).split(',') if t.strip()]
-            try:
-                depends_on_parsed = json.loads(row['depends_on']) if row['depends_on'] else []
-            except Exception:
-                depends_on_parsed = []
-            tasks.append({
-                "id": row['id'],
-                "repo": row['repo'],
-                "tier": row['tier'],
-                "parentId": row['parent_id'],
-                "dependsOn": depends_on_parsed,
-                "priority": row['priority'] or '',
-                "size": row['size'] or '',
-                "ticket_type": row['ticket_type'],
-                "status": row['status'],
-                "title": row['title'],
-                "description": row['description'],
-                "tags": tags_parsed,
-                "subBucket": row['sub_bucket'],
-                "timestamp": row['created_at'],
-                "closedAt": row['closed_at'],
-                "deliveryDate": row['delivery_date'],
-                "filepath": row['filepath']
-            })
-        return jsonify({"tasks": tasks})
+        # Hardware-Accelerated JSON Construction via SQLite C-Extensions
+        query = """
+            SELECT json_group_array(
+                json_object(
+                    'id', id,
+                    'repo', repo,
+                    'tier', tier,
+                    'parentId', parent_id,
+                    'dependsOn', CASE WHEN json_valid(depends_on) THEN json(depends_on) ELSE json('[]') END,
+                    'priority', COALESCE(priority, ''),
+                    'size', COALESCE(size, ''),
+                    'ticket_type', ticket_type,
+                    'status', status,
+                    'title', title,
+                    'description', description,
+                    'tags', CASE WHEN json_valid(tags) THEN json(tags) ELSE json('[]') END,
+                    'subBucket', sub_bucket,
+                    'timestamp', created_at,
+                    'closedAt', closed_at,
+                    'deliveryDate', delivery_date,
+                    'filepath', filepath
+                )
+            )
+            FROM tracker_tickets
+        """
+        if not include_archived:
+            query += " WHERE status != 'archived'"
+
+        json_result = conn.execute(query).fetchone()[0]
+        if not json_result or json_result == '[{}]': 
+            json_result = '[]'
+
+        # Stream the raw JSON string directly to the client without Python serialization overhead
+        return f'{{"tasks": {json_result}}}', 200, {'Content-Type': 'application/json'}
     except Exception as e:
         print(f"⚠️ [Tracker Error] api_tracker_files failed: {e}")
         return jsonify({"error": str(e)}), 500
+@tracker_bp.worker("restore_metadata_task")
+def _background_restore_metadata(ctx, **kwargs):
+    ctx.jobs.update_progress("Scanning Git history for wiped ticket metadata...")
+    restored_count = restore_ticket_metadata_from_git(workspace_id=ctx.workspace_id)
+    return f"Restored metadata for {restored_count} tickets from Git history."
+
+@tracker_bp.route('restore_metadata', methods=['POST'])
+def api_tracker_restore_metadata(ctx):
+    job_id = ctx.jobs.submit("restore_metadata_task")
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+def restore_ticket_metadata_from_git(workspace_id=None):
+    from insetu.core.topology.engine_topology import get_topology_files_for_repo
+    from insetu.extensions.git.engine_git import execute_git
+    from insetu.core.utils_core import parse_frontmatter, update_frontmatter, clean_date_str, parse_list_field, parse_string_enum, get_earlier_date
+    ctx = tracker_bp.get_context(workspace_id)
+    repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
+    restored_count = 0
+
+    for current_repo in repos:
+        repo_path = ctx.get_repo_path(current_repo)
+        if not os.path.exists(repo_path): continue
+
+        repo_files = get_topology_files_for_repo(workspace_id, current_repo, strip_prefix=False)
+        tracker_files = [f for f in repo_files if '.tracker/' in f and f.endswith('.md')]
+
+        for ws_rel_path in tracker_files:
+            try:
+                content = ctx.vfs.read(ws_rel_path)
+                if not content: continue
+
+                yaml_data, body, _ = parse_frontmatter(content)
+                rel_to_repo = ws_rel_path.split('.tracker/', 1)[1]
+                git_file_path = f".tracker/{rel_to_repo}"
+
+                modified = False
+                curr_repo_yaml = yaml_data.get('repo')
+                canon_repo = _canonicalize_repo(ctx, curr_repo_yaml or current_repo)
+                if curr_repo_yaml != canon_repo:
+                    yaml_data['repo'] = canon_repo
+                    modified = True
+                curr_created = clean_date_str(yaml_data.get('created_at'))
+                curr_closed = clean_date_str(yaml_data.get('closed_at'))
+                curr_delivery = clean_date_str(yaml_data.get('delivery_date'))
+                curr_status = _normalize_status(yaml_data.get('status'), fallback='open')
+                curr_parent = yaml_data.get('parent_id') or yaml_data.get('parent')
+                if str(curr_parent).lower() in ('null', 'none', ''): curr_parent = None
+                curr_deps = json.loads(parse_list_field(yaml_data.get('depends_on', '[]')))
+                curr_prio = parse_string_enum(yaml_data.get('priority'))
+                curr_size = parse_string_enum(yaml_data.get('size'))
+                curr_tags = json.loads(parse_list_field(yaml_data.get('tags', '[]')))
+                curr_sub = yaml_data.get('sub_bucket', 'None')
+                curr_tier = yaml_data.get('tier')
+
+                earliest_created = curr_created
+                earliest_closed = curr_closed
+                earliest_delivery = curr_delivery
+
+                try:
+                    log_res = execute_git(repo_path, ['log', '-p', '--follow', '--', git_file_path], check=False)
+                    git_log_text = log_res.stdout if log_res.returncode == 0 else ""
+
+                    matches = re.findall(r'---\s*\n([\s\S]*?)\n---', git_log_text)
+                    for raw_fm in matches:
+                        old_meta, _, _ = parse_frontmatter(f"---\n{raw_fm}\n---")
+                        old_created = clean_date_str(old_meta.get('created_at'))
+                        if old_created:
+                            earliest_created = get_earlier_date(earliest_created, old_created)
+
+                        old_closed = clean_date_str(old_meta.get('closed_at'))
+                        if old_closed:
+                            earliest_closed = get_earlier_date(earliest_closed, old_closed)
+
+                        old_delivery = clean_date_str(old_meta.get('delivery_date'))
+                        if old_delivery:
+                            earliest_delivery = get_earlier_date(earliest_delivery, old_delivery)
+
+                        old_parent = old_meta.get('parent_id') or old_meta.get('parent')
+                        if not curr_parent and old_parent and str(old_parent).lower() not in ('null', 'none', ''):
+                            yaml_data['parent_id'] = str(old_parent)
+                            curr_parent = str(old_parent)
+                            modified = True
+
+                        old_deps = json.loads(parse_list_field(old_meta.get('depends_on', '[]')))
+                        if not curr_deps and old_deps:
+                            yaml_data['depends_on'] = old_deps
+                            curr_deps = old_deps
+                            modified = True
+
+                        old_prio = parse_string_enum(old_meta.get('priority'))
+                        if not curr_prio and old_prio:
+                            yaml_data['priority'] = old_prio
+                            curr_prio = old_prio
+                            modified = True
+
+                        old_size = parse_string_enum(old_meta.get('size'))
+                        if not curr_size and old_size:
+                            yaml_data['size'] = old_size
+                            curr_size = old_size
+                            modified = True
+
+                        old_sub = old_meta.get('sub_bucket')
+                        if (not curr_sub or curr_sub == 'None') and old_sub and old_sub != 'None':
+                            yaml_data['sub_bucket'] = old_sub
+                            curr_sub = old_sub
+                            modified = True
+
+                        old_tags = json.loads(parse_list_field(old_meta.get('tags', '[]')))
+                        if old_tags:
+                            for ot in old_tags:
+                                if ot not in curr_tags:
+                                    curr_tags.append(ot)
+                                    modified = True
+                            yaml_data['tags'] = curr_tags
+
+                        old_tier = old_meta.get('tier')
+                        if not curr_tier and old_tier:
+                            yaml_data['tier'] = int(old_tier)
+                            curr_tier = int(old_tier)
+                            modified = True
+
+                except Exception as ge:
+                    print(f"Git log parse warning for {ws_rel_path}: {ge}")
+                try:
+                    date_res = execute_git(repo_path, ['log', '--format=%aI', '--reverse', '--', git_file_path], check=False)
+                    first_commit_date = clean_date_str(date_res.stdout.strip().splitlines()[0]) if date_res.returncode == 0 and date_res.stdout.strip() else None
+                    if first_commit_date:
+                        earliest_created = get_earlier_date(earliest_created, first_commit_date)
+                except Exception:
+                    pass
+
+                if curr_status in ('closed', 'logged', 'archived') and not earliest_closed:
+                    try:
+                        date_res = execute_git(repo_path, ['log', '-1', '--format=%aI', '--', git_file_path], check=False)
+                        last_commit_date = clean_date_str(date_res.stdout.strip().splitlines()[0]) if date_res.returncode == 0 and date_res.stdout.strip() else None
+                        if last_commit_date:
+                            earliest_closed = last_commit_date
+                    except Exception:
+                        pass
+
+                if earliest_created and earliest_created != curr_created:
+                    yaml_data['created_at'] = earliest_created
+                    modified = True
+
+                if curr_status in ('closed', 'logged', 'archived') and earliest_closed and earliest_closed != curr_closed:
+                    yaml_data['closed_at'] = earliest_closed
+                    modified = True
+
+                if earliest_delivery and earliest_delivery != curr_delivery:
+                    yaml_data['delivery_date'] = earliest_delivery
+                    modified = True
+
+                if modified:
+                    new_content = update_frontmatter(content, yaml_data)
+                    ctx.vfs.save(ws_rel_path, new_content)
+                    _parse_and_upsert_ticket(ctx.resolve_path(ws_rel_path), ws_rel_path, workspace_id)
+                    restored_count += 1
+
+            except Exception as e:
+                print(f"Error restoring metadata for {ws_rel_path}: {e}")
+
+    ctx.db.commit()
+    return restored_count
+
 @tracker_bp.route('transition', methods=['POST'])
 def api_tracker_transition(ctx):
     data = ctx.req.json

@@ -60,7 +60,6 @@ def _register_flow_compilation_step(workspace_id=None, **kwargs):
 def _background_compile_workflows(ctx, **kwargs):
     ctx.jobs.update_progress("Packing active workflows...")
     if "flow" not in ctx.config.get("extensions", []): return
-
     # Ensure all preceding VFS writes (such as newly generated gather context parts) settle on disk
     ctx.sync_vfs_barrier()
 
@@ -70,7 +69,7 @@ def _background_compile_workflows(ctx, **kwargs):
     from insetu.core.gather.engine_gather import compile_context_payload
     import concurrent.futures
 
-    current_manifest = ctx.manifest
+    current_manifest = ctx.manifest.get("ctx", {})
     manifest_deltas = {}
     def process_batch(batch):
         batch_id = batch.get("id")
@@ -78,11 +77,9 @@ def _background_compile_workflows(ctx, **kwargs):
         includes = batch.get("includes", [])
         target_repos_set = set()
         for i in includes:
-            clean_inc = i.replace("ctx://", "")
-            if '/' in clean_inc:
-                repo_cand = clean_inc.split('/')[0]
-                if repo_cand not in ('contexts', 'diffs', 'prompts'):
-                    target_repos_set.add(repo_cand)
+            repo_cand, _ = ctx.parse_uri(i)
+            if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
+                target_repos_set.add(repo_cand)
 
         base_filename = f"workflow_{batch_id}_context.txt"
 

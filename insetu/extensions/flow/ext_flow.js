@@ -8,7 +8,7 @@ export const FlowStore = createExtensionStore('Flow', {
     batches: [],
     loading: false,
     searchQuery: '',
-    fetchBatches: async () => {
+    fetchBatches: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
         FlowStore.setState({ loading: true });
         try {
@@ -35,7 +35,7 @@ export const FlowStore = createExtensionStore('Flow', {
         } finally {
             FlowStore.setState({ loading: false });
         }
-    }
+    })
 });
 window.inSetu.stores.Flow = FlowStore;
 export class InSetuExtFlow extends InSetuElement {
@@ -193,7 +193,7 @@ export class InSetuExtFlow extends InSetuElement {
     async deleteEditBatch() {
         if (!confirm("Delete this workflow batch?")) return;
         try {
-            const res = await this.api.post('batches/delete', { id: this._editingBatch.id });
+            const res = await this.api.post('batches/delete', { id: this._editingBatch.id }, { collapseKey: `flow:batch:delete:${this._editingBatch.id}` });
             if (res.ok) {
                 FlowStore.setState(s => ({ batches: s.batches.filter(b => b.id !== this._editingBatch.id) }));
                 this._editingBatch = null;
@@ -239,7 +239,7 @@ export class InSetuExtFlow extends InSetuElement {
             if (this._editForm.archivePath) payload.archive_path = this._editForm.archivePath.trim();
         }
         try {
-            const res = await this.api.post('batches/save', payload);
+            const res = await this.api.post('batches/save', payload, { collapseKey: `flow:batch:save:${newId}` });
             if (res.ok) {
                 const currentBatches = FlowStore.getState().batches;
                 const isExisting = currentBatches.some(b => b.id === originalId);
@@ -276,7 +276,9 @@ export class InSetuExtFlow extends InSetuElement {
         const dStr = localISOTime.replace(/-/g, '').replace(/:/g, '').replace('T', '_').split('.')[0];
         const finalPath = this._viewingBatch.response_path.replace('{date}', dStr);
         const allRepos = this.ecosystem.allRepos || [];
-        const isRepoTarget = allRepos.includes(finalPath.split('/')[0]);
+
+        const { repo: responseRepo } = this.utils.parseURI(finalPath);
+        const isRepoTarget = responseRepo && allRepos.includes(responseRepo);
 
         const payload = {
             filepath: isRepoTarget ? finalPath : `${artifactsDir}/${finalPath}`,
@@ -284,7 +286,8 @@ export class InSetuExtFlow extends InSetuElement {
             original_response_path: this._viewingBatch.response_path
         };
         if (this._viewingBatch.archive_path) {
-            const isArchiveRepoTarget = allRepos.includes(this._viewingBatch.archive_path.split('/')[0]);
+            const { repo: archiveRepo } = this.utils.parseURI(this._viewingBatch.archive_path);
+            const isArchiveRepoTarget = archiveRepo && allRepos.includes(archiveRepo);
             payload.archive_path = isArchiveRepoTarget ? this._viewingBatch.archive_path : `${artifactsDir}/${this._viewingBatch.archive_path}`;
         }
 
@@ -423,7 +426,6 @@ export class InSetuExtFlow extends InSetuElement {
                                                             suppress: ['file-edit'], 
                                                             chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}
-                                                        has-actions
                                                         @card-clicked=${() => this.openBatchModal(b)}>
                                                 </insetu-card>
                                             `;

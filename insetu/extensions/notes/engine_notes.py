@@ -41,11 +41,13 @@ def _parse_and_upsert_note(abs_path, rel_path, workspace_id):
     note_id = yaml_data.get('id', uuid.uuid4().hex[:8])
     repo = yaml_data.get('repo', 'global')
     title = yaml_data.get('title', Path(rel_path).name)
-    tags_raw = yaml_data.get('tags', '[]')
-    
+    tags_raw = yaml_data.get('tags', [])
+
     try:
-        if isinstance(tags_raw, str) and tags_raw.startswith('['):
-            tags = tags_raw
+        if isinstance(tags_raw, list):
+            tags = json.dumps([str(t).strip() for t in tags_raw if str(t).strip()])
+        elif isinstance(tags_raw, str) and tags_raw.startswith('['):
+            tags = json.dumps(json.loads(tags_raw))
         else:
             tags = json.dumps([t.strip() for t in str(tags_raw).split(',') if t.strip()])
     except Exception:
@@ -67,6 +69,7 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     ctx = notes_bp.get_context(workspace_id)
     for m in mutations:
         filepath = m.get("filepath", "")
+        ctx.parse_uri(filepath)
         if ".insetu/notes/" in filepath and filepath.endswith(".md"):
             if m.get("operation") == "save":
                 abs_path = ctx.resolve_path(filepath)
@@ -104,7 +107,6 @@ def api_notes_new(ctx):
     title = data.get("title", "Untitled Note")
     filename = f"{slugify(title)}-{note_id}.md"
     filepath = f".insetu/notes/{filename}"
-    
     yaml_data = {
         "id": note_id,
         "title": title.replace('"', "'"),
@@ -113,29 +115,54 @@ def api_notes_new(ctx):
         "created_at": datetime.now().isoformat(timespec='seconds'),
         "updated_at": datetime.now().isoformat(timespec='seconds')
     }
-    
+
     tags = data.get("tags", "")
     if tags:
-        yaml_data["tags"] = json.dumps([t.strip() for t in tags.split(',') if t.strip()])
+        yaml_data["tags"] = [t.strip() for t in tags.split(',') if t.strip()]
     raw_content = f"## {title}\n\n"
     content = update_frontmatter(raw_content, yaml_data)
 
     # Save via VFS to trigger the Cartographer and Event Ledger
     ctx.vfs.save(filepath, content)
     return jsonify({"status": "success", "filepath": filepath})
-@hooks.on('compile_contexts')
-def inject_notes_context(manifest, workspace_id=None, **kwargs):
-    """Injects the notes library into the RAG manifest dynamically."""
+@hooks.on('gather_declare_topology')
+def declare_notes_topology(target_repos=None, ledger_events=None, workspace_id=None, **kwargs):
+    """Declares the notes library to the Gather engine for centralized chunking and context compilation."""
     ctx = notes_bp.get_context(workspace_id)
     notes = ctx.db.get_all("notes_ledger")
-    if notes:
-        files = [n['filepath'] for n in notes]
-        manifest["notes_context.txt"] = {
-            "files": files,
-            "meta": {
-                "type": "note",
-                "title": "Notes Library",
-                "domain": "Documentation & Notes",
-                "desc": "User generated notes and documentation."
-            }
-        }
+    if not notes: 
+        return []
+
+    def gen_cb():
+        header_str = "============================================================\n"
+        header_str += "INSETU TOPOLOGY (Notes Library)\n"
+        header_str += "============================================================\n\n"
+
+        text_blocks = []
+        files = []
+        for n in notes:
+            content = ctx.vfs.read(n['filepath'])
+            if content:
+                text_blocks.append(f"============================================================\n>>> FILE: {n['filepath']}\n============================================================\n\n{content}\n\n")
+                files.append(n['filepath'])
+
+        return {"header": header_str, "blocks": text_blocks, "files": files}
+
+    def rec_cb(events):
+        # Differential RAG triggers if any event touches the notes domain
+        for e in events:
+            if ".insetu/notes/" in e.get('filepath', ''):
+                return gen_cb()
+        return None
+
+    return [{
+        "filename": "notes_context.txt",
+        "meta": {
+            "type": "note",
+            "title": "Notes Library",
+            "domain": "Documentation & Notes",
+            "desc": "User generated notes and documentation."
+        },
+        "generator_callback": gen_cb,
+        "recall_callback": rec_cb
+    }]

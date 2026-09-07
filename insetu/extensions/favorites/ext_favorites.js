@@ -42,10 +42,9 @@ export const FavoritesStore = createExtensionStore('Favorites', {
             type, 
             name 
         };
-
         FavoritesStore.setState(state => ({ items: [...state.items, newItem] }));
         try {
-            const res = await window.inSetu.api.post('favorites/add', newItem);
+            const res = await window.inSetu.api.post('favorites/add', newItem, { collapseKey: `favorites:add:${targetPath}` });
             if (res.ok) {
                 const data = await res.json().catch(()=>({}));
                 if (data.job_id !== 'offline_queue') {
@@ -63,9 +62,8 @@ export const FavoritesStore = createExtensionStore('Favorites', {
         FavoritesStore.setState(state => ({
             items: state.items.filter(item => item.id !== id)
         }));
-
         try {
-            const res = await window.inSetu.api.post(`favorites/delete/${id}`, {});
+            const res = await window.inSetu.api.post(`favorites/delete/${id}`, {}, { collapseKey: `favorites:delete:${id}` });
             if (!res.ok) {
                 FavoritesStore.getState().fetchFavorites();
                 console.error("Failed to safely delete favorite token on disk.");
@@ -185,7 +183,8 @@ export class InSetuExtFavorites extends InSetuElement {
                 ${this.items.map(item => {
                     const isContext = item.type === 'file' && (item.path.startsWith('ctx://') || item.path.endsWith('_context.txt') || item.path.endsWith('_diffs.txt') || item.path.includes('workflow_'));
                     const eType = item.type === 'folder' ? 'folder' : (isContext ? 'file:context' : 'file');
-                    const displayPath = item.path.replace(/^vfs:\/\//, '');
+                    const { repo, relativePath } = this.utils.parseURI(item.path);
+                    const displayPath = repo ? `${repo}/${relativePath}` : relativePath;
                     return html`
                     <insetu-card
                         .filename=${displayPath}
@@ -194,7 +193,7 @@ export class InSetuExtFavorites extends InSetuElement {
                         icon=${item.type === 'folder' ? '📁' : (isContext ? '📦' : '📄')}
                         intentColor="var(--intent-highlight)"
                         entityType=${eType}
-                        .entityData=${{ filepath: item.path, repoDir: displayPath.split('/')[0], isFS: !isContext }}
+                        .entityData=${{ filepath: item.path, repoDir: repo, isFS: !isContext }}
                         @card-clicked=${() => this._navigateToFavorite(item)}>
                     </insetu-card>
                     `;

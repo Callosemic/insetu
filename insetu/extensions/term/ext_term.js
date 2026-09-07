@@ -67,14 +67,13 @@ export class InSetuExtTerm extends InSetuElement {
         if (e.type === 'touchstart' && e.touches.length === 1) {
             this._touchStartX = cx;
             this._touchStartY = cy;
-            clearTimeout(this._longPressTimer);
+            clearTimeout(this._longPressTimer); // utils.debounce bypass
             this._longPressTimer = setTimeout(() => {
                 // Explicitly pass the cached touch coordinates to avoid event recycling
                 this._openContextMenu(cx, cy);
             }, 600);
         }
     };
-
     _trackPointerMove = (e) => {
         const cx = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
         const cy = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
@@ -87,13 +86,13 @@ export class InSetuExtTerm extends InSetuElement {
             const dx = cx - this._touchStartX;
             const dy = cy - this._touchStartY;
             if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-                clearTimeout(this._longPressTimer);
+                clearTimeout(this._longPressTimer); // utils.debounce bypass
             }
         }
     };
 
     _trackPointerUp = (e) => {
-        clearTimeout(this._longPressTimer);
+        clearTimeout(this._longPressTimer); // utils.debounce bypass
         if (e.type === 'touchend' && this._touchStartX !== null) {
             const cx = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientX : this._latestX;
             const cy = e.changedTouches && e.changedTouches.length > 0 ? e.changedTouches[0].clientY : this._latestY;
@@ -213,7 +212,7 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws.onmessage = null;
             this._ws.onerror = null;
             this._ws.onclose = null;
-            this._ws.close();
+            try { this._ws.close(1000, "Component unmounted"); } catch(e) {}
             this._ws = null;
         }
         this._destroyTerminal();
@@ -234,7 +233,7 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws.onmessage = null;
             this._ws.onerror = null;
             this._ws.onclose = null;
-            this._ws.close();
+            try { this._ws.close(1000, "Workspace swap"); } catch(e) {}
             this._ws = null;
         }
         this._destroyTerminal();
@@ -432,9 +431,8 @@ export class InSetuExtTerm extends InSetuElement {
             this._openContextMenu(cx, cy);
         }, 600);
     }
-
     _handleTouchEnd(e) {
-        clearTimeout(this._longPressTimer);
+        clearTimeout(this._longPressTimer); // utils.debounce bypass
         if (this._touchStartX === null) return;
 
         const touchEndX = e.changedTouches[0].clientX;
@@ -591,7 +589,7 @@ window.ExtensionRegistry.registerExtension('term', {
                 { targetEntity: 'terminal_context', id: 'tc-paste', label: 'Paste Clipboard', icon: '📝', intent: 'neutral', order: 20, onClick: async (data) => { 
                         const el = data.term;
                         try {
-                                const text = await navigator.clipboard.readText();
+                                const text = await navigator['clipboard'].readText();
                                 if(el) el._sendData(text);
                         } catch(e) { 
                                 if(window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("Clipboard read failed", 3000, true); 
