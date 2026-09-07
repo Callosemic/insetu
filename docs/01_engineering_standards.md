@@ -11,13 +11,13 @@
 ### Tier 1: Kernel & Micro-Kernel Substrate (`insetu.kernel` / `sutram` / `yenvui`)
 * **`insetu.kernel` (Python Kernel):** Thread-local SQLite connection pooling, non-blocking VFS commit worker queue, background worker metronome scheduler, priority event bus (`hooks.py`), and security token gatehouse (Note: Extraction into standalone package `akasa` is planned).
 * **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and URL hash routing.
-
-### Tier 2: Core Substrate Engines (The Four Core Engines)
-The Tier 2 Core Substrate consists strictly of four core engines that provide essential local-first AI Developer OS infrastructure:
+### Tier 2: Core Substrate Engines (The Core Engines)
+The Tier 2 Core Substrate consists of core engines that provide essential local-first AI Developer OS infrastructure:
 1. **Gather (`engine_gather.py`):** RAG context payload compiler, topology declaration broker, and differential context synthesizer.
 2. **Yomama Sync Bridge (`engine_bridge.py`, `bridge_vfs.py`, `bridge_fuzzy.py`):** Multi-file `SEARCH`/`REPLACE` block parser, relative indentation healer, pre-flight AST syntax bouncer, and transactional patch ledger.
 3. **Virtual File System (`vfs.py`, `routes_fs.py`):** Asynchronous commit pipeline, POSIX path sandbox resolution, and mutation event ledger logging.
 4. **Cartographer (`cartographer.py`):** Repository topographer and deterministic `CODE_INDEX.md` architectural map generator.
+5. **Offline Engine (`engine_offline.py`, `offline_ui.js`):** Stale-While-Revalidate GET request mirroring, IndexedDB outbox queueing, dead-letter queue, and two-stage outbox reconciler.
 
 ### Tier 3: Domain Extensions
 All other feature modules are Tier 3 Domain Extensions that plug into the core substrate via the `InSetuExtension` SDK and the synchronous/asynchronous Event Bus (`hooks` / `window.inSetu.events`):
@@ -65,8 +65,9 @@ inSetu operates directly on the user's hard drive. However, relying purely on ra
 ## 3. The Virtual File System (VFS) & Atomic Commits
 The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to disk creates half-patched, uncompilable codebases if an LLM hallucinates halfway through a transmission.
 * **The VFS Matrix**: All incoming patch payloads must be staged entirely within an in-memory Virtual File System. 
-* **The Pre-Flight Syntax Guardrail**: Before any file is flushed to physical disk, the VFS must run native syntax validation (e.g., Python AST, native V8 JS parsing) against the *completed* in-memory matrices. 
-* **Atomic Rollbacks**: Transactions are atomic. If a multi-file patch is received and a single file fails syntax validation or diff anchoring, the entire VFS transaction is aborted. 
+* **The Pre-Flight Syntax Guardrail**: Before any file is flushed to physical disk, the VFS must run native syntax validation (e.g., Tree-Sitter AST validation with fallback to Python AST or Node V8 JS parsing) against the *completed* in-memory matrices. 
+* **Optimistic Concurrency Control (OCC)**: File save mutations accepting an optional `base_hash` parameter verify physical disk parity prior to overwrite; if an out-of-band modification is detected, the transaction yields a localized `.conflict_<timestamp>` fallback file and returns HTTP 409 Conflict.
+* **Atomic Rollbacks**: Transactions are atomic. If a multi-file patch is received and a single file fails syntax validation or diff anchoring, the entire VFS transaction is aborted.  
 * **The Semantic Strategy Pattern**: The bridge must route patches dynamically based on syntax reality:
     * **Strict Engine**: `.py` and `.yaml` files use strict statistical ratio math and absolute step delta matching. Whitespace is law.
     * **Structural Engine**: `.js` and `.ts` ignore line breaks and pipe outputs through AST formatters (e.g., Prettier).

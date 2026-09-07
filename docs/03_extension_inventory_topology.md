@@ -142,7 +142,6 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * UI Hooks: Sub-navigation Tab injection (`ctrl` -> `update`), `zone:vfs-mutated` for debounced repo status refresh.
     * Event Bus: Emits `insetu:git:generate-diffs` on version scaffold/tag creation.
-
 ### P. Offline Engine & HTTP Gateway (`offline_ui.js` & `api.js`)
 * **Status:** Core Engine / Active Extension (SDK V2).
 * **Role:** IndexedDB outbox mutation queueing, Stale-While-Revalidate blob caching, offline telemetry logging, and per-repository pre-caching.
@@ -151,6 +150,16 @@ These are fully built and compliant extensions currently operating within the sy
 * **Injection Surfaces:**
     * Network Interceptor: Wraps `window.inSetu.api` via `OfflineHttpProvider`.
     * UI Slots: Primary Navigation Tab (`offline`) housing `ledger` and `log` sub-tabs, and global storage modal.
+
+### Q. Cronic Job Manager (`engine_cronic.py` & `ext_cronic.js`)
+* **Status:** Active Extension (SDK V2).
+* **Role:** Schedules Python/bash scripts as system cron tasks, manages log rotation, and handles crontab drift healing.
+* **Dependencies (`__depends__`):** `None`
+* **Data Containment:** `{ARTIFACTS_BASE}/cronic.db` (`cronic_jobs` table) and `.insetu/data/cronic_*.log` execution logs.
+* **Injection Surfaces:**
+    * Core Hooks: `@hooks.on('workspace_boot')` for crontab drift healing and daily log sweeping.
+    * UI Slots: Primary Navigation Tab (`cronic` -> `main`).
+    * Polymorphic Cards: Registers `cronic-schedule-file` entity action for `.py` and `.sh` files.
 
 ---
 
