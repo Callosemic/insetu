@@ -5,10 +5,13 @@ status: "open"
 id: "INS-TODO-20260713_1327_WORKER_LOG_ROTATION"
 title: "Transition worker execution trace prints to structured log rotation engine"
 created_at: "2026-07-13T13:27:00"
-closed_at: null
+closed_at: 'null'
 sub_bucket: "None"
 delivery_date: "2026-08-23"
-tags: ["Backend", "Tech Debt", "Logging"]
+tags:
+  - Backend
+  - Tech Debt
+  - Logging
 ---
 
 ## Description

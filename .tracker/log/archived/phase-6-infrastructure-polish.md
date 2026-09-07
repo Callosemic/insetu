@@ -4,11 +4,13 @@ type: "todo"
 status: "archived"
 id: phase-6-infrastructure-polish
 title: "Phase 6: Infrastructure Polish (Process Management)"
-created_at: 2026-07-02T09:18:30
-closed_at: 2026-07-02T23:51:00
+created_at: '2026-07-02T09:18:30'
+closed_at: '2026-07-02T23:51:00'
 sub_bucket: "None"
-tags: ["Architecture"]
+tags:
+  - Architecture
 ---
+
 # Infrastructure Polish
 
 Replace the interactive terminal multiplexer with a deterministic process manager.

@@ -4,10 +4,14 @@ repo: "insetu"
 type: "queue"
 status: "open"
 title: "Generalize Spinner and Empty-State Components into Vendorized Sutram Primitives"
-created_at: null
-closed_at: null
-sub_bucket: "UI"
-tags: ["Sutram", "UI", "Refactor", "Primitives"]
+created_at: '2026-08-06T02:18:32-07:00'
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - Sutram
+  - UI
+  - Refactor
+  - Primitives
 ---
 
 ## Description

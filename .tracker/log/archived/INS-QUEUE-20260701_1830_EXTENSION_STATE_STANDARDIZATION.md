@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260701_1830_EXTENSION_STATE_STANDARDIZATION
 title: "Standardization: Replicate ext_citations Vanilla Zustand Architecture across Remaining Extensions"
-created_at: 2026-07-01T18:30:00
-closed_at: 2026-07-04T17:30:00
+created_at: '2026-07-01T18:30:00'
+closed_at: '2026-07-04T17:30:00'
 sub_bucket: "None"
 ---
 

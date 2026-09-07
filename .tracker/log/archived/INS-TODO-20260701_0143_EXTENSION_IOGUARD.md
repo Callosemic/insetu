@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260701_0143_EXTENSION_IOGUARD
 title: "Enforce Extension API Compliance: Guard File Writes via VFS Substrate"
-created_at: 2026-07-01T01:43:01
-closed_at: 2026-07-02T23:23:49
+created_at: '2026-07-01T01:43:01'
+closed_at: '2026-07-02T23:23:49'
 sub_bucket: "None"
 ---
 

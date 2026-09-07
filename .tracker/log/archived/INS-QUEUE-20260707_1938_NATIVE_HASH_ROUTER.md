@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260707_1938_NATIVE_HASH_ROUTER
 title: "Zero-Bundler SPA Router (Native Hash Routing) for Virtual Pathing"
-created_at: 2026-07-07T19:38:26
-closed_at: 2026-07-25T02:17:51
+created_at: '2026-07-07T19:38:26'
+closed_at: '2026-07-25T02:17:51'
 sub_bucket: "None"
 ---
 

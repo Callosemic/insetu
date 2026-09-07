@@ -4,11 +4,16 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260710_1221_MANIFEST_CQRS
 title: "Migrate VFS Manifest to SQLite CQRS and Delta Payloads"
-created_at: 2026-07-10T12:21:34
-closed_at: 2026-08-04T10:24:00
+created_at: '2026-07-10T12:21:34'
+closed_at: '2026-08-04T10:24:00'
 sub_bucket: "None"
-tags: ["Architecture", "Backend", "Performance", "CQRS"]
+tags:
+  - Architecture
+  - Backend
+  - Performance
+  - CQRS
 ---
+
 ## Description
 The ecosystem currently relies on a flat `manifest.json` file as the central index for all workspace contexts and topologies. As workspaces scale, this monolithic JSON approach violates several core engineering principles:
 

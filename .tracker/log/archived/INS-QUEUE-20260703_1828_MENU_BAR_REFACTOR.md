@@ -4,13 +4,14 @@ type: "queue"
 status: "archived"
 id: INS-QUEUE-20260703_1828_MENU_BAR_REFACTOR
 title: "Refactor File Modal Toolbar to Dropdown Menu Bar"
-created_at: 2026-07-06T15:46:16
-closed_at: 2026-07-06T15:46:50
+created_at: '2026-07-06T15:46:16'
+closed_at: '2026-07-06T15:46:50'
 sub_bucket: "None"
-tags: ["ui", "refactor", "tech-debt"]
+tags:
+  - ui
+  - refactor
+  - tech-debt
 ---
-
-
 
 ## Description
 The current file modal toolbar relied on `flex-wrap`, which created a cluttered layout and broke vertical height constraints on smaller screens when multiple extensions injected their own buttons.

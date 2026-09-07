@@ -4,10 +4,11 @@ type: "bug"
 status: "archived"
 id: INS-BUG-20260705_0203_VFS_BYPASS_FLOW
 title: "VFS Pipeline Bypass in Flow Batch Deletion"
-created_at: 2026-07-05T02:03:00
-closed_at: 2026-07-05T03:53:36
+created_at: '2026-07-05T02:03:00'
+closed_at: '2026-07-05T03:53:36'
 sub_bucket: "None"
 ---
+
 ## Description
 An unguarded synchronous file deletion remains in the workflow engine. The `api_flow_batches_delete` controller within `engine_flow.py` actively bypasses the asynchronous `_VFS_WRITE_QUEUE` by executing an inline `os.remove(out_path)` call. 
 

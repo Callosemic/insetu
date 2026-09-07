@@ -4,10 +4,14 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260703_1300_TIER2_CONFIG_EDITOR
 title: "Feature: Upgrade Config Editor for Tier 2 Global Settings and Secure Credential Vaulting"
-created_at: 2026-07-03T13:00:00
-closed_at: 2026-08-04T15:26:51
+created_at: '2026-07-03T13:00:00'
+closed_at: '2026-08-04T15:26:51'
 sub_bucket: "None"
-tags: ["Frontend", "Config-Editor", "Security", "Feature"]
+tags:
+  - Frontend
+  - Config-Editor
+  - Security
+  - Feature
 ---
 
 ## Description

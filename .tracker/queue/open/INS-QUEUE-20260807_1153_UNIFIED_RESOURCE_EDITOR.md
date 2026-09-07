@@ -4,10 +4,15 @@ repo: "insetu"
 type: "queue"
 status: "open"
 title: "Unify File Creation, VFS Code Editing, and Frontmatter Drawers into <insetu-resource-editor>"
-created_at: null
-closed_at: null
-sub_bucket: "UI"
-tags: ["Architecture", "Frontend", "UI", "Editor", "VFS"]
+created_at: '2026-08-07T12:01:01-07:00'
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - Architecture
+  - Frontend
+  - UI
+  - Editor
+  - VFS
 ---
 
 ## Description

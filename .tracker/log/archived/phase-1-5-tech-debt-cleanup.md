@@ -4,11 +4,13 @@ type: "queue"
 status: "archived"
 id: phase-1-5-tech-debt-cleanup
 title: "Phase 1.5: V1 Tech Debt & Standards Compliance"
-created_at: 2026-07-02T09:18:30
-closed_at: 2026-07-02T23:51:00
+created_at: '2026-07-02T09:18:30'
+closed_at: '2026-07-02T23:51:00'
 sub_bucket: "None"
-tags: ["Architecture"]
+tags:
+  - Architecture
 ---
+
 # Tech Debt Cleanup
 
 Address the three lingering violations of the `01_engineering_standards.md` document before embarking on the massive V2 architectural migrations.

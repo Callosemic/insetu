@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260727_0131_UTILS_DECOUPLING
 title: "Decouple utils_core.py into Tier 1 (utils.py) and Tier 2 (core/utils_core.py)"
-created_at: 2026-07-27T01:31:29
-closed_at: 2026-07-28T00:26:35
+created_at: '2026-07-27T01:31:29'
+closed_at: '2026-07-28T00:26:35'
 sub_bucket: "None"
-tags: ["Tech Debt", "Refactor", "Architecture"]
+tags:
+  - Tech Debt
+  - Refactor
+  - Architecture
 ---
 
 ## Description

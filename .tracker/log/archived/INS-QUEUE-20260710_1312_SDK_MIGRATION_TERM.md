@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260710_1312_SDK_MIGRATION_TERM
 title: "SDK V2 Migration: Terminal Extension"
-created_at: 2026-07-10T13:12:00
-closed_at: 2026-07-13T13:14:00
+created_at: '2026-07-10T13:12:00'
+closed_at: '2026-07-13T13:14:00'
 sub_bucket: "None"
-tags: ["Architecture", "SDK", "Refactor"]
+tags:
+  - Architecture
+  - SDK
+  - Refactor
 ---
 
 ## Description

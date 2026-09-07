@@ -4,10 +4,14 @@ type: "queue"
 status: "archived"
 id: INS-QUEUE-20260708_1758_GLOBAL_FETCH_WRAPPER
 title: "Architectural Upgrade: Global API Fetch Wrapper (window.inSetu.fetch)"
-created_at: 2026-07-08T17:58:00
-closed_at: 2026-07-10T00:53:11
+created_at: '2026-07-08T17:58:00'
+closed_at: '2026-07-10T00:53:11'
 sub_bucket: "None"
-tags: ["Architecture", "Frontend", "Refactor", "Security"]
+tags:
+  - Architecture
+  - Frontend
+  - Refactor
+  - Security
 ---
 
 ## Description

@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INSETU-QUEUE-20260622_0442_PATHLIB
 title: "Backend Maintainability: Migrate to Pathlib"
-created_at: 2026-06-22T04:42:00
-closed_at: 2026-07-05T20:10:24
+created_at: '2026-06-22T04:42:00'
+closed_at: '2026-07-05T20:10:24'
 sub_bucket: "None"
 ---
 

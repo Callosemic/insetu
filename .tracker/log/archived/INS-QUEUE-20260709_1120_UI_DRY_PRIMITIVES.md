@@ -1,13 +1,17 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: INS-QUEUE-20260709_1120_UI_DRY_PRIMITIVES
 title: "UI DRY Violations: Abstract Global Component Primitives"
-created_at: 2026-07-09T11:20:00
-closed_at: 2026-08-05T21:21:59
+created_at: '2026-07-09T11:20:00'
+closed_at: '2026-08-05T21:21:59'
 sub_bucket: "None"
-tags: ["Frontend", "DRY", "UI Factory", "Refactor"]
+tags:
+  - Frontend
+  - DRY
+  - UI Factory
+  - Refactor
 ---
 
 ## Description

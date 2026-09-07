@@ -5,9 +5,12 @@ type: "queue"
 status: "open"
 title: "Generalize System Banner Alerts into <yenvui-alert-banner> Component"
 created_at: "2026-07-28T23:55:00"
-closed_at: null
-sub_bucket: "UI"
-tags: ["yenVUI", "UI", "Refactor"]
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - yenVUI
+  - UI
+  - Refactor
 ---
 
 ## Description

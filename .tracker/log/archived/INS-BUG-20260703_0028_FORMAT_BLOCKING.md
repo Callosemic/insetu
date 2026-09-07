@@ -4,10 +4,11 @@ type: "bug"
 status: "archived"
 id: INS-BUG-20260703_0028_FORMAT_BLOCKING
 title: "I/O Block Ban Violation: Async Pandoc Document Compilation"
-created_at: 2026-07-03T00:28:00
-closed_at: 2026-07-05T01:49:15
+created_at: '2026-07-03T00:28:00'
+closed_at: '2026-07-05T01:49:15'
 sub_bucket: "None"
 ---
+
 ## Description
 The `compile_document_payload` function in `engine_format.py` relied on a heavy, synchronous `subprocess.run(['pandoc', ...])` call.
 ## Resolution

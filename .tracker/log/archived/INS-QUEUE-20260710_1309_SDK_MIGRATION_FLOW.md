@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260710_1309_SDK_MIGRATION_FLOW
 title: "SDK V2 Migration: Flow / Batch Extension"
-created_at: 2026-07-10T13:09:00
-closed_at: 2026-07-13T01:22:12
+created_at: '2026-07-10T13:09:00'
+closed_at: '2026-07-13T01:22:12'
 sub_bucket: "None"
-tags: ["Architecture", "SDK", "Refactor"]
+tags:
+  - Architecture
+  - SDK
+  - Refactor
 ---
 
 ## Description

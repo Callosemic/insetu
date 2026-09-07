@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INSETU-BUG-20260701_0150_ROUTES_FS_TENANT_LEAK
 title: "Multi-Tenant Leakage & Path Hardcoding in routes_fs.py"
-created_at: 2026-07-01T01:50:00
-closed_at: 2026-07-01T11:16:00
+created_at: '2026-07-01T01:50:00'
+closed_at: '2026-07-01T11:16:00'
 sub_bucket: "None"
 ---
 

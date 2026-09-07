@@ -4,10 +4,11 @@ type: "todo"
 status: "archived"
 id: phase-4-async-io-streaming
 title: "Phase 4: Asynchronous I/O & Streaming"
-created_at: 2026-07-02T09:18:30
-closed_at: 2026-07-29T09:59:28
+created_at: '2026-07-02T09:18:30'
+closed_at: '2026-07-29T09:59:28'
 sub_bucket: "None"
-tags: ["Architecture"]
+tags:
+  - Architecture
 ---
 
 ## Description

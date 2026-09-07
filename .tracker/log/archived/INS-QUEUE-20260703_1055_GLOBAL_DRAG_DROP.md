@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260703_1055_GLOBAL_DRAG_DROP
 title: "Ecosystem Generalization: Migrate Desktop Drag-and-Drop Export to Global UI Namespace"
-created_at: 2026-07-03T10:55:00
-closed_at: 2026-07-05T01:55:51
+created_at: '2026-07-03T10:55:00'
+closed_at: '2026-07-05T01:55:51'
 sub_bucket: "None"
-tags: [Architecture, Frontend, Standardization]
+tags:
+  - Architecture
+  - Frontend
+  - Standardization
 ---
 
 ## Description
@@ -19,4 +22,3 @@ Abstracting this orchestration layer will allow any optional extension module—
 
 ## Resolution
 The desktop drag-and-drop mechanism was cleanly abstracted into the `UIFactory` singleton inside `ui.js`. A global `dragstart` event listener was established on the document body to intercept any component tagged with the `.ui-draggable-export` semantic class. Inline event listeners and fragmented configuration blocks were stripped from `fs.js`, `ext_flow.js`, and `gather.js`, standardizing the export flow across all system lists and modals.
-

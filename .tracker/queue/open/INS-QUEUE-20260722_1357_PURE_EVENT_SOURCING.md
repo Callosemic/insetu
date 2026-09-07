@@ -5,9 +5,13 @@ status: "open"
 id: "INS-QUEUE-20260722_1357_PURE_EVENT_SOURCING"
 title: "Refactor Manifest Compilation to Pure Event Sourcing with Snapshotting"
 created_at: "2026-07-22T13:57:37"
-closed_at: null
-sub_bucket: "Architecture"
-tags: ["Architecture", "CQRS", "Event-Sourcing", "VFS"]
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - Architecture
+  - CQRS
+  - Event-Sourcing
+  - VFS
 ---
 
 ## Description

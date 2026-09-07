@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260703_1930_CODEMIRROR_ABSTRACTION
 title: "Ecosystem Generalization: Abstract CodeMirror Mode Mapping"
-created_at: 2026-07-03T19:30:56
-closed_at: 2026-07-04T17:30:00
+created_at: '2026-07-03T19:30:56'
+closed_at: '2026-07-04T17:30:00'
 sub_bucket: "None"
-tags: ["Frontend", "Refactor", "DRY"]
+tags:
+  - Frontend
+  - Refactor
+  - DRY
 ---
 
 ## Description

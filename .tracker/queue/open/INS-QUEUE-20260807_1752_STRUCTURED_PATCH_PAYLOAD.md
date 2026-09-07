@@ -5,9 +5,13 @@ status: "open"
 id: "INS-QUEUE-20260807_1752_STRUCTURED_PATCH_PAYLOAD"
 title: "Migrate Yomama Bridge Request Payload to Structured JSON Intent Array"
 created_at: "2026-08-07T17:52:28"
-closed_at: null
-sub_bucket: "Architecture"
-tags: ["Bridge", "Architecture", "Refactor", "API"]
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - Bridge
+  - Architecture
+  - Refactor
+  - API
 ---
 
 ## Description

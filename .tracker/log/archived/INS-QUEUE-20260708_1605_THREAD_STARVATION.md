@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260708_1605_THREAD_STARVATION
 title: "Offload URL Ingestion and Quick-Packs to Immediate Jobs"
-created_at: 2026-07-08T16:05:00
-closed_at: 2026-07-29T09:59:28
+created_at: '2026-07-08T16:05:00'
+closed_at: '2026-07-29T09:59:28'
 sub_bucket: "None"
-tags: ["Backend", "Performance", "Async"]
+tags:
+  - Backend
+  - Performance
+  - Async
 ---
 
 ## Description

@@ -4,12 +4,14 @@ type: "todo"
 status: "open"
 id: feature-release-ui-extension
 title: "Feature: Release Management UI Extension"
-created_at: 2026-07-02T09:18:30
-closed_at: null
+created_at: '2026-07-02T09:18:30'
+closed_at: 'null'
 sub_bucket: "None"
 delivery_date: "2026-09-06"
-tags: ["Extension"]
+tags:
+  - Extension
 ---
+
 # Release Management UI Extension
 
 Build a UI control surface around `bump-my-version` to handle version bumps across the workspace without reinventing the underlying Git/regex wheel (adhering to the NIH defense).

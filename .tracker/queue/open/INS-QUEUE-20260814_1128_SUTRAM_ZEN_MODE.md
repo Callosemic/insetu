@@ -5,9 +5,14 @@ status: "open"
 id: "INS-QUEUE-20260814_1128_SUTRAM_ZEN_MODE"
 title: "Generalize Zen Focus Mode into Vendorized Sutram Primitive"
 created_at: "2026-08-14T11:28:03"
-closed_at: null
-sub_bucket: "UI"
-tags: ["sutram", "ui", "refactor", "editor"]
+closed_at: 'null'
+sub_bucket: "None"
+tags:
+  - sutram
+  - ui
+  - refactor
+  - editor
+  - UI
 ---
 
 ## Description

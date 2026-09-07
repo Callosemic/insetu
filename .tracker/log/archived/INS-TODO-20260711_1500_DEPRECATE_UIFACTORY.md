@@ -4,10 +4,14 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260711_1500_DEPRECATE_UIFACTORY
 title: "Deprecate UIFactory and Finalize Declarative Dropdown Web Component"
-created_at: 2026-07-11T15:00:00
-closed_at: 2026-07-23T16:00:00
+created_at: '2026-07-11T15:00:00'
+closed_at: '2026-07-23T16:00:00'
 sub_bucket: "None"
-tags: ["Frontend", "UI", "LitElement", "Refactor"]
+tags:
+  - Frontend
+  - UI
+  - LitElement
+  - Refactor
 ---
 
 ## Description

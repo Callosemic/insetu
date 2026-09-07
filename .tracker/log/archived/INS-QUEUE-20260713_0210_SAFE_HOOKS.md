@@ -4,10 +4,14 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260713_0210_SAFE_HOOKS
 title: "Frontend DX: Fail-Safe Global UI Hook Emitter"
-created_at: 2026-07-13T02:10:00
-closed_at: 2026-07-25T02:17:51
+created_at: '2026-07-13T02:10:00'
+closed_at: '2026-07-25T02:17:51'
 sub_bucket: "None"
-tags: ["Frontend", "DX", "SDK", "Event-Bus"]
+tags:
+  - Frontend
+  - DX
+  - SDK
+  - Event-Bus
 ---
 
 ## Description

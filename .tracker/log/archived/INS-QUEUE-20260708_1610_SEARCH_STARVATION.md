@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260708_1610_SEARCH_STARVATION
 title: "Resolve External Network and Deep Search Starvation"
-created_at: 2026-07-08T16:10:00
-closed_at: 2026-07-29T09:59:28
+created_at: '2026-07-08T16:10:00'
+closed_at: '2026-07-29T09:59:28'
 sub_bucket: "None"
-tags: ["Backend", "Performance", "Search"]
+tags:
+  - Backend
+  - Performance
+  - Search
 ---
 
 ## Description

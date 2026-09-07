@@ -4,10 +4,14 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260710_1313_FILE_MODAL_WEB_COMPONENT
 title: "Declarative UI: Migrate #file-modal Monolith to Web Component"
-created_at: 2026-07-10T13:25:35
-closed_at: 2026-07-29T09:33:02
+created_at: '2026-07-10T13:25:35'
+closed_at: '2026-07-29T09:33:02'
 sub_bucket: "None"
-tags: ["Frontend", "Architecture", "LitElement", "Refactor"]
+tags:
+  - Frontend
+  - Architecture
+  - LitElement
+  - Refactor
 ---
 
 ## Description

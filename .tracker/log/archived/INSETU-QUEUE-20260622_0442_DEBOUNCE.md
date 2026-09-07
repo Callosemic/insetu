@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INSETU-QUEUE-20260622_0442_DEBOUNCE
 title: "Optimize Frontend Speed: Debounce Search Inputs"
-created_at: 2026-06-22T04:42:00
-closed_at: 2026-06-28T19:55:44
+created_at: '2026-06-22T04:42:00'
+closed_at: '2026-06-28T19:55:44'
 sub_bucket: "None"
 ---
 

@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: TKT-MULTI-SELECT-TRAY
 title: "Global Multi-Select Selection Tray & Polymorphic Batch Actions"
-created_at: 2026-07-20T17:55:00
-closed_at: 2026-07-24T23:55:41
+created_at: '2026-07-20T17:55:00'
+closed_at: '2026-07-24T23:55:41'
 sub_bucket: "None"
-tags: ["UI", "yenVUI", "UX"]
+tags:
+  - UI
+  - yenVUI
+  - UX
 ---
 
 ## Description

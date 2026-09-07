@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-QUEUE-20260710_1310_SDK_MIGRATION_FORMAT
 title: "SDK V2 Migration: Format Extension"
-created_at: 2026-07-10T13:10:00
-closed_at: 2026-07-13T13:32:00
+created_at: '2026-07-10T13:10:00'
+closed_at: '2026-07-13T13:32:00'
 sub_bucket: "None"
-tags: ["Architecture", "SDK", "Refactor"]
+tags:
+  - Architecture
+  - SDK
+  - Refactor
 ---
 
 ## Description

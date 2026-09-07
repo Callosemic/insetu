@@ -4,10 +4,13 @@ type: "todo"
 status: "archived"
 id: INS-TODO-20260713_1326_EINK_CSS_PROPERTIES
 title: "Abstract E-Ink High Contrast theme overrides into CSS Custom Properties"
-created_at: 2026-07-13T13:26:00
-closed_at: 2026-07-27T15:33:44
+created_at: '2026-07-13T13:26:00'
+closed_at: '2026-07-27T15:33:44'
 sub_bucket: "None"
-tags: ["Frontend", "Tech Debt", "Theming"]
+tags:
+  - Frontend
+  - Tech Debt
+  - Theming
 ---
 
 ## Description

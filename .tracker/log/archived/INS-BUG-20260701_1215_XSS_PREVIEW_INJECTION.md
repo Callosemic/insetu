@@ -4,8 +4,8 @@ type: "todo"
 status: "archived"
 id: INS-BUG-20260701_1215_XSS_PREVIEW_INJECTION
 title: "Security Hardening: Replace Naive Regex Script Stripping with DOMPurify Sanitization"
-created_at: 2026-07-01T12:15:00
-closed_at: 2026-07-04T17:30:00
+created_at: '2026-07-01T12:15:00'
+closed_at: '2026-07-04T17:30:00'
 sub_bucket: "None"
 ---
 
