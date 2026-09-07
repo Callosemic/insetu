@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v0.19.0 (2026-09-07)
+
+### Bug Fixes
+
+- **core**: Canonicalize vfs:// URI event payloads, resolve topology repo paths, and add ruamel.yaml
+  frontmatter parsing
+  ([`d4cec72`](https://github.com/Callosemic/insetu/commit/d4cec72e6c15a683841b40ab5610d99b34137a02))
+
+### Features
+
+- **cronic**: Add Cronic Job Manager extension and optimize ecosystem API & VFS boundaries
+  ([`681d445`](https://github.com/Callosemic/insetu/commit/681d445b25b9cf4de798003789c008ddf341970c))
+
+- **fitness**: Integrate Tree-sitter AST JavaScript linter, ruamel.yaml frontmatter engine, and
+  dual-root manifest partitioning
+  ([`caa4c15`](https://github.com/Callosemic/insetu/commit/caa4c157c2a1ee2141310f8e3ac6283f1201a45d))
+
+- **sdk**: Integrate js-yaml frontmatter engine, offline outbox recovery, and storage quota
+  management
+  ([`966988f`](https://github.com/Callosemic/insetu/commit/966988f8f74354ac77ccaef4756ecdd31e2e2b6d))
+
+- **vfs**: Add tree-sitter AST validation, OCC save conflicts, and workspace boot schema
+  provisioning
+  ([`bbb57b8`](https://github.com/Callosemic/insetu/commit/bbb57b8c7c236cfedf037f9e99bd43ff9bf036bd))
+
+
 ## v0.18.0 (2026-09-04)
 
 ### Features
