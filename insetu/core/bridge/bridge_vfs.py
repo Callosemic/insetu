@@ -355,7 +355,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 from insetu.kernel.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
-
             # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
             ext = os.path.splitext(resolved_path)[1].lower()
             syntax_error = False
@@ -363,18 +362,44 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             is_last_block = (b == blocks[-1])
             if is_last_block and not data.get("ignore_syntax"):
                 try:
-                    if ext == '.py':
-                        ast.parse(new_content)
-                    elif ext == '.json':
+                    if ext == '.json':
                         json.loads(new_content)
-                    elif ext in ['.js', '.ts']:
+                    else:
                         try:
-                            res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8')
-                            if res.returncode != 0:
-                                syntax_error = True
-                                err_str = res.stderr.strip()
-                        except FileNotFoundError:
-                            pass
+                            # Attempt high-performance, native Tree-sitter validation first
+                            from tree_sitter import Language, Parser
+
+                            lang_mod = None
+                            if ext == '.py':
+                                import tree_sitter_python as ts_lang
+                                lang_mod = ts_lang
+                            elif ext in ['.js', '.mjs', '.cjs', '.ts', '.tsx']:
+                                import tree_sitter_javascript as ts_lang
+                                lang_mod = ts_lang
+
+                            if lang_mod:
+                                # Tree-sitter >=0.22.0 bindings
+                                parser = Parser(Language(lang_mod.language()))
+                                tree = parser.parse(bytes(new_content, "utf8"))
+
+                                if tree.root_node.has_error:
+                                    syntax_error = True
+                                    err_str = "Tree-sitter detected a syntax error in the modified AST."
+                            else:
+                                raise ImportError("Language not mapped for Tree-sitter.")
+
+                        except ImportError:
+                            # Graceful Fallback if Tree-sitter C-extensions are missing
+                            if ext == '.py':
+                                ast.parse(new_content)
+                            elif ext in ['.js', '.ts', '.mjs']:
+                                try:
+                                    res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8')
+                                    if res.returncode != 0:
+                                        syntax_error = True
+                                        err_str = res.stderr.strip()
+                                except FileNotFoundError:
+                                    pass
                 except SyntaxError as e:
                     syntax_error = True
                     err_str = f"Line {e.lineno}: {e.msg}"

@@ -5,6 +5,96 @@ import subprocess
 from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree
 from insetu.kernel.hooks import hooks
 import threading
+import io
+import re
+from ruamel.yaml import YAML
+
+def _get_yaml_engine():
+    yaml = YAML(typ='rt')
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.width = 4096  # Prevent premature multi-line string wrapping
+    return yaml
+
+def parse_frontmatter(content):
+    if not content:
+        return {}, "", None
+
+    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
+    yaml_data = {}
+    body = content
+
+    if yaml_match:
+        raw_yaml = yaml_match.group(1)
+        body = content[yaml_match.end():].strip()
+
+        if raw_yaml.strip():
+            try:
+                engine = _get_yaml_engine()
+                parsed = engine.load(io.StringIO(raw_yaml))
+                if isinstance(parsed, dict):
+                    yaml_data = parsed
+            except Exception as e:
+                print(f"⚠️ [YAML Error] Frontmatter parse failure: {e}")
+
+    return yaml_data, body, yaml_match
+def update_frontmatter(content, new_data):
+    yaml_data, body, _ = parse_frontmatter(content)
+
+    if isinstance(yaml_data, dict):
+        yaml_data.update(new_data)
+    else:
+        yaml_data = dict(new_data)
+
+    engine = _get_yaml_engine()
+    stream = io.StringIO()
+    engine.dump(yaml_data, stream)
+    formatted_yaml = stream.getvalue().strip()
+
+    return f"---\n{formatted_yaml}\n---\n\n{body}"
+
+def clean_date_str(val):
+    """Safely normalizes varied date inputs into a standard ISO format."""
+    from datetime import datetime, timedelta
+    if val is None:
+        return None
+    if isinstance(val, (datetime, timedelta)):
+        return val.isoformat()
+    s = str(val).strip().strip('\'"')
+    if not s or s.lower() in ('null', 'none', '0000-00-00t00:00:00', '0000-00-00'):
+        return None
+    return s
+
+def get_earlier_date(d1, d2):
+    """Safely compares and returns the earlier of two ISO timestamp strings."""
+    from datetime import datetime
+    d1_clean = clean_date_str(d1)
+    d2_clean = clean_date_str(d2)
+    if not d1_clean: return d2_clean
+    if not d2_clean: return d1_clean
+    try:
+        dt1 = datetime.fromisoformat(d1_clean.replace('Z', '+00:00'))
+        dt2 = datetime.fromisoformat(d2_clean.replace('Z', '+00:00'))
+        return d1_clean if dt1 <= dt2 else d2_clean
+    except Exception:
+        return d1_clean if d1_clean <= d2_clean else d2_clean
+
+def parse_list_field(raw_val):
+    """Safely parses comma-separated strings or JSON arrays into a standardized JSON string."""
+    try:
+        if isinstance(raw_val, list):
+            return json.dumps([str(d).strip() for d in raw_val if str(d).strip()])
+        elif isinstance(raw_val, str) and raw_val.startswith('['):
+            return json.dumps(json.loads(raw_val))
+        elif isinstance(raw_val, str):
+            return json.dumps([d.strip() for d in raw_val.split(',') if d.strip()])
+    except Exception:
+        pass
+    return '[]'
+
+def parse_string_enum(raw_val):
+    """Safely parses and normalizes string enumerations (e.g., priority, sizes)."""
+    return str(raw_val).upper() if raw_val and str(raw_val).lower() not in ('null', 'none', '') else ''
 
 _NATIVE_VFS_WRITES = {}
 _WATCHDOG_TIMERS = {}
@@ -33,16 +123,17 @@ def _track_native_vfs_writes(mutations=None, **kwargs):
                 if clean_fp in _WATCHDOG_TIMERS:
                     _WATCHDOG_TIMERS[clean_fp].cancel()
                     del _WATCHDOG_TIMERS[clean_fp]
-
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
-    # Fast path: Check if ANY workspace has watchdog enabled before importing or instantiating
+    from insetu.kernel.extension import SettingsManager
+    if not SettingsManager('core_system', 'default').get("enable_watchdog", True):
+        return None
+
     active_configs = []
     for ws_id in workspace_ids:
         cfg = load_config(ws_id)
-        if cfg.get("enable_watchdog", False):
-            active_configs.append((ws_id, cfg))
-            
+        active_configs.append((ws_id, cfg))
+
     if not active_configs:
         return None
     try:
@@ -198,83 +289,6 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
 def load_workflows(workspace_id=None):
     _, _, wf_path = get_workspace_physics(workspace_id)
     return load_json_file(wf_path, {"context_batches": []})
-import io
-import re
-
-try:
-    from ruamel.yaml import YAML
-    HAS_RUAMEL = True
-except ImportError:
-    HAS_RUAMEL = False
-    print("⚠️  [YAML] 'ruamel.yaml' is missing. Falling back to naive string parser. Run: pip install ruamel.yaml")
-
-def _get_yaml_engine():
-    if not HAS_RUAMEL:
-        return None
-    yaml = YAML(typ='rt')
-    yaml.preserve_quotes = True
-    yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.width = 4096  # Prevent premature multi-line string wrapping
-    return yaml
-
-def parse_frontmatter(content):
-    if not content:
-        return {}, "", None
-
-    yaml_match = re.search(r'^\s*---\n([\s\S]*?)\n\s*---', content)
-    yaml_data = {}
-    body = content
-
-    if yaml_match:
-        raw_yaml = yaml_match.group(1)
-        body = content[yaml_match.end():].strip()
-        
-        # Graceful fallback to legacy parsing if ruamel is missing
-        if not HAS_RUAMEL:
-            for line in raw_yaml.split('\n'):
-                if ':' in line:
-                    k, v = line.split(':', 1)
-                    yaml_data[k.strip()] = v.strip().strip('\'"')
-            return yaml_data, body, yaml_match
-
-        if raw_yaml.strip():
-            try:
-                engine = _get_yaml_engine()
-                parsed = engine.load(io.StringIO(raw_yaml))
-                if isinstance(parsed, dict):
-                    yaml_data = parsed
-            except Exception as e:
-                print(f"⚠️ [YAML Error] Frontmatter parse failure: {e}")
-
-    return yaml_data, body, yaml_match
-
-def update_frontmatter(content, new_data):
-    yaml_data, body, _ = parse_frontmatter(content)
-    
-    if isinstance(yaml_data, dict):
-        yaml_data.update(new_data)
-    else:
-        yaml_data = dict(new_data)
-
-    # Graceful fallback to legacy serialization if ruamel is missing
-    if not HAS_RUAMEL:
-        new_yaml = ["---"]
-        for k, v in yaml_data.items():
-            if v is None or str(v).lower() == 'null':
-                new_yaml.append(f"{k}: null")
-            elif isinstance(v, (int, float, bool)) or (isinstance(v, str) and (v.startswith('[') or v.startswith('{'))):
-                new_yaml.append(f"{k}: {v}")
-            else:
-                new_yaml.append(f'{k}: "{v}"')
-        new_yaml.append("---")
-        return "\n".join(new_yaml) + "\n\n" + body
-
-    engine = _get_yaml_engine()
-    stream = io.StringIO()
-    engine.dump(yaml_data, stream)
-    formatted_yaml = stream.getvalue().strip()
-
-    return f"---\n{formatted_yaml}\n---\n\n{body}"
 
 def generate_text_chunks(blocks, chunk_limit=400000):
     current_chunk = []
@@ -412,29 +426,9 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
         out_dir = "contexts"
         if item_type == "diff": out_dir = "diffs"
         elif item_type == "flow": out_dir = "workflows"
-
         expected_contexts.add(f"{out_dir}/{decl['filename']}")
 
     return expected_contexts
-def parse_uri(path_str):
-    """SDK Helper: Parses any scheme:// or relative path into (repo_dir, relative_path)."""
-    if not path_str:
-        return "", ""
-
-    str_path = str(path_str).replace('\\', '/').strip()
-
-    import re
-    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', str_path)
-    if match:
-        str_path = match.group(2)
-
-    str_path = str_path.lstrip('/')
-    parts = str_path.split('/', 1)
-
-    repo = parts[0] if len(parts) > 1 else ""
-    rel_path = parts[1] if len(parts) > 1 else str_path
-
-    return repo, rel_path
 
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)

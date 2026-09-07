@@ -351,11 +351,17 @@ def api_create_workspace():
 
         # 2. Save the pure topology mapping
         save_json_file(config_abs_path, starter_config, workspace_id=ws_id)
-
         # 3. Seed the Tier 2 Workspace Settings safely
         from insetu.kernel.extension import SettingsManager
         settings = SettingsManager('core_system', ws_id)
         settings.set("instance_title", f"inSetu Workspace: {ws_id}")
+
+        # 4. Provision databases and trigger the boot sequence for the new workspace
+        from insetu.kernel.db import apply_declarative_schema, _REGISTERED_SCHEMAS
+        from insetu.kernel.hooks import hooks
+        for ext_name, schema in _REGISTERED_SCHEMAS.items():
+            apply_declarative_schema(ext_name, schema, ws_id)
+        hooks.emit('workspace_boot', workspace_id=ws_id)
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
     except Exception as e:
@@ -393,10 +399,11 @@ def api_delete_workspace():
         import traceback
         print(f"Workspace Delete Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-
 @system_bp.route('/api/system/jobs/<job_id>', methods=['GET'])
-def api_job_status(job_id):
-    workspace_id = sniff_tenant_id()
+@system_bp.route('/api/<workspace_id>/system/jobs/<job_id>', methods=['GET'])
+def api_job_status(job_id, workspace_id=None):
+    if not workspace_id:
+        workspace_id = sniff_tenant_id()
     from insetu.kernel.db import get_connection
     try:
         conn = get_connection("workers", workspace_id=workspace_id)

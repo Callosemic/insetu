@@ -219,10 +219,34 @@ def api_fs_save(workspace_id):
 
         if "is_absolute_artifact" in data:
                 del data["is_absolute_artifact"]
-
         filepath, content = data.get("filepath", "").strip(), data.get("content", "")
         if not filepath: 
                 return jsonify({"error": "Filepath is required"}), 400
+
+        base_hash = data.get("base_hash")
+        if base_hash:
+            import hashlib
+            from insetu.kernel.utils import resolve_system_artifact_path, resolve_sandbox_path
+            from insetu.kernel.hooks import hooks
+
+            if data.get("is_absolute_artifact"):
+                resolved_path = resolve_system_artifact_path(filepath, workspace_id)
+            else:
+                overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
+                resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
+
+            if os.path.exists(resolved_path):
+                with open(resolved_path, 'r', encoding='utf-8') as f:
+                    current_disk_content = f.read()
+                current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
+
+                if current_hash != base_hash and current_disk_content != content:
+                    import time
+                    conflict_name = f"{Path(resolved_path).stem}.conflict_{int(time.time())}{Path(resolved_path).suffix}"
+                    conflict_path = Path(resolved_path).parent.joinpath(conflict_name).as_posix()
+                    with open(conflict_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    return jsonify({"error": f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"}), 409
 
         result = execute_vfs_save(workspace_id, filepath, content, data)
         return jsonify(result)

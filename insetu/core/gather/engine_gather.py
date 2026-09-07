@@ -9,7 +9,7 @@ import uuid
 import concurrent.futures
 from flask import jsonify
 from insetu.kernel.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, extract_manifest_files, resolve_logical_path
+from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path
 from insetu.core.topology.engine_topology import resolve_file_bucket
 from insetu.kernel.extension import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
@@ -63,12 +63,11 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     ctx = gather_bp.get_context(workspace_id)
     if max_kb is None:
         max_kb = ctx.settings.get("max_context_size_kb", 0)
-
     # 1. Physical Idempotency: Hash the raw content before volatile headers are applied
     import hashlib
     content_hash = hashlib.sha256("".join(text_blocks).encode('utf-8')).hexdigest()
 
-    existing_entry = ctx.manifest.get(base_filename)
+    existing_entry = ctx.manifest.get("ctx", {}).get(base_filename)
     if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
         return existing_entry  # Skip all disk I/O. The content hasn't changed.
 
@@ -158,9 +157,8 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
         try:
             old_args = json.loads(existing['args_json'])
             old_events = old_args.get('ledger_events', [])
-
             def _get_fp(item):
-                raw_fp = item.get('filepath', '') if isinstance(item, dict) else str(item)
+                raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
                 clean_fp = raw_fp.replace('\\', '/').strip('/')
                 if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
                     clean_fp = f"vfs://{clean_fp}"
@@ -263,11 +261,11 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
     if not query: return []
     terms = [t for t in query.split() if t]
     if not terms: return []
-
     ctx = gather_bp.get_context(workspace_id)
     md_files = set()
-    manifest = ctx.manifest
-    for filepath in extract_manifest_files(manifest, domain='vfs'):
+    manifest = ctx.manifest.get("ctx", {})
+    vfs_items = [k for k, v in manifest.items() if v.get('meta', {}).get('domain') == 'vfs']
+    for filepath in ctx.expand_selection(vfs_items):
         if filepath.lower().endswith('.md'):
             md_files.add(filepath)
     results = []
@@ -508,9 +506,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         raw_ledger_events = kwargs.get("ledger_events") or []
         ledger_events = []
         seen_paths = set()
-
         def _to_canonical_event(item, default_op="save"):
-            raw_fp = item.get('filepath', '') if isinstance(item, dict) else str(item)
+            raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
             m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
 
             clean_fp = raw_fp.replace('\\', '/').strip('/')
@@ -649,9 +646,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
     if target_repos is None:
         from insetu.core.utils_core import vacuum_manifest_artifacts
         vacuum_manifest_artifacts(ctx, paths["contexts_dir"], expected_artifacts, exempt_abs_paths=active_ephemerals)
-
     # Re-inject surviving Ephemeral Artifacts into the manifest
-    old_manifest = ctx.manifest
+    old_manifest = ctx.manifest.get("ctx", {})
     restored_ephemerals = set()
 
     for k, v in old_manifest.items():
@@ -740,10 +736,9 @@ def _pack_selection_worker(ctx, items, job_id=None):
             "files": chunks
         }
     }
-
 @gather_bp.route('clear_quickpacks', methods=['POST'])
 def api_clear_quickpacks(ctx):
-    manifest_data = ctx.manifest
+    manifest_data = ctx.manifest.get("ctx", {})
     keys_to_delete = [k for k in manifest_data.keys() if k.startswith('quickpack_') or k.startswith('selection_')]
     if not keys_to_delete:
         return jsonify({"status": "success", "message": "No quickpacks to clear."})
@@ -829,13 +824,12 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                         seen_paths.add(de['filepath'])
             except Exception:
                 pass
-
         # Purge the delayed job (whether it was trapped, or just respawned by the resolve_topology_buffer hook above)
-        w_conn.execute("DELETE FROM jobs WHERE id=?", (delayed_job_id,))
-        w_conn.commit()
+        from insetu.kernel.workers import cancel_job
+        cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
 
         paths = ctx.paths
-        manifest_data = ctx.manifest
+        manifest_data = ctx.manifest.get("ctx", {})
 
         forced_repos = target_repos or []
         if isinstance(force_full, list):
@@ -991,20 +985,21 @@ def hook_request_manifest(workspace_id=None, **kwargs):
         return manifest
     except Exception: pass
     return {}
-
 @hooks.on('request_manifest_chunks')
 def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
     try:
-        manifest = hook_request_manifest(workspace_id=workspace_id)
-        return extract_manifest_files(manifest, target_key)
+        from insetu.core.utils_core import extract_manifest_files
+        ctx = gather_bp.get_context(workspace_id)
+        return extract_manifest_files(ctx.manifest, target_key=target_key, domain='ctx')
     except Exception: return []
 
 @hooks.on('resolve_payload_chunks')
 def hook_resolve_payload_chunks(uri=None, workspace_id=None, **kwargs):
     if not uri: return []
     try:
+        ctx = gather_bp.get_context(workspace_id)
         basename = Path(uri).name
-        chunks = hook_request_manifest_chunks(target_key=basename, workspace_id=workspace_id)
+        chunks = ctx.get_manifest_files(target_key=basename)
         if not chunks: return [uri]
 
         base_dir = uri.rsplit('/', 1)[0] if '/' in uri else ""

@@ -146,9 +146,10 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         filepath = m.get("filepath")
         if not filepath:
             continue
-
         # Gatekeeper: Filter out internal system artifacts and VFS context streams
+        import re
         norm_path = filepath.replace('\\', '/').strip('/')
+        norm_path = re.sub(r'^\./+', '', norm_path)
         if norm_path.startswith("ctx://") or "/data/contexts/" in norm_path or "/data/diffs/" in norm_path or "/data/workflows/" in norm_path or ".insetu/data/" in norm_path:
             continue
 
@@ -176,11 +177,13 @@ def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
-    events = conn.execute("SELECT filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
+    events = conn.execute("SELECT id, filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
     if not events:
         return []
 
-    conn.execute("DELETE FROM topology_event_buffer")
+    event_ids = [e["id"] for e in events]
+    placeholders = ",".join(["?"] * len(event_ids))
+    conn.execute(f"DELETE FROM topology_event_buffer WHERE id IN ({placeholders})", tuple(event_ids))
     conn.commit()
 
     dirty_buckets = set()
@@ -211,7 +214,7 @@ def resolve_topology_buffer(workspace_id):
                                 pass
         else:
             expanded_events.append({"filepath": filepath, "mutation_type": op})
-    from insetu.core.utils_core import parse_uri
+    from insetu.kernel.utils import parse_uri
 
     for e in expanded_events:
         raw_fp = e["filepath"]
@@ -242,23 +245,27 @@ def resolve_topology_buffer(workspace_id):
                 ignore_dirs = set(repo_cfg.get("repo_ignore_dirs") if repo_cfg.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
                 ignore_files = set(repo_cfg.get("repo_ignore_files") if repo_cfg.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
                 ignore_patterns = repo_cfg.get("repo_ignore_patterns") if repo_cfg.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
-
                 filename = Path(filepath).name.lower()
                 if filename in ignore_files:
+                    print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_files): {filepath}")
                     is_ignored = True
                 elif any(pattern in rel_to_repo for pattern in ignore_patterns):
+                    print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_patterns): {filepath}")
                     is_ignored = True
                 elif set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs):
+                    print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_dirs): {filepath}")
                     is_ignored = True
                 else:
                     ext = Path(filepath).suffix.lower()
                     allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
                     if ext not in allowed_exts and filename not in allowed_exts:
+                        print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (exts): {filepath} | ext '{ext}' not in {allowed_exts}")
                         is_ignored = True
 
             if is_ignored:
                 continue
 
+            print(f"🌍 [TOPOLOGY TELEMETRY] ✅ ADDED TO LEDGER: {filepath}")
             sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
             b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=repo_dir)
             if b and module:
@@ -314,13 +321,19 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
     # Absolute Settlement Barrier: 2.0 second debounce to outlast watchdog bursts (e.g. git checkout)
     time.sleep(2.0)
 
-    ctx.jobs.update_progress("Resolving physical topology boundaries...")
-    events = resolve_topology_buffer(ctx.workspace_id)
-    print(f"🌍 [TOPOLOGY TELEMETRY] Worker resolved {len(events) if events else 0} events. Emitted topology_resolved.")
-    if not events:
+    total_resolved = 0
+    while True:
+        ctx.jobs.update_progress("Resolving physical topology boundaries...")
+        events = resolve_topology_buffer(ctx.workspace_id)
+        if not events:
+            break
+        total_resolved += len(events)
+
+    print(f"🌍 [TOPOLOGY TELEMETRY] Worker resolved {total_resolved} events. Emitted topology_resolved.")
+    if total_resolved == 0:
         return {"message": "No topology events to resolve."}
 
-    return {"message": f"Topology settled. Resolved {len(events)} events."}
+    return {"message": f"Topology settled. Resolved {total_resolved} events."}
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
     import subprocess
