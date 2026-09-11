@@ -1,6 +1,5 @@
 import uuid
 from flask import jsonify
-from insetu.kernel.utils import generate_idempotency_hash
 from insetu.kernel.db import get_connection
 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.kernel.extension import InSetuExtension
@@ -132,7 +131,8 @@ def bridge_revert(ctx):
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
     data = ctx.req.json or {}
-    args_json = generate_idempotency_hash(data)
+    import json
+    args_json = json.dumps(data)
 
     # Idempotency Guardrail: Prevent duplicate overlapping patches
     conn = get_connection("workers", workspace_id=ctx.workspace_id)
@@ -154,20 +154,28 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
         update_immediate_job_status(job_id, 'processing', "Analyzing patch matrices and running AST validation...", workspace_id=workspace_id)
         # Execute the pure operational logic
         sync_output_json = execute_bridge_sync(workspace_id, kwargs)
-        # VFS BARRIER: Block the completion signal until physical disk writes settle
-        from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
-        import time
-
-        # Replace blocking .join() with an abortable polling lock
-        while _VFS_WRITE_QUEUE.unfinished_tasks > 0:
-            if _VFS_SHUTDOWN_SIGNAL.is_set():
-                update_immediate_job_status(job_id, 'failed', "Transaction aborted mid-flight due to system shutdown or workspace context swap.", workspace_id=workspace_id)
-                return
-            time.sleep(0.1)
 
         import json
         try:
             sync_data = json.loads(sync_output_json)
+
+            # Only block on the global VFS queue if we actually committed writes to it
+            if sync_data.get("status") == "committed":
+                update_immediate_job_status(job_id, 'processing', "Awaiting VFS disk settlement...", workspace_id=workspace_id)
+
+                # VFS BARRIER: Block the completion signal until physical disk writes settle
+                from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
+                import time
+
+                # Replace blocking .join() with an abortable polling lock. Add timeout to survive heavy I/O storms.
+                timeout_loops = 0
+                while _VFS_WRITE_QUEUE.unfinished_tasks > 0 and timeout_loops < 50:
+                    if _VFS_SHUTDOWN_SIGNAL.is_set():
+                        update_immediate_job_status(job_id, 'failed', "Transaction aborted mid-flight due to system shutdown or workspace context swap.", workspace_id=workspace_id)
+                        return
+                    time.sleep(0.1)
+                    timeout_loops += 1
+
             update_immediate_job_status(job_id, 'completed', "Transaction evaluated.", artifact=sync_data, workspace_id=workspace_id)
         except Exception:
             # Fallback if execution violently aborted outside the JSON envelope

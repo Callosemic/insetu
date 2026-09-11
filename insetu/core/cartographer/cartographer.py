@@ -13,7 +13,7 @@ def hook_cartographer_compile_complete(workspace_id=None, **kwargs):
     cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
     submit_immediate_job(cart_job_id, "cartographer", "map_task", "{}", workspace_id=workspace_id)
 
-def _background_map(job_id, workspace_id, target_repos=None):
+def _background_map(job_id, workspace_id, target_repos=None, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
         map_repositories(workspace_id, target_repos=target_repos)
@@ -34,6 +34,8 @@ def extract_existing_comments(index_path, repo_path=None):
                 # Ignore system placeholders to prevent placeholder lock-in
                 if clean_name and comment not in ("[comment required]", "[managed file]"):
                     cmap[clean_name] = comment
+                    cmap[clean_name.rstrip('/')] = comment
+                    cmap[clean_name.rstrip('/') + '/'] = comment
         return cmap
 
     live_comments = {}

@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import json
 import subprocess
-from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree
+from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree, parse_uri
 from insetu.kernel.hooks import hooks
 import threading
 import io
@@ -95,14 +95,49 @@ def parse_list_field(raw_val):
 def parse_string_enum(raw_val):
     """Safely parses and normalizes string enumerations (e.g., priority, sizes)."""
     return str(raw_val).upper() if raw_val and str(raw_val).lower() not in ('null', 'none', '') else ''
-
 _NATIVE_VFS_WRITES = {}
-_WATCHDOG_TIMERS = {}
+_WATCHDOG_PENDING = {}
+_WATCHDOG_LOCK = threading.Lock()
 _WATCHDOG_DEBOUNCE_WINDOW = 10.0
-@hooks.on('vfs_mutated')
-def _track_native_vfs_writes(mutations=None, **kwargs):
-    """Records native VFS mutations to prevent watchdog double-fires and cancels pending watchdog events."""
-    if not mutations: return
+_WATCHDOG_THREAD = None
+
+def _watchdog_debouncer_loop():
+    import time
+    from insetu.kernel.db import get_connection
+    while True:
+        time.sleep(2.0)
+        now = time.time()
+        to_emit = {}
+        with _WATCHDOG_LOCK:
+            for path, data in list(_WATCHDOG_PENDING.items()):
+                # Final Guardrail: Ensure the VFS didn't touch it while the timer was ticking
+                if time.time() - _NATIVE_VFS_WRITES.get(path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                    del _WATCHDOG_PENDING[path]
+                    continue
+
+                if now - data['ts'] >= _WATCHDOG_DEBOUNCE_WINDOW:
+                    to_emit[path] = data
+                    del _WATCHDOG_PENDING[path]
+
+        if to_emit:
+            ws_groups = {}
+            for path, data in to_emit.items():
+                print(f"👀 [Watchdog] Caught '{data['op']}' on: {path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
+                ws_id = data['workspace_id']
+                if ws_id not in ws_groups: ws_groups[ws_id] = []
+                ws_groups[ws_id].append({"filepath": path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
+                try:
+                    w_conn = get_connection("workers", workspace_id=ws_id)
+                    w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (path, data['op'], now))
+                    w_conn.commit()
+                except Exception: pass
+
+            for ws_id, mutations in ws_groups.items():
+                hooks.emit_background('vfs_mutated', workspace_id=ws_id, mutations=mutations)
+@hooks.on('pre_file_save')
+def _track_intent_vfs_writes(workspace_id=None, filepath=None, **kwargs):
+    """Records VFS intent BEFORE disk I/O to completely seal Watchdog race conditions."""
+    if not filepath: return
     import time
     now = time.time()
 
@@ -111,18 +146,22 @@ def _track_native_vfs_writes(mutations=None, **kwargs):
         expired = [k for k, v in _NATIVE_VFS_WRITES.items() if now - v > _WATCHDOG_DEBOUNCE_WINDOW * 2]
         for k in expired:
             del _NATIVE_VFS_WRITES[k]
-    for m in mutations:
-        if not m.get("is_watchdog"):
-            filepath = m.get("filepath")
-            if filepath:
-                clean_fp = filepath.replace('\\', '/').strip('/')
-                if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
-                    clean_fp = f"vfs://{clean_fp}"
-                _NATIVE_VFS_WRITES[clean_fp] = now
-                # Cancel any pending watchdog timer since the VFS natively handled it
-                if clean_fp in _WATCHDOG_TIMERS:
-                    _WATCHDOG_TIMERS[clean_fp].cancel()
-                    del _WATCHDOG_TIMERS[clean_fp]
+
+    if filepath.startswith("ctx://"):
+        clean_fp = filepath
+    else:
+        repo_dir, rel_path = parse_uri(filepath)
+        if repo_dir:
+            clean_fp = f"vfs://{repo_dir}/{rel_path}"
+        else:
+            clean_fp = f"vfs://{rel_path.lstrip('/')}"
+
+    clean_fp_lower = clean_fp.lower()
+    _NATIVE_VFS_WRITES[clean_fp_lower] = now
+
+    if clean_fp_lower in _WATCHDOG_PENDING:
+        with _WATCHDOG_LOCK:
+            _WATCHDOG_PENDING.pop(clean_fp_lower, None)
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
     from insetu.kernel.extension import SettingsManager
@@ -154,56 +193,47 @@ def start_filesystem_observer(workspace_ids):
         def process_event(self, event, filepath_override=None, op_override=None, is_dir_override=None):
             src_path = filepath_override or event.src_path
             is_dir = is_dir_override if is_dir_override is not None else getattr(event, 'is_directory', False)
+            # 🚨 O(N^2) STORM PREVENTER 🚨
+            # Watchdog fires events for directories whenever their contents change.
+            # Since Watchdog natively fires individual events for all files *inside* dragged-and-dropped folders anyway, 
+            # we can completely ban directory events to prevent telemetry flooding and recursive OS walks.
+            if is_dir:
+                return
 
             filename = Path(src_path).name
-            if filename.startswith('.') or filename.endswith('~'): return
+            if filename.startswith('.') or filename.endswith('~') or filename == 'CODE_INDEX.md': return
 
             op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
             try:
                 rel_to_target = os.path.relpath(src_path, self.target_path).replace('\\', '/')
+                if rel_to_target == '.' or rel_to_target == '': return
                 logical_path = f"vfs://{self.repo_dir}/{rel_to_target}"
 
                 if is_dir:
                     logical_path += '/'
-
                 # CPU Optimization: Drop events for ignored directories/patterns before waking the Event Bus
                 parts = set(p.lower() for p in logical_path.strip('/').split('/'))
+
+                # Hardcoded OS Guardrails to prevent Watchdog infinite I/O loops and UI flooding
+                if parts.intersection({'.git', '.insetu', 'node_modules', '__pycache__', 'venv'}): return
+
                 if parts.intersection(self.ignore_dirs): return
                 if any(pattern in logical_path for pattern in self.ignore_patterns): return
-
                 import time
                 now = time.time()
 
+                logical_path_lower = logical_path.lower()
+
                 # Deduplication 1: Was this file recently modified natively by our own VFS?
-                if now - _NATIVE_VFS_WRITES.get(logical_path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                if now - _NATIVE_VFS_WRITES.get(logical_path_lower, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
                     return
-
-                # Deduplication 2: Trailing Debounce for external edits
-                if logical_path in _WATCHDOG_TIMERS:
-                    _WATCHDOG_TIMERS[logical_path].cancel()
-
-                def _emit_debounced():
-                    # Final Guardrail: Ensure the VFS didn't touch it while the timer was ticking
-                    if time.time() - _NATIVE_VFS_WRITES.get(logical_path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
-                        return
-
-                    print(f"👀 [Watchdog] Caught '{op}' on: {logical_path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
-                    try:
-                        from insetu.kernel.db import get_connection
-                        w_conn = get_connection("workers", workspace_id=self.workspace_id)
-                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, op, time.time()))
-                        w_conn.commit()
-                    except Exception:
-                        pass
-
-                    hooks.emit_background('vfs_mutated', workspace_id=self.workspace_id, mutations=[{"filepath": logical_path, "operation": op, "ignore_ledger": False, "is_watchdog": True}])
-
-                    if logical_path in _WATCHDOG_TIMERS:
-                        del _WATCHDOG_TIMERS[logical_path]
-
-                timer = threading.Timer(_WATCHDOG_DEBOUNCE_WINDOW, _emit_debounced)
-                _WATCHDOG_TIMERS[logical_path] = timer
-                timer.start()
+                # Deduplication 2: Unified Trailing Debounce
+                global _WATCHDOG_THREAD
+                with _WATCHDOG_LOCK:
+                    _WATCHDOG_PENDING[logical_path_lower] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time()}
+                    if _WATCHDOG_THREAD is None or not _WATCHDOG_THREAD.is_alive():
+                        _WATCHDOG_THREAD = threading.Thread(target=_watchdog_debouncer_loop, daemon=True)
+                        _WATCHDOG_THREAD.start()
 
             except Exception:
                 pass
@@ -455,61 +485,58 @@ def resolve_logical_path(path, workspace_id=None):
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
-
     norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
+    # Centralized URI parsing to extract repository boundaries safely
+    repo_dir, rel_path = parse_uri(norm_path)
     target_repos = cfg.get("target_repos", [])
-    # Handle strict VFS logical boundary (vfs://repo/path)
-    if norm_path.startswith("vfs://"):
-        norm_path = norm_path.replace("vfs://", "", 1)
-        boundary_parts = norm_path.split('/', 1)
-        if len(boundary_parts) == 2:
-            target_repo, downstream = boundary_parts[0], boundary_parts[1].lstrip('/')
-            for repo in target_repos:
-                if target_repo == repo.get("repo_dir"):
-                    physical_path = repo.get("physical_path")
-                    expanded_base = Path(physical_path).expanduser().resolve() if physical_path else (ws_root_path / target_repo).resolve()
-                    if not expanded_base.exists() and ws_root_path.name == target_repo:
-                        expanded_base = ws_root_path
-                    return expanded_base.joinpath(downstream).resolve().as_posix()
-
-    # Pass 1: Direct match relative to workspace root (SSOT)
-    direct_cand = ws_root_path.joinpath(norm_path).resolve()
-    if direct_cand.exists():
-        return direct_cand.as_posix()
-
-    # Pass 2: Map logical workspace bounds ({repo}/path) to physical disk paths
+    # Map logical workspace bounds ({repo}/path) to physical disk paths deterministically
     for repo in target_repos:
-        repo_dir = repo.get("repo_dir")
-        if not repo_dir: continue
+        if repo_dir == repo.get("repo_dir"):
+            p_path = repo.get("physical_path")
+            repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
 
-        p_path = repo.get("physical_path")
-        repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
-        if not repo_base.exists() and ws_root_path.name == repo_dir:
-            repo_base = ws_root_path
+            # Fallback: if physical path doesn't exist but the workspace root is the repo itself
+            if not repo_base.exists() and ws_root_path.name == repo_dir:
+                repo_base = ws_root_path
 
-        # If the path explicitly starts with the repo boundary, map it directly
-        if norm_path == repo_dir or norm_path.startswith(f"{repo_dir}/"):
-            downstream = norm_path[len(repo_dir):].lstrip('/')
-            mapped_cand = repo_base.joinpath(downstream).resolve()
+            return repo_base.joinpath(rel_path).resolve().as_posix()
 
-            # For new file creation within an absolute repo, we MUST return this mapped candidate 
-            # rather than falling through to the workspace root fallback.
-            if mapped_cand.exists() or p_path:
-                return mapped_cand.as_posix()
+    # Fallback to standard sandbox resolution (reconstruct clean path without schemes)
+    clean_fallback = f"{repo_dir}/{rel_path}".strip('/')
+    return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
 
-            # Fallback: Check if downstream exists directly under workspace_root
-            direct_downstream = ws_root_path.joinpath(downstream).resolve()
-            if direct_downstream.exists():
-                return direct_downstream.as_posix()
 
-        # Rescue implicit downstream paths
-        repo_cand = repo_base.joinpath(norm_path).resolve()
-        if repo_cand.exists():
-            return repo_cand.as_posix()
+def find_path_candidates(query_path, workspace_id=None, allowed_repos=None):
+    """
+    Explicit, opt-in candidate finder for path disambiguation.
+    Principal consumer is the Yomama Sync Bridge.
+    """
+    if not query_path:
+        return []
 
-    # Fallback for new file creation outside of absolute repos: relative to workspace root.
-    return direct_cand.as_posix()
+    from insetu.core.topology.engine_topology import get_omniscient_workspace_files
+    clean_query = str(query_path).replace('\\', '/').strip('/')
+    clean_query = clean_query.replace('vfs://', '').replace('ctx://', '')
+    query_basename = Path(clean_query).name.lower()
+
+    omniscient = get_omniscient_workspace_files(workspace_id, allowed_repos)
+    candidates = []
+
+    for cand_basename, cand_rel in omniscient:
+        cand_basename_lower = cand_basename.lower()
+        cand_rel_lower = cand_rel.lower()
+
+        if cand_rel_lower == clean_query.lower():
+            candidates.append({"filepath": cand_rel, "score": 1.0, "match_type": "exact_match"})
+        elif cand_basename_lower == query_basename:
+            score = 0.9 if clean_query.lower() in cand_rel_lower else 0.8
+            candidates.append({"filepath": cand_rel, "score": score, "match_type": "basename_match"})
+        elif clean_query.lower() in cand_rel_lower or cand_rel_lower.endswith(clean_query.lower()):
+            candidates.append({"filepath": cand_rel, "score": 0.7, "match_type": "subpath_match"})
+
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    return candidates
 def get_default_repo_template(repo_dir, title=None, domain=None, description=None, exts=None):
     if not exts:
         exts = [".py", ".json", ".md", ".sh", ".txt", ".html", ".css", ".js"]

@@ -48,12 +48,14 @@ def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
 
     safe_basename = Path(filename).name
-    if "diffs/" in filename:
-        cand = Path(ctx.paths.get("diffs_dir", ctx.paths["artifacts_base"] + "/diffs")).joinpath(safe_basename).as_posix()
-    elif "workflows/" in filename:
-        cand = Path(ctx.paths.get("workflows_dir", ctx.paths["artifacts_base"] + "/workflows")).joinpath(safe_basename).as_posix()
-    else:
-        cand = Path(ctx.paths["contexts_dir"]).joinpath(safe_basename).as_posix()
+
+    # Dynamically map the artifact directory from the logical URI path
+    clean_filename = filename.replace("ctx://", "").replace("vfs://", "")
+    parts = clean_filename.split('/')
+    base_dir = parts[0] if len(parts) > 1 else "contexts"
+
+    dir_key = f"{base_dir}_dir"
+    cand = Path(ctx.paths.get(dir_key, ctx.paths["artifacts_base"] + f"/{base_dir}")).joinpath(safe_basename).as_posix()
 
     if os.path.exists(cand):
         return cand, True
@@ -180,10 +182,10 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
 
     from insetu.kernel.workers import submit_one_shot_job
     submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
-def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=None, **kwargs):
+def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, ledger_events=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
 
-    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+    chain_job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
     steps = []
     for res in ctx.emit('register_compilation_steps'):
@@ -210,7 +212,7 @@ def _execute_delayed_compile(workspace_id=None, force_full=False, ledger_events=
                 "on_complete_hook": "compilation_sequence_complete"
             }
         })
-        submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id)
+        submit_immediate_job(chain_job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id)
 
 register_callback("gather", "execute_delayed_compile", _execute_delayed_compile)
 
@@ -674,7 +676,9 @@ def generate_context_file(workspace_id=None, target_repos=None):
     ctx.save_manifest(manifest, is_full_compile=(target_repos is None))
     ctx.sync_vfs_barrier()
 @gather_bp.worker("pack_selection_task")
-def _pack_selection_worker(ctx, items, job_id=None):
+def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
+    if items is None:
+        items = kwargs.get('items', [])
     ctx.jobs.update_progress("Compiling selected files into context payload...")
     if not items:
         raise ValueError("No items provided.")
@@ -787,12 +791,17 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         import time
         from insetu.kernel.db import get_connection
         w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
-        while True:
+        
+        timeout_loops = 0
+        while timeout_loops < 20:
             active_tpl = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'tpl_%' AND status IN ('pending', 'processing')").fetchone()
             if not active_tpl:
                 break
             ctx.jobs.update_progress("Waiting for topology to settle...")
             time.sleep(0.5)
+            timeout_loops += 1
+        if timeout_loops >= 20:
+            print("⚠️ Topology Barrier Timeout: A topology resolution task is hung or thread-starved. Proceeding with compilation to prevent deadlock.")
 
         # Topology Flush: Drain pending mutation events so topology_ledger reflects disk reality
         from insetu.core.topology.engine_topology import resolve_topology_buffer
@@ -903,10 +912,10 @@ def api_gather_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
     w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
-    # Reattach check: If ANY compilation job is currently running, attach to it.
-    existing_job = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'cmp_%' AND status IN ('pending', 'processing')").fetchone()
+    # Reattach check: Only attach to pending jobs. Avoid attaching to processing jobs which may be hung.
+    existing_job = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'cmp_%' AND status = 'pending'").fetchone()
     if existing_job:
-        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing compilation."}), 202
+        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing pending compilation."}), 202
 
     # 1. Ask ecosystem for compilation steps
     steps = []
@@ -972,9 +981,19 @@ def hook_request_paths(workspace_id=None, **kwargs):
         os.makedirs(paths["contexts_dir"], exist_ok=True)
         return paths
     except Exception: return {}
+_manifest_thread_cache = threading.local()
 
 @hooks.on('request_manifest')
 def hook_request_manifest(workspace_id=None, **kwargs):
+    import time
+    now = time.time()
+    if not hasattr(_manifest_thread_cache, 'data'):
+        _manifest_thread_cache.data = {}
+
+    cache = _manifest_thread_cache.data.get(workspace_id)
+    if cache and now - cache['ts'] < 2.0:
+        return cache['manifest']
+
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger").fetchall()
@@ -982,6 +1001,8 @@ def hook_request_manifest(workspace_id=None, **kwargs):
         for r in rows:
             if r['entry_json']:
                 manifest[r['filepath']] = json.loads(r['entry_json'])
+
+        _manifest_thread_cache.data[workspace_id] = {'ts': now, 'manifest': manifest}
         return manifest
     except Exception: pass
     return {}
@@ -992,14 +1013,18 @@ def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
         ctx = gather_bp.get_context(workspace_id)
         return extract_manifest_files(ctx.manifest, target_key=target_key, domain='ctx')
     except Exception: return []
-
 @hooks.on('resolve_payload_chunks')
-def hook_resolve_payload_chunks(uri=None, workspace_id=None, **kwargs):
+def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kwargs):
     if not uri: return []
     try:
-        ctx = gather_bp.get_context(workspace_id)
         basename = Path(uri).name
-        chunks = ctx.get_manifest_files(target_key=basename)
+        if manifest:
+            from insetu.core.utils_core import extract_manifest_files
+            chunks = extract_manifest_files(manifest, target_key=basename, domain='ctx')
+        else:
+            ctx = gather_bp.get_context(workspace_id)
+            chunks = ctx.get_manifest_files(target_key=basename)
+
         if not chunks: return [uri]
 
         base_dir = uri.rsplit('/', 1)[0] if '/' in uri else ""
@@ -1010,6 +1035,8 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, **kwargs):
         return [uri]
 @hooks.on('save_manifest')
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
+    if hasattr(_manifest_thread_cache, 'data') and workspace_id in _manifest_thread_cache.data:
+        del _manifest_thread_cache.data[workspace_id]
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         now_ts = time.time()

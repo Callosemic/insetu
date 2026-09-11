@@ -1,6 +1,7 @@
 import time
 import uuid
 import json
+import threading
 from pathlib import Path
 from insetu.kernel.extension import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
@@ -21,8 +22,10 @@ TOPOLOGY_SCHEMA = {
         "timestamp": "REAL"
     }
 }
+_vfs_manifest_thread_cache = threading.local()
+
 topology_bp = InSetuExtension(
-    'topology', 
+    'topology',  
     __name__, 
     title="Topology Engine", 
     description="Single Source of Truth (SSOT) for workspace file mapping and structural bucket routing.",
@@ -30,6 +33,7 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight repository signatures for the vfs domain."""
@@ -40,6 +44,7 @@ def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs)
         repo = r['repo']
         vfs_sigs[repo] = f"{r['cnt']}-{r['max_ts']}"
     return {"vfs": vfs_sigs}
+
 @topology_bp.route('vfs', methods=['GET'])
 def api_topology_vfs_repo(ctx):
     """Surgically fetches the VFS bucket structure for a specific repository."""
@@ -62,6 +67,8 @@ def api_topology_vfs_repo(ctx):
 @hooks.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
+    if hasattr(_vfs_manifest_thread_cache, 'data') and workspace_id in _vfs_manifest_thread_cache.data:
+        del _vfs_manifest_thread_cache.data[workspace_id]
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
 
@@ -91,6 +98,14 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
 @hooks.on('request_vfs_manifest')
 def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     """Returns the vfs manifest derived directly from the topology ledger."""
+    now = time.time()
+    if not hasattr(_vfs_manifest_thread_cache, 'data'):
+        _vfs_manifest_thread_cache.data = {}
+
+    cache = _vfs_manifest_thread_cache.data.get(workspace_id)
+    if cache and now - cache['ts'] < 2.0:
+        return cache['manifest']
+
     ctx = topology_bp.get_context(workspace_id)
     rows = ctx.db.get_all("topology_ledger")
 
@@ -103,7 +118,9 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
             manifest[manifest_key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
         manifest[manifest_key]["files"].append(r['filepath'])
 
+    _vfs_manifest_thread_cache.data[workspace_id] = {'ts': now, 'manifest': manifest}
     return manifest
+
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
     resolve_topology_buffer(workspace_id)
@@ -112,6 +129,7 @@ def get_omniscient_workspace_files(workspace_id, allowed_repos):
     placeholders = ','.join(['?'] * len(allowed_repos))
     rows = ctx.db.execute(f"SELECT filepath FROM topology_ledger WHERE repo IN ({placeholders})", tuple(allowed_repos)).fetchall()
     return [(Path(r['filepath']).name, r['filepath']) for r in rows]
+
 def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
     """SSOT accessor to retrieve ledger paths and format them cleanly for downstream modules."""
     resolve_topology_buffer(workspace_id)
@@ -126,6 +144,7 @@ def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
         else:
             result.append(fp)
     return result
+
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
@@ -146,11 +165,11 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         filepath = m.get("filepath")
         if not filepath:
             continue
-        # Gatekeeper: Filter out internal system artifacts and VFS context streams
+        # Gatekeeper: Filter out internal system artifacts, VFS context streams, and index files
         import re
         norm_path = filepath.replace('\\', '/').strip('/')
         norm_path = re.sub(r'^\./+', '', norm_path)
-        if norm_path.startswith("ctx://") or "/data/contexts/" in norm_path or "/data/diffs/" in norm_path or "/data/workflows/" in norm_path or ".insetu/data/" in norm_path:
+        if norm_path.startswith("ctx://") or "/data/" in norm_path or ".insetu/data/" in norm_path or norm_path.endswith("CODE_INDEX.md"):
             continue
 
         if not norm_path.startswith("vfs://"):
@@ -165,16 +184,17 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     if buffered_count == 0:
         print(f"🌍 [TOPOLOGY TELEMETRY] 0 mutations buffered (filtered out as artifacts).")
         return
-
     conn.commit()
 
     # Dispatch the resolution worker. The `coalesce=True` flag ensures that if a storm 
     # of mutations arrives within the debounce window, they attach to the existing job.
-    job_id = f"tpl_{uuid.uuid4().hex[:8]}"
+    job_id = f"tpl_res_{workspace_id}"
     print(f"🌍 [TOPOLOGY TELEMETRY] Submitting resolve_topology_task (job_id={job_id}).")
     submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=workspace_id, coalesce=True)
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
+    if hasattr(_vfs_manifest_thread_cache, 'data') and workspace_id in _vfs_manifest_thread_cache.data:
+        del _vfs_manifest_thread_cache.data[workspace_id]
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
     events = conn.execute("SELECT id, filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
@@ -190,36 +210,61 @@ def resolve_topology_buffer(workspace_id):
     dirty_repos = set()
     target_repos = ctx.config.get("target_repos", [])
     target_repos_map = {r.get("repo_dir"): r for r in target_repos if r and r.get("repo_dir")}
+    from insetu.kernel.utils import parse_uri
+    import os
 
-    expanded_events = []
+    final_events = []
+
+    # Safely expand directories without iterating over a mutating list
     for e in events:
-        filepath = e["filepath"]
+        raw_fp = e["filepath"]
         op = e["mutation_type"]
-        if op == "save" and filepath.endswith('/'):
-            repo_dir = filepath.split('/')[0] if '/' in filepath else "global"
+
+        repo_dir, rel_path = parse_uri(raw_fp)
+
+        if repo_dir and repo_dir not in target_repos_map and not rel_path:
+            rel_path = repo_dir
+            repo_dir = "global"
+        else:
+            repo_dir = repo_dir or "global"
+
+        is_dir = raw_fp.endswith('/')
+        if not is_dir and op == "save":
+            repo_base = Path(ctx.get_repo_path(repo_dir)) if repo_dir != "global" else None
+            if repo_base:
+                target_dir = repo_base / rel_path.strip('/')
+                if target_dir.exists() and target_dir.is_dir():
+                    is_dir = True
+
+        # Prevent root repository directories from expanding and causing an infinite loop
+        if op == "save" and is_dir and rel_path.strip('/'):
             repo_cfg = target_repos_map.get(repo_dir)
             if repo_cfg:
-                import os
                 repo_base = Path(ctx.get_repo_path(repo_dir))
-                rel_dir = filepath[len(repo_dir)+1:].strip('/')
+                rel_dir = rel_path.strip('/')
                 target_dir = repo_base / rel_dir if rel_dir else repo_base
                 if target_dir.exists() and target_dir.is_dir():
-                    for root, _, files in os.walk(target_dir):
+                    for root, dirs, files in os.walk(target_dir):
+                        dirs[:] = [d for d in dirs if d not in ['.git', 'node_modules', '__pycache__', 'venv', '.insetu']]
                         for f in files:
                             f_path = Path(root).joinpath(f).as_posix()
                             try:
                                 rel_file = os.path.relpath(f_path, repo_base).replace('\\', '/')
-                                expanded_events.append({"filepath": f"vfs://{repo_dir}/{rel_file}", "mutation_type": "save"})
+                                final_events.append({"filepath": f"vfs://{repo_dir}/{rel_file}", "mutation_type": "save"})
                             except ValueError:
                                 pass
         else:
-            expanded_events.append({"filepath": filepath, "mutation_type": op})
-    from insetu.kernel.utils import parse_uri
+            final_events.append({"filepath": raw_fp, "mutation_type": op})
 
-    for e in expanded_events:
+    for e in final_events:
         raw_fp = e["filepath"]
         repo_dir, rel_path = parse_uri(raw_fp)
-        repo_dir = repo_dir or "global"
+
+        if repo_dir and repo_dir not in target_repos_map and not rel_path:
+            rel_path = repo_dir
+            repo_dir = "global"
+        else:
+            repo_dir = repo_dir or "global"
 
         clean_filepath = f"{repo_dir}/{rel_path}" if repo_dir != "global" else rel_path
         vfs_fp = f"vfs://{clean_filepath}"
@@ -287,10 +332,11 @@ def resolve_topology_buffer(workspace_id):
         workspace_id=workspace_id, 
         dirty_repos=list(dirty_repos), 
         dirty_buckets=list(dirty_buckets), 
-        events=expanded_events
+        events=final_events
     )
 
-    return expanded_events
+    return final_events
+
 @hooks.on('workspace_boot')
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
@@ -304,13 +350,14 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
 
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
     submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id)
-
 @topology_bp.worker("boot_scan_task")
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
     force_topology_scan(workspace_id=ctx.workspace_id)
     from insetu.kernel.hooks import hooks
-    hooks.emit_background('topology_boot_complete', workspace_id=ctx.workspace_id)
+    # Phase 2 Trigger: Synchronous emission ensures deterministic, sequential execution of deferred tasks
+    hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
+
 @topology_bp.worker("resolve_topology_task")
 def _background_resolve_topology(ctx, job_id=None, **kwargs):
     """
@@ -334,6 +381,7 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
         return {"message": "No topology events to resolve."}
 
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
+
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
     import subprocess
@@ -345,8 +393,15 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
     ignore_dirs = set(config.get("repo_ignore_dirs") if config.get("repo_ignore_dirs") is not None else (live_cfg.get("ignore_dirs") or []))
     ignore_files = set(config.get("repo_ignore_files") if config.get("repo_ignore_files") is not None else (live_cfg.get("ignore_files") or []))
     ignore_patterns = config.get("repo_ignore_patterns") if config.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
-
     archive_type = config.get("archive_type", "repo")
+
+    def _fallback_rglob():
+        fb_files = set()
+        for p in Path(repo_path).rglob('*'):
+            if p.is_file() and '.git' not in p.parts and 'node_modules' not in p.parts and '__pycache__' not in p.parts:
+                try: fb_files.add(p.relative_to(repo_path).as_posix())
+                except ValueError: pass
+        return fb_files
 
     if archive_type == "repo":
         if os.path.exists(repo_path):
@@ -362,20 +417,12 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 pass
         try:
             result = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], 
-                                            capture_output=True, text=True, check=True, cwd=repo_path)
+                                    capture_output=True, text=True, check=True, cwd=repo_path)
             git_files = set(result.stdout.splitlines())
         except Exception:
-            git_files = set()
-            for p in Path(repo_path).rglob('*'):
-                if p.is_file():
-                    try: git_files.add(p.relative_to(repo_path).as_posix())
-                    except ValueError: pass
+            git_files = _fallback_rglob()
     else:
-        git_files = set()
-        for p in Path(repo_path).rglob('*'):
-            if p.is_file():
-                try: git_files.add(p.relative_to(repo_path).as_posix())
-                except ValueError: pass
+        git_files = _fallback_rglob()
 
     valid_files = set()
     repo_p = Path(repo_path)
@@ -444,3 +491,36 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
                         return b, None
     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
     return catch_all, None
+
+@hooks.on('resolve_owning_workspaces')
+def resolve_owning_workspaces(filepath=None, **kwargs):
+    """Deterministically maps a physical path back to all owning tenant workspaces."""
+    if not filepath: return set()
+    
+    from insetu.kernel.utils import load_json_file, get_workspace_physics, load_config, _cwd
+    import os
+    from pathlib import Path
+    
+    abs_target = os.path.abspath(filepath)
+    index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    
+    owning_workspaces = set()
+    if os.path.exists(index_path):
+        w_data = load_json_file(index_path, {})
+        for ws_id in w_data.get("workspaces", {}).keys():
+            try:
+                _, ws_root, _ = get_workspace_physics(ws_id)
+                if abs_target.startswith(os.path.abspath(ws_root)):
+                    owning_workspaces.add(ws_id)
+                    continue
+                    
+                cfg = load_config(ws_id)
+                for repo in cfg.get("target_repos", []):
+                    p_path = repo.get("physical_path")
+                    if p_path and abs_target.startswith(os.path.abspath(os.path.expanduser(p_path))):
+                        owning_workspaces.add(ws_id)
+                        break
+            except Exception:
+                continue
+                
+    return owning_workspaces

@@ -15,10 +15,9 @@ def resolve_vfs_file(workspace_id, filename):
     filename = filename.strip()
     if filename.startswith("system://"):
         filename = filename.replace("system://", "ctx://", 1)
-
     check_name = filename.replace("vfs://", "", 1) if filename.startswith("vfs://") else filename
 
-    is_artifact = check_name.startswith("ctx://") or check_name.startswith("contexts/") or check_name.startswith("diffs/") or check_name.startswith("workflows/")
+    is_artifact = check_name.startswith("ctx://") or check_name.startswith("data/") or check_name.startswith(".insetu/")
     if not is_artifact:
         from insetu.kernel.hooks import hooks
         manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
@@ -26,17 +25,26 @@ def resolve_vfs_file(workspace_id, filename):
         base_name = Path(filename).name
         if base_name in manifest:
             is_artifact = True
+            entry = manifest[base_name]
+            out_dir = entry.get("meta", {}).get("out_dir")
+            if out_dir:
+                filename = f"ctx://{out_dir}/{filename}"
+            else:
+                meta_type = entry.get("meta", {}).get("type", "")
+                mapped_dir = "diffs" if meta_type == "diff" else ("workflows" if meta_type == "flow" else "contexts")
+                filename = f"ctx://{mapped_dir}/{filename}"
         else:
             for entry in manifest.values():
                 if base_name in entry.get("chunks", []):
                     is_artifact = True
-                    meta_type = entry.get("meta", {}).get("type", "")
-                    if meta_type == "diff":
-                        filename = f"ctx://diffs/{filename}"
-                    elif meta_type == "flow":
-                        filename = f"ctx://workflows/{filename}"
+                    out_dir = entry.get("meta", {}).get("out_dir")
+                    if out_dir:
+                        filename = f"ctx://{out_dir}/{filename}"
                     else:
-                        filename = f"ctx://contexts/{filename}"
+                        # Dynamic mapping fallback
+                        meta_type = entry.get("meta", {}).get("type", "")
+                        mapped_dir = "diffs" if meta_type == "diff" else ("workflows" if meta_type == "flow" else "contexts")
+                        filename = f"ctx://{mapped_dir}/{filename}"
                     break
 
     from insetu.kernel.hooks import hooks
@@ -99,7 +107,7 @@ def download_file(filename):
         return send_file(resolved_path, as_attachment=False)
 
     return send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
-def _background_fs_search(job_id, workspace_id, query):
+def _background_fs_search(job_id, workspace_id, query, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
         from insetu.kernel.hooks import hooks

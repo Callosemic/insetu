@@ -133,23 +133,53 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 if explicit_repo in allowed_repos:
                     resolved_path = target_file
                     resolution_type = "genesis"
-                elif len(allowed_repos) == 1:
-                    cand_path = f"{allowed_repos[0]}/{norm_target}"
-                    patch_tel["status"] = "needs_confirmation"
-                    patch_tel["resolution_type"] = "genesis_pinned_shortcut"
-                    patch_tel["candidates"] = [{"filepath": cand_path, "score": 1.0, "match_type": "genesis_pinned"}]
-                    patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                    telemetry["can_commit"] = False
-                    telemetry["summary"]["action_required"] += 1
-                    telemetry["patches"].append(patch_tel)
-                    continue
                 else:
-                    patch_tel["status"] = "failed"
-                    patch_tel["error_message"] = "Genesis patch missing valid repository anchor."
-                    telemetry["summary"]["failed"] += 1
-                    telemetry["can_commit"] = False
-                    telemetry["patches"].append(patch_tel)
-                    continue
+                    if omniscient_cache is None:
+                        omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+
+                    target_path_obj = Path(norm_target)
+                    target_dirname = target_path_obj.parent.as_posix()
+                    if target_dirname == '.': target_dirname = ''
+                    target_basename = target_path_obj.name
+
+                    cand_list = []
+                    if target_dirname:
+                        known_dirs = set()
+                        for _, cand_rel in omniscient_cache:
+                            cand_parent = Path(cand_rel).parent.as_posix()
+                            known_dirs.add(cand_parent if cand_parent != '.' else '')
+                        target_dir_suffix = target_dirname if target_dirname.startswith('/') else '/' + target_dirname
+
+                        for kd in known_dirs:
+                            if kd == target_dirname or kd.endswith(target_dir_suffix):
+                                cand_list.append({"filepath": f"{kd}/{target_basename}", "score": 0.9, "match_type": "genesis_guess"})
+
+                    if not cand_list and len(allowed_repos) == 1:
+                        cand_path = f"{allowed_repos[0]}/{norm_target}"
+                        cand_list.append({"filepath": cand_path, "score": 1.0, "match_type": "genesis_pinned"})
+
+                    if cand_list:
+                        confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                        if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                            resolved_path = confirmed
+                            resolution_type = "confirmed_candidate"
+                        else:
+                            patch_tel["status"] = "needs_confirmation"
+                            patch_tel["resolution_type"] = "genesis_guess"
+                            patch_tel["candidates"] = cand_list
+                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                            telemetry["can_commit"] = False
+                            telemetry["summary"]["action_required"] += 1
+                            telemetry["patches"].append(patch_tel)
+                            continue
+                    else:
+                        patch_tel["status"] = "failed"
+                        patch_tel["error_message"] = "Genesis patch missing valid repository anchor, and path fragment could not be uniquely matched."
+                        telemetry["summary"]["failed"] += 1
+                        telemetry["can_commit"] = False
+                        telemetry["patches"].append(patch_tel)
+                        continue
+
                 if get_file_content(resolved_path) is not None:
                     if target_file in data.get("confirmed_candidates", {}):
                         pass # Overwrite explicitly authorized
@@ -189,14 +219,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     elif ok_search:
                         resolved_path = cand
                         resolution_type = "pinned_shortcut"
-
             # Step d & e: Multi-Match Path Scoring
             if not resolved_path and not is_genesis:
-                if omniscient_cache is None:
-                    omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
-
-                basename = Path(target_file).name
-                candidates = [cand_rel for f, cand_rel in omniscient_cache if f == basename]
+                raw_candidates = ctx.find_path_candidates(target_file, allowed_repos=allowed_repos)
+                candidates = [c["filepath"] for c in raw_candidates if c["score"] >= 0.8]
 
                 best_search_cand = None
                 best_replace_cand = None
@@ -394,7 +420,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                 ast.parse(new_content)
                             elif ext in ['.js', '.ts', '.mjs']:
                                 try:
-                                    res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8')
+                                    res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
                                     if res.returncode != 0:
                                         syntax_error = True
                                         err_str = res.stderr.strip()
