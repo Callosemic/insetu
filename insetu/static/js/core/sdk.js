@@ -479,7 +479,6 @@ window.inSetu.utils.parseURI = function(pathStr) {
         scheme = schemeMatch[1];
         str = schemeMatch[2];
     }
-
     str = str.replace(/^\/+/, '');
     const parts = str.split('/');
     const repo = parts.length > 1 ? parts[0] : '';

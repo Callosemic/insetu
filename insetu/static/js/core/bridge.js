@@ -651,6 +651,43 @@ export class InSetuExtBridge extends InSetuElement {
                                                 }
                                             }}>📁 Remap</button>
                                         </div>
+                                        ${this._fileVerificationCache[file] === false ? (() => {
+                                            let cands = [];
+                                            if (this.vfs && this.vfs.getGlobalManifest) {
+                                                const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
+
+                                                // Strip OS attachment duplicate suffixes like " (1)", " (2)"
+                                                const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
+                                                const cleanFileLower = cleanFile.toLowerCase();
+                                                const basename = cleanFile.split('/').pop().toLowerCase();
+
+                                                // 1. Try matching the exact fragment (e.g. "c/file.py" matches "a/b/c/file.py")
+                                                cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
+
+                                                // 2. Fall back to matching the exact basename
+                                                if (cands.length === 0) {
+                                                    cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
+                                                }
+                                            }
+                                            if (cands.length > 0) {
+                                                return html`
+                                                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 6px;">
+                                                        <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Suggested Matches:</span>
+                                                        ${cands.map(c => html`
+                                                            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border);">
+                                                                <span style="font-family: monospace; font-size: 0.8rem; color: var(--text); word-break: break-all;">${c}</span>
+                                                                <button class="btn-sm" style="background: var(--intent-success); margin: 0; padding: 4px 8px; font-size: 0.75rem;" @click=${(e) => {
+                                                                    e.stopPropagation();
+                                                                    BridgeStore.getState().updateGroupFile(file, c);
+                                                                    window.inSetu.stores.Fs.getState().verifyFiles([c], true);
+                                                                }}>Swap</button>
+                                                            </div>
+                                                        `)}
+                                                    </div>
+                                                `;
+                                            }
+                                            return '';
+                                        })() : ''}
                                     </insetu-card>
                                     <!-- Patches (Subsequent Stacked Chunks) -->
                                     ${groupCells.map((c, i) => {
@@ -942,7 +979,7 @@ customElements.define('insetu-ext-bridge-history', InSetuExtBridgeHistory);
 window.ExtensionRegistry.registerExtension('bridge', {
     name: "Yomama Sync Bridge",
     version: "2.0.0",
-    offline_mode: "none",
+    offline_mode: "read_only",
     entityActions: [
         {
             targetEntity: 'yomama-turn',

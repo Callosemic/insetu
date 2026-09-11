@@ -39,6 +39,12 @@ export const AppStore = createExtensionStore('App', {
     currentBrowsePath: [],
     browserConfig: { mode: 'view', callback: null },
     blobViewer: { open: false, title: '', content: '', suggestedFilename: '' },
+    warmingQueue: new Set(),
+    enqueueWarming: (urls) => AppStore.setState(s => {
+        const q = new Set(s.warmingQueue);
+        urls.forEach(u => q.add(u));
+        return { warmingQueue: q };
+    }),
     resolvingLocks: {},
     setResolvingLock: (path, action) => AppStore.setState(s => ({ resolvingLocks: { ...s.resolvingLocks, [path]: { action, expires: Date.now() + 10000 } } })),
     clearResolvingLock: (path) => AppStore.setState(s => { const newLocks = { ...s.resolvingLocks }; delete newLocks[path]; return { resolvingLocks: newLocks }; }),

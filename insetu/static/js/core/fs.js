@@ -359,6 +359,8 @@ async function saveModalFile(autoSave = false) {
         try { JSON.parse(content); } catch (e) { return alert("Invalid JSON syntax: " + e.message); }
     }
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', { filepath: state.filename, content }, {
+        collapseKey: `vfs:save:${state.filename}`,
+        pendingMutations: [state.filename],
         loadingText: 'Saving...',
         silent: autoSave,
         onSuccess: () => {
@@ -397,6 +399,9 @@ async function renameModalFile() {
     parts.pop();
     const destPath = parts.length > 0 ? parts.join('/') + '/' + newName : newName;
     await window.inSetu.sys.executeWorkspaceMutation('fs/move', { filepath: filename, dest_path: destPath }, {
+        collapseKey: `vfs:move:${filename}`,
+        pendingMutations: [destPath],
+        deletedMutations: [filename],
         loadingText: 'Renaming...',
         onSuccess: () => {
             closeFileModal(true);
@@ -409,6 +414,9 @@ async function executeMove() {
     const { currentFile, destPath } = FsStore.getState().modals.move;
     if (!destPath || destPath === currentFile) return alert("Please enter a valid new destination path.");
     await window.inSetu.sys.executeWorkspaceMutation('fs/move', { filepath: currentFile, dest_path: destPath }, {
+        collapseKey: `vfs:move:${currentFile}`,
+        pendingMutations: [destPath],
+        deletedMutations: [currentFile],
         loadingText: 'Moving...',
         onSuccess: () => {
             FsStore.getState().setModal('move', { open: false });
@@ -421,6 +429,8 @@ async function archiveModalFile() {
     const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to archive this file?\nIt will be moved to an 'archived/' subdirectory.")) return;
     await window.inSetu.sys.executeWorkspaceMutation('fs/archive', { filepath: filename }, {
+        collapseKey: `vfs:archive:${filename}`,
+        deletedMutations: [filename],
         onSuccess: (data) => {
             closeFileModal(true);
             refreshActiveFileViews(filename, data.new_path);
@@ -430,6 +440,8 @@ async function archiveModalFile() {
 export async function deleteEmptyFolder(dirPath) {
     if (!confirm(`Are you sure you want to delete the empty folder /${dirPath}?`)) return;
     await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: dirPath }, {
+        collapseKey: `vfs:delete:${dirPath}`,
+        deletedMutations: [dirPath],
         onSuccess: () => {
             const parts = dirPath.split('/');
             parts.pop();
@@ -443,6 +455,8 @@ async function deleteModalFile() {
     const filename = FsStore.getState().fileModal.filename;
     if (!confirm("Are you sure you want to delete this file?\nThis cannot be undone!")) return;
     await window.inSetu.sys.executeWorkspaceMutation('fs/delete', { filepath: filename }, {
+        collapseKey: `vfs:delete:${filename}`,
+        deletedMutations: [filename],
         onSuccess: () => {
             closeFileModal(true);
             refreshActiveFileViews(filename);
@@ -952,11 +966,12 @@ async function saveNewFile() {
     if (Array.isArray(hookRes) && hookRes.length > 0 && typeof hookRes[0] === 'string') {
         content = hookRes[0];
     }
-
     await window.inSetu.sys.executeWorkspaceMutation('fs/save', {
         filepath,
         content
     }, {
+        collapseKey: `vfs:save:${filepath}`,
+        pendingMutations: [filepath],
         loadingText: 'Saving...',
         onSuccess: async () => {
             // Optimistic outbox injection for immediate offline editor reads
@@ -1023,6 +1038,8 @@ async function saveNewFolder() {
         repo_dir: folderName,
         ...payloadExt
     }, {
+        collapseKey: `vfs:save:${filepath}`,
+        pendingMutations: [filepath],
         loadingText: "Creating...",
         onSuccess: async () => {
             if (isNewRepo) {
