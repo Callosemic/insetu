@@ -135,6 +135,8 @@ initShortcutRouter(window.ExtensionRegistry, () => {
 });
 // Default OS Shortcut Registrations
 
+const _isCoreExt = (extName) => window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'offline'].includes(extName);
+
 export function autoWireSettingsSchemas() {
     if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
         window.inSetu.settingsSchemas = window.inSetu.settingsSchemas || {};
@@ -145,7 +147,7 @@ export function autoWireSettingsSchemas() {
             ...Object.keys(window.inSetu.serverSchemas || {})
         ]);
         allExts.forEach((extName) => {
-            const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
+            const isCore = _isCoreExt(extName);
             if (!isCore && window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes(extName)) {
                 return;
             }
@@ -327,35 +329,77 @@ async function checkManifestVersion() {
         }
         if (manifestUpdated) {
             AppStore.setState({ manifest: currentManifest || { vfs: {}, ctx: {} } });
-            // Phase 4: Hash-Delta Cache Warmer (Background Priority Threads)
-            if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true) {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                // Warm offline-capable VFS files dynamically
-                const targetConfigs = AppStore.getState().targetConfigs || [];
-                const offlineRepos = targetConfigs.filter(c => c.offline_capable).map(c => c.repo_dir);
-                if (offlineRepos.length > 0 && currentManifest.vfs && sigs.vfs) {
-                    Object.entries(currentManifest.vfs).forEach(([key, bucket]) => {
-                        const repo = key.split('::')[0];
-                        const currentSig = sigs.vfs[repo];
-                        if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
-                            (bucket.files || []).forEach(f => {
-                                pathsToWarm.push(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}&t=${Date.now()}`);
-                            });
-                            warmedVfsSignatures[repo] = currentSig;
-                        }
-                    });
-                }
 
-                const uniquePaths = Array.from(new Set(pathsToWarm));
-                uniquePaths.forEach(p => {
-                    if (window.inSetu?.api?.request) {
-                        window.inSetu.api.request(p, { priority: 'low' }, activeWs).catch(() => {});
-                    } else {
-                        fetch(p, { priority: 'low' }).catch(() => {});
+            // Phase 4: Hash-Delta Cache Warmer (Queue Injection)
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+
+            // Map offline-capable VFS files dynamically
+            const targetConfigs = AppStore.getState().targetConfigs || [];
+            const offlineRepos = targetConfigs.filter(c => c.offline_capable).map(c => c.repo_dir);
+            if (offlineRepos.length > 0 && currentManifest.vfs && sigs.vfs) {
+                Object.entries(currentManifest.vfs).forEach(([key, bucket]) => {
+                    const repo = key.split('::')[0];
+                    const currentSig = sigs.vfs[repo];
+                    if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
+                        (bucket.files || []).forEach(f => {
+                            pathsToWarm.push(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}&t=${Date.now()}`);
+                        });
+                        warmedVfsSignatures[repo] = currentSig;
                     }
                 });
             }
+
+            if (pathsToWarm.length > 0) {
+                AppStore.getState().enqueueWarming(pathsToWarm);
+            }
         }
+        // Phase 5: Drain the Global Cache Warming Queue (Background Priority Threads)
+        // Guardrail: Suspend warming during active I/O (is_compiling) and for 2.5 minutes after backend boot
+        const backendUptimeSeconds = deltaData.timestamp - (deltaData.backend_boot_ts || deltaData.timestamp);
+        const isBootSettled = backendUptimeSeconds > 150;
+        const isSystemSettled = !deltaData.is_compiling && isBootSettled;
+
+        if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true && isSystemSettled) {
+            const q = Array.from(AppStore.getState().warmingQueue);
+            if (q.length > 0) {
+                // Dynamic Throttle: Adjust fetch rate based on live network conditions
+                let chunkSize = 50; 
+
+                if (navigator.connection) {
+                    if (navigator.connection.effectiveType === '2g' || navigator.connection.effectiveType === '3g') {
+                        chunkSize = 10; // Severe throttle for slow mobile networks
+                    } else if (navigator.connection.downlink) {
+                        const mbps = navigator.connection.downlink;
+                        if (mbps < 2) chunkSize = 15;       // Weak connection
+                        else if (mbps < 10) chunkSize = 30; // Moderate connection
+                        else chunkSize = 50;                // Fast connection (LAN/Strong Wi-Fi)
+                    }
+                }
+
+                // Spread the chunk evenly across a 2.5 second window to prevent bursting
+                const staggerMs = Math.floor(2500 / chunkSize);
+
+                const chunk = q.slice(0, chunkSize);
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+
+                chunk.forEach((p, index) => {
+                    setTimeout(() => {
+                        if (window.inSetu?.api?.request) {
+                            window.inSetu.api.request(p, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
+                        } else {
+                            fetch(p, { priority: 'low' }).catch(() => {});
+                        }
+                    }, index * staggerMs);
+                });
+
+                AppStore.setState(s => {
+                    const newQ = new Set(s.warmingQueue);
+                    chunk.forEach(u => newQ.delete(u));
+                    return { warmingQueue: newQ };
+                });
+            }
+        }
+
         if (deltaData.timestamp) {
             lastManifestSyncTs = deltaData.timestamp;
         }
@@ -1255,7 +1299,7 @@ async function performSoftRefresh() {
             // Flush old memory states only for deactivated extensions to protect core layout definitions
             if (window.ExtensionRegistry && window.ExtensionRegistry._manifests) {
                 window.ExtensionRegistry._manifests.forEach((ext, extName) => {
-                    const isCoreModule = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files'].includes(extName);
+                    const isCoreModule = _isCoreExt(extName);
                     if (!window.ACTIVE_EXTENSIONS.includes(extName) && !isCoreModule) {
                         if (window.ExtensionRegistry.executeUnload) {
                             window.ExtensionRegistry.executeUnload(extName);
@@ -1267,7 +1311,7 @@ async function performSoftRefresh() {
             if (window.ExtensionRegistry) {
                 window.ExtensionRegistry._settingsActions = [];
                 window.ExtensionRegistry._manifests.forEach((manifest, extName) => {
-                    const isCore = window.inSetu?.isCore ? window.inSetu.isCore(extName) : ['bridge', 'gather', 'config', 'files', 'editor'].includes(extName);
+                    const isCore = _isCoreExt(extName);
                     if (isCore || window.ACTIVE_EXTENSIONS.includes(extName)) {
                         if (manifest.settingsActions) {
                             manifest.settingsActions.forEach(act => {

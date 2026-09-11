@@ -23,12 +23,13 @@ def _prepare_job_payload(args_json, workspace_id):
     conn = get_connection("workers", workspace_id=workspace_id)
     now = time.time()
     try:
-        args_payload = json.loads(args_json)
+        args_payload = args_json if isinstance(args_json, dict) else json.loads(args_json)
         if "_workspace_id" not in args_payload:
             args_payload["_workspace_id"] = workspace_id
         args_json = json.dumps(args_payload)
     except Exception:
-        pass
+        if isinstance(args_json, dict):
+            args_json = json.dumps(args_json)
     return workspace_id, conn, now, args_json
 def submit_job(job_id, ext_name, callback_name, interval_ms, args_json="{}", jitter_ms=0, workspace_id=None):
     """
@@ -138,12 +139,19 @@ def update_immediate_job_status(job_id, status, message=None, artifact=None, wor
 def _execute_immediate_job(job_id, ext_name, callback_name, args_json, target_ws):
     """Executes an immediate job and manages its lifecycle in the ledger."""
     func = _callbacks.get(f"{ext_name}:{callback_name}")
-    try:
-        kwargs = json.loads(args_json)
-        if "_workspace_id" in kwargs:
-            target_ws = kwargs.pop("_workspace_id")
-    except Exception:
-        kwargs = {}
+    kwargs = {}
+    if args_json:
+        try:
+            parsed = args_json if isinstance(args_json, dict) else json.loads(args_json)
+            if isinstance(parsed, dict):
+                kwargs = parsed
+                if "_workspace_id" in kwargs:
+                    target_ws = kwargs.pop("_workspace_id")
+        except Exception as e:
+            print(f"⚠️ [Worker] Failed to parse args_json for {job_id}: {e}")
+
+    chain_data = kwargs.pop('_chain', None)
+    step_error = None
 
     if func:
         try:
@@ -154,17 +162,48 @@ def _execute_immediate_job(job_id, ext_name, callback_name, args_json, target_ws
             if 'job_id' in sig.parameters:
                 kwargs['job_id'] = job_id
             func(**kwargs)
-
-            # If the function didn't already mark it completed/failed, do it here gracefully
-            conn = get_connection("workers", workspace_id=target_ws)
-            current = conn.execute("SELECT status FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
-            if current and current['status'] == 'processing':
-                update_immediate_job_status(job_id, 'completed', 'Execution finished.', None, target_ws)
         except Exception as e:
             print(f"❌ [Worker] Immediate Job {job_id} failed on workspace [{target_ws}]: {e}")
-            update_immediate_job_status(job_id, 'failed', f"Error: {str(e)}", None, target_ws)
+            step_error = str(e)
     else:
-        update_immediate_job_status(job_id, 'failed', f"Callback {ext_name}:{callback_name} not found.", None, target_ws)
+        step_error = f"Callback {ext_name}:{callback_name} not found."
+        print(f"❌ [Worker] {step_error}")
+
+    # --- STEP CHAINING LOGIC (ADR 0037 - Resilient Handoff) ---
+    if chain_data and chain_data.get('steps'):
+        next_step = chain_data['steps'][0]
+        remaining_steps = chain_data['steps'][1:]
+        
+        next_chain = {
+            "steps": remaining_steps,
+            "on_complete_hook": chain_data.get('on_complete_hook')
+        }
+        
+        next_kwargs = {k: v for k, v in kwargs.items() if k not in ('job_id', 'workspace_id')}
+        next_kwargs['_chain'] = next_chain
+        
+        next_args_json = json.dumps(next_kwargs)
+        
+        msg = f"Transitioning to {next_step['ext_name']}..."
+        if step_error:
+            msg = f"Step '{ext_name}' failed. {msg}"
+            
+        update_immediate_job_status(job_id, 'processing', msg, None, target_ws)
+        _executor.submit(_execute_immediate_job, job_id, next_step['ext_name'], next_step['worker_name'], next_args_json, target_ws)
+        return
+        
+    elif chain_data and chain_data.get('on_complete_hook'):
+        from insetu.kernel.hooks import hooks
+        hooks.emit_background(chain_data['on_complete_hook'], workspace_id=target_ws)
+
+    # Final completion/failure evaluation for the terminal step
+    conn = get_connection("workers", workspace_id=target_ws)
+    current = conn.execute("SELECT status FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
+    if current and current['status'] == 'processing':
+        if step_error:
+            update_immediate_job_status(job_id, 'failed', f"Error: {step_error}", None, target_ws)
+        else:
+            update_immediate_job_status(job_id, 'completed', 'Execution finished.', None, target_ws)
 def register_ephemeral_artifact(filepath, owner, ttl_seconds, workspace_id="default"):
     conn = get_connection("workers", workspace_id=workspace_id)
     now = time.time()
@@ -204,7 +243,7 @@ def _execute_job(job_id, ext_name, callback_name, interval_ms, jitter_ms, args_j
     func = _callbacks.get(f"{ext_name}:{callback_name}")
     target_ws = fallback_ws
     try:
-        kwargs = json.loads(args_json)
+        kwargs = args_json if isinstance(args_json, dict) else json.loads(args_json)
         if "_workspace_id" in kwargs:
             target_ws = kwargs.pop("_workspace_id")
     except Exception:
@@ -338,9 +377,9 @@ def _init_worker_schema(workspace_id="default"):
         _INITIALIZED_WORKSPACES.add(workspace_id)
 _observer = None
 @hooks.on('system_boot', priority=10)
-def start_workers():
+def start_workers(**kwargs):
         global _executor, _metronome_thread, _observer
-        _executor = ThreadPoolExecutor(max_workers=3)
+        _executor = ThreadPoolExecutor(max_workers=20)
 
         from insetu.kernel.utils import _cwd, load_json_file
         import os
@@ -376,7 +415,7 @@ def start_workers():
             print(f"⚠️  Watcher initialization failed: {e}")
 
 @hooks.on('system_shutdown')
-def stop_workers():
+def stop_workers(**kwargs):
     global _executor, _observer
     print("🛑 Suspending Worker Metronome...")
     _shutdown_event.set()

@@ -84,7 +84,7 @@ def _vfs_commit_worker():
             continue
 
 @hooks.on('system_boot')
-def start_vfs_pipeline():
+def start_vfs_pipeline(**kwargs):
     global _VFS_WORKER_THREAD
     _VFS_SHUTDOWN_SIGNAL.clear()
     _VFS_WORKER_THREAD = threading.Thread(target=_vfs_commit_worker, name="VFS-Commit-Pipeline", daemon=True)
@@ -92,7 +92,7 @@ def start_vfs_pipeline():
     print("🚀 Asynchronous VFS Commit Pipeline Online.")
 
 @hooks.on('system_shutdown')
-def stop_vfs_pipeline():
+def stop_vfs_pipeline(**kwargs):
     print("🛑 Draining VFS Commit Pipeline...")
     _VFS_SHUTDOWN_SIGNAL.set()
     _VFS_WRITE_QUEUE.put(None)
@@ -246,11 +246,16 @@ class VFSTransaction:
 
             if not resolved:
                 resolved = resolve_sandbox_path(filepath, self.workspace_id)
-
-        if not os.path.exists(resolved):
+        if not resolved or not os.path.exists(resolved):
             return None
-        with open(resolved, 'r', encoding='utf-8') as f:
-            return f.read()
+        if os.path.isdir(resolved):
+            return None
+        try:
+            with open(resolved, 'r', encoding='utf-8') as f:
+                return f.read()
+        except UnicodeDecodeError:
+            # Graceful fallback for binary payloads (e.g. .git objects) to prevent 500 errors
+            return "[Binary Data]"
 
     def __enter__(self):
         self._in_transaction = True

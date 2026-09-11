@@ -394,7 +394,6 @@ class ExtensionContext:
         overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=self.workspace_id)
         resolved = next((r for r in overrides if r), None)
         return resolved or resolve_sandbox_path(filepath, self.workspace_id)
-
     def get_repo_path(self, repo_dir):
         """SSOT for resolving a repository's physical override or logical path."""
         import os
@@ -402,13 +401,20 @@ class ExtensionContext:
             if c.get("repo_dir") == repo_dir and c.get("physical_path"):
                 return os.path.abspath(os.path.expanduser(c.get("physical_path")))
         return self.resolve_path(repo_dir)
+
+    def find_path_candidates(self, query_path, allowed_repos=None):
+        """Opt-in candidate discovery for path disambiguation."""
+        from insetu.core.utils_core import find_path_candidates
+        return find_path_candidates(query_path, workspace_id=self.workspace_id, allowed_repos=allowed_repos)
     @property
     def manifest(self):
         """Reads the centralized context manifest statelessly."""
-        from insetu.kernel.hooks import hooks
-        ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=self.workspace_id) if m), {})
-        vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=self.workspace_id) if m), {})
-        return {"vfs": vfs_manifest, "ctx": ctx_manifest}
+        if not hasattr(self, '_manifest_cache'):
+            from insetu.kernel.hooks import hooks
+            ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=self.workspace_id) if m), {})
+            vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=self.workspace_id) if m), {})
+            self._manifest_cache = {"vfs": vfs_manifest, "ctx": ctx_manifest}
+        return self._manifest_cache
 
     def get_manifest_files(self, target_key=None):
         """SSOT Helper to extract polymorphic lists of files or chunks from the manifest."""
@@ -463,6 +469,8 @@ class ExtensionContext:
         """Writes updates to the centralized context manifest."""
         from insetu.kernel.hooks import hooks
         hooks.emit('save_manifest', manifest_data=manifest_data, is_full_compile=is_full_compile, workspace_id=self.workspace_id)
+        if hasattr(self, '_manifest_cache'):
+            del self._manifest_cache
     def sync_vfs_barrier(self):
         """Halts the current thread until all pending VFS writes are physically flushed to disk."""
         from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL

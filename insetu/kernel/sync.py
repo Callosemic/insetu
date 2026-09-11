@@ -3,6 +3,8 @@ from insetu.kernel.db import get_connection
 from insetu.kernel.hooks import hooks
 from insetu.kernel.utils import sniff_tenant_id
 
+KERNEL_BOOT_TS = time.time()
+
 def get_system_deltas(workspace_id=None, since_ts=0.0):
     """
     Calculates lightweight system deltas and collects domain-specific signatures.
@@ -40,9 +42,9 @@ def get_system_deltas(workspace_id=None, since_ts=0.0):
                     signatures[domain] = {}
                 if isinstance(sigs, dict):
                     signatures[domain].update(sigs)
-
     return {
         "timestamp": now,
+        "backend_boot_ts": KERNEL_BOOT_TS,
         "is_compiling": is_compiling,
         "mutations": mutations,
         "signatures": signatures

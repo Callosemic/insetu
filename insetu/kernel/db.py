@@ -41,8 +41,8 @@ register_schema('workers', {
         'timestamp': 'REAL'
     }
 })
-@hooks.on('system_boot')
-def init_declarative_schemas():
+@hooks.on('system_boot', priority=90)
+def init_declarative_schemas(**kwargs):
     """Automatically provisions schemas and boots workspaces across all tenants."""
     from insetu.kernel.utils import get_all_workspace_ids
     for ws_id in get_all_workspace_ids():

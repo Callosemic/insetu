@@ -4,7 +4,6 @@ This index serves as the architectural map. It outlines the core directories and
 
 ```text
 insetu/
-├── .                               # [comment required]
 ├── .gitignore                      # Defines intentionally untracked files and volatile state to ignore.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
@@ -12,7 +11,6 @@ insetu/
 ├── LICENSE                         # Apache License 2.0 open-source distribution terms.
 ├── NOTICE                          # Third-party dependency attributions and bundled software notices.
 ├── README.md                       # Primary project overview, architecture, and installation guide.
-├── dist                            # [comment required]
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
 │   ├── 01_engineering_standards.md # Engineering standards and audit guardrails.
@@ -58,6 +56,8 @@ insetu/
 │   │   ├── 0042-vfs-logical-uri-boundary-standardization-and-path-heuristic-purge.md # Standardized vfs:// logical URI boundaries and purged legacy path heuristics.
 │   │   ├── 0043-client-offline-provider-and-offline-engine.md # Client offline provider, SW core vendorization, and outbox reconciliation.
 │   │   ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
+│   │   ├── 0045-two-pass-deterministic-boot-sequence.md # Two-pass deterministic boot sequence bisecting spatial discovery and deferred mutation.
+│   │   ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
 │   │   └── archived/               # Superseded and historical ADR documents.
 │   │       ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │   │       ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -215,13 +215,6 @@ insetu/
 │   │   └── vendor.json             # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   └── templates/                  # Jinja2 HTML templates.
 │       └── index.html              # The master SPA entry point containing the OS crash shell.
-├── insetu.egg-info/                # [comment required]
-│   ├── PKG-INFO                    # [comment required]
-│   ├── SOURCES.txt                 # [comment required]
-│   ├── dependency_links.txt        # [comment required]
-│   ├── entry_points.txt            # [comment required]
-│   ├── requires.txt                # [comment required]
-│   └── top_level.txt               # [comment required]
 ├── pyproject.toml                  # Python package definition and semantic-release configurations.
 ├── scripts/                        # Build, vendorization, and utility shell scripts.
 │   ├── .gitkeep                    # Git folder retention.

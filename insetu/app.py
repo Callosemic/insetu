@@ -463,8 +463,13 @@ import os
 from insetu.kernel.hooks import hooks
 
 # Fire the system boot hook to ignite the worker pools and VFS queues globally
-# Guardrail: Prevent the Werkzeug master reloader process from executing background threads
-if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+# Guardrail: Prevent the Werkzeug master reloader process from executing background threads,
+# but allow ignition if running under standard WSGI servers where the reloader is absent.
+import sys
+is_werkzeug_worker = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+is_cli_serve = "serve" in sys.argv
+
+if is_werkzeug_worker or not is_cli_serve:
     try:
         hooks.emit('system_boot')
     except Exception as e:

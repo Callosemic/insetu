@@ -221,13 +221,24 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     break
             if not has_uri_check:
                 report_violation("CANONICAL_URI_EVENT_MANDATE", self.filepath, node.lineno, "Event handler for 'vfs_mutated' or 'topology_resolved' must process paths through parse_uri(), _to_canonical_event(), or canonical 'vfs://' URI validation.")
-
+        for sys_event in ('system_boot', 'system_shutdown'):
+            if sys_event in hook_events and not node.args.kwarg:
+                report_violation("SYSTEM_HOOK_KWARGS_MANDATE", self.filepath, node.lineno, f"System hook handler '{node.name}' subscribing to '{sys_event}' must accept **kwargs.")
         if 'system_boot' in hook_events:
             for child in ast.walk(node):
                 if isinstance(child, ast.Call):
                     func_name = child.func.id if isinstance(child.func, ast.Name) else (child.func.attr if isinstance(child.func, ast.Attribute) else "")
                     if func_name in ('generate_context_file', 'walk'):
                         report_violation("BOOT_HOOK_NONBLOCKING_MANDATE", self.filepath, child.lineno, f"Synchronous execution '{func_name}' detected in system_boot hook. Offload heavy operations to background workers via submit_immediate_job.")
+
+        if 'workspace_boot' in hook_events:
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    func_name = getattr(child.func, 'attr', '') or getattr(child.func, 'id', '')
+                    if func_name in ('save', 'delete', 'move', 'archive') and isinstance(getattr(child.func, 'value', None), ast.Attribute) and getattr(child.func.value, 'attr', '') == 'vfs':
+                        report_violation("WORKSPACE_BOOT_VFS_BAN", self.filepath, child.lineno, "Phase 1 Boot Violation: VFS mutations are strictly banned during 'workspace_boot'. Defer physical disk I/O to 'topology_boot_complete' (ADR 0045).")
+                    elif func_name in ('execute_vfs_save', 'execute_vfs_delete', 'execute_vfs_move', 'execute_vfs_archive'):
+                        report_violation("WORKSPACE_BOOT_VFS_BAN", self.filepath, child.lineno, "Phase 1 Boot Violation: Direct VFS execution is strictly banned during 'workspace_boot'. Defer physical disk I/O to 'topology_boot_complete' (ADR 0045).")
 
         if 'request_paths' in hook_events:
             for child in ast.walk(node):

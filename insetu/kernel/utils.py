@@ -3,7 +3,6 @@ import os
 import json
 
 _cwd = os.getcwd()
-
 def sniff_tenant_id():
     try:
         from flask import request
@@ -168,7 +167,6 @@ def get_all_workspace_ids():
     return workspace_ids
 def generate_idempotency_hash(payload: dict) -> str:
     return json.dumps(payload, sort_keys=True)
-
 def parse_uri(path_str):
     """SDK Helper: Parses any scheme:// or relative path into (repo_dir, relative_path)."""
     if not path_str:
@@ -205,14 +203,18 @@ def slugify(text):
     clean = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
     clean = re.sub(r'[^a-zA-Z0-9_-]', '_', clean.lower())
     return re.sub(r'_+', '_', clean).strip('_')
-
 def resolve_sandbox_path(filepath, workspace_id=None):
     """Tier 1 Safe Path Resolution: Prevents directory traversal breakouts."""
     import re
     _, workspace_root, _ = get_workspace_physics(workspace_id)
     ws_root_path = Path(workspace_root).resolve()
 
-    norm_path = filepath
+    # Strip logical scheme wrappers to prevent creating literal "vfs:" folders on disk
+    norm_path = str(filepath).strip()
+    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', norm_path)
+    if match:
+        norm_path = match.group(2)
+
     if Path(norm_path).is_absolute():
         resolved_abs = Path(norm_path).resolve()
         if str(resolved_abs).startswith(str(ws_root_path)):
@@ -223,7 +225,6 @@ def resolve_sandbox_path(filepath, workspace_id=None):
             norm_path = resolved_abs.name
     norm_path = re.sub(r'\.\.(?=/|$)', '', str(norm_path))
     norm_path = re.sub(r'/+', '/', norm_path).strip('/')
-
     resolved = ws_root_path.joinpath(norm_path).resolve()
     if not resolved.exists():
         parts = norm_path.split('/')
