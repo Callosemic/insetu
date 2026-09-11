@@ -132,7 +132,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Ephemeral.
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('workspace_boot')` triggering non-blocking background worker tasks.
+    * Core Hooks: `@hooks.on('topology_boot_complete')` triggering non-blocking background worker tasks.
     * Settings Schema: Declarative port mode selector and manual bind action trigger.
 ### O. Semantic Update (`engine_update.py` & `ext_update.js`)
 * **Status:** Active Extension (SDK V2).
@@ -157,7 +157,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/cronic.db` (`cronic_jobs` table) and `.insetu/data/cronic_*.log` execution logs.
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('workspace_boot')` for crontab drift healing and daily log sweeping.
+    * Core Hooks: `@hooks.on('topology_boot_complete')` for crontab drift healing and daily log sweeping.
     * UI Slots: Primary Navigation Tab (`cronic` -> `main`).
     * Polymorphic Cards: Registers `cronic-schedule-file` entity action for `.py` and `.sh` files.
 

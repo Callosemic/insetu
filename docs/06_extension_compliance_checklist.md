@@ -28,10 +28,13 @@ The backend must never block the ASGI event loop or bypass the topology ledgers.
 *   **Async Worker Execution (ADR 0005, 0034)**
     *   ❌ **Noncompliant:** Executing heavy SQLite queries or disk sweeps synchronously on the main thread, or spinning up rogue `threading.Thread(target=..., daemon=True)` loops that evade the OS Metronome.
     *   ✅ **Gold Standard:** Returning a `202 Accepted` immediately with a `job_id`, deferring all execution to a formal `@ext_bp.worker` routed through `ctx.jobs.submit()`.
-
 *   **Virtual File System Transactions (ADR 0004, 0018)**
     *   ❌ **Noncompliant:** Using native `open('file.md', 'w')`, `os.remove()`, or passing leaky abstraction flags like `ctx.vfs.save(..., data={"action": "delete"})` to remove files.
     *   ✅ **Gold Standard:** Exclusively using `ctx.vfs.save()` and the formalized `ctx.vfs.delete()` methods, ensuring mutations are correctly staged in the atomic write queue and broadcast to the Event Ledger.
+
+*   **Two-Pass Boot Lifecycle (ADR 0045)**
+    *   ❌ **Noncompliant:** Executing `ctx.vfs.save()`, submitting heavy background workers, or triggering disk mutations during the `@hooks.on('workspace_boot')` lifecycle phase, which causes I/O starvation.
+    *   ✅ **Gold Standard:** Registering schemas and memory states during `workspace_boot` (Phase 1), and deferring all physical disk mutations and background compilation tasks to the `@hooks.on('topology_boot_complete')` hook (Phase 2).
 
 *   **Spatial Pathing (ADR 0013)**
     *   ❌ **Noncompliant:** Using `os.path.join()` or raw string concatenation (`path + '/' + filename`).
