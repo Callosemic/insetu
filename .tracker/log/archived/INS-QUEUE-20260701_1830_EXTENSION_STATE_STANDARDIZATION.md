@@ -7,6 +7,7 @@ title: "Standardization: Replicate ext_citations Vanilla Zustand Architecture ac
 created_at: '2026-07-01T18:30:00'
 closed_at: '2026-07-04T17:30:00'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

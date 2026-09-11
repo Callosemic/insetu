@@ -7,6 +7,7 @@ title: "I/O Block Ban Violation: Async Pandoc Document Compilation"
 created_at: '2026-07-03T00:28:00'
 closed_at: '2026-07-05T01:49:15'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

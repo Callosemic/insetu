@@ -7,6 +7,7 @@ title: "Enforce execute_vfs_save across Tracker and Research Extensions"
 created_at: '2026-07-01T10:32:00'
 closed_at: '2026-07-02T23:23:49'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

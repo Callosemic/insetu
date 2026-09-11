@@ -12,6 +12,7 @@ tags:
   - UI
   - LitElement
   - Refactor
+tier: 3
 ---
 
 ## Description

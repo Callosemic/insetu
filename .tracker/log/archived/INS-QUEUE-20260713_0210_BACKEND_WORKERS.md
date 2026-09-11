@@ -12,6 +12,7 @@ tags:
   - DX
   - SDK
   - Workers
+tier: 3
 ---
 
 ## Description

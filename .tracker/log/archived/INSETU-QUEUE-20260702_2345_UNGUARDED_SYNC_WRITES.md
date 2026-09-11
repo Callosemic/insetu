@@ -7,6 +7,7 @@ title: "Audit and Refactor Unguarded Synchronous File Writes"
 created_at: '2026-07-02T23:45:00'
 closed_at: '2026-07-05T01:49:15'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

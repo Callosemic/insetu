@@ -10,6 +10,7 @@ sub_bucket: "None"
 delivery_date: "2026-09-06"
 tags:
   - Extension
+tier: 3
 ---
 
 # Release Management UI Extension

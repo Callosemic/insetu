@@ -12,6 +12,7 @@ tags:
   - DRY
   - UI Factory
   - Refactor
+tier: 3
 ---
 
 ## Description

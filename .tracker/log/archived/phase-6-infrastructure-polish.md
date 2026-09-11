@@ -9,6 +9,7 @@ closed_at: '2026-07-02T23:51:00'
 sub_bucket: "None"
 tags:
   - Architecture
+tier: 3
 ---
 
 # Infrastructure Polish

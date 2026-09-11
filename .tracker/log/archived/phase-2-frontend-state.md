@@ -9,6 +9,7 @@ closed_at: '2026-07-06T11:05:14'
 sub_bucket: "None"
 tags:
   - Architecture
+tier: 3
 ---
 
 # Frontend State Hardening

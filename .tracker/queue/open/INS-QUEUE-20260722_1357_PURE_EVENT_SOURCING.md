@@ -12,6 +12,7 @@ tags:
   - CQRS
   - Event-Sourcing
   - VFS
+tier: 3
 ---
 
 ## Description

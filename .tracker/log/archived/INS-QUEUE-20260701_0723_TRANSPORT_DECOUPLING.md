@@ -7,6 +7,7 @@ title: "Ecosystem Blueprint: Complete Separation of Transport and Logic Layers"
 created_at: '2026-07-01T07:23:00'
 closed_at: '2026-07-02T23:23:49'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

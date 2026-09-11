@@ -7,6 +7,7 @@ title: "Optimize Frontend Speed: DOM Batching"
 created_at: '2026-06-22T04:42:00'
 closed_at: '2026-07-01T07:25:00'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

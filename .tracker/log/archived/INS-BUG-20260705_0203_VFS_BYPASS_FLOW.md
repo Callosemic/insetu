@@ -7,6 +7,7 @@ title: "VFS Pipeline Bypass in Flow Batch Deletion"
 created_at: '2026-07-05T02:03:00'
 closed_at: '2026-07-05T03:53:36'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

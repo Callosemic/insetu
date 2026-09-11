@@ -12,6 +12,7 @@ tags:
   - Backend
   - Performance
   - CQRS
+tier: 3
 ---
 
 ## Description

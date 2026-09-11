@@ -11,6 +11,7 @@ tags:
   - Frontend
   - LitElement
   - Refactor
+tier: 3
 ---
 
 ## Description

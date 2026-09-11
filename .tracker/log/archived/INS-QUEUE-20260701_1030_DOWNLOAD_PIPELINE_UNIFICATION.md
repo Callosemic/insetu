@@ -7,6 +7,7 @@ title: "Unify Extension Download Patterns via downloadFile Pipeline"
 created_at: '2026-07-01T10:30:00'
 closed_at: '2026-07-02T23:51:00'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

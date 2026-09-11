@@ -10,6 +10,7 @@ sub_bucket: "None"
 delivery_date: "2026-10-04"
 tags:
   - Epic
+tier: 3
 ---
 
 # Open Source Release Prep

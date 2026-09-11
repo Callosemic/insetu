@@ -7,6 +7,7 @@ title: "Security Hardening: Replace Naive Regex Script Stripping with DOMPurify 
 created_at: '2026-07-01T12:15:00'
 closed_at: '2026-07-04T17:30:00'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

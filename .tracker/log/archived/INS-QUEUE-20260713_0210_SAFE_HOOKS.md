@@ -12,6 +12,7 @@ tags:
   - DX
   - SDK
   - Event-Bus
+tier: 3
 ---
 
 ## Description

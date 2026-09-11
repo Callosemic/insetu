@@ -12,6 +12,7 @@ tags:
   - Architecture
   - LitElement
   - Refactor
+tier: 3
 ---
 
 ## Description

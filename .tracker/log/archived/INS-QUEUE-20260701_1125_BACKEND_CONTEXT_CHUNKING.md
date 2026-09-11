@@ -7,6 +7,7 @@ title: "Offload RAG Context File Chunking to Backend Compilation Pipeline"
 created_at: '2026-07-01T11:25:00'
 closed_at: '2026-07-05T03:53:36'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description

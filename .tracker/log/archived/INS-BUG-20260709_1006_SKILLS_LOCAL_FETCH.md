@@ -11,6 +11,7 @@ tags:
   - Frontend
   - Compliance
   - DRY
+tier: 3
 ---
 
 ## Description

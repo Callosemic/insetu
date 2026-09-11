@@ -12,6 +12,7 @@ tags:
   - Backend
   - Tech Debt
   - Logging
+tier: 3
 ---
 
 ## Description

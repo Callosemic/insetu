@@ -9,6 +9,7 @@ closed_at: "2026-08-18T09:55:00"
 sub_bucket: "None"
 delivery_date: "2026-08-23"
 tags: "['SDK', 'Refactor', 'API', 'Extensions']"
+tier: 3
 ---
 
 ## Description

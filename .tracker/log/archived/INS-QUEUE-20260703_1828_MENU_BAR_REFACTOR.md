@@ -11,6 +11,7 @@ tags:
   - ui
   - refactor
   - tech-debt
+tier: 3
 ---
 
 ## Description

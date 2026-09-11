@@ -7,6 +7,7 @@ title: "Decouple REST Routes into Shallow HTTP Transport Shells"
 created_at: '2026-07-01T10:33:00'
 closed_at: '2026-07-02T23:23:49'
 sub_bucket: "None"
+tier: 3
 ---
 
 ## Description
