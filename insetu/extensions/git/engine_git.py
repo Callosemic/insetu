@@ -63,11 +63,11 @@ def resolve_git_artifacts(filename=None, workspace_id=None, **kwargs):
     from pathlib import Path
     import os
     ctx = git_bp.get_context(workspace_id)
-
-    safe_basename = Path(filename).name
-    cand = Path(ctx.paths["diffs_dir"]).joinpath(safe_basename).as_posix()
-    if os.path.exists(cand):
-        return cand, True
+    if filename.startswith("ctx://diffs/") or filename.startswith("diffs/"):
+        safe_basename = Path(filename).name
+        cand = Path(ctx.paths["diffs_dir"]).joinpath(safe_basename).as_posix()
+        if os.path.exists(cand):
+            return cand, True
     return None
 @hooks.on('register_compilation_steps')
 def _register_git_compilation_step(workspace_id=None, **kwargs):
@@ -77,6 +77,10 @@ def _register_git_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "git",
         "worker_name": "compile_diffs_task"
     }]
+import threading
+_DIFF_FILE_CACHE = {}
+_DIFF_FILE_CACHE_LOCK = threading.Lock()
+
 @git_bp.worker("compile_diffs_task")
 def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs):
     ctx.jobs.update_progress("Evaluating Git diffs...")
@@ -187,7 +191,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         "title": config.get("title", safe_r_dir.replace('_', ' ').title()),
                         "domain": config.get("domain", "Workspaces")
                     }
-
             for out_filename, files_in_bucket in bucketed_files.items():
                 if touched_diff_buckets is not None and out_filename not in touched_diff_buckets:
                     continue
@@ -201,10 +204,30 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                 header_lines.append("\n\n")
                 header_str = "\n".join(header_lines)
 
-                files_to_diff = [orig_f for _, s, orig_f in files_in_bucket if s != "??"]
+                # Shadow Cache: Filter out unchanged files based on mtime and size
+                stale_files = []
+                cached_blocks = {}
+                for rel_path, status, orig_filepath in files_in_bucket:
+                    abs_filepath = git_root / orig_filepath
+                    try:
+                        stat = os.stat(abs_filepath)
+                        mtime, size = stat.st_mtime, stat.st_size
+                    except FileNotFoundError:
+                        mtime, size = 0, 0
+                    cache_key = (workspace_id, str(abs_filepath))
+                    with _DIFF_FILE_CACHE_LOCK:
+                        cached = _DIFF_FILE_CACHE.get(cache_key)
+
+                    if cached and cached['mtime'] == mtime and cached['size'] == size and cached['status'] == status:
+                        cached_blocks[orig_filepath] = cached['block']
+                    else:
+                        stale_files.append((rel_path, status, orig_filepath, mtime, size))
+
+                files_to_diff = [orig_f for _, s, orig_f, _, _ in stale_files if s != "??"]
                 bulk_diffs = {}
                 if files_to_diff:
                     try:
+                        # Diff ONLY the stale files to save massive CPU/IO overhead
                         diff_res = execute_git(str(git_root), ['diff', 'HEAD', '--'] + files_to_diff, check=False)
                         for chunk in diff_res.stdout.split('diff --git '):
                             if not chunk.strip(): continue
@@ -218,6 +241,15 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
 
                 text_blocks = []
                 for rel_path, status, orig_filepath in files_in_bucket:
+                    if orig_filepath in cached_blocks:
+                        text_blocks.append(cached_blocks[orig_filepath])
+                        continue
+
+                    # Retrieve matching stale file entry to save its metadata
+                    stale_entry = next((item for item in stale_files if item[2] == orig_filepath), None)
+                    if not stale_entry: continue
+                    _, _, _, mtime, size = stale_entry
+
                     block_lines = []
                     abs_filepath = git_root / orig_filepath
                     if 'D' in status:
@@ -246,8 +278,25 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         else:
                             block_lines.append(bulk_diffs.get(orig_filepath, "[No diff available or file is binary]"))
                         block_lines.append("\n\n")
+                    block_text = "\n".join(block_lines)
+                    text_blocks.append(block_text)
 
-                    text_blocks.append("\n".join(block_lines))
+                    # Store in the shadow cache with thread-safe capacity eviction
+                    cache_key = (workspace_id, str(abs_filepath))
+                    with _DIFF_FILE_CACHE_LOCK:
+                        if len(_DIFF_FILE_CACHE) > 5000:
+                            try:
+                                oldest_key = next(iter(_DIFF_FILE_CACHE))
+                                _DIFF_FILE_CACHE.pop(oldest_key, None)
+                            except StopIteration:
+                                pass
+
+                        _DIFF_FILE_CACHE[cache_key] = {
+                            'mtime': mtime,
+                            'size': size,
+                            'status': status,
+                            'block': block_text
+                        }
                 if text_blocks:
                     from insetu.core.gather.engine_gather import compile_context_payload
 
@@ -255,7 +304,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     existing_content = ""
                     try:
                         # Reconstruct full existing content from all chunks to prevent false positive diffs
-                        responses = ctx.emit('resolve_payload_chunks', uri=f"ctx://diffs/{out_filename}")
+                        responses = ctx.emit('resolve_payload_chunks', uri=f"ctx://diffs/{out_filename}", manifest=working_manifest)
                         chunks = next((r for r in responses if r), [f"ctx://diffs/{out_filename}"])
                         for c in chunks:
                             chunk_text = ctx.vfs.read(c, is_absolute_artifact=True)

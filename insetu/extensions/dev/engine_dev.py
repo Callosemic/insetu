@@ -208,7 +208,7 @@ def sweep_telemetry_worker(ctx, **kwargs):
     
     ctx.db.commit()
     return "Telemetry swept."
-@hooks.on('workspace_boot')
+@hooks.on('topology_boot_complete')
 def init_dev_workers(workspace_id=None, **kwargs):
     try:
         from insetu.kernel.workers import submit_job

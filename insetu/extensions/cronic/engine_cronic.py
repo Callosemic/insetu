@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import uuid
 import time
+from pathlib import Path
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.kernel.hooks import hooks
@@ -64,9 +65,8 @@ def _sync_system_crontab(ctx):
             cmd = f"bash {abs_path}"
         else:
             cmd = abs_path
-
         log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
         cron_entry = f"{job['schedule']} {cmd} >> {log_file} 2>&1 {workspace_tag}{job['id']}"
         crontab_lines.append(cron_entry)
@@ -128,11 +128,10 @@ def get_logs(ctx):
         return jsonify({"logs": "No job ID supplied."}), 400
 
     log_file = ctx.resolve_path(f".insetu/data/cronic_{job_id}.log")
-
-    if os.path.exists(log_file):
-        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
-            return jsonify({"logs": "".join(lines[-100:])})
+    content = ctx.vfs.read(log_file, is_absolute_artifact=True)
+    if content is not None:
+        lines = content.splitlines(keepends=True)
+        return jsonify({"logs": "".join(lines[-100:])})
     return jsonify({"logs": "No execution logs recorded yet."})
 @cronic_bp.worker("run_manual_task")
 def _run_manual_worker(ctx, job_id=None, **kwargs):
@@ -145,7 +144,7 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     ext = os.path.splitext(abs_path)[1].lower()
 
     log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
     if ext == '.py':
         cmd = f'"{sys.executable}" "{abs_path}"'
@@ -155,8 +154,10 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     # Route output streams directly to the log file at the OS level
     full_cmd = f"{cmd} >> \"{log_file}\" 2>&1"
 
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"\n--- Manual Run Dispatched [{time.ctime()}] ---\n")
+    log_content = ctx.vfs.read(log_file, is_absolute_artifact=True) or ""
+    log_content += f"\n--- Manual Run Dispatched [{time.ctime()}] ---\n"
+    ctx.vfs.save(log_file, log_content, data={"is_absolute_artifact": True, "ignore_ledger": True})
+    ctx.sync_vfs_barrier()
 
     ctx.db.update("cronic_jobs", {"last_run": time.time(), "last_status": "dispatched"}, "id", job['id'])
 
@@ -182,13 +183,15 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
     # Issue a SIGTERM to any process executing this exact script path
     cmd = f'pkill -f "{abs_path}"'
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-
     ctx.db.update("cronic_jobs", {"last_status": "terminated"}, "id", job['id'])
 
     log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"\n--- Job Terminated Manually [{time.ctime()}] ---\n")
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+
+    log_content = ctx.vfs.read(log_file, is_absolute_artifact=True) or ""
+    log_content += f"\n--- Job Terminated Manually [{time.ctime()}] ---\n"
+    ctx.vfs.save(log_file, log_content, data={"is_absolute_artifact": True, "ignore_ledger": True})
+    ctx.sync_vfs_barrier()
 
     # pkill returns 0 if it successfully killed something, 1 if nothing matched
     if res.returncode == 0:
@@ -213,15 +216,15 @@ def _sweep_logs_worker(ctx, **kwargs):
     count = 0
     for f in os.listdir(log_dir):
         if f.startswith("cronic_") and f.endswith(".log"):
-            f_path = os.path.join(log_dir, f)
+            f_path = Path(log_dir).joinpath(f).as_posix()
             if os.path.getmtime(f_path) < cutoff:
                 try:
-                    os.remove(f_path)
+                    ctx.vfs.delete(f_path, data={"is_absolute_artifact": True, "ignore_ledger": True})
                     count += 1
                 except Exception:
                     pass
     return f"Swept {count} old log files."
-@hooks.on('workspace_boot')
+@hooks.on('topology_boot_complete')
 def cronic_workspace_boot(workspace_id=None, **kwargs):
     if not workspace_id or not has_crontab():
         return

@@ -35,8 +35,7 @@ def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
     ctx = prompts_bp.get_context(workspace_id)
     safe_basename = Path(filename).name
     cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
-
-    if filename.startswith("ctx://prompts/") or os.path.exists(cand):
+    if filename.startswith("ctx://prompts/") or filename.startswith(".insetu/prompts/"):
         if os.path.exists(cand):  
             return cand, True
     return None

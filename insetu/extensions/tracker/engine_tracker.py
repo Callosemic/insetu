@@ -123,17 +123,13 @@ TRACKER_SETTINGS_SCHEMA = [
 tracker_bp = InSetuExtension('tracker', __name__, title="Issue Tracker", description="Markdown-based Kanban issue tracking.", schema=TRACKER_SCHEMA, settings_schema=TRACKER_SETTINGS_SCHEMA)
 __depends__ = []
 @tracker_bp.worker("archive_stale_task")
-def _background_archive_stale_tickets(ctx):
+def _background_archive_stale_tickets(ctx, **kwargs):
     ctx.jobs.update_progress("Sweeping for stale entries...")
     count = archive_stale_tickets(workspace_id=ctx.workspace_id)
     return f"Archived {count} stale tickets."
 @hooks.on('workspace_boot')
-def schedule_tracker_archiving(workspace_id=None, **kwargs):
-    # Schedule background archiving to run silently every 1 hour
-    from insetu.kernel.workers import submit_job
-    submit_job(f"trk_arch_{workspace_id}", "tracker", "archive_stale_task", interval_ms=3600000, jitter_ms=300000, workspace_id=workspace_id)
-
-    # Initialize hardware-accelerated query indexes on the tickets ledger
+def initialize_tracker_schemas(workspace_id=None, **kwargs):
+    # Phase 1: Initialize hardware-accelerated query indexes on the tickets ledger
     ctx = tracker_bp.get_context(workspace_id)
     try:
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_tracker_repo ON tracker_tickets(repo)")
@@ -143,6 +139,12 @@ def schedule_tracker_archiving(workspace_id=None, **kwargs):
         ctx.db.commit()
     except Exception:
         pass
+
+@hooks.on('topology_boot_complete')
+def schedule_tracker_archiving(workspace_id=None, **kwargs):
+    # Phase 2: Schedule background archiving to run silently every 1 hour
+    from insetu.kernel.workers import submit_job
+    submit_job(f"trk_arch_{workspace_id}", "tracker", "archive_stale_task", interval_ms=3600000, jitter_ms=300000, workspace_id=workspace_id)
 @hooks.on('vfs_mutated')
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     if not mutations: return
@@ -717,11 +719,15 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 # Leverage the centralized parser, then decode to safely append hallucinated tags
                 decl_tags_str = parse_list_field(yaml_data.get('tags', '[]'))
                 decl_tags_list = json.loads(decl_tags_str)
-
                 for ht in hallucinated_tags:
                     if ht not in decl_tags_list: decl_tags_list.append(ht)
 
                 decl_tags = json.dumps(decl_tags_list) if decl_tags_list else '[]'
+
+                decl_tier = yaml_data.get('tier')
+                if decl_tier is None:
+                    decl_tier = db_tier if db_tier else _resolve_tier(ctx, decl_repo, decl_type)
+
                 # Determine if we need to rewrite YAML (fields missing or mismatched)
                 needs_rewrite = (
                     'repo' not in yaml_data or
@@ -731,7 +737,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     'status' not in yaml_data or
                     yaml_data.get('status') != decl_status or
                     'tier' not in yaml_data or
-                    int(yaml_data.get('tier', 0)) != int(decl_tier) or
+                    int(yaml_data.get('tier', 0)) != int(db_tier) or
                     clean_date_str(yaml_data.get('created_at')) != decl_created or
                     (clean_date_str(yaml_data.get('closed_at')) or 'null') != decl_closed
                 )
@@ -796,7 +802,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
 
     return enforced_count
 @tracker_bp.worker("spawn_template_task")
-def _background_spawn_template(ctx, target_repo, template_id, variables):
+def _background_spawn_template(ctx, target_repo=None, template_id=None, variables=None, **kwargs):
+    variables = variables or {}
     ctx.jobs.update_progress("Spawning template instance...")
     all_tickets = ctx.db.get_all("tracker_tickets")
 

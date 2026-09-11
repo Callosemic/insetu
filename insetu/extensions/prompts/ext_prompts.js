@@ -277,14 +277,13 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
             });
             PromptsStore.setState({ prompts: cleanPrompts });
             // Offline Cache Warming: Pre-fetch fully resolved prompt blobs silently
-            const appState = window.inSetu?.stores?.App?.getState();
-            if (appState && !appState.isOffline && navigator.connection?.saveData !== true) {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
-                cleanPrompts.forEach(p => {
-                    const fullPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p}`;
-                    // Fetch the *resolved* endpoint so the macro-expanded version is cached for offline use
-                    window.inSetu.api.request(`/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
-                });
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
+            const urlsToWarm = cleanPrompts.map(p => {
+                const fullPath = p.startsWith('.insetu/prompts/') ? p : `.insetu/prompts/${p}`;
+                return `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`;
+            });
+            if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
+                window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
             }
 
             const gatherStore = window.inSetu?.stores?.Gather;

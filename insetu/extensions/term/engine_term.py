@@ -135,7 +135,7 @@ def _run_term_stream(ws, workspace_id):
                     data = os.read(master_fd, 4096)
                     if not data:
                         break
-                    safe_send(data.decode('utf-8', errors='replace'))
+                    safe_send(data)
         except OSError:
             pass  # Expected standard exception when PTY gracefully closes
         except Exception as e:

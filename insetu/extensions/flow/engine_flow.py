@@ -26,10 +26,11 @@ def resolve_flow_artifacts(filename=None, workspace_id=None, **kwargs):
     from pathlib import Path
     import os
     ctx = flow_bp.get_context(workspace_id)
-    safe_basename = Path(filename).name
-    cand = Path(ctx.paths.get("gather_dir", "")).joinpath(safe_basename).as_posix()
-    if os.path.exists(cand):
-        return cand, True
+    if filename.startswith("ctx://workflows/") or filename.startswith("workflows/"):
+        safe_basename = Path(filename).name
+        cand = Path(ctx.paths.get("gather_dir", "")).joinpath(safe_basename).as_posix()
+        if os.path.exists(cand):
+            return cand, True
     return None
 
 @hooks.on('request_paths')
@@ -98,7 +99,7 @@ def _background_compile_workflows(ctx, **kwargs):
                 else:
                     expanded_includes.append(inc)
         for inc in expanded_includes:
-            responses = ctx.emit('resolve_payload_chunks', uri=inc)
+            responses = ctx.emit('resolve_payload_chunks', uri=inc, manifest=current_manifest)
             chunks = next((r for r in responses if r), [inc])
 
             for chunk_identifier in chunks:

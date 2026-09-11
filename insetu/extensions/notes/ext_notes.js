@@ -24,14 +24,10 @@ export const NotesStore = createExtensionStore('Notes', {
                 const notesList = data.notes || [];
                 NotesStore.setState({ notes: notesList });
                 // Offline Cache Warming: Pre-fetch note blobs silently so they survive disconnects
-                const appState = window.inSetu?.stores?.App?.getState();
-                if (appState && !appState.isOffline && navigator.connection?.saveData !== true) {
-                    const activeWs = window.inSetu.utils.getActiveWorkspace();
-                    notesList.forEach(n => {
-                        if (n.filepath) {
-                            window.inSetu.api.request(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(n.filepath)}`, { priority: 'low', onlyIfMissing: true }, activeWs).catch(() => {});
-                        }
-                    });
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const urlsToWarm = notesList.filter(n => n.filepath).map(n => `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(n.filepath)}`);
+                if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
+                    window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
                 }
             }
         } catch (e) {

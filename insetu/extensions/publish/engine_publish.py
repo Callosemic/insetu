@@ -20,8 +20,11 @@ __depends__ = []
 @hooks.on('vfs_resolve_file')
 def resolve_publish_artifacts(filename=None, workspace_id=None, **kwargs):
     if not filename: return None
+    # Strict deterministic boundary: only claim direct basename matches to prevent path hijacking
+    if '/' in filename.replace('\\', '/'): return None
+
     ctx = publish_bp.get_context(workspace_id)
-    cand = Path(ctx.paths["artifacts_base"]).joinpath(Path(filename).name).as_posix()
+    cand = Path(ctx.paths["artifacts_base"]).joinpath(filename).as_posix()
     if os.path.exists(cand):
         return cand, True
     return None

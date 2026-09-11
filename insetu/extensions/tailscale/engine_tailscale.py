@@ -101,7 +101,7 @@ tailscale_bp = InSetuExtension(
 def _background_bind_serve(ctx, **kwargs):
     ctx.jobs.update_progress("Configuring Tailscale Serve binding...")
     return _execute_serve_bind(ctx.workspace_id)
-@hooks.on('workspace_boot')
+@hooks.on('topology_boot_complete')
 def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
     """Tenant Boot Hook: Evaluates auto-bind preference off-thread when the workspace mounts."""
     if not workspace_id:

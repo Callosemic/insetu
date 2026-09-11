@@ -413,8 +413,8 @@ constructor() {
                                                 parentId: meta.parent_id || meta.parent || old.parentId,
                                                 tier: meta.tier ? parseInt(meta.tier, 10) : old.tier,
                                                 deliveryDate: meta.delivery_date && meta.delivery_date !== 'null' ? meta.delivery_date : old.deliveryDate,
-                                                tags: meta.tags ? (typeof meta.tags === 'string' ? JSON.parse(meta.tags) : meta.tags) : old.tags,
-                                                dependsOn: meta.depends_on ? (typeof meta.depends_on === 'string' ? JSON.parse(meta.depends_on) : meta.depends_on) : old.dependsOn
+                                                tags: meta.tags ? (typeof meta.tags === 'string' ? (() => { try { return JSON.parse(meta.tags.replace(/'/g, '"')); } catch(e) { return meta.tags.split(',').map(s=>s.trim().replace(/['"\[\]]/g, '')).filter(Boolean); } })() : meta.tags) : old.tags,
+                                                dependsOn: meta.depends_on ? (typeof meta.depends_on === 'string' ? (() => { try { return JSON.parse(meta.depends_on.replace(/'/g, '"')); } catch(e) { return meta.depends_on.split(',').map(s=>s.trim().replace(/['"\[\]]/g, '')).filter(Boolean); } })() : meta.depends_on) : old.dependsOn
                                             };
                                         }
                                         return { tasks };
@@ -547,7 +547,7 @@ constructor() {
             return tasks.filter(t => {
                 if (t.parentId && parentIdsInView.has(t.parentId)) return false;
                 const isChildDependency = t.dependsOn && t.dependsOn.some(dep => {
-                    const parts = dep.split('::');
+                    const parts = dep.split('/');
                     const pId = parts.length > 1 ? parts[1] : parts[0];
                     return parentIdsInView.has(pId);
                 });
@@ -560,7 +560,7 @@ constructor() {
         const topOpen = filterTopLevel(openTasks);
         const topClosed = filterTopLevel(closedTasks);
         const renderGroupedTask = (t) => {
-            const childTasks = this.tasks.filter(child => child.status !== 'template' && (child.parentId === t.id || (child.dependsOn && child.dependsOn.includes(`${t.repo}::${t.id}`))));
+            const childTasks = this.tasks.filter(child => child.status !== 'template' && (child.parentId === t.id || (child.dependsOn && (child.dependsOn.includes(`${t.repo}/${t.id}`) || child.dependsOn.includes(t.id)))));
             if (childTasks.length > 0) {
                 return html`
                     <sutram-card-group ?stacked=${true} ?accordion=${true}>

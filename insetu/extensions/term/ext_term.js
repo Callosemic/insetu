@@ -99,7 +99,9 @@ export class InSetuExtTerm extends InSetuElement {
             const dx = cx - this._touchStartX;
             const dy = cy - this._touchStartY;
 
-            if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
+            const hasSelection = this._term && this._term.hasSelection();
+
+            if (!hasSelection && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
                 if (dx > 0) this._sendData('\t'); 
                 else this._sendData('\x17'); 
             } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
@@ -417,47 +419,6 @@ export class InSetuExtTerm extends InSetuElement {
             this._ws.send(data);
         }
     }
-    _handleTouchStart(e) {
-        if (e.touches.length !== 1) return;
-        this._touchStartX = e.touches[0].clientX;
-        this._touchStartY = e.touches[0].clientY;
-
-        // Cache the coordinates immediately because the browser will wipe 
-        // the TouchEvent object from memory before the timeout resolves.
-        const cx = this._touchStartX;
-        const cy = this._touchStartY;
-
-        this._longPressTimer = setTimeout(() => {
-            this._openContextMenu(cx, cy);
-        }, 600);
-    }
-    _handleTouchEnd(e) {
-        clearTimeout(this._longPressTimer); // utils.debounce bypass
-        if (this._touchStartX === null) return;
-
-        const touchEndX = e.changedTouches[0].clientX;
-        const touchEndY = e.changedTouches[0].clientY;
-        const dx = touchEndX - this._touchStartX;
-        const dy = touchEndY - this._touchStartY;
-
-        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) {
-            // Evaluated Swipes
-            if (dx > 0) this._sendData('\t'); // Rightward: Tab
-            else this._sendData('\x17'); // Leftward: Ctrl+W
-        } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-            // Evaluated Double Tap
-            const now = Date.now();
-            if (now - this._lastTapTime < 300) {
-                this._actionBarVisible = !this._actionBarVisible;
-                this.updateComplete.then(() => {
-                    if (this._handleResize) this._handleResize();
-                    if (this._term) this._term.focus();
-                });
-            }
-            this._lastTapTime = now;
-        }
-        this._touchStartX = null;
-    }
     _openContextMenu(x, y) {
         this._menuOpenTime = Date.now();
 
@@ -573,16 +534,22 @@ window.ExtensionRegistry.registerExtension('term', {
                 { targetEntity: 'virtual_keyboard', id: 'vk-right', label: '▶', icon: '', intent: 'neutral', order: 70, onClick: (data) => { if(data.term) { data.term._sendData('\x1b[C'); if(data.term._term) data.term._term.focus(); } } },
 
                 // Terminal Context Menu
-                { targetEntity: 'terminal_context', id: 'tc-copy', label: 'Copy Buffer', icon: '📋', intent: 'neutral', order: 10, onClick: (data) => { 
+                { targetEntity: 'terminal_context', id: 'tc-copy', label: 'Copy Selection / Recent', icon: '📋', intent: 'neutral', order: 10, onClick: (data) => { 
                     const el = data.term;
                     if(el && el._term) {
-                        let text = el._term.getSelection();
-                        if (!text) {
-                            el._term.selectAll();
-                            text = el._term.getSelection();
-                            el._term.clearSelection();
+                        const text = el._term.getSelection();
+                        if (text) {
+                            window.inSetu.utils.copyRawText(text.trim());
+                        } else {
+                            const buffer = el._term.buffer.active;
+                            const lines = [];
+                            const start = Math.max(0, buffer.length - 150);
+                            for (let i = start; i < buffer.length; i++) {
+                                const line = buffer.getLine(i);
+                                if (line) lines.push(line.translateToString(true));
+                            }
+                            window.inSetu.utils.copyRawText(lines.join('\n').trim(), "✅ Copied last 150 lines");
                         }
-                        if (text) window.inSetu.utils.copyRawText(text.trim());
                     }
                     if(el) { el._contextMenuOpen = false; el.requestUpdate(); if(el._term) el._term.focus(); }
                 } },
