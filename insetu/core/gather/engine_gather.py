@@ -42,25 +42,31 @@ GATHER_SETTINGS_SCHEMA = [
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
 __depends__ = []
 @hooks.on('vfs_resolve_file')
-def resolve_gather_artifacts(filename=None, workspace_id=None, **kwargs):
-    """Resolves ctx://contexts URIs and fallback searches."""
-    if not filename: return None
+@hooks.on('vfs_resolve_path', priority=10)
+def resolve_gather_artifacts(filename=None, filepath=None, workspace_id=None, **kwargs):
+    """Universal resolver for fully-qualified ctx:// URIs and domain relative paths across all extensions."""
+    target_name = filename or filepath
+    if not target_name: return None
+
+    clean_name = str(target_name)
+    while clean_name.startswith("ctx://"):
+        clean_name = clean_name[6:]
+
+    parts = clean_name.split('/')
+    if len(parts) < 2: return None
+    domain_dir = parts[0]
+    rel_subpath = "/".join(parts[1:])
+
     ctx = gather_bp.get_context(workspace_id)
+    dir_key = f"{domain_dir}_dir"
+    resolved_dir = ctx.paths.get(dir_key) or Path(ctx.paths.get("artifacts_base", ".insetu/data")).joinpath(domain_dir).as_posix()
+    cand = Path(resolved_dir).joinpath(rel_subpath).as_posix()
 
-    safe_basename = Path(filename).name
+    if target_name.startswith("ctx://") or domain_dir in ("contexts", "diffs", "workflows", "prompts"):
+        return (cand, True) if filename else cand
 
-    # Dynamically map the artifact directory from the logical URI path
-    clean_filename = filename.replace("ctx://", "").replace("vfs://", "")
-    parts = clean_filename.split('/')
-    base_dir = parts[0] if len(parts) > 1 else "contexts"
-
-    dir_key = f"{base_dir}_dir"
-    cand = Path(ctx.paths.get(dir_key, ctx.paths["artifacts_base"] + f"/{base_dir}")).joinpath(safe_basename).as_posix()
-
-    if os.path.exists(cand):
-        return cand, True
     return None
-def compile_context_payload(workspace_id, output_dir, base_filename, header_block, text_blocks, files, meta, max_kb=None):
+def compile_context_payload(workspace_id, output_dir, base_uri, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
     ctx = gather_bp.get_context(workspace_id)
     if max_kb is None:
@@ -68,18 +74,21 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     # 1. Physical Idempotency: Hash the raw content before volatile headers are applied
     import hashlib
     content_hash = hashlib.sha256("".join(text_blocks).encode('utf-8')).hexdigest()
-
-    existing_entry = ctx.manifest.get("ctx", {}).get(base_filename)
+    existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
     if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
-        return existing_entry  # Skip all disk I/O. The content hasn't changed.
+        # Physical disk guardrail: Heal the context if it was deleted or misrouted by a previous bug
+        from insetu.kernel.vfs import _resolve_physical_path
+        resolved_disk_path = _resolve_physical_path(base_uri, workspace_id)
+        if resolved_disk_path and os.path.exists(resolved_disk_path):
+            return existing_entry  # Skip all disk I/O. The content hasn't changed and file physically exists.
 
     vfs = VFSTransaction(workspace_id)
     max_bytes = (max_kb * 1024) if max_kb and max_kb > 0 else float('inf')
     chunks = []
 
     def get_chunk_name(chunk_num):
-        if chunk_num == 1: return base_filename
-        base, ext = os.path.splitext(base_filename)
+        if chunk_num == 1: return base_uri
+        base, ext = os.path.splitext(base_uri)
         return f"{base}_part{chunk_num}{ext}"
     timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = f"Generated: {timestamp_str}\n\n"
@@ -116,15 +125,14 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
                     "size": len(new_header.encode('utf-8')) + s_block_bytes,
                     "content": new_header + s_block
                 })
-
     chunk_sizes = []
     for i, b in enumerate(bins):
         chunk_name = get_chunk_name(i + 1)
-        chunk_path = Path(output_dir).joinpath(chunk_name).as_posix()
-        vfs.save(chunk_path, b["content"], data={"is_absolute_artifact": True})
+        # Use the URI directly, the VFS now natively understands it
+        vfs.save(chunk_name, b["content"], data={"is_absolute_artifact": True})
         chunks.append(chunk_name)
         chunk_sizes.append(b["size"])
-        
+
     meta_copy = meta.copy()
     if "type" not in meta_copy:
         meta_copy["type"] = "gather"
@@ -137,10 +145,10 @@ def compile_context_payload(workspace_id, output_dir, base_filename, header_bloc
     manifest_entry["meta"]["size_bytes"] = sum(chunk_sizes)
     manifest_entry["meta"]["chunk_sizes"] = chunk_sizes
     manifest_entry["meta"]["content_hash"] = content_hash
-    manifest_entry["meta"]["file"] = base_filename
-    manifest_entry["meta"]["filename"] = base_filename
-    manifest_entry["meta"]["filepath"] = base_filename
-    manifest_entry["meta"]["out_file"] = base_filename
+    manifest_entry["meta"]["file"] = base_uri
+    manifest_entry["meta"]["filename"] = base_uri
+    manifest_entry["meta"]["filepath"] = base_uri
+    manifest_entry["meta"]["out_file"] = base_uri
     return manifest_entry
 SYSTEM_BOOT_TIME = time.time()
 @hooks.on('topology_resolved')
@@ -182,11 +190,8 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
 
     from insetu.kernel.workers import submit_one_shot_job
     submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
-def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, ledger_events=None, **kwargs):
-    ctx = gather_bp.get_context(workspace_id)
-
-    chain_job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-
+def get_ordered_compilation_steps(ctx):
+    """Collects registered compilation steps from all extensions and performs a topological sort."""
     steps = []
     for res in ctx.emit('register_compilation_steps'):
         if res: steps.extend(res)
@@ -202,6 +207,14 @@ def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, l
             ordered_steps.append(step)
 
     for s in steps: visit(s['id'])
+    return ordered_steps
+
+
+def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, ledger_events=None, **kwargs):
+    ctx = gather_bp.get_context(workspace_id)
+    chain_job_id = f"cmp_{uuid.uuid4().hex[:8]}"
+
+    ordered_steps = get_ordered_compilation_steps(ctx)
     if ordered_steps:
         first_step = ordered_steps[0]
         args_json = json.dumps({
@@ -222,23 +235,8 @@ def init_gather_workers(workspace_id=None, **kwargs):
     # Boot-Time Mandate: Always perform a full compile safely after Topology settles
     try:
         job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-
         ctx = gather_bp.get_context(ws_id)
-        steps = []
-        for res in ctx.emit('register_compilation_steps'):
-            if res: steps.extend(res)
-
-        ordered_steps = []
-        visited = set()
-        def visit(step_id):
-            if step_id in visited: return
-            step = next((s for s in steps if s['id'] == step_id), None)
-            if step:
-                for dep in step.get('depends_on', []): visit(dep)
-                visited.add(step_id)
-                ordered_steps.append(step)
-
-        for s in steps: visit(s['id'])
+        ordered_steps = get_ordered_compilation_steps(ctx)
         if ordered_steps:
             first_step = ordered_steps[0]
             args_json = json.dumps({
@@ -249,7 +247,6 @@ def init_gather_workers(workspace_id=None, **kwargs):
                 }
             })
             submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id)
-            update_immediate_job_status(job_id, 'processing', 'Executing full boot compile...', workspace_id=ws_id)
     except Exception as e:
         print(f"Warning: Boot scan failed: {e}")
 
@@ -340,7 +337,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             debug_log_lines.append(f"  - Sample raw files: {final_list[:5]}")
         archive_type = config.get("archive_type", "repo")
         if archive_type == "media-vault":
-            vault_name = f"{repo_dir}_vault.json"
+            vault_name = f"ctx://contexts/{repo_dir}_vault.json"
             r_title = config.get("title", repo_dir.replace('-', ' ').title())
 
             def make_vault_gen(files, current_repo_dir):
@@ -446,8 +443,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         for b_id, data in buckets.items():
             if not data["files"]: continue
             if data["cfg"].get("exclude_from_context"): continue
-
-            safe_out = f"{safe_r_dir}_context.txt" if b_id == "main" else f"{safe_r_dir}_{b_id}_context.txt"
+            safe_out = f"ctx://contexts/{safe_r_dir}_context.txt" if b_id == "main" else f"ctx://contexts/{safe_r_dir}_{b_id}_context.txt"
             b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
             b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
             b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
@@ -460,7 +456,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             })
         for module, data in dynamic_files.items():
             if not data["files"]: continue
-            out_name = f"{safe_r_dir}_{module}_context.txt"
+            out_name = f"ctx://contexts/{safe_r_dir}_{module}_context.txt"
             c = data["cfg"]
             meta = c.get("meta_map", {}).get(module, {})
             title = meta.get("title", module.replace('_', ' ').title())
@@ -479,7 +475,6 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             debug_log_lines.append(f"    - Bucket [{b_id}]: {len(data['files'])} files")
             if data['files']:
                 debug_log_lines.append(f"        Sample: {data['files'][:5]}")
-
     # Flush the debug log to disk
     try:
         with open(debug_log_path, "w", encoding="utf-8") as f:
@@ -575,12 +570,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
 
             payload = recall_cb(ledger_events)
             if payload is None: return None, None # Clean, no changes needed
-
             if payload and payload.get('blocks'):
-                out_dir = decl.get('out_dir', paths["contexts_dir"])
-
                 entry = compile_context_payload(
-                    workspace_id, out_dir, decl['filename'],
+                    workspace_id, None, decl['filename'],
                     payload.get('header', ''), payload['blocks'], payload.get('files', []), decl['meta']
                 )
                 return decl['filename'], entry
@@ -597,10 +589,12 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                         touched_manifest[filename] = None # Marker for deletion
                     else:
                         touched_manifest[filename] = entry
-
         if dirty:
             ctx.sync_vfs_barrier()
             ctx.save_manifest(touched_manifest, is_full_compile=False)
+            return list(touched_manifest.keys())
+        return []
+
 def generate_context_file(workspace_id=None, target_repos=None):
     """The Master Orchestrator Loop: Executes full sweeps based on declared topology and garbage collects."""
     ctx = gather_bp.get_context(workspace_id)
@@ -625,17 +619,14 @@ def generate_context_file(workspace_id=None, target_repos=None):
         try:
             payload = gen_cb()
             if payload and payload.get('blocks'):
-                out_dir = decl.get('out_dir', paths["contexts_dir"])
-
                 entry = compile_context_payload(
-                    workspace_id, out_dir, decl['filename'], 
+                    workspace_id, None, decl['filename'], 
                     payload.get('header', ''), payload['blocks'], payload.get('files', []), decl['meta']
                 )
                 return decl['filename'], entry
         except Exception as e:
             print(f"Error compiling {decl['filename']}: {e}")
         return decl['filename'], None
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(process_declaration, d) for d in declarations]
         for future in concurrent.futures.as_completed(futures):
@@ -643,7 +634,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
             if entry:
                 manifest[filename] = entry
                 # Track all constituent chunks for the global vacuum
-                expected_artifacts.update(entry.get("chunks", [filename]))
+                chunks = entry.get("chunks", [filename])
+                expected_artifacts.update(Path(c).name for c in chunks)
     # 3. Global Vacuum: Purge physical files that aren't explicitly declared
     if target_repos is None:
         from insetu.core.utils_core import vacuum_manifest_artifacts
@@ -660,7 +652,6 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 for chunk in ctx.get_manifest_files(target_key=k):
                     chunk_path = Path(paths["contexts_dir"]).joinpath(chunk).as_posix()
                     restored_ephemerals.add(chunk_path)
-
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]) and f_path not in restored_ephemerals:
             f_name = Path(f_path).name
@@ -668,13 +659,22 @@ def generate_context_file(workspace_id=None, target_repos=None):
             is_quickpack = f_name.startswith(('quickpack_', 'selection_'))
             domain_name = "Quickpacks" if is_quickpack else "Exported Contexts"
             title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
-            manifest[f_name] = {
+            uri_key = f"ctx://contexts/{f_name}"
+            manifest[uri_key] = {
                 "files": [f"data/contexts/{f_name}"],
                 "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
             }
 
-    ctx.save_manifest(manifest, is_full_compile=(target_repos is None))
+    # Add tombstones for orphaned contexts to prevent global vacuum from wiping other extensions
+    if target_repos is None:
+        for k, v in old_manifest.items():
+            if k.startswith("ctx://contexts/") and k.endswith("_context.txt") and k not in manifest:
+                manifest[k] = None
+
+    ctx.save_manifest(manifest, is_full_compile=False)
     ctx.sync_vfs_barrier()
+    return [k for k, v in manifest.items() if v is not None]
+
 @gather_bp.worker("pack_selection_task")
 def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     if items is None:
@@ -706,12 +706,11 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
                     text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: Not found]\n\n")
             except Exception as e:
                 text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: {str(e)}]\n\n")
-
-    base_filename = f"quickpack_{int(time.time())}_context.txt"
+    base_uri = f"ctx://contexts/quickpack_{int(time.time())}_context.txt"
     manifest_entry = compile_context_payload(
         ctx.workspace_id,
-        ctx.paths["contexts_dir"],
-        base_filename,
+        None,
+        base_uri,
         header_str,
         text_blocks,
         files,
@@ -719,23 +718,24 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     )
 
     # Pure Granular Routing: Only save the specific quickpack to the ledger
-    ctx.save_manifest({base_filename: manifest_entry}, is_full_compile=False)
+    ctx.save_manifest({base_uri: manifest_entry}, is_full_compile=False)
     ctx.sync_vfs_barrier()
 
-    chunks = manifest_entry.get("chunks", [base_filename])
+    chunks = manifest_entry.get("chunks", [base_uri])
     for chunk in chunks:
-        out_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
+        from insetu.kernel.utils import resolve_system_artifact_path
+        out_path = resolve_system_artifact_path(chunk, ctx.workspace_id)
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
 
     return {
         "message": "Compilation successful.",
         "artifact": {
-            "base_filename": base_filename,
-            "file": base_filename,
-            "filename": base_filename,
-            "filepath": base_filename,
-            "out_file": base_filename,
-            "url": f"/download/{base_filename}",
+            "base_filename": base_uri,
+            "file": base_uri,
+            "filename": base_uri,
+            "filepath": base_uri,
+            "out_file": base_uri,
+            "url": f"/download/{base_uri}",
             "chunks": chunks,
             "files": chunks
         }
@@ -743,7 +743,7 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
 @gather_bp.route('clear_quickpacks', methods=['POST'])
 def api_clear_quickpacks(ctx):
     manifest_data = ctx.manifest.get("ctx", {})
-    keys_to_delete = [k for k in manifest_data.keys() if k.startswith('quickpack_') or k.startswith('selection_')]
+    keys_to_delete = [k for k in manifest_data.keys() if 'quickpack_' in k or 'selection_' in k]
     if not keys_to_delete:
         return jsonify({"status": "success", "message": "No quickpacks to clear."})
     tombstones = {}
@@ -752,11 +752,7 @@ def api_clear_quickpacks(ctx):
         if not chunks:
             chunks = [k]
         for chunk in chunks:
-            chunk_path = Path(ctx.paths["contexts_dir"]).joinpath(chunk).as_posix()
-            try:
-                os.remove(chunk_path)
-            except Exception:
-                pass
+            ctx.vfs.delete(chunk, data={"is_absolute_artifact": True})
         tombstones[k] = None
 
     ctx.save_manifest(tombstones, is_full_compile=False)
@@ -786,56 +782,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     try:
         # VFS Barrier: Wait for async physical disk moves/deletes in queue to complete
         ctx.sync_vfs_barrier()
-
-        # TOPOLOGY BARRIER: Wait for any active topology resolution tasks to settle
-        import time
-        from insetu.kernel.db import get_connection
-        w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
-        
-        timeout_loops = 0
-        while timeout_loops < 20:
-            active_tpl = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'tpl_%' AND status IN ('pending', 'processing')").fetchone()
-            if not active_tpl:
-                break
-            ctx.jobs.update_progress("Waiting for topology to settle...")
-            time.sleep(0.5)
-            timeout_loops += 1
-        if timeout_loops >= 20:
-            print("⚠️ Topology Barrier Timeout: A topology resolution task is hung or thread-starved. Proceeding with compilation to prevent deadlock.")
-
-        # Topology Flush: Drain pending mutation events so topology_ledger reflects disk reality
-        from insetu.core.topology.engine_topology import resolve_topology_buffer
-        drained_events = resolve_topology_buffer(ctx.workspace_id)
-
         if ledger_events is None:
             ledger_events = []
-
-        seen_paths = {e['filepath'] for e in ledger_events}
-        for de in drained_events:
-            if de['filepath'] not in seen_paths:
-                ledger_events.append(de)
-                seen_paths.add(de['filepath'])
-
-        # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
-        # This prevents manual UI compilations from missing events and stops ghost re-compilations.
-        from insetu.kernel.db import get_connection
-        w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
-        delayed_job_id = f"cmp_del_{ctx.workspace_id}"
-        delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status='pending'", (delayed_job_id,)).fetchone()
-
-        if delayed_job and delayed_job['args_json']:
-            try:
-                import json
-                delayed_args = json.loads(delayed_job['args_json'])
-                for de in delayed_args.get('ledger_events', []):
-                    if de['filepath'] not in seen_paths:
-                        ledger_events.append(de)
-                        seen_paths.add(de['filepath'])
-            except Exception:
-                pass
-        # Purge the delayed job (whether it was trapped, or just respawned by the resolve_topology_buffer hook above)
-        from insetu.kernel.workers import cancel_job
-        cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
 
         paths = ctx.paths
         manifest_data = ctx.manifest.get("ctx", {})
@@ -852,21 +800,24 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             ctx.emit('pre_compile', is_full_sweep=needs_full_compile, forced_repos=forced_repos)
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
-
+        touched_buckets = []
         if not needs_full_compile and not forced_repos:
             try:
                 if ledger_events:
                     # Phase 3: Pure Event Sourced Differential Routing
                     changed_files = [e["filepath"] for e in ledger_events]
                     ctx.jobs.update_progress(f"Surgically evaluating {len(changed_files)} mutated file(s)...")
-                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None, ledger_events=ledger_events)
+                    res = _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None, ledger_events=ledger_events)
+                    if res: touched_buckets.extend(res)
                 else:
                     ctx.jobs.update_progress("No pending changes. Syncing extensions...")
-                    _surgically_update_manifest(workspace_id=ctx.workspace_id, files=[], filepath=None)
+                    res = _surgically_update_manifest(workspace_id=ctx.workspace_id, files=[], filepath=None)
+                    if res: touched_buckets.extend(res)
             except Exception as e:
                 import traceback
                 print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
                 needs_full_compile = True
+
         if needs_full_compile or forced_repos:
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
 
@@ -875,7 +826,9 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                 ctx.emit('force_topology_scan', target_repos=None if needs_full_compile else forced_repos)
 
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
-            generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
+            res = generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
+            if res: touched_buckets.extend(res)
+
         # Allow simple extensions (Citations, Notes) to synchronously integrate their contexts
         ctx.jobs.update_progress("Integrating static ecosystems...")
 
@@ -886,6 +839,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
         if delta_manifest:
             ctx.save_manifest(delta_manifest, is_full_compile=False)
+            touched_buckets.extend(list(delta_manifest.keys()))
 
         # Retrieve the final unified keys directly from the SSOT database
         manifest_keys = [r['filepath'] for r in get_connection("vfs_index", workspace_id=ctx.workspace_id).execute("SELECT filepath FROM manifest_ledger").fetchall()]
@@ -894,7 +848,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
         return {
             "message": "Base contexts generated successfully.",
-            "artifact": {"files": sorted(manifest_keys)}
+            "artifact": {"files": sorted(manifest_keys)},
+            "next_kwargs": {"touched_buckets": touched_buckets if not needs_full_compile else None}
         }
     except Exception as e:
         import traceback
@@ -917,22 +872,7 @@ def api_gather_submit(ctx):
     if existing_job:
         return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing pending compilation."}), 202
 
-    # 1. Ask ecosystem for compilation steps
-    steps = []
-    for res in ctx.emit('register_compilation_steps'):
-        if res: steps.extend(res)
-
-    # 2. Topological sort
-    ordered_steps = []
-    visited = set()
-    def visit(step_id):
-        if step_id in visited: return
-        step = next((s for s in steps if s['id'] == step_id), None)
-        if step:
-            for dep in step.get('depends_on', []): visit(dep)
-            visited.add(step_id)
-            ordered_steps.append(step)
-    for s in steps: visit(s['id'])
+    ordered_steps = get_ordered_compilation_steps(ctx)
 
     start_step = data.get("start_step")
     if start_step:
@@ -961,26 +901,20 @@ def api_gather_submit(ctx):
     submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], json.dumps(payload), workspace_id=ctx.workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @hooks.on('register_compilation_steps')
 def _register_gather_step(workspace_id=None, **kwargs):
     return [{
         "id": "gather_base",
-        "depends_on": [],
+        "depends_on": ["topology_scan"],
         "ext_name": "gather",
         "worker_name": "compile_contexts"
     }]
 @hooks.on('request_paths')
 def hook_request_paths(workspace_id=None, **kwargs):
-    try:
-        cfg_path, _, _ = get_workspace_physics(workspace_id)
-        artifacts_base = Path(cfg_path).parent.joinpath("data").as_posix()
-        paths = {
-            "contexts_dir": Path(artifacts_base).joinpath("contexts").as_posix()
-        }
-        os.makedirs(paths["contexts_dir"], exist_ok=True)
-        return paths
-    except Exception: return {}
+    from insetu.core.utils_core import get_domain_artifact_path
+    return {
+        "contexts_dir": get_domain_artifact_path(workspace_id, "contexts")
+    }
 _manifest_thread_cache = threading.local()
 
 @hooks.on('request_manifest')
@@ -1002,7 +936,7 @@ def hook_request_manifest(workspace_id=None, **kwargs):
             if r['entry_json']:
                 manifest[r['filepath']] = json.loads(r['entry_json'])
 
-        _manifest_thread_cache.data[workspace_id] = {'ts': now, 'manifest': manifest}
+        _manifest_thread_cache.data[workspace_id] = {'ts': time.time(), 'manifest': manifest}
         return manifest
     except Exception: pass
     return {}
@@ -1017,19 +951,14 @@ def hook_request_manifest_chunks(target_key=None, workspace_id=None, **kwargs):
 def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kwargs):
     if not uri: return []
     try:
-        basename = Path(uri).name
         if manifest:
             from insetu.core.utils_core import extract_manifest_files
-            chunks = extract_manifest_files(manifest, target_key=basename, domain='ctx')
+            chunks = extract_manifest_files(manifest, target_key=uri, domain='ctx')
         else:
             ctx = gather_bp.get_context(workspace_id)
-            chunks = ctx.get_manifest_files(target_key=basename)
+            chunks = ctx.get_manifest_files(target_key=uri)
 
         if not chunks: return [uri]
-
-        base_dir = uri.rsplit('/', 1)[0] if '/' in uri else ""
-        if base_dir:
-            return [f"{base_dir}/{chunk}" for chunk in chunks]
         return chunks
     except Exception:
         return [uri]

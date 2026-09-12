@@ -23,7 +23,6 @@ TOPOLOGY_SCHEMA = {
     }
 }
 _vfs_manifest_thread_cache = threading.local()
-
 topology_bp = InSetuExtension(
     'topology',  
     __name__, 
@@ -33,6 +32,64 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
+
+@hooks.on('register_compilation_steps')
+def _register_topology_compilation_step(workspace_id=None, **kwargs):
+    return [{
+        "id": "topology_scan",
+        "depends_on": [],
+        "ext_name": "topology",
+        "worker_name": "scan_topology_task"
+    }]
+
+@topology_bp.worker("scan_topology_task")
+def _background_scan_topology(ctx, ledger_events=None, **kwargs):
+    import time
+    from insetu.kernel.db import get_connection
+    w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
+
+    timeout_loops = 0
+    while timeout_loops < 20:
+        active_tpl = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'tpl_%' AND status IN ('pending', 'processing')").fetchone()
+        if not active_tpl:
+            break
+        ctx.jobs.update_progress("Waiting for concurrent topology mappers to settle...")
+        time.sleep(0.5)
+        timeout_loops += 1
+
+    from insetu.core.topology.engine_topology import resolve_topology_buffer
+    drained_events = resolve_topology_buffer(ctx.workspace_id)
+
+    all_events = ledger_events or []
+    seen_paths = {e['filepath'] for e in all_events}
+
+    for de in drained_events:
+        if de['filepath'] not in seen_paths:
+            all_events.append(de)
+            seen_paths.add(de['filepath'])
+
+    # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
+    delayed_job_id = f"cmp_del_{ctx.workspace_id}"
+    delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status='pending'", (delayed_job_id,)).fetchone()
+
+    if delayed_job and delayed_job['args_json']:
+        try:
+            import json
+            delayed_args = json.loads(delayed_job['args_json'])
+            for de in delayed_args.get('ledger_events', []):
+                if de['filepath'] not in seen_paths:
+                    all_events.append(de)
+                    seen_paths.add(de['filepath'])
+        except Exception:
+            pass
+
+    from insetu.kernel.workers import cancel_job
+    cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
+
+    return {
+        "message": "Topology mapped successfully.",
+        "next_kwargs": {"ledger_events": all_events}
+    }
 
 @hooks.on('register_manifest_signatures')
 def hook_topology_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
@@ -105,21 +162,23 @@ def hook_request_vfs_manifest(workspace_id=None, **kwargs):
     cache = _vfs_manifest_thread_cache.data.get(workspace_id)
     if cache and now - cache['ts'] < 2.0:
         return cache['manifest']
+    try:
+        ctx = topology_bp.get_context(workspace_id)
+        rows = ctx.db.get_all("topology_ledger")
 
-    ctx = topology_bp.get_context(workspace_id)
-    rows = ctx.db.get_all("topology_ledger")
+        manifest = {}
+        for r in rows:
+            repo = r['repo']
+            bucket_id = r['bucket_id']
+            manifest_key = f"{repo}::{bucket_id}"
+            if manifest_key not in manifest:
+                manifest[manifest_key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
+            manifest[manifest_key]["files"].append(r['filepath'])
 
-    manifest = {}
-    for r in rows:
-        repo = r['repo']
-        bucket_id = r['bucket_id']
-        manifest_key = f"{repo}::{bucket_id}"
-        if manifest_key not in manifest:
-            manifest[manifest_key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
-        manifest[manifest_key]["files"].append(r['filepath'])
-
-    _vfs_manifest_thread_cache.data[workspace_id] = {'ts': now, 'manifest': manifest}
-    return manifest
+        _vfs_manifest_thread_cache.data[workspace_id] = {'ts': time.time(), 'manifest': manifest}
+        return manifest
+    except Exception:
+        return {}
 
 def get_omniscient_workspace_files(workspace_id, allowed_repos):
     """Fast SQL replacement for the old os.walk bridge optimization."""
@@ -423,6 +482,14 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
             git_files = _fallback_rglob()
     else:
         git_files = _fallback_rglob()
+
+    for m_dir in (live_cfg.get("managed_dirs") or []):
+        m_path = repo_p / m_dir
+        if m_path.exists() and m_path.is_dir():
+            for p in m_path.rglob('*'):
+                if p.is_file():
+                    try: git_files.add(p.relative_to(repo_p).as_posix())
+                    except ValueError: pass
 
     valid_files = set()
     repo_p = Path(repo_path)

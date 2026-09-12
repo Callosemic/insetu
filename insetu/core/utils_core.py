@@ -118,14 +118,14 @@ def _watchdog_debouncer_loop():
                 if now - data['ts'] >= _WATCHDOG_DEBOUNCE_WINDOW:
                     to_emit[path] = data
                     del _WATCHDOG_PENDING[path]
-
         if to_emit:
             ws_groups = {}
-            for path, data in to_emit.items():
-                print(f"👀 [Watchdog] Caught '{data['op']}' on: {path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
+            for abs_key, data in to_emit.items():
+                logical_path = data.get('logical_path', abs_key)
+                print(f"👀 [Watchdog] Caught '{data['op']}' on: {logical_path} (after {_WATCHDOG_DEBOUNCE_WINDOW}s quiet)")
                 ws_id = data['workspace_id']
                 if ws_id not in ws_groups: ws_groups[ws_id] = []
-                ws_groups[ws_id].append({"filepath": path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
+                ws_groups[ws_id].append({"filepath": logical_path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
                 try:
                     w_conn = get_connection("workers", workspace_id=ws_id)
                     w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (path, data['op'], now))
@@ -135,7 +135,7 @@ def _watchdog_debouncer_loop():
             for ws_id, mutations in ws_groups.items():
                 hooks.emit_background('vfs_mutated', workspace_id=ws_id, mutations=mutations)
 @hooks.on('pre_file_save')
-def _track_intent_vfs_writes(workspace_id=None, filepath=None, **kwargs):
+def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=None, **kwargs):
     """Records VFS intent BEFORE disk I/O to completely seal Watchdog race conditions."""
     if not filepath: return
     import time
@@ -147,21 +147,12 @@ def _track_intent_vfs_writes(workspace_id=None, filepath=None, **kwargs):
         for k in expired:
             del _NATIVE_VFS_WRITES[k]
 
-    if filepath.startswith("ctx://"):
-        clean_fp = filepath
-    else:
-        repo_dir, rel_path = parse_uri(filepath)
-        if repo_dir:
-            clean_fp = f"vfs://{repo_dir}/{rel_path}"
-        else:
-            clean_fp = f"vfs://{rel_path.lstrip('/')}"
-
-    clean_fp_lower = clean_fp.lower()
-    _NATIVE_VFS_WRITES[clean_fp_lower] = now
-
-    if clean_fp_lower in _WATCHDOG_PENDING:
-        with _WATCHDOG_LOCK:
-            _WATCHDOG_PENDING.pop(clean_fp_lower, None)
+    if resolved_path:
+        abs_key = os.path.abspath(resolved_path).lower()
+        _NATIVE_VFS_WRITES[abs_key] = now
+        if abs_key in _WATCHDOG_PENDING:
+            with _WATCHDOG_LOCK:
+                _WATCHDOG_PENDING.pop(abs_key, None)
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
     from insetu.kernel.extension import SettingsManager
@@ -223,14 +214,14 @@ def start_filesystem_observer(workspace_ids):
                 now = time.time()
 
                 logical_path_lower = logical_path.lower()
-
                 # Deduplication 1: Was this file recently modified natively by our own VFS?
-                if now - _NATIVE_VFS_WRITES.get(logical_path_lower, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                abs_key = os.path.abspath(src_path).lower()
+                if now - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
                     return
                 # Deduplication 2: Unified Trailing Debounce
                 global _WATCHDOG_THREAD
                 with _WATCHDOG_LOCK:
-                    _WATCHDOG_PENDING[logical_path_lower] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time()}
+                    _WATCHDOG_PENDING[abs_key] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time(), 'logical_path': logical_path}
                     if _WATCHDOG_THREAD is None or not _WATCHDOG_THREAD.is_alive():
                         _WATCHDOG_THREAD = threading.Thread(target=_watchdog_debouncer_loop, daemon=True)
                         _WATCHDOG_THREAD.start()
@@ -292,21 +283,6 @@ def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
     """Provides logical vfs://repo/path boundary resolution to the Kernel VFS."""
     if filepath:
         is_artifact = filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/")
-
-        if not is_artifact:
-            # Deep OS integration: If the path lacks a prefix but belongs to a compiled context chunk, promote it to an artifact
-            from insetu.kernel.hooks import hooks
-            manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
-            manifest = next((m for m in manifest_res if m), {})
-            base_name = Path(filepath).name
-            if base_name in manifest:
-                is_artifact = True
-            else:
-                for entry in manifest.values():
-                    if base_name in entry.get("chunks", []):
-                        is_artifact = True
-                        break
-
         if is_artifact:
             from insetu.kernel.hooks import hooks
             overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
@@ -373,6 +349,21 @@ def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclud
                 if isinstance(f, str):
                     all_files.add(f)
     return sorted(list(all_files))
+def get_domain_artifact_path(workspace_id, domain_name):
+    """Resolves and ensures physical existence of standard .insetu/data/<domain_name> directory."""
+    from pathlib import Path
+    import os
+    from insetu.kernel.utils import get_workspace_physics
+
+    try:
+        cfg_path, _, _ = get_workspace_physics(workspace_id)
+        domain_dir = Path(cfg_path).parent.joinpath("data", domain_name).resolve().as_posix()
+        os.makedirs(domain_dir, exist_ok=True)
+        return domain_dir
+    except Exception:
+        return f".insetu/data/{domain_name}"
+
+
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
@@ -400,6 +391,46 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
                 ctx.vfs.delete(ws_rel_path)
             except Exception:
                 pass
+def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_dir, filename_suffix="_context.txt", target_repos=None):
+    """
+    SSOT reconciler: Identifies orphaned domain manifest entries, merges deltas,
+    persists manifest state, and vacuums orphaned text artifacts on disk.
+    """
+    from pathlib import Path
+    current_manifest = ctx.manifest.get("ctx", {})
+    expected_artifacts = set()
+    active_keys = set()
+
+    # 1. Register new/updated deltas
+    for filename, entry in manifest_deltas.items():
+        if entry:
+            active_keys.add(filename)
+            chunks = entry.get("chunks", [filename])
+            expected_artifacts.update(Path(c).name for c in chunks)
+
+    # 2. Identify orphaned manifest keys in this domain
+    for k, v in list(current_manifest.items()):
+        if domain_uri_prefix in k and k.endswith(filename_suffix):
+            repo = v.get("meta", {}).get("repo") if isinstance(v, dict) else None
+            is_targeted = target_repos and (repo in target_repos if repo else True)
+            if k not in active_keys and (target_repos is None or is_targeted):
+                manifest_deltas[k] = None
+            else:
+                chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
+                expected_artifacts.update(Path(c).name for c in chunks)
+
+    # 3. Commit manifest changes & sync barrier
+    if manifest_deltas:
+        for k, v in manifest_deltas.items():
+            if v is None:
+                current_manifest.pop(k, None)
+            else:
+                current_manifest[k] = v
+        ctx.save_manifest(manifest_deltas, is_full_compile=False)
+        ctx.sync_vfs_barrier()
+
+    # 4. Sweep disk for orphaned files
+    vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts)
 
 def get_flattened_buckets(workspace_id=None, target_configs=None):
     """Backend SSOT helper for resolving flattened sub-buckets with defensive null-safety."""
@@ -452,11 +483,9 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
             continue
         if include_types and item_type not in include_types:
             continue
-
-        out_dir = "contexts"
-        if item_type == "diff": out_dir = "diffs"
-        elif item_type == "flow": out_dir = "workflows"
-        expected_contexts.add(f"{out_dir}/{decl['filename']}")
+        filename = decl.get("filename", "")
+        if filename:
+            expected_contexts.add(filename)
 
     return expected_contexts
 
@@ -485,25 +514,28 @@ def resolve_logical_path(path, workspace_id=None):
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
-    norm_path = re.sub(r'\.\.(?=/|$)', '', norm_path)
-    norm_path = re.sub(r'/+', '/', norm_path).strip('/')
-    # Centralized URI parsing to extract repository boundaries safely
+    # Centralized URI parsing to extract repository boundaries safely BEFORE slash collapsing
     repo_dir, rel_path = parse_uri(norm_path)
+
+    rel_path_str = str(rel_path).strip().replace('\\', '/')
+    rel_path_str = re.sub(r'\.\.(?=/|$)', '', rel_path_str)
+    rel_path_str = re.sub(r'/+', '/', rel_path_str).strip('/')
     target_repos = cfg.get("target_repos", [])
     # Map logical workspace bounds ({repo}/path) to physical disk paths deterministically
     for repo in target_repos:
         if repo_dir == repo.get("repo_dir"):
             p_path = repo.get("physical_path")
-            repo_base = Path(p_path).expanduser().resolve() if p_path else (ws_root_path / repo_dir).resolve()
-
-            # Fallback: if physical path doesn't exist but the workspace root is the repo itself
-            if not repo_base.exists() and ws_root_path.name == repo_dir:
+            if p_path:
+                repo_base = Path(p_path).expanduser().resolve()
+            elif ws_root_path.name == repo_dir:
                 repo_base = ws_root_path
+            else:
+                repo_base = (ws_root_path / repo_dir).resolve()
 
-            return repo_base.joinpath(rel_path).resolve().as_posix()
+            return repo_base.joinpath(rel_path_str).resolve().as_posix()
 
     # Fallback to standard sandbox resolution (reconstruct clean path without schemes)
-    clean_fallback = f"{repo_dir}/{rel_path}".strip('/')
+    clean_fallback = f"{repo_dir}/{rel_path_str}".strip('/')
     return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
 
 

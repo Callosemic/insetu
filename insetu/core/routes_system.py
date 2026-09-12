@@ -407,12 +407,13 @@ def api_job_status(job_id, workspace_id=None):
     from insetu.kernel.db import get_connection
     try:
         conn = get_connection("workers", workspace_id=workspace_id)
-        job = conn.execute("SELECT status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
+        job = conn.execute("SELECT ext_name, status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify({"error": "Job not found in active workspace context."}), 404
 
         return jsonify({
             "id": job_id,
+            "ext_name": job['ext_name'],
             "status": job['status'],
             "message": job['status_message'],
             "artifact": json.loads(job['artifact_json']) if job['artifact_json'] else {},

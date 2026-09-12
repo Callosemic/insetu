@@ -194,6 +194,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             elif content is not None:
                 ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
                 if ok_search and s_status == "idempotent":
+                    patch_tel["resolved_file"] = target_file
                     patch_tel["status"] = "auto_skipped"
                     patch_tel["flags"].append("already_applied")
                     patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
@@ -210,6 +211,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 if cand_content is not None:
                     ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
                     if ok_search and s_status == "idempotent":
+                        patch_tel["resolved_file"] = cand
                         patch_tel["status"] = "auto_skipped"
                         patch_tel["flags"].append("already_applied")
                         patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
@@ -243,6 +245,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     resolution_type = "scored_path_auto"
 
                     if cand_list[0]["match_type"] == "replace_block":
+                        patch_tel["resolved_file"] = resolved_path
                         patch_tel["status"] = "auto_skipped"
                         patch_tel["flags"].append("already_applied")
                         patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state (Fuzzy Resolved)."
@@ -536,18 +539,11 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             # Phase 4: Restore target file EOL format (CRLF drift prevention)
             if '\r\n' in orig_content and '\r\n' not in final_content:
                 final_content = final_content.replace('\n', '\r\n')
-
             vfs.save(filepath, final_content)
             mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
 
         db_conn.commit()
         telemetry["status"] = "committed"
-
-        # Broadcast the atomic transaction to the backend Event Bus
-        # This guarantees Topology and Hooks awaken even if the target folder isn't covered by the Filesystem Watchdog.
-        if mutations:
-            from insetu.kernel.hooks import hooks
-            hooks.emit_background('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
 
     elif dry_run:
         telemetry["status"] = "dry_run_evaluated"

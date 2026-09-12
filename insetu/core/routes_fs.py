@@ -4,68 +4,18 @@ import json
 import uuid
 import datetime
 from pathlib import Path
-from insetu.kernel.vfs import execute_vfs_move, execute_vfs_archive, execute_vfs_delete, execute_vfs_save
+from insetu.kernel.vfs import execute_vfs_move, execute_vfs_archive, execute_vfs_delete, execute_vfs_save, _resolve_physical_path as resolve_physical_path
 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
 fs_bp = Blueprint('fs', __name__)
-def resolve_vfs_file(workspace_id, filename):
-    """Universal path resolver for workspace files, ctx URIs, and artifact contexts."""
-    if not filename:
-        return None, False
-    filename = filename.strip()
-    if filename.startswith("system://"):
-        filename = filename.replace("system://", "ctx://", 1)
-    check_name = filename.replace("vfs://", "", 1) if filename.startswith("vfs://") else filename
 
-    is_artifact = check_name.startswith("ctx://") or check_name.startswith("data/") or check_name.startswith(".insetu/")
-    if not is_artifact:
-        from insetu.kernel.hooks import hooks
-        manifest_res = hooks.emit('request_manifest', workspace_id=workspace_id)
-        manifest = next((m for m in manifest_res if m), {})
-        base_name = Path(filename).name
-        if base_name in manifest:
-            is_artifact = True
-            entry = manifest[base_name]
-            out_dir = entry.get("meta", {}).get("out_dir")
-            if out_dir:
-                filename = f"ctx://{out_dir}/{filename}"
-            else:
-                meta_type = entry.get("meta", {}).get("type", "")
-                mapped_dir = "diffs" if meta_type == "diff" else ("workflows" if meta_type == "flow" else "contexts")
-                filename = f"ctx://{mapped_dir}/{filename}"
-        else:
-            for entry in manifest.values():
-                if base_name in entry.get("chunks", []):
-                    is_artifact = True
-                    out_dir = entry.get("meta", {}).get("out_dir")
-                    if out_dir:
-                        filename = f"ctx://{out_dir}/{filename}"
-                    else:
-                        # Dynamic mapping fallback
-                        meta_type = entry.get("meta", {}).get("type", "")
-                        mapped_dir = "diffs" if meta_type == "diff" else ("workflows" if meta_type == "flow" else "contexts")
-                        filename = f"ctx://{mapped_dir}/{filename}"
-                    break
-
-    from insetu.kernel.hooks import hooks
-    overrides = hooks.emit('vfs_resolve_file', filename=filename, workspace_id=workspace_id)
-    for res in overrides:
-        if res and isinstance(res, tuple) and len(res) == 2:
-            if os.path.exists(res[0]):
-                return res
-    from insetu.kernel.utils import resolve_sandbox_path
-    resolved = resolve_sandbox_path(check_name, workspace_id)
-    if os.path.exists(resolved):
-        return resolved, False
-
-    return None, False
 @fs_bp.route('/api/<workspace_id>/fs/exists', methods=['GET'])
 def api_fs_exists(workspace_id):
     """Silent validation route that verifies file existence for the UI."""
     filename = request.args.get('file', '').strip()
     if not filename:
         return jsonify({"exists": False, "path": filename})
-    resolved_path, _ = resolve_vfs_file(workspace_id, filename)
+    resolved_path = resolve_physical_path(filename, workspace_id)
     exists = bool(resolved_path and os.path.exists(resolved_path))
     return jsonify({"exists": exists, "path": filename})
 
@@ -80,10 +30,6 @@ def api_fs_fetch(workspace_id):
     from insetu.kernel.vfs import VFSTransaction
     with VFSTransaction(workspace_id) as vfs:
         content = vfs.read(filename, is_absolute_artifact=is_absolute_artifact)
-        if content is None:
-            resolved_path, is_artifact = resolve_vfs_file(workspace_id, filename)
-            if resolved_path:
-                content = vfs.read(resolved_path, is_absolute_artifact=is_artifact or is_absolute_artifact)
 
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
@@ -95,7 +41,7 @@ def download_file(filename):
     from insetu.kernel.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
 
-    resolved_path, _ = resolve_vfs_file(workspace_id, filename)
+    resolved_path = resolve_physical_path(filename, workspace_id)
     if not resolved_path or not os.path.exists(resolved_path):
         return jsonify({"error": "File object not found"}), 404
 
@@ -193,9 +139,8 @@ def api_fs_upload(workspace_id):
 
             filename = werkzeug.utils.secure_filename(file.filename)
             filepath = f"{dest_dir}/{filename}".strip('/') if dest_dir else filename
-            
-            overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-            resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
+
+            resolved_path = resolve_physical_path(filepath, workspace_id)
 
             import os
             is_new = not os.path.exists(resolved_path)
@@ -234,16 +179,10 @@ def api_fs_save(workspace_id):
         base_hash = data.get("base_hash")
         if base_hash:
             import hashlib
-            from insetu.kernel.utils import resolve_system_artifact_path, resolve_sandbox_path
-            from insetu.kernel.hooks import hooks
 
-            if data.get("is_absolute_artifact"):
-                resolved_path = resolve_system_artifact_path(filepath, workspace_id)
-            else:
-                overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-                resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
+            resolved_path = resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
 
-            if os.path.exists(resolved_path):
+            if resolved_path and os.path.exists(resolved_path):
                 with open(resolved_path, 'r', encoding='utf-8') as f:
                     current_disk_content = f.read()
                 current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
