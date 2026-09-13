@@ -1,15 +1,12 @@
-# inSetu Kernel Code Index
+# inSetu Code Index
 
 This index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.
 
 ```text
 insetu/
-├── .gitignore                      # Defines intentionally untracked files and volatile state to ignore.
 ├── .gitkeep                        # Git folder retention.
 ├── CHANGELOG.md                    # Auto-generated semantic release changelog.
 ├── CODE_INDEX.md                   # Topological map of the inSetu repository (this file).
-├── LICENSE                         # Apache License 2.0 open-source distribution terms.
-├── NOTICE                          # Third-party dependency attributions and bundled software notices.
 ├── README.md                       # Primary project overview, architecture, and installation guide.
 ├── docs/                           # Internal Documentation and Architecture.
 │   ├── 00_index.md                 # Master Index for inSetu.
