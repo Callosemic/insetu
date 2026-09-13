@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { InSetuElement, createExtensionStore } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramDB } from '../../vendor/sutram/js/offline.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };

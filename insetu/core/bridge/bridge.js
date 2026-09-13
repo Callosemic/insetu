@@ -1,10 +1,18 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
-import { AppStore } from './store.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { AppStore } from '/static/extensions/system/store.js';
 
 // --- VFS BRIDGE STATE STORE (UDF LAYER) ---
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
+window.addEventListener('beforeunload', (e) => {
+    const state = BridgeStore.getState();
+    if (state && state.cells && state.cells.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});
+
 export const BridgeStore = createExtensionStore('Bridge', {
     cells: [],
     activeBridgeJobId: null,

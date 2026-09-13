@@ -1,8 +1,8 @@
 import { html, css } from 'lit';
 import { buildFileTree } from '../../../vendor/sutram/js/utils.js';
-import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 import { SutramCard } from '../../../vendor/sutram/js/primitives.js';
-import { InSetuElement } from '../sdk.js';
+import { InSetuElement } from '/static/extensions/system/sdk.js';
 
 export class InSetuCard extends SutramCard {}
 export class InSetuFileTree extends InSetuElement {

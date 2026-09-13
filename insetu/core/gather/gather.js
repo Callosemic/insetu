@@ -1,18 +1,129 @@
 import { html, css } from 'lit';
-import { AppStore } from './store.js';
-import { fetchAndDownloadState, fetchAndCopy, getGlobalManifest, viewAndCopy, FsStore } from './fs.js';
-import { createExtensionStore, InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { AppStore } from '/static/extensions/system/store.js';
+import { fetchAndDownloadState, fetchAndCopy, getGlobalManifest, viewAndCopy, FsStore } from '/static/extensions/fs/fs.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+let compilePromise = null;
+let compilePromiseWs = null;
 
+export const executeCompile = async (onProgress = null, forceFull = false, startStep = null, targetRepos = null) => {
+    const activeWs = window.inSetu.utils.getActiveWorkspace();
+    if (compilePromise && compilePromiseWs === activeWs) return compilePromise;
+
+    const targetConfigs = AppStore.getState().targetConfigs || [];
+    if (!targetConfigs || targetConfigs.length === 0) {
+        return Promise.resolve({ status: 'success', message: "No tracked repositories configured.", files: [] });
+    }
+    compilePromiseWs = activeWs;
+    compilePromise = (async () => {
+        AppStore.setState({ isPipelineActive: true });
+        if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
+        try {
+            const payload = { force_full: forceFull };
+            if (startStep) payload.start_step = startStep;
+            if (targetRepos) payload.target_repos = targetRepos;
+
+            const response = await window.inSetu.api.workspace.post('gather/submit', payload);
+            const data = await response.json();
+            let result = null;
+            if (response.status === 202) {
+                let jobId = data.job_id;
+                if (jobId === 'offline_queue') {
+                    return { status: 'success', message: 'Queued for offline sync.', files: [] };
+                }
+                let retries = 0;
+                const processedSteps = new Set();
+                while (true) {
+                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
+                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
+                        break;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
+                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
+                        break;
+                    }
+
+                    const pollRes = await window.inSetu.api.workspace.get(`system/jobs/${jobId}`, {
+                        headers: { 'X-Workspace-ID': compilePromiseWs }
+                    });
+
+                    if (pollRes.status === 404) {
+                        result = { status: 'aborted', message: 'Job not found (context shifted).', files: [] };
+                        break;
+                    }
+                    if (!pollRes.ok) throw new Error("Compilation job failed");
+                    const pollData = await pollRes.json();
+
+                    // INVERSION OF CONTROL: Broadcast progress statelessly
+                    window.inSetu.events.emitHook('insetu:compile-progress', pollData);
+                    if (pollData.artifact && pollData.artifact.chain_history) {
+                        pollData.artifact.chain_history.forEach(step => {
+                            if (!processedSteps.has(step.job_id)) {
+                                processedSteps.add(step.job_id);
+                                window.inSetu.events.emitHook('insetu:compile-step-complete', step);
+                            }
+                        });
+                    }
+
+                    if (pollData.status === 'processing' || pollData.status === 'pending') {
+                        const msg = pollData.message || "Compiling...";
+                        if (AppStore.getState().activeWorkspace === compilePromiseWs) {
+                            window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                            if (onProgress) onProgress(msg);
+                        }
+                        retries++;
+                        if (retries > 720) {
+                            result = { status: 'error', message: 'Compilation timed out. The background worker may have stalled.', files: [] };
+                            break;
+                        }
+                    } else if (pollData.status === 'completed') {
+                        if (pollData.artifact && pollData.artifact.next_job_id) {
+                            jobId = pollData.artifact.next_job_id;
+                            retries = 0;
+                            continue;
+                        }
+                        result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
+                        break;
+                    } else if (pollData.status === 'failed') {
+                        result = { status: 'error', message: pollData.message, files: [] };
+                        break;
+                    }
+                }
+            } else {
+                result = data;
+            }
+            // OS-Level Hydration: Automatically update global manifest on success
+            if (result && result.status !== 'error') {
+                const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+                if (mRes.ok) {
+                    const rawManifest = await mRes.json();
+                    AppStore.setState({ manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} } });
+                }
+                if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
+            } else {
+                if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
+            }
+            window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
+            return result;
+        } catch (error) {
+            if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending');
+            throw error;
+        } finally {
+            AppStore.setState({ isPipelineActive: false });
+            window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
+            compilePromise = null;
+        }
+    })();
+    return compilePromise;
+};
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
     loadingMessage: "Compiling ecosystem contexts... please wait.",
+    executeCompile,
     searchQuery: '',
     allRepos: AppStore.getState().allRepos || [],
     targetConfigs: AppStore.getState().targetConfigs || [],
-    virtualContexts: [],
-    categoryOrder: [],
-    hiddenOutputs: [],
     quickPacks: [],
     activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
@@ -121,6 +232,9 @@ export class InSetuExtGather extends InSetuElement {
         allRepos: { type: Array },
         activeModules: { type: Array },
         pendingModules: { type: Array },
+        isPipelineActive: { type: Boolean },
+        categoryOrder: { type: Array },
+        hiddenOutputs: { type: Array },
         _showFilters: { type: Boolean },
         _expandedCats: { type: Object },
         _syncState: { type: String }
@@ -137,6 +251,8 @@ export class InSetuExtGather extends InSetuElement {
         this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         this.manifestFiles = [];
         this.searchQuery = '';
+        this.categoryOrder = [];
+        this.hiddenOutputs = [];
         this._expandedCats = {};
         this._syncState = 'synced';
     }
@@ -156,6 +272,9 @@ export class InSetuExtGather extends InSetuElement {
             this.manifestFiles = Object.keys(state.manifest?.ctx || {});
             this.activeModules = state.activeModules || [];
             this.pendingModules = state.pendingModules || [];
+            this.isPipelineActive = state.isPipelineActive || false;
+            this.categoryOrder = state.categoryOrder || [];
+            this.hiddenOutputs = state.hiddenOutputs || [];
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
@@ -164,6 +283,19 @@ export class InSetuExtGather extends InSetuElement {
         this.registerGlobalListener('sutram-sync-status', window, (e) => {
             this._syncState = e.detail.state;
             this.requestUpdate();
+        });
+        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
+            const pollData = e.detail;
+            if (pollData.status === 'terminated') {
+                GatherStore.setState({ loading: false });
+                return;
+            }
+            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
+            GatherStore.setState(state => ({ 
+                loading: currentExt === 'gather' || currentExt === 'cmp',
+                // Preserve the previous message during the 250ms handoff to prevent visual flickering
+                loadingMessage: pollData.status === 'completed' ? state.loadingMessage : (pollData.message || "Compiling ecosystem contexts...")
+            }));
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
@@ -181,23 +313,20 @@ export class InSetuExtGather extends InSetuElement {
     async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
         try {
-            const result = await window.inSetu.sys.executeSystemCompile((msg) => {
-                GatherStore.setState({ loadingMessage: msg });
-            }, forceFull);
+            const result = await GatherStore.getState().executeCompile(null, forceFull);
             if (result && result.status === 'error') {
                 alert("❌ " + result.message);
             }
         } catch (error) {
             console.error("Compilation error:", error);
             alert("❌ Network or syntax error compiling files. Check console for details.");
-        } finally {
-            GatherStore.setState({ loading: false });
         }
     }
     render() {
         const categories = {};
         const ctxManifest = AppStore.getState().manifest?.ctx || {};
-        const { categoryOrder, hiddenOutputs } = GatherStore.getState();
+        const categoryOrder = this.categoryOrder || [];
+        const hiddenOutputs = this.hiddenOutputs || [];
         // 1. Enrich data with metadata for searching
         const enrichedFiles = this.manifestFiles.map(file => {
                 const manifestObj = ctxManifest[file] || {};
@@ -217,8 +346,8 @@ export class InSetuExtGather extends InSetuElement {
 
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
-        const isGatherActive = this.loading || (this.activeModules || []).includes('gather');
-        const isGatherPending = (this.pendingModules || []).includes('gather');
+        const isGatherActive = this.loading || (!this.isPipelineActive && (this.activeModules || []).includes('gather'));
+        const isGatherPending = !this.isPipelineActive && (this.pendingModules || []).includes('gather');
         const isGatherLoading = isGatherActive || isGatherPending;
         const displayLoadingMsg = isGatherActive ? this.loadingMessage : "Waiting for prerequisite contexts to compile...";
 

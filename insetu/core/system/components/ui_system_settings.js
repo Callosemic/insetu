@@ -1,7 +1,7 @@
 import { html, css } from 'lit';
-import { InSetuElement } from '../sdk.js';
-import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
-import { AppStore } from '../store.js';
+import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { AppStore } from '/static/extensions/system/store.js';
 export class InSetuSystemSettings extends InSetuElement {
     static properties = {
         menuOpen: { type: Boolean },
@@ -170,7 +170,7 @@ export class InSetuSystemSettings extends InSetuElement {
                 const data = await res.json();
                 if (data.requires_reboot) {
                     this.setStatus("Reboot required. Restarting...", 3000, true);
-                    await window.inSetu.api.system.post('reboot', {});
+                    await window.inSetu.api.workspace.post('system/reboot', {});
                     setInterval(() => window.location.reload(), 2000);
                 } else {
                     this.setStatus("Extensions updated. Refreshing UI...", 2000);
@@ -192,8 +192,8 @@ export class InSetuSystemSettings extends InSetuElement {
         const allExtKeys = new Set([...Object.keys(allSchemas), ...Array.from(window.ExtensionRegistry?._manifests?.keys() || [])]);
 
         allExtKeys.forEach(ext => {
-            // core_system and config actions are manually hardcoded in the system tab
-            if (ext === 'core_system' || ext === 'config') return; 
+            // system and config actions are manually hardcoded in the system tab
+            if (ext === 'core_system' || ext === 'system' || ext === 'config') return; 
 
             const schema = allSchemas[ext] || [];
             const manifest = window.ExtensionRegistry?._manifests?.get(ext);
@@ -291,7 +291,7 @@ export class InSetuSystemSettings extends InSetuElement {
                     </div>
                     <div style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 20px;">
                         ${this.activeTab === 'system' ? html`
-                            ${renderBtn('⚙️', 'System Preferences', () => this._openGenericSettings('core_system'))}
+                            ${renderBtn('⚙️', 'System Preferences', () => this._openGenericSettings('system'))}
                             ${renderBtn('🗃️', 'Add / Remove Workspaces', () => AppStore.setState({ isWorkspaceEditorOpen: true }))}
                             ${renderBtn('📂', 'Configure Current Workspace', () => AppStore.setState({ isConfigOpen: true }))}
                             ${renderBtn('🧩', 'Manage Workspace Extensions', () => this.manageExtOpen = true)}
@@ -456,7 +456,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     async _loadHostDirs(path = '') {
         try {
-            const res = await window.inSetu.api.system.get(`fs/list_local?path=${encodeURIComponent(path)}`);
+            const res = await window.inSetu.api.workspace.get(`fs/list_local?path=${encodeURIComponent(path)}`);
             if (res.ok) {
                 const data = await res.json();
                 this._hostCurrentPath = data.current;
@@ -491,7 +491,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
     }
     async _loadWorkspacesManifest() {
         try {
-            const res = await window.inSetu.api.system.get('workspaces?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.workspace.get('system/workspaces?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.workspaces = data.workspaces || {};
@@ -508,7 +508,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         const wsRoot = this._newWsRoot.trim();
         if (!wsId) return;
         try {
-            const res = await window.inSetu.api.system.post('workspaces/create', { id: wsId, workspace_root: wsRoot });
+            const res = await window.inSetu.api.workspace.post('system/workspaces/create', { id: wsId, workspace_root: wsRoot });
             if (res.ok) {
                 this._newWsId = '';
                 this._newWsRoot = '';
@@ -527,7 +527,7 @@ export class InSetuWorkspaceEditor extends InSetuElement {
         if (wsId === 'default') return;
         if (!confirm(`⚠️ Are you sure you want to permanently delete workspace "${wsId}"?\nThis removes its tracking configuration metadata indexes instantly.`)) return;
         try {
-            const res = await window.inSetu.api.system.post('workspaces/delete', { id: wsId });
+            const res = await window.inSetu.api.workspace.post('system/workspaces/delete', { id: wsId });
             if (res.ok) {
                 await this._loadWorkspacesManifest();
                 if (window.inSetu.sys.loadWorkspaces) window.inSetu.sys.loadWorkspaces();

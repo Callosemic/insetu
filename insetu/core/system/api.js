@@ -140,11 +140,9 @@ window.inSetu.api = {
         const fullUrl = `/api/${activeWs}/${cleanPath}`;
         return this.request(fullUrl, options, activeWs);
     },
-
     system: async function(path, options = {}) {
         const cleanPath = path.startsWith('/') ? path.substring(1) : path;
-        const fullUrl = `/api/system/${cleanPath}`;
-        return this.request(fullUrl, options, 'default');
+        return this.workspace(`system/${cleanPath}`, options);
     },
 
     get: function(path, options = {}) {
@@ -168,21 +166,16 @@ window.inSetu.api.workspace.post = function(path, payload, options = {}) {
     return window.inSetu.api.workspace(path, { ...options, method: 'POST', headers, body });
 };
 window.inSetu.api.system.get = function(path, options = {}) {
-    return window.inSetu.api.system(path, { ...options, method: 'GET' });
+    return window.inSetu.api.workspace.get(`system/${path.replace(/^\/+/, '')}`, options);
 };
 window.inSetu.api.system.post = function(path, payload, options = {}) {
-    return window.inSetu.api.system(path, {
-        ...options,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-        body: JSON.stringify(payload)
-    });
+    return window.inSetu.api.workspace.post(`system/${path.replace(/^\/+/, '')}`, payload, options);
 };
 window.inSetu.api.workspace.delete = function(path, options = {}) {
     return window.inSetu.api.workspace(path, { ...options, method: 'DELETE' });
 };
 window.inSetu.api.system.delete = function(path, options = {}) {
-    return window.inSetu.api.system(path, { ...options, method: 'DELETE' });
+    return window.inSetu.api.workspace.delete(`system/${path.replace(/^\/+/, '')}`, options);
 };
 // Phase E: Network Hysteresis & Outbox Reconciliation Loop
 const networkManager = new NetworkHysteresisManager('/?t={t}', 3);

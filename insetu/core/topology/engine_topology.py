@@ -3,6 +3,7 @@ import uuid
 import json
 import threading
 from pathlib import Path
+from flask import jsonify
 from insetu.kernel.extension import InSetuExtension, ExtensionContext
 from insetu.kernel.hooks import hooks
 from insetu.kernel.workers import submit_immediate_job, register_callback
@@ -43,12 +44,17 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "topology",
         "worker_name": "scan_topology_task"
     }]
-
 @topology_bp.worker("scan_topology_task")
 def _background_scan_topology(ctx, ledger_events=None, **kwargs):
     import time
     from insetu.kernel.db import get_connection
     w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
+
+    # Barrier Sync: Await async VFS pipeline writes to settle before draining topology
+    try:
+        ctx.sync_vfs_barrier(timeout=10.0)
+    except TimeoutError as e:
+        print(f"⚠️ [Topology] {str(e)} Proceeding with partial disk state.")
 
     timeout_loops = 0
     while timeout_loops < 20:
@@ -576,26 +582,31 @@ def resolve_owning_workspaces(filepath=None, **kwargs):
     from pathlib import Path
 
     clean_fp = str(filepath).replace('vfs://', '').replace('ctx://', '').lstrip('/')
-    abs_target = os.path.abspath(clean_fp)
     index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
-    
+
     owning_workspaces = set()
     if os.path.exists(index_path):
         w_data = load_json_file(index_path, {})
         for ws_id in w_data.get("workspaces", {}).keys():
             try:
                 _, ws_root, _ = get_workspace_physics(ws_id)
-                if abs_target.startswith(os.path.abspath(ws_root)):
+                abs_ws_root = Path(ws_root).resolve().as_posix()
+                if Path(clean_fp).is_absolute():
+                    abs_target = Path(clean_fp).resolve().as_posix()
+                else:
+                    abs_target = Path(abs_ws_root).joinpath(clean_fp).resolve().as_posix()
+
+                if abs_target.startswith(abs_ws_root):
                     owning_workspaces.add(ws_id)
                     continue
-                    
+
                 cfg = load_config(ws_id)
                 for repo in cfg.get("target_repos", []):
                     p_path = repo.get("physical_path")
-                    if p_path and abs_target.startswith(os.path.abspath(os.path.expanduser(p_path))):
+                    if p_path and abs_target.startswith(Path(p_path).expanduser().resolve().as_posix()):
                         owning_workspaces.add(ws_id)
                         break
             except Exception:
                 continue
-                
+
     return owning_workspaces

@@ -4,14 +4,14 @@ import sys
 import json
 import threading
 import time
-from flask import Blueprint, request, jsonify
+from flask import request, jsonify
 from insetu.kernel.utils import load_config, save_json_file, load_json_file, get_workspace_physics, sniff_tenant_id
 import insetu.kernel.utils as utils
 from insetu.kernel.hooks import hooks
 from insetu.kernel.sync import get_system_deltas
-from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
+from insetu.core.sdk import InSetuExtension
 
-_REGISTERED_SETTINGS_SCHEMAS['core_system'] = [
+SYSTEM_SETTINGS_SCHEMA = [
     {
         "id": "port",
         "label": "Daemon Port",
@@ -61,29 +61,24 @@ _REGISTERED_SETTINGS_SCHEMAS['core_system'] = [
         "description": "Maximum IndexedDB storage quota for VFS cache warming."
     }
 ]
-from insetu.kernel.extension import InSetuExtension
-@hooks.on('core_system_settings_updated')
+
+system_bp = InSetuExtension(
+    'system', __name__,
+    title="Core OS",
+    description="Core OS daemon and workspace environment configurations.",
+    core=True,
+    settings_schema=SYSTEM_SETTINGS_SCHEMA
+)
+
+@hooks.on('system_settings_updated')
 def core_system_settings_updated(workspace_id=None, **kwargs):
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
     return {"requires_refresh": True}
 
-core_system_ext = InSetuExtension(
-    'core_system', __name__,
-    title="Core OS",
-    description="Core OS daemon and workspace environment configurations.",
-    core=True,
-    settings_schema=_REGISTERED_SETTINGS_SCHEMAS['core_system']
-)
-
-system_bp = Blueprint('system', __name__)
-
-@system_bp.route('/api/system/deltas', methods=['GET'])
-@system_bp.route('/api/<workspace_id>/system/deltas', methods=['GET'])
-def api_system_deltas(workspace_id=None):
-    if not workspace_id:
-        workspace_id = sniff_tenant_id()
-    since = float(request.args.get('since', 0.0))
-    return jsonify(get_system_deltas(workspace_id, since_ts=since))
+@system_bp.route('deltas', methods=['GET'])
+def api_system_deltas(ctx):
+    since = float(ctx.req.args.get('since', 0.0))
+    return jsonify(get_system_deltas(ctx.workspace_id, since_ts=since))
 
 @hooks.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
@@ -188,13 +183,13 @@ def get_system_config(workspace_id):
             except Exception: evaluated_schemas[ext_id] = []
         else:
             evaluated_schemas[ext_id] = schema_spec
-
     return {
-            "config": data,
-            "meta": {
-                    "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
-                    "settings_schemas": evaluated_schemas
-            }
+        "config": data,
+        "meta": {
+            "available_extensions": sorted(available, key=lambda x: x.get('title') or ""),
+            "settings_schemas": evaluated_schemas,
+            "core_modules": list(CORE_MODULES)
+        }
     }
 def save_system_config(workspace_id, payload):
     cfg_path, _, _ = get_workspace_physics(workspace_id)
@@ -213,9 +208,8 @@ def save_system_config(workspace_id, payload):
     from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
-@system_bp.route('/api/system/reboot', methods=['POST'])
-@system_bp.route('/api/<workspace_id>/system/reboot', methods=['POST'])
-def api_system_reboot(workspace_id=None):
+@system_bp.route('reboot', methods=['POST'])
+def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
     import os, sys, threading, time
     def restart():
@@ -228,16 +222,14 @@ def api_system_reboot(workspace_id=None):
 
     threading.Thread(target=restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Rebooting inSetu OS..."})
-@system_bp.route('/api/system/config', methods=['GET', 'POST'])
-@system_bp.route('/api/<workspace_id>/system/config', methods=['GET', 'POST'])
-def api_system_config(workspace_id=None):
+@system_bp.route('config', methods=['GET', 'POST'])
+def api_system_config(ctx):
     try:
-        if not workspace_id: workspace_id = sniff_tenant_id()
-        if request.method == 'GET':
-            data = get_system_config(workspace_id)
+        if ctx.req.method == 'GET':
+            data = get_system_config(ctx.workspace_id)
             return jsonify(data)
         else:
-            payload = request.get_json(silent=True) or {}
+            payload = ctx.req.get_json(silent=True) or {}
 
             from flask import current_app
             requires_reboot = False
@@ -245,7 +237,7 @@ def api_system_config(workspace_id=None):
                 if ext != "config" and ext not in current_app.blueprints:
                     requires_reboot = True
 
-            save_system_config(workspace_id, payload)
+            save_system_config(ctx.workspace_id, payload)
             return jsonify({
                 "status": "success", 
                 "message": "Configuration saved successfully.", 
@@ -255,18 +247,15 @@ def api_system_config(workspace_id=None):
         import traceback
         print(f"Config Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('/api/system/topology', methods=['GET'])
-@system_bp.route('/api/<workspace_id>/system/topology', methods=['GET'])
-def api_system_topology(workspace_id=None):
+@system_bp.route('topology', methods=['GET'])
+def api_system_topology(ctx):
     try:
-        if not workspace_id:
-            workspace_id = sniff_tenant_id()
         from insetu.core.utils_core import get_sister_repos
         import os
         from pathlib import Path
-        cfg = load_config(workspace_id)
+        cfg = load_config(ctx.workspace_id)
         targets = cfg.get("target_repos", []) or []
-        cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+        cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
 
         for c in targets:
             if not c: continue
@@ -282,7 +271,7 @@ def api_system_topology(workspace_id=None):
                                 if module not in b["meta_map"]:
                                     b["meta_map"][module] = {"title": module.replace('_', ' ').title()}
         return jsonify({
-            "repos": get_sister_repos(workspace_id),
+            "repos": get_sister_repos(ctx.workspace_id),
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
             "term_port": cfg.get("term_port", 8181),
             "targets": targets,
@@ -296,23 +285,20 @@ def api_system_topology(workspace_id=None):
         import traceback
         print(f"Topology Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('/api/system/manifest', methods=['GET'])
-@system_bp.route('/api/<workspace_id>/system/manifest', methods=['GET'])
-def api_system_manifest(workspace_id=None):
-    if not workspace_id:
-        workspace_id = sniff_tenant_id()
+@system_bp.route('manifest', methods=['GET'])
+def api_system_manifest(ctx):
     headers = {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
     }
-    ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=workspace_id) if m), {})
-    vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=workspace_id) if m), {})
+    ctx_manifest = next((m for m in hooks.emit('request_manifest', workspace_id=ctx.workspace_id) if m), {})
+    vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=ctx.workspace_id) if m), {})
 
     return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
-@system_bp.route('/api/system/workspaces/create', methods=['POST'])
-def api_create_workspace():
+@system_bp.route('workspaces/create', methods=['POST'])
+def api_create_workspace(ctx):
     try:
-        data = request.json or {}
+        data = ctx.req.json or {}
         ws_id = data.get('id', '').strip().lower()
         if not ws_id or ws_id in ['default', 'none']:
             return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
@@ -353,7 +339,7 @@ def api_create_workspace():
         save_json_file(config_abs_path, starter_config, workspace_id=ws_id)
         # 3. Seed the Tier 2 Workspace Settings safely
         from insetu.kernel.extension import SettingsManager
-        settings = SettingsManager('core_system', ws_id)
+        settings = SettingsManager('system', ws_id)
         settings.set("instance_title", f"inSetu Workspace: {ws_id}")
 
         # 4. Provision databases and trigger the boot sequence for the new workspace
@@ -368,10 +354,10 @@ def api_create_workspace():
         import traceback
         print(f"Workspace Create Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('/api/system/workspaces/delete', methods=['POST'])
-def api_delete_workspace():
+@system_bp.route('workspaces/delete', methods=['POST'])
+def api_delete_workspace(ctx):
     try:
-        data = request.json or {}
+        data = ctx.req.json or {}
         ws_id = data.get('id', '').strip().lower()
         if ws_id == 'default':
             return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
@@ -399,14 +385,11 @@ def api_delete_workspace():
         import traceback
         print(f"Workspace Delete Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('/api/system/jobs/<job_id>', methods=['GET'])
-@system_bp.route('/api/<workspace_id>/system/jobs/<job_id>', methods=['GET'])
-def api_job_status(job_id, workspace_id=None):
-    if not workspace_id:
-        workspace_id = sniff_tenant_id()
+@system_bp.route('jobs/<job_id>', methods=['GET'])
+def api_job_status(ctx, job_id):
     from insetu.kernel.db import get_connection
     try:
-        conn = get_connection("workers", workspace_id=workspace_id)
+        conn = get_connection("workers", workspace_id=ctx.workspace_id)
         job = conn.execute("SELECT ext_name, status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
         if not job:
             return jsonify({"error": "Job not found in active workspace context."}), 404
@@ -422,17 +405,17 @@ def api_job_status(job_id, workspace_id=None):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@system_bp.route('/api/system/workspaces', methods=['GET', 'POST'])
-def api_workspaces():
+@system_bp.route('workspaces', methods=['GET', 'POST'])
+def api_workspaces(ctx):
     index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
 
-    if request.method == 'GET':
+    if ctx.req.method == 'GET':
         data = utils.load_json_file(index_path, {})
         if "workspaces" not in data:
             data["workspaces"] = {"default": {"config_path": "config.json"}}
         return jsonify(data)
-    if request.method == 'POST':
-        data = request.json or {}
+    if ctx.req.method == 'POST':
+        data = ctx.req.json or {}
         new_active = data.get("active_workspace") or data.get("workspace_id")
         old_active = sniff_tenant_id()
         if not os.path.exists(index_path):
@@ -446,16 +429,14 @@ def api_workspaces():
 
         # Stateless UDF: Session state managed by client
     return jsonify({"status": "success", "message": f"Validated workspace {new_active}"})
-@system_bp.route('/api/system/config/test_bucketing', methods=['POST'])
-@system_bp.route('/api/<workspace_id>/system/config/test_bucketing', methods=['POST'])
-def api_system_config_test_bucketing(workspace_id=None):
+@system_bp.route('config/test_bucketing', methods=['POST'])
+def api_system_config_test_bucketing(ctx):
     try:
-        if not workspace_id: workspace_id = sniff_tenant_id()
-        data = request.get_json(silent=True) or {}
+        data = ctx.req.get_json(silent=True) or {}
         repo_cfg = data.get("repo_cfg", {})
 
         from insetu.kernel.utils import get_workspace_physics
-        cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+        cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir:
             return jsonify({"error": "repo_dir missing"}), 400
@@ -467,7 +448,7 @@ def api_system_config_test_bucketing(workspace_id=None):
             return jsonify({"error": f"Path not found: {repo_path}"}), 404
 
         from insetu.core.topology.engine_topology import get_valid_workspace_files, resolve_file_bucket
-        valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, workspace_id)
+        valid_files = get_valid_workspace_files(repo_path.as_posix(), repo_cfg, ctx.workspace_id)
 
         sub_buckets = repo_cfg.get("sub_buckets", [])
         buckets_map = {}
@@ -486,10 +467,10 @@ def api_system_config_test_bucketing(workspace_id=None):
         print(f"Bucketing Test Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
-@system_bp.route('/api/system/fs/list_local', methods=['GET'])
-def api_list_local_host_dirs():
+@system_bp.route('fs/list_local', methods=['GET'])
+def api_list_local_host_dirs(ctx):
     """Stateless directory explorer that reads absolute host paths for workspace mounts."""
-    target = request.args.get('path', '').strip()
+    target = ctx.req.args.get('path', '').strip()
     if not target:
         target = os.path.expanduser('~')
     else:

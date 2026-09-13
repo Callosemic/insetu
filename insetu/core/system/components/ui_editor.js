@@ -1,8 +1,8 @@
 import { LitElement, html, css } from 'lit';
-import { InSetuElement } from '../sdk.js';
-import { FsStore } from '../fs.js';
-import { AppStore } from '../store.js';
-import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
+import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { FsStore } from '/static/extensions/fs/fs.js';
+import { AppStore } from '/static/extensions/system/store.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export function resolveEditorMode(filename) {
     if (!filename) return { ext: '', mode: null, isSupported: false, isMarkdown: false };

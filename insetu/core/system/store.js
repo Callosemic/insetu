@@ -1,6 +1,6 @@
 // insetu/static/js/store.js
 // Strict Unidirectional Data Flow (UDF) State Manager
-import { createExtensionStore } from './sdk.js';
+import { createExtensionStore } from '/static/extensions/system/sdk.js';
 import { StatusStore, ToastStore, SelectionStore } from '../../vendor/sutram/js/sdk.js';
 
 export { StatusStore, ToastStore, SelectionStore };
@@ -52,6 +52,9 @@ export const AppStore = createExtensionStore('App', {
     clearResolvingLock: (path) => AppStore.setState(s => { const newLocks = { ...s.resolvingLocks }; delete newLocks[path]; return { resolvingLocks: newLocks }; }),
     allRepos: [],
     targetConfigs: [],
+    virtualContexts: [],
+    categoryOrder: [],
+    hiddenOutputs: [],
     pinnedRepos: new Set(JSON.parse(localStorage.getItem(`insetu_pinned_repos_${window.inSetu.utils.getActiveWorkspace()}`)) || ["ALL"]),
     setPinnedRepos: (repos) => {
         const ws = AppStore.getState().activeWorkspace || 'default';

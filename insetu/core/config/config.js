@@ -1,8 +1,8 @@
 // config.js - Core OS Workspace Configuration Editor
 import { html, css } from 'lit';
-import { AppStore } from './store.js';
-import { InSetuElement } from './sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { AppStore } from '/static/extensions/system/store.js';
+import { InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export class InSetuExtConfig extends InSetuElement {
     static properties = {
@@ -585,12 +585,11 @@ export class InSetuExtConfig extends InSetuElement {
         try {
             // Config saves utilize explicit multi-tenant URL path boundaries
             const res = await window.inSetu.api.workspace.post('system/config', this.configForm);
-
             if (res.ok) {
                 const data = await res.json();
-                if (window.inSetu.sys.executeSystemCompile) {
+                if (window.inSetu.stores.Gather) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⏳ Re-indexing...", null);
-                    await window.inSetu.sys.executeSystemCompile(null, true);
+                    await window.inSetu.stores.Gather.getState().executeCompile(null, true);
                 }
                 if (data.requires_reboot) {
                     // Declarative UI State Transition
@@ -658,8 +657,8 @@ window.ExtensionRegistry.registerExtension('config', {
             intent: 'primary',
             order: 10,
             asyncAction: async (data, e) => {
-                if (window.inSetu.sys.executeSystemCompile) {
-                    await window.inSetu.sys.executeSystemCompile(null, true);
+                if (window.inSetu.stores.Gather) {
+                    await window.inSetu.stores.Gather.getState().executeCompile(null, true);
                 }
             }
         },

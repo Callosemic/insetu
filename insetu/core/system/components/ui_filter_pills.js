@@ -1,5 +1,5 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export class InSetuRepoFilter extends LitElement {
     static properties = {

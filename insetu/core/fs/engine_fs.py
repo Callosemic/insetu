@@ -1,29 +1,38 @@
-from flask import Blueprint, request, jsonify, send_file
 import os
 import json
 import uuid
 import datetime
 from pathlib import Path
+from flask import request, jsonify, send_file
+from insetu.core.sdk import InSetuExtension
 from insetu.kernel.vfs import execute_vfs_move, execute_vfs_archive, execute_vfs_delete, execute_vfs_save, _resolve_physical_path as resolve_physical_path
 from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
-fs_bp = Blueprint('fs', __name__)
+fs_bp = InSetuExtension(
+    'fs', 
+    __name__, 
+    title="Virtual File System", 
+    description="Core VFS access and mutation routes.", 
+    core=True
+)
+__depends__ = []
 
-@fs_bp.route('/api/<workspace_id>/fs/exists', methods=['GET'])
-def api_fs_exists(workspace_id):
+@fs_bp.route('exists', methods=['GET'])
+def api_fs_exists(ctx):
     """Silent validation route that verifies file existence for the UI."""
-    filename = request.args.get('file', '').strip()
+    workspace_id = ctx.workspace_id
+    filename = ctx.req.args.get('file', '').strip()
     if not filename:
         return jsonify({"exists": False, "path": filename})
     resolved_path = resolve_physical_path(filename, workspace_id)
     exists = bool(resolved_path and os.path.exists(resolved_path))
     return jsonify({"exists": exists, "path": filename})
-
-@fs_bp.route('/api/<workspace_id>/fs/fetch', methods=['GET'])
-def api_fs_fetch(workspace_id):
+@fs_bp.route('fetch', methods=['GET'])
+def api_fs_fetch(ctx):
     """Fetches raw content of a target VFS path for frontend viewing."""
-    filename = request.args.get('file', '').strip()
-    is_absolute_artifact = request.args.get('is_absolute_artifact', 'false').lower() == 'true'
+    workspace_id = ctx.workspace_id
+    filename = ctx.req.args.get('file', '').strip()
+    is_absolute_artifact = ctx.req.args.get('is_absolute_artifact', 'false').lower() == 'true'
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
@@ -34,8 +43,8 @@ def api_fs_fetch(workspace_id):
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     return "File not found.", 404
-
-@fs_bp.route('/download/<path:filename>')
+# Bypass the InSetuExtension wrapper to retain the global /download/ path for absolute URLs
+@fs_bp.bp.route('/download/<path:filename>')
 def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
     from insetu.kernel.utils import sniff_tenant_id
@@ -68,10 +77,11 @@ def _background_fs_search(job_id, workspace_id, query, **kwargs):
         update_immediate_job_status(job_id, 'failed', f"Search failed: {str(e)}", workspace_id=workspace_id)
 
 register_callback("fs", "search_task", _background_fs_search)
-@fs_bp.route('/api/<workspace_id>/fs/search', methods=['POST'])
-def api_fs_search(workspace_id):
+@fs_bp.route('search', methods=['POST'])
+def api_fs_search(ctx):
+    workspace_id = ctx.workspace_id
     try:
-        data = request.get_json(silent=True) or {}
+        data = ctx.req.get_json(silent=True) or {}
         query = data.get('q', '').lower()
         if not query: return jsonify({"results": []})
 
@@ -80,10 +90,11 @@ def api_fs_search(workspace_id):
         return jsonify({"status": "accepted", "job_id": job_id}), 202
     except Exception as e:
         return jsonify({"error": f"Search dispatch failed: {str(e)}"}), 500
-@fs_bp.route('/api/<workspace_id>/fs/move', methods=['POST'])
-def api_fs_move(workspace_id):
+@fs_bp.route('move', methods=['POST'])
+def api_fs_move(ctx):
+    workspace_id = ctx.workspace_id
     try:
-        data = request.get_json(silent=True) or {}
+        data = ctx.req.get_json(silent=True) or {}
         filepath = data.get("filepath", "").strip()
         dest_path = data.get("dest_path", "").strip()
         if not filepath or not dest_path:
@@ -92,10 +103,11 @@ def api_fs_move(workspace_id):
         return jsonify(res), code
     except Exception as e:
         return jsonify({"error": f"VFS Move Error: {str(e)}"}), 500
-@fs_bp.route('/api/<workspace_id>/fs/archive', methods=['POST'])
-def api_fs_archive(workspace_id):
+@fs_bp.route('archive', methods=['POST'])
+def api_fs_archive(ctx):
+    workspace_id = ctx.workspace_id
     try:
-        data = request.get_json(silent=True) or {}
+        data = ctx.req.get_json(silent=True) or {}
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
@@ -103,10 +115,11 @@ def api_fs_archive(workspace_id):
         return jsonify(res), code
     except Exception as e:
         return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
-@fs_bp.route('/api/<workspace_id>/fs/delete', methods=['POST'])
-def api_fs_delete(workspace_id):
+@fs_bp.route('delete', methods=['POST'])
+def api_fs_delete(ctx):
+    workspace_id = ctx.workspace_id
     try:
-        data = request.get_json(silent=True) or {}
+        data = ctx.req.get_json(silent=True) or {}
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
@@ -114,15 +127,15 @@ def api_fs_delete(workspace_id):
         return jsonify(res), code
     except Exception as e:
         return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
-
-@fs_bp.route('/api/<workspace_id>/fs/upload', methods=['POST'])
-def api_fs_upload(workspace_id):
+@fs_bp.route('upload', methods=['POST'])
+def api_fs_upload(ctx):
     """Native multipart/form-data uploader for robust binary handling."""
-    if 'file' not in request.files:
+    workspace_id = ctx.workspace_id
+    if 'file' not in ctx.req.files:
             return jsonify({"error": "No files provided"}), 400
 
-    files = request.files.getlist('file')
-    dest_dir = request.form.get('dest_dir', '').strip()
+    files = ctx.req.files.getlist('file')
+    dest_dir = ctx.req.form.get('dest_dir', '').strip()
     import werkzeug.utils
     import time
     from insetu.kernel.db import get_connection
@@ -162,11 +175,12 @@ def api_fs_upload(workspace_id):
             return jsonify({"error": "No valid files uploaded"}), 400
 
     return jsonify({"status": "success", "message": f"{len(uploaded_paths)} file(s) uploaded successfully.", "filepaths": uploaded_paths})
-@fs_bp.route('/api/<workspace_id>/fs/save', methods=['POST'])
-def api_fs_save(workspace_id):
+@fs_bp.route('save', methods=['POST'])
+def api_fs_save(ctx):
     """Universal save-back endpoint with explicit path routing guardrails."""
+    workspace_id = ctx.workspace_id
     try:
-        data = request.get_json(silent=True)
+        data = ctx.req.get_json(silent=True)
         if not data:
                 return jsonify({"error": "Invalid or missing JSON payload"}), 400
 
@@ -186,13 +200,11 @@ def api_fs_save(workspace_id):
                 with open(resolved_path, 'r', encoding='utf-8') as f:
                     current_disk_content = f.read()
                 current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
-
                 if current_hash != base_hash and current_disk_content != content:
                     import time
                     conflict_name = f"{Path(resolved_path).stem}.conflict_{int(time.time())}{Path(resolved_path).suffix}"
                     conflict_path = Path(resolved_path).parent.joinpath(conflict_name).as_posix()
-                    with open(conflict_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
+                    execute_vfs_save(workspace_id, conflict_path, content, data={"is_absolute_artifact": True})
                     return jsonify({"error": f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"}), 409
 
         result = execute_vfs_save(workspace_id, filepath, content, data)

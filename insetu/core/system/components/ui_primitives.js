@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../../vendor/sutram/js/shared_styles.js';
-import { InSetuElement } from '../sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { InSetuElement } from '/static/extensions/system/sdk.js';
 
 export class InSetuJobTracker extends InSetuElement {
     static properties = {

@@ -1,8 +1,8 @@
 // insetu/insetu/static/js/core/sdk.js
 // Tier 1A: inSetu Local OS SDK Wrapper
-import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '../../vendor/sutram/js/sdk.js';
-import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo } from '../../vendor/sutram/js/utils.js';
-import * as jsYaml from '../../vendor/js-yaml/js-yaml.min.js';
+import { SutramElement, createSutramStore, ExtensionRegistry as SutramRegistry, bindStoreInput } from '/static/vendor/sutram/js/sdk.js';
+import { fuzzyFilterObjects, normalizeAccentText, slugify, debounce, coalescedAsync, formatDate, timeAgo } from '/static/vendor/sutram/js/utils.js';
+import * as jsYaml from '/static/vendor/js-yaml/js-yaml.min.js';
 
 export { bindStoreInput };
 export function createExtensionStore(name, initialState, persistKeys = []) {
@@ -76,8 +76,8 @@ export class InSetuElement extends SutramElement {
         }
     }
     compileSystem(onProgress = null, forceFull = false, startStep = null, targetRepos = null) {
-        if (window.inSetu?.sys?.executeSystemCompile) {
-            return window.inSetu.sys.executeSystemCompile(onProgress, forceFull, startStep, targetRepos);
+        if (window.inSetu?.stores?.Gather) {
+            return window.inSetu.stores.Gather.getState().executeCompile(onProgress, forceFull, startStep, targetRepos);
         }
         return Promise.resolve();
     }
@@ -264,20 +264,24 @@ export class InSetuElement extends SutramElement {
     onWorkspaceLoad(workspaceId) {}
     onViewActivated() {}
 }
-// Safely initialize nested global namespaces individually
-export const CORE_MODULES = new Set(['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'workers', 'auth', 'security', 'cartographer', 'core_text_blobs', 'offline']);
+window.inSetu = window.inSetu || {};
+// Pre-seed foundational OS chassis modules to protect against offline cache misses or backend latency
+const _baseCore = ['bridge', 'gather', 'config', 'files', 'editor', 'system', 'fs', 'cartographer', 'offline', 'topology'];
+window.inSetu.CORE_MODULES = window.inSetu.CORE_MODULES && window.inSetu.CORE_MODULES.size > 0 
+    ? window.inSetu.CORE_MODULES 
+    : new Set(_baseCore);
+window.inSetu.isCore = (extName) => window.inSetu.CORE_MODULES.has(extName);
+
+// Safely export the dynamic namespace
+export const CORE_MODULES = window.inSetu.CORE_MODULES;
 
 // Explicit list of Core OS modules that require frontend UI payloads to be mounted on boot
 export const CORE_UI_SCRIPTS = [
-    '/static/js/core/bridge.js',
-    '/static/js/core/gather.js',
-    '/static/js/core/config.js',
-    '/static/js/core/offline_ui.js'
+    '/static/extensions/bridge/bridge.js',
+    '/static/extensions/gather/gather.js',
+    '/static/extensions/config/config.js',
+    '/static/extensions/offline/offline_ui.js'
 ];
-
-window.inSetu = window.inSetu || {};
-window.inSetu.CORE_MODULES = CORE_MODULES;
-window.inSetu.isCore = (extName) => CORE_MODULES.has(extName);
 
 window.inSetu.stores = window.inSetu.stores || {};
 window.inSetu.extensions = window.inSetu.extensions || {};
@@ -403,13 +407,10 @@ window.ExtensionRegistry.registerExtension = function(extName, config) {
             window.ExtensionRegistry.registerShortcut(s.context, s.key, s.action, { id: s.id, extName, label: s.label });
         });
     }
-
     if (config.settingsActions) {
         config.settingsActions.forEach(act => {
-            let sectionName = 'Extensions';
+            let sectionName = config.settingsCategory || 'Extensions';
             if (config.name === 'Workspace Configuration' || act.id === 'config_editor' || act.id === 'workspaces_editor') sectionName = 'Workspace';
-            else if (config.name === 'Issue Tracker') sectionName = 'Tracker';
-            else if (config.name === 'Skills Tracker') sectionName = 'Practice';
             this.registerSettingsAction(act.id, act.label, act.icon, act.onClick, sectionName);
         });
     }
@@ -575,9 +576,8 @@ window.inSetu.utils.extractManifestFiles = function(manifestData, targetKey = nu
     });
     return Array.from(allFiles);
 };
-
-window.ExtensionRegistry.registerExtension('core_text_blobs', {
-    name: "Core Text Blob Actions",
+window.ExtensionRegistry.registerExtension('system', {
+    name: "System Core Actions",
     version: "1.0.0",
     entityActions: [
         {

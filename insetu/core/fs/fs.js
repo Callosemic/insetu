@@ -1,8 +1,8 @@
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
-import { InSetuElement, createExtensionStore } from './sdk.js';
-import { resolveEditorMode } from './components/ui_editor.js';
-import { AppStore } from './store.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { InSetuElement, createExtensionStore } from '/static/extensions/system/sdk.js';
+import { resolveEditorMode } from '/static/extensions/system/components/ui_editor.js';
+import { AppStore } from '/static/extensions/system/store.js';
 import { buildFileTree, downloadFile as sutramDownloadFile, downloadBlob, bindGhostDrag } from '../../vendor/sutram/js/utils.js';
 export function bindDownloadDrag(e, filename, fetchUrl) {
     const absoluteUrl = window.location.origin + fetchUrl;
@@ -252,10 +252,9 @@ function refreshActiveFileViews(oldPath, newPath = null) {
     const mutations = [{ filepath: oldPath, operation: 'delete' }];
     if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
     window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
-
     // Trigger a proactive compile to let the Cartographer map the renamed/moved/deleted files
-    if (window.inSetu.sys.executeSystemCompile) {
-        window.inSetu.sys.executeSystemCompile();
+    if (window.inSetu.stores.Gather) {
+        window.inSetu.stores.Gather.getState().executeCompile();
     }
 }
 function updateManifestState(oldPath, newPath = null) {
@@ -1549,8 +1548,8 @@ export async function uploadFileToWorkspace(targetDir) {
                 if (data && data.filepaths) {
                     data.filepaths.forEach(fp => updateManifestState(null, fp));
                 }
-                if (window.inSetu.sys.executeSystemCompile) {
-                    window.inSetu.sys.executeSystemCompile();
+                if (window.inSetu.stores.Gather) {
+                    window.inSetu.stores.Gather.getState().executeCompile();
                 }
             }
         });
@@ -1905,3 +1904,12 @@ if (document.readyState === 'loading') {
 } else {
     mountVFSModals();
 }
+
+// Isolate VFS-specific dirty state checks
+window.addEventListener('beforeunload', (e) => {
+    const fm = FsStore.getState().fileModal;
+    if (fm && fm.open && fm.isFS && fm.content !== fm.originalContent) {
+        e.preventDefault();
+        e.returnValue = '';
+    }
+});

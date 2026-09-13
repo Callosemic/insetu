@@ -71,9 +71,10 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     ctx = gather_bp.get_context(workspace_id)
     if max_kb is None:
         max_kb = ctx.settings.get("max_context_size_kb", 0)
-    # 1. Physical Idempotency: Hash the raw content before volatile headers are applied
-    import hashlib
-    content_hash = hashlib.sha256("".join(text_blocks).encode('utf-8')).hexdigest()
+    # 1. Physical Idempotency: Hash payload structure (header, text blocks, files) before disk writes
+    import hashlib, json
+    payload_fingerprint = f"{header_block}\n" + "".join(text_blocks) + json.dumps(files)
+    content_hash = hashlib.sha256(payload_fingerprint.encode('utf-8')).hexdigest()
     existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
     if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
         # Physical disk guardrail: Heal the context if it was deleted or misrouted by a previous bug
@@ -867,10 +868,12 @@ def api_gather_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
     w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
-    # Reattach check: Only attach to pending jobs. Avoid attaching to processing jobs which may be hung.
-    existing_job = w_conn.execute("SELECT id FROM immediate_jobs WHERE id LIKE 'cmp_%' AND status = 'pending'").fetchone()
+    # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
+    existing_job = w_conn.execute(
+        "SELECT id FROM immediate_jobs WHERE callback_name IN ('compile_contexts', 'compile_diffs_task', 'compile_workflows_task') AND status IN ('pending', 'processing')"
+    ).fetchone()
     if existing_job:
-        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to existing pending compilation."}), 202
+        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to active compilation."}), 202
 
     ordered_steps = get_ordered_compilation_steps(ctx)
 
