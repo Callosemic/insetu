@@ -2,6 +2,64 @@
 
 <!-- version list -->
 
+## v0.20.0 (2026-09-13)
+
+### Bug Fixes
+
+- **bridge**: Restore vfs_event_log persistence and vfs_mutated event emission in yomama sync
+  transaction settlement
+  ([`c1926b8`](https://github.com/Callosemic/insetu/commit/c1926b82ac7fbb0839bfde902bb803dad45ed0d7))
+
+- **client-sdk**: Preserve canonical VFS paths, fix Yomama telemetry deselection indexing, and add
+  AppStore reactive module state arrays
+  ([`78208d5`](https://github.com/Callosemic/insetu/commit/78208d5e1f6f34f641234cdbcb105c5707a4f9f2))
+
+- **core**: Enforce VFS barrier sync in topology scan, multi-stage job reattachment, and OCC
+  conflict VFS parity
+  ([`1cf460e`](https://github.com/Callosemic/insetu/commit/1cf460e225fe172315cc7cc50be8a492d073d688))
+
+- **extensions**: Canonicalize URIs, optimize incremental compilation, and harden offline VFS
+  handlers
+  ([`9d14c7f`](https://github.com/Callosemic/insetu/commit/9d14c7fb6add8146f53066afd1abe6340d5cb5ab))
+
+- **kernel**: Generalize core module discovery, optimize VFS barrier synchronization, and align app
+  core blueprint routes
+  ([`287f2b6`](https://github.com/Callosemic/insetu/commit/287f2b6d32ece224b81d9bcf29f70b0935f665c9))
+
+- **kernel**: Resolve multi-tenant spatial event routing, binary VFS reads, and worker argument
+  handling
+  ([`1288143`](https://github.com/Callosemic/insetu/commit/128814384d628ead247a4f0b0838c776931ada33))
+
+- **topology**: Switch VFS manifest cache to thread-safe lock and add watchdog ignore_exceptions
+  support
+  ([`30fd178`](https://github.com/Callosemic/insetu/commit/30fd1781f8b0bcaf3cef7b20cc1888252298bdf0))
+
+### Features
+
+- Add VFS optimistic offline mutations, AppStore cache warming, and Bridge smart remapping
+  ([`003f60f`](https://github.com/Callosemic/insetu/commit/003f60f6d500c78e79f7ae380038c9e0ed529539))
+
+- **core**: Unified watchdog debouncer, genesis patch candidate resolution, and thread-local
+  manifest caching
+  ([`64e239e`](https://github.com/Callosemic/insetu/commit/64e239ee3ae6fa8e9cc7a51cbd8c4213400a34f7))
+
+### Refactoring
+
+- Extract topology compilation barrier and delegate vfs path resolution
+  ([`7cf7996`](https://github.com/Callosemic/insetu/commit/7cf7996e20e858bfdeb586ff6ec2c95223fd87fe))
+
+- **extensions**: Align boot hooks with ADR 0045, harden VFS operations and URI resolution, and
+  optimize git diff caching
+  ([`f4daad2`](https://github.com/Callosemic/insetu/commit/f4daad2869325d78e0895d6e7fb28a42564f7dfe))
+
+- **extensions**: Standardize absolute SDK import paths, align workspace API routes, and enforce
+  tracker VFS mutation events
+  ([`27ce358`](https://github.com/Callosemic/insetu/commit/27ce35813f7dd176c05e3c49c1ff73f874dfbc9d))
+
+- **kernel**: Consolidate VFS path resolution, worker step chaining, and system deltas telemetry
+  ([`055801c`](https://github.com/Callosemic/insetu/commit/055801ced81885442596254805a61b68a6283cdb))
+
+
 ## v0.19.0 (2026-09-07)
 
 ### Bug Fixes
