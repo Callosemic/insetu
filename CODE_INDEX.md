@@ -60,6 +60,7 @@ insetu/
 │       ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
 │       ├── 0045-two-pass-deterministic-boot-sequence.md # Two-pass deterministic boot sequence bisecting spatial discovery and deferred mutation.
 │       ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
+│       ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # [comment required]
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -76,6 +77,7 @@ insetu/
 │   │   ├── __init__.py             # Module initialization.
 │   │   ├── bridge/                 # Yomama Sync Bridge and AST validation engine.
 │   │   │   ├── __init__.py         # Module initialization.
+│   │   │   ├── bridge.js           # [Sync Bridge Payload UI]
 │   │   │   ├── bridge_fuzzy.py     # Fuzzy matching and fallback regex algorithms.
 │   │   │   ├── bridge_parser.py    # Deprecated string parsing engine.
 │   │   │   ├── bridge_vfs.py       # Async VFS commit pipelines and concurrency locks.
@@ -83,18 +85,37 @@ insetu/
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── cartographer.py     # [VFS Topology Mapper]
+│   │   ├── config/                 # [comment required]
+│   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
 │   │   ├── editor/                 # Global CodeMirror editor settings.
 │   │   │   └── engine_editor.py    # Editor preferences and markdown link configurations.
+│   │   ├── fs/                     # [comment required]
+│   │   │   ├── engine_fs.py        # [comment required]
+│   │   │   └── fs.js               # [Virtual File System Modals & UI]
 │   │   ├── gather/                 # RAG Context compiler and manifest synchronizer.
 │   │   │   ├── __init__.py         # Module initialization.
-│   │   │   └── engine_gather.py    # [Context Compiler and Workflow Batch routing]
+│   │   │   ├── engine_gather.py    # [Context Compiler and Workflow Batch routing]
+│   │   │   └── gather.js           # [Context Batch & Workflow UI]
 │   │   ├── offline/                # Local offline data provider and sync reconciliation engine.
 │   │   │   ├── __init__.py         # Module initialization.
-│   │   │   └── engine_offline.py   # Offline data provider and sync reconciliation handlers.
-│   │   ├── routes_fs.py            # [VFS Substrate & File Mutations]
-│   │   ├── routes_system.py        # [Config & Workspace Transport]
+│   │   │   ├── engine_offline.py   # Offline data provider and sync reconciliation handlers.
+│   │   │   └── offline_ui.js       # Client offline status indicator and outbox telemetry UI.
 │   │   ├── sdk/                    # Developer SDK namespace.
 │   │   │   └── __init__.py         # Module initialization.
+│   │   ├── system/                 # [comment required]
+│   │   │   ├── api.js              # Centralized API fetch wrapper and token injector.
+│   │   │   ├── components/         # Reusable Lit Web Components for the OS.
+│   │   │   │   ├── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
+│   │   │   │   ├── ui_file_tree.js # Recursive file tree browser with fuzzy search.
+│   │   │   │   ├── ui_filter_pills.js # Repository and tag filtering arrays.
+│   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
+│   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and OS Settings Hub.
+│   │   │   ├── engine_system.py    # [comment required]
+│   │   │   ├── sdk.js              # The InSetuElement base class and Zustand store factory.
+│   │   │   ├── shared_styles.js    # Proxy export pointing to the Sutram micro-kernel.
+│   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
+│   │   │   ├── system.js           # [comment required]
+│   │   │   └── types.js            # Root JSDoc type definitions entry point.
 │   │   ├── topology/               # Central SSOT for logical workspace topologies.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── engine_topology.py  # Tracks the active layout of repositories and buckets.
@@ -177,7 +198,8 @@ insetu/
 │   │       ├── ext_update.js       # Release preview and publish UI.
 │   │       └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
 │   ├── kernel/                     # Tier 1 Micro-Kernel Substrate (To be extracted to 'akasa').
-│   │   ├── auth.py                 # Central REST/WS token gatehouse and Tailscale WHOIS.
+│   │   ├── auth/                   # [comment required]
+│   │   │   └── __init__.py         # Module initialization.
 │   │   ├── db.py                   # [SQLite Connection Pooling]
 │   │   ├── extension.py            # The InSetuExtension and ExtensionContext SDK wrappers.
 │   │   ├── fallback_bridge.py      # Immutable Recovery OS and Zero-JS Lifeboat UI.
@@ -186,29 +208,13 @@ insetu/
 │   │   ├── types.py                # Central Tier 1 Kernel type definitions and protocol contracts.
 │   │   ├── utils.py                # Domain-agnostic kernel utilities and physics resolution.
 │   │   ├── vfs.py                  # Asynchronous Virtual File System write queue and barriers.
-│   │   └── workers.py              # Background Metronome task scheduler and SQLite jobs ledger.
+│   │   └── workers/                # [comment required]
+│   │       └── __init__.py         # Module initialization.
 │   ├── static/                     # Web server static assets and frontend bundles.
 │   │   ├── css/                    # Global CSS stylesheets.
 │   │   │   └── style.css           # Global theme variables, utility classes, and layout rules.
 │   │   ├── js/                     # [Frontend JavaScript Payloads]
 │   │   │   ├── app.js              # [Frontend Bootloader & Core Setup]
-│   │   │   ├── core/               # Core frontend SDK and UI components.
-│   │   │   │   ├── api.js          # Centralized API fetch wrapper and token injector.
-│   │   │   │   ├── bridge.js       # [Sync Bridge Payload UI]
-│   │   │   │   ├── components/     # Reusable Lit Web Components for the OS.
-│   │   │   │   │   ├── ui_editor.js # CodeMirror 6 markdown and frontmatter editor wrappers.
-│   │   │   │   │   ├── ui_file_tree.js # Recursive file tree browser with fuzzy search.
-│   │   │   │   │   ├── ui_filter_pills.js # Repository and tag filtering arrays.
-│   │   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
-│   │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and OS Settings Hub.
-│   │   │   │   ├── config.js       # UI for managing repository topologies and tracked buckets.
-│   │   │   │   ├── fs.js           # [Virtual File System Modals & UI]
-│   │   │   │   ├── gather.js       # [Context Batch & Workflow UI]
-│   │   │   │   ├── offline_ui.js   # Client offline status indicator and outbox telemetry UI.
-│   │   │   │   ├── sdk.js          # The InSetuElement base class and Zustand store factory.
-│   │   │   │   ├── shared_styles.js # Proxy export pointing to the Sutram micro-kernel.
-│   │   │   │   ├── store.js        # [Zustand Unified Data Flow (UDF) Store]
-│   │   │   │   └── types.js        # Root JSDoc type definitions entry point.
 │   │   │   └── types.js            # Root JSDoc type definitions entry point.
 │   │   ├── manifest.json           # Progressive Web App (PWA) manifest.
 │   │   ├── sw.js                   # Service Worker for offline-first asset caching.

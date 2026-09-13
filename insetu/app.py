@@ -29,17 +29,15 @@ app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
 from insetu.kernel.auth import auth_bp, security_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
 app.register_blueprint(security_bp.bp)
-
 # Explicitly register system core routes first to prevent dynamic loader misfires
 try:
-    from insetu.core.routes_system import system_bp, core_system_ext
+    from insetu.core.system.engine_system import system_bp
     if 'system' not in app.blueprints:
-        app.register_blueprint(system_bp)
-    if 'core_system' not in app.blueprints:
-        app.register_blueprint(core_system_ext.bp)
-    from insetu.core.routes_fs import fs_bp
+        app.register_blueprint(system_bp.bp)
+
+    from insetu.core.fs.engine_fs import fs_bp
     if 'fs' not in app.blueprints:
-        app.register_blueprint(fs_bp)
+        app.register_blueprint(fs_bp.bp)
 except Exception as e:
     print(f"⚠️ Failed to mount core system routes explicitly: {e}")
 @app.before_request
@@ -354,7 +352,7 @@ def manifest():
     except Exception:
         manifest_data = {}
     cfg = load_config()
-    settings = SettingsManager('core_system', "default")
+    settings = SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     # Inject the instance title cleanly into the PWA footprint
     manifest_data["name"] = instance_title
@@ -451,7 +449,7 @@ def index():
     from insetu.kernel.utils import load_config
     from insetu.kernel.extension import SettingsManager
     cfg = load_config()
-    settings = SettingsManager('core_system', "default")
+    settings = SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
     instance_emoji = settings.get("instance_emoji", "⚙️")
     extensions = cfg.get("extensions", [])

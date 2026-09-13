@@ -36,7 +36,11 @@ def _vfs_commit_worker():
             workspace_id, filepath, content, data = task
             try:
                 action = data.get("action", "save")
-                if action == "delete":
+                if action == "barrier":
+                    if "barrier_event" in data:
+                        data["barrier_event"].set()
+                    continue
+                elif action == "delete":
                     resolved_path = _resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
 
                     if resolved_path and os.path.exists(resolved_path):
@@ -122,7 +126,7 @@ def execute_vfs_archive(workspace_id, filepath):
     from insetu.kernel.utils import get_workspace_physics
     _, ws_root, _ = get_workspace_physics(workspace_id)
     try:
-        rel_dest = os.path.relpath(new_path, ws_root).replace('\\', '/')
+        rel_dest = Path(new_path).relative_to(ws_root).as_posix()
     except ValueError:
         rel_dest = new_path.as_posix()
 

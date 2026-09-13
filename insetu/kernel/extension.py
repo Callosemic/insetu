@@ -138,7 +138,7 @@ class SettingsManager:
             data = load_json_file(filepath, {})
 
             if scope == 'daemon':
-                if self.ext_name == 'core_system' and key in data:
+                if self.ext_name in ('core_system', 'system') and key in data:
                     return data[key]
                 elif key in data.get(self.ext_name, {}):
                     return data[self.ext_name][key]
@@ -184,7 +184,7 @@ class SettingsManager:
             data = load_json_file(filepath, {})
 
             if scope == 'daemon':
-                if self.ext_name == 'core_system':
+                if self.ext_name in ('core_system', 'system'):
                     data[key] = value
                 else:
                     if self.ext_name not in data: data[self.ext_name] = {}
@@ -486,19 +486,20 @@ class ExtensionContext:
         hooks.emit('save_manifest', manifest_data=manifest_data, is_full_compile=is_full_compile, workspace_id=self.workspace_id)
         if hasattr(self, '_manifest_cache'):
             del self._manifest_cache
-    def sync_vfs_barrier(self):
-        """Halts the current thread until all pending VFS writes are physically flushed to disk."""
+    def sync_vfs_barrier(self, timeout=5.0):
+        """Halts the current thread until all VFS writes queued prior to this call are physically flushed."""
         from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
-        import time
-        timeout_loops = 0
-        while _VFS_WRITE_QUEUE.unfinished_tasks > 0 and timeout_loops < 50:
-            if _VFS_SHUTDOWN_SIGNAL.is_set():
-                raise RuntimeError("Transaction aborted mid-flight due to system shutdown or workspace context swap.")
-            time.sleep(0.1)
-            timeout_loops += 1
+        import threading
 
-        if timeout_loops >= 50:
-            raise TimeoutError("VFS Barrier Timeout: The async write queue stalled and failed to settle within 5.0 seconds.")
+        barrier_event = threading.Event()
+        _VFS_WRITE_QUEUE.put((self.workspace_id, "", "", {"action": "barrier", "barrier_event": barrier_event}))
+
+        settled = barrier_event.wait(timeout=timeout)
+
+        if _VFS_SHUTDOWN_SIGNAL.is_set():
+            raise RuntimeError("Transaction aborted mid-flight due to system shutdown or workspace context swap.")
+        if not settled:
+            raise TimeoutError(f"VFS Barrier Timeout: The async write queue failed to reach the sync watermark within {timeout} seconds.")
 
     def emit(self, event_name, *args, **kwargs):
         """Emits a synchronous event, automatically injecting the tenant's workspace ID."""

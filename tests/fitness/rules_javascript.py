@@ -288,8 +288,8 @@ def check_javascript_files():
                 report_violation("DECLARATIVE_EMIT_EVENT_MANDATE", filepath, line_num, "Imperative CustomEvent dispatch in entityAction detected. Use declarative emitEvent: (data) => ({ name, detail }) instead.")
             if banned_localstorage_tab_pattern.search(line):
                 report_violation("BANNED_LOCALSTORAGE_TAB_ROUTING", filepath, line_num, "Direct localStorage tab state reads/writes are banned. Use AppStore routing and window.location.hash.")
-            if re.search(r'window\.executeSystemCompile\b', line):
-                report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of window.executeSystemCompile detected. Use SDK domain accessor window.inSetu.sys.executeSystemCompile instead (ADR 0024).")
+            if re.search(r'window\.(?:inSetu\.sys\.)?executeSystemCompile\b', line):
+                report_violation("LEGACY_DOMAIN_ACCESSOR_VIOLATION", filepath, line_num, "Direct invocation of executeSystemCompile detected. Route through the Store (e.g. GatherStore.getState().executeCompile) or this.compileSystem() (ADR 0024).")
             if file not in ["store.js", "sdk.js"] and direct_execute_ui_hook_pattern.search(line):
                 report_violation("BANNED_DIRECT_EXECUTE_UI_HOOK", filepath, line_num, "Direct ExtensionRegistry.executeUIHook calls are deprecated. Use window.inSetu.events.emitHook(zone, payload).")
             if shared_styles_pattern.search(line) and 'vendor/sutram/js/shared_styles.js' not in line:

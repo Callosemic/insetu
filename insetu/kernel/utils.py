@@ -69,8 +69,29 @@ def get_workspace_physics(workspace_id=None):
         return resolved_cfg, Path(resolved_cfg).parent.parent.as_posix(), workflows_path
 
     return resolved_cfg, _cwd, workflows_path
-CORE_MODULES = {'bridge', 'gather', 'cartographer', 'config', 'fs', 'system', 'workers', 'auth', 'security', 'offline'}
+def _discover_core_modules():
+    import os
+    from pathlib import Path
+    kernel_dir = Path(__file__).resolve().parent
+    core_dir = kernel_dir.parent.joinpath("core")
+    
+    # Pre-seed the single pure-frontend synthetic UI module
+    modules = {'core_text_blobs'} 
+    # 1. Discover Akasa Kernel Primitives (Directories)
+    if kernel_dir.exists():
+        for item in os.listdir(kernel_dir):
+            if kernel_dir.joinpath(item).is_dir() and not item.startswith('__'):
+                modules.add(item)
 
+    # 2. Discover inSetu OS Core Modules (Directories)
+    if core_dir.exists():
+        for item in os.listdir(core_dir):
+            if core_dir.joinpath(item).is_dir() and not item.startswith('__'):
+                modules.add(item)
+                
+    return modules
+
+CORE_MODULES = _discover_core_modules()
 def is_core_module(ext_name):
     return ext_name in CORE_MODULES
 

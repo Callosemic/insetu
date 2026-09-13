@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 export const {{cap_name}}Store = createExtensionStore('{{cap_name}}', {
     items: [],
