@@ -7,15 +7,16 @@
 ## 0. Three-Tier Architecture & Module Classification
 
 `inSetu` enforces a strict three-tier module hierarchy to preserve system resilience, prevent cognitive overload, and eliminate logic drift.
+### Tier 1: Kernel & Micro-Kernel Substrate (Domain-Agnostic)
+The Kernel is a purely generic application substrate. It is strictly forbidden from possessing domain knowledge about the "inSetu" product, Large Language Models, Context Gathering, or code editing. It provides purely agnostic I/O and orchestration (Note: Extraction into the standalone package `akasa` is planned).
+* **`insetu.kernel` (Python Kernel):** Thread-local SQLite connection pooling (`db.py`), asynchronous Virtual File System queue and barrier locks (`vfs.py`), background worker metronome (`workers.py`), priority event bus (`hooks.py`), and the token gatehouse (`auth.py`).
+* **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and declarative URL hash routing.
 
-### Tier 1: Kernel & Micro-Kernel Substrate (`insetu.kernel` / `sutram` / `yenvui`)
-* **`insetu.kernel` (Python Kernel):** Thread-local SQLite connection pooling, non-blocking VFS commit worker queue, background worker metronome scheduler, priority event bus (`hooks.py`), and security token gatehouse (Note: Extraction into standalone package `akasa` is planned).
-* **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and URL hash routing.
-### Tier 2: Core Substrate Engines (The Core Engines)
-The Tier 2 Core Substrate consists of core engines that provide essential local-first AI Developer OS infrastructure:
+### Tier 2: Core Substrate Engines (The inSetu OS)
+Tier 2 represents "inSetu proper." It builds the local-first AI Developer OS product on top of the agnostic Tier 1 Kernel.
 1. **Gather (`engine_gather.py`):** RAG context payload compiler, topology declaration broker, and differential context synthesizer.
 2. **Yomama Sync Bridge (`engine_bridge.py`, `bridge_vfs.py`, `bridge_fuzzy.py`):** Multi-file `SEARCH`/`REPLACE` block parser, relative indentation healer, pre-flight AST syntax bouncer, and transactional patch ledger.
-3. **Virtual File System (`vfs.py`, `routes_fs.py`):** Asynchronous commit pipeline, POSIX path sandbox resolution, and mutation event ledger logging.
+3. **VFS REST Gateway (`routes_fs.py`):** API transport layer that exposes the Kernel's VFS queue to the frontend via authenticated endpoints.
 4. **Cartographer (`cartographer.py`):** Repository topographer and deterministic `CODE_INDEX.md` architectural map generator.
 5. **Offline Engine (`engine_offline.py`, `offline_ui.js`):** Stale-While-Revalidate GET request mirroring, IndexedDB outbox queueing, dead-letter queue, and two-stage outbox reconciler.
 
@@ -61,7 +62,6 @@ inSetu operates directly on the user's hard drive. However, relying purely on ra
 * **The SQLite Cache Index**: Upon daemon boot, physical files are indexed into an embedded SQLite/DuckDB cache layer. All UI filtering, Kanban rendering, and API reads (`/api/tracker/files`) MUST query the fast SQL layer.
 * **CQRS Write-Path Separation**: When a user drags a Kanban ticket, the API must perform the mutation against the SQL layer (for instant UI feedback) and dispatch a background worker task to asynchronously write the `.md` mutation to the physical disk.
 * **Surgical Editing & O(1) Updates**: Global re-indexing (`DELETE FROM table` followed by bulk re-insertion) or complete DOM annihilation is strictly banned as a response to singular events. Event listeners must extract target boundaries and execute granular `INSERT OR REPLACE` or localized DOM reconciliation.
-
 ## 3. The Virtual File System (VFS) & Atomic Commits
 The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to disk creates half-patched, uncompilable codebases if an LLM hallucinates halfway through a transmission.
 * **The VFS Matrix**: All incoming patch payloads must be staged entirely within an in-memory Virtual File System. 
@@ -73,16 +73,6 @@ The Yomama Sync Bridge is a surgical tool. Applying string patches blindly to di
     * **Structural Engine**: `.js` and `.ts` ignore line breaks and pipe outputs through AST formatters (e.g., Prettier).
     * **Object Engine**: `.json` bypasses text diffs entirely, recursively applying object tree mutations.
     * **Fuzzy Engine**: `.md` and `.txt` utilize flattened Levenshtein distances to survive LLM token-wrapping hallucination.
-
-## 7. Architectural Fitness Functions (Automated Compliance)
-Human discipline scales poorly. To guarantee that these engineering standards are never compromised by fatigue or rapid prototyping, this codebase is guarded by automated Static Analysis.
-
-* **The Validator (`tests/fitness_functions.py`)**: A zero-dependency Python script utilizing native `ast` and `re` modules to parse the codebase and mathematically fail if an anti-pattern is detected.
-* **Execution**: Run `python tests/fitness_functions.py` from the root directory to audit the workspace.
-* **Extending the Rules**: When a new anti-pattern is identified and documented in a standup or ADR, it MUST be codified into the validator.
-    * Add Python structural bans to the `BackendFitnessVisitor` (e.g., catching rogue `open()` or `subprocess.run` calls, or hardcoded references to deprecated `"workspaces.json"` paths).
-    * Add JavaScript frontend bans to `check_javascript_files()` (e.g., catching `setInterval` or `document.getElementById` violations).
-* **The Whitelist Bypass**: If a core engine (like the VFS) legitimately requires a banned function, it must be explicitly added to the whitelists at the top of the script. Do not disable the rule globally.
 
 ## 4. Frontend: Unidirectional Data Flow (UDF)
 The frontend UI must be highly resilient, reactive, and entirely decoupled from HTML DOM states.
@@ -105,7 +95,7 @@ You MUST always enforce pristine cloning before executing mutations:
 
 ### 4.3 Multi-Pass UI Layout Assembly (Hoisting Guardrail)
 To prevent runtime render omissions inside the zero-bundler Single Page Application layout engine, the layout compilation routine must execute across a segmented multi-pass sequence. The layout assembly layer must first process and guarantee the physical mounting of all top-level Primary Navigation tab shells before attempting to register or mount dependent sub-navigation tracks, slot components, or action dropdown buttons. Extensions must never assume immediate sibling presence during script evaluation.
-### 4.5 Component & Communication Isolation
+### 4.4 Component & Communication Isolation
 All newly introduced system capabilities must implement the `InSetuExtension` framework on the backend and extend `InSetuElement` on the frontend. Direct manipulation of the HTTP event loop for long-running processes or raw `fetch` interactions outside the `this.api` boundary is strictly prohibited. All frontend requests must consume explicit semantic methods (`this.api.get()`, `this.api.post()`, `this.api.delete()`).
 * **Stateless Shell Demolition & Namespacing Rule**: Frontend extension views and dashboard components must adhere strictly to the `insetu-ext-` tag prefix convention. The core workspace router executes an agnostic prefix sweep to evict elements during a tenant hot-swap. Hardcoding specific extension element tags or class definitions inside core micro-kernel reload scripts is strictly banned to preserve absolute Inversion of Control.
 * **Dynamic Code-Splitting and Lazy-Loading**: Complex third-party asset libraries or language extensions (e.g., CodeMirror language grammars) must be imported dynamically (`await import(...)`) inside component lifecycles rather than bundled statically into top-level layout frameworks, keeping initial presentation pathways lean and responsive.

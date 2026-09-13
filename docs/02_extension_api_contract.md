@@ -29,43 +29,9 @@ Extensions cannot hardcode themselves into `engine_gather.py` or the `bridge_syn
 ## 3. The Frontend Injection Surface (Declarative Schema)
 Direct DOM mutation and imperative initialization (e.g., self-executing `registerTab` calls) of the core OS elements are strictly forbidden.
 Extensions must expose a static configuration payload using the Declarative Schema. The OS bootloader reads this payload and orchestrates the DOM injection statelessly.
-* **The Declarative Registration:**
 
-```javascript
-window.ExtensionRegistry.registerExtension('ext_name', {
-    name: "Extension Title",
-    version: "2.0.0",
-    offline_mode: "full",
-    entityActions: [
-        {
-            targetEntity: 'file',
-            id: 'ext-action-id',
-            label: 'Action Label',
-            icon: '🔧',
-            intent: 'primary',
-            order: 20,
-            match: (data) => data.filepath && data.filepath.endsWith('.ext'),
-            onClick: (data, e) => { ... },
-            asyncAction: async (data, e) => { ... },
-            emitEvent: (data) => ({ name: 'insetu:ext:action', detail: { id: data.id } })
-        }
-    ],
-    layoutSlots: [
-        { slot: "primary-navigation", id: "my_tab", label: "My Tab", order: 5 },
-        { slot: "sub-navigation", targetParent: "my_tab", id: "my_subtab", label: "Sub Tab", order: 1, component: "insetu-ext-component" }
-    ],
-    repoConfigOptions: [
-        { id: 'ext-repo-option', order: 10, component: ({ repo, updateCallback }) => { ... } }
-    ],
-    bucketConfigOptions: [
-        { id: 'ext-bucket-option', order: 10, component: ({ bucket, repoDir, updateCallback }) => { ... } }
-    ],
-    settingsActions: [
-        { id: 'config_id', label: 'Settings Label', icon: '⚙️', onClick: () => { ... } }
-    ]
-});
+*(Note: For the exact code properties and shape of `ExtensionRegistry.registerExtension`, refer directly to `07_sdk_v2_contracts.md` and `08_sutram_contracts.md`)*
 
-```
 ### 3.1 Declarative Layout Slots & Entity Actions
 Extensions declare their spatial footprint and contextual actions statelessly using the schema registration object:
 
@@ -90,12 +56,12 @@ Legacy zone hook behaviors (preserved for historical reference):
 * `zone:vfs-mutated`: (Superseded by `InSetuElement.prototype.onForceRefresh()` / event bus).
 * `zone:new-file-options-lit`: (Superseded by `layoutSlots`).
 * `zone:tab-changed`: (Superseded by `InSetuElement.prototype.onForceRefresh()` / `onTabVisible()`).
-### 3.1 The Client State Engine (Zustand Slices)
+### 3.3 The Client State Engine (Zustand Slices)
 To preserve strict Unidirectional Data Flow (UDF) constraints, extensions must never mutate or query raw DOM layout strings directly. The client environment manages global state across two core reactive stores:
 * **`AppStore` (store.js):** Coordinates system-wide topologies, configuration schemas, manifest states, active repositories, and extension arrays.
 * **`KanbanStore` (ext_tracker.js):** Isolates the task tracking arrays, active ticket filters, tag matrices, and column expansion flags for the project management canvas.
 
-### 3.2 The Frontend Metronome & Lifecycle Teardown
+### 3.4 The Frontend Metronome & Lifecycle Teardown
 In a stateless Single Page Application (SPA), navigating between workspaces does not trigger a hard browser refresh. Extensions must manually clean up their memory footprints to prevent cross-tenant data contamination and zombie polling loops.
 * **The `setInterval` Ban:** Extensions are strictly forbidden from utilizing native `setInterval`.
 * **`ExtensionRegistry.registerTick(extName, intervalMs, callback)`:** Extensions requiring background polling or UI updates must subscribe to the centralized Frontend Metronome. The metronome guarantees execution pacing and automatically garbage-collects the polling loop when the extension unmounts.

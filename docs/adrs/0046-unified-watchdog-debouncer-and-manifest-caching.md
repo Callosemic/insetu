@@ -12,7 +12,7 @@ Operating filesystem observers (`watchdog`) alongside an asynchronous Virtual Fi
 ## Decision
 1. **Unified Watchdog Debouncer Thread (`_watchdog_debouncer_loop`):** Replaced per-file `threading.Timer` objects with a single background debouncer thread monitoring a thread-safe `_WATCHDOG_PENDING` dictionary.
 2. **Pre-I/O Intent Capture (`_track_intent_vfs_writes`):** Subscribed `_track_intent_vfs_writes` to `@hooks.on('pre_file_save')`. Intent is recorded *before* physical disk I/O occurs, allowing the debouncer thread to cancel pending Watchdog events before the observer even detects the disk change.
-3. **Thread-Local Short-TTL Manifest Caching:** Introduced `_manifest_thread_cache` and `_vfs_manifest_thread_cache` (`threading.local`) with a 2.0-second TTL in `engine_gather.py` and `engine_topology.py`. Caches are invalidated immediately upon `save_manifest`, `force_topology_scan`, or `resolve_topology_buffer`.
+3. **Process-Global Thread-Locked Short-TTL Manifest Caching:** Deployed short-TTL manifest caching (2.0s TTL) backed by thread locks (`_vfs_manifest_cache_lock`) in `engine_topology.py` to guarantee process-wide cache invalidation across concurrent thread pools upon `save_manifest`, `force_topology_scan`, or `resolve_topology_buffer`.
 4. **Barrier Loop Circuit Breakers:** Added loop iteration bounds (`timeout_loops < 50` in `engine_bridge.py`, `timeout_loops < 20` in `engine_gather.py`) to prevent indefinite thread blocking during barrier wait states.
 5. **Owning Workspace Hook:** Registered `@hooks.on('resolve_owning_workspaces')` in `engine_topology.py` to map physical file paths to owning tenant workspace IDs.
 

@@ -12,4 +12,6 @@ This document serves as the local master index for the inSetu Developer OS, an A
 * **[04 UI Design Standards](./04_ui_design_standards.md)**: Visual layout, single-scroll rules, and UX component guardrails.
 * **[05 Extension Developer Guide](./05_extension_developer_guide.md)**: Developer guide and SDK best practices for building extensions.
 * **[06 Extension Compliance Checklist](./06_extension_compliance_checklist.md)**: The definitive audit checklist for architectural purity and SDK adherence.
+* **[07 SDK V2 Contracts](./07_sdk_v2_contracts.md)**: Absolute Single Source of Truth for the Python backend and JavaScript frontend SDK interfaces.
+* **[08 Sutram Platform Contracts](./08_sutram_contracts.md)**: API surface and Web Component definitions for the Tier 0 presentation chassis.
 * **[Ledger of Logic (ADR Index)](./ADR_INDEX.md)**: Historical index of all Architectural Decision Records.

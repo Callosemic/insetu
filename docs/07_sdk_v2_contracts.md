@@ -42,6 +42,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.db`** *(DatabaseWrapper)*: Automated SQLite connector keyed securely to the active tenant workspace schema. Exposes `.get_all(table)`, `.insert_or_replace(table, dict)`, `.update(table, data, where_col, where_val)`, `.get_by_id(table, id_val, id_col)`, and `.delete(table, col, val)`.
 * **`ctx.vfs`** *(VFSTransaction)*: Atomic Virtual File System context. Exposes `.save(filepath, content, data)`, `.delete(filepath, data)`, `.read(filepath)`, and `.walk(directory)`. Directly utilizing `os.walk` or `open()` is strictly banned.
 * **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)` for immediate tasks. For ledger-scheduled execution, use `submit_job()` for recurring metronome tasks (`interval_ms > 0`) or `submit_one_shot_job()` for self-destructing delayed tasks (`delay_ms`).
+    * **Step Chaining:** You may pass a reserved `_chain` dictionary (matching `JobChainPayload`) as a kwarg to `.submit()` to automatically sequence multiple background workers or trigger an `on_complete_hook` event upon final settlement.
 
 ---
 

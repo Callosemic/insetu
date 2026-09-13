@@ -79,11 +79,34 @@ ctx.jobs.update_progress("Initializing remote synchronization loop...")
 return {"status": "completed", "message": "Synchronization complete."}
 
 ```
-
 When scheduling background tasks in the worker ledger, use the explicit function matching your lifecycle intent:
 * **Recurring Metronome Tasks**: Use `submit_job(job_id, ext_name, callback_name, interval_ms, ...)` where `interval_ms > 0`.
 * **One-Shot Delayed Tasks**: Use `submit_one_shot_job(job_id, ext_name, callback_name, delay_ms, ...)` for tasks that execute once after `delay_ms` elapses and self-destruct from the ledger upon completion.
-### 2.5 Multi-Track Event Parity
+
+### 2.5 Step Chaining & Pipelines
+If an operation requires multiple distinct background phases (or relies on other extensions), do not force a single worker to manage the entire lifecycle synchronously. Instead, use the native Kernel `_chain` payload to queue a sequence of steps. The Kernel automatically forks the next step in the chain as an independent task once the current one succeeds.
+
+```python
+@my_ext_bp.route('start_pipeline', methods=['POST'])
+def start_pipeline(ctx):
+    # Pass a _chain dict when submitting the job
+    ctx.jobs.submit(
+        "stage_one_task",
+        target_data="...",
+        _chain={
+            "steps": [
+                {"ext_name": "my_ext", "worker_name": "stage_two_task"},
+                {"ext_name": "gather", "worker_name": "compile_contexts"}
+            ],
+            "on_complete_hook": "my_pipeline_finished" # Fires on the Event Bus at the very end
+        }
+    )
+    return {"status": "accepted"}
+
+```
+
+### 2.6 Multi-Track Event Parity
+
 When building performance-optimized extensions that cache filesystem metadata into an SQLite layer (CQRS), do not assume all workspace updates arrive in batch arrays. 
 Cache-rebuilding functions must listen to the unified VFS lifecycle hook:
 1. `vfs_mutated` (Receives an array of mutation objects covering saves, deletes, moves, and multi-file transactions).
@@ -194,22 +217,4 @@ window.ExtensionRegistry.registerExtension('my_ext', {
 });
 ```
 
-## 5. The Component Graduation Checklist (Compliance Guardrails)
-
-Before an extension is considered fully migrated to the V2 SDK, it must pass the following structural checks:
-
-### Frontend (The `InSetuElement` Contract)
-1. **Inheritance**: The primary UI class must `extend InSetuElement` (not `LitElement`).
-2. **State Management**: Banned raw Zustand `createStore` imports. Must use `createExtensionStore('Name', initialState)`.
-3. **Network Routing**: Raw `fetch()` calls and manual URL concatenations (`/api/${workspace}/...`) are strictly banned. Use `this.api.get()`, `this.api.post()`, etc.
-4. **Store Subscriptions**: Manual un-subscription variables (`this._unsub`) inside `disconnectedCallback` are banned. Use `this.subscribe(Store, selector, callback)`.
-5. **Tenant Lifecycle**: Do not manually subscribe to `activeWorkspace` changes in the AppStore. Implement the `onWorkspaceLoad(ws)` method instead.
-
-### Backend (The `InSetuExtension` Contract)
-1. **Inheritance**: The Flask blueprint must be instantiated via `InSetuExtension('name', __name__)`.
-2. **Declarative Schemas**: Banned `@hooks.on('system_boot')` loops that run `CREATE TABLE`. Must pass a declarative schema dictionary to the `InSetuExtension` constructor.
-3. **Auto-Routing**: Banned explicit route prefixes (`@bp.route('/api/<workspace_id>/name/list')`). Routes must be strictly relative (`@bp.route('list')`).
-4. **The Context Object**: Route handlers must accept the `ctx` object instead of raw `workspace_id` strings.
-5. **Path Physics**: Banned `get_gather_paths()` and `resolve_workspace_path` imports. Use `ctx.paths` and `ctx.resolve_path()`.
-6. **VFS Walk & Read**: Banned raw `os.walk` and `open(f, 'r')`. Use `ctx.vfs.walk()` and `ctx.vfs.read()`.
-7. **Config Cache**: Banned `load_config()` imports. Use `ctx.config`.
+*(Note: For the definitive audit and graduation requirements, refer strictly to `06_extension_compliance_checklist.md`)*
