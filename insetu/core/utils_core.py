@@ -172,15 +172,15 @@ def start_filesystem_observer(workspace_ids):
         from watchdog.events import FileSystemEventHandler
     except ImportError:
         raise ImportError("watchdog not installed")
-
     class FileSystemObserver(FileSystemEventHandler):
-        def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns):
+        def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns, ignore_exceptions=None):
             super().__init__()
             self.workspace_id = workspace_id
             self.repo_dir = repo_dir
             self.target_path = target_path
             self.ignore_dirs = ignore_dirs
             self.ignore_patterns = ignore_patterns
+            self.ignore_exceptions = ignore_exceptions or []
         def process_event(self, event, filepath_override=None, op_override=None, is_dir_override=None):
             src_path = filepath_override or event.src_path
             is_dir = is_dir_override if is_dir_override is not None else getattr(event, 'is_directory', False)
@@ -208,8 +208,10 @@ def start_filesystem_observer(workspace_ids):
                 # Hardcoded OS Guardrails to prevent Watchdog infinite I/O loops and UI flooding
                 if parts.intersection({'.git', '.insetu', 'node_modules', '__pycache__', 'venv'}): return
 
-                if parts.intersection(self.ignore_dirs): return
-                if any(pattern in logical_path for pattern in self.ignore_patterns): return
+                is_excepted = any(rel_to_target.startswith(exc) or exc in rel_to_target for exc in self.ignore_exceptions)
+                if not is_excepted:
+                    if parts.intersection(self.ignore_dirs): return
+                    if any(pattern in logical_path for pattern in self.ignore_patterns): return
                 import time
                 now = time.time()
 
@@ -263,13 +265,14 @@ def start_filesystem_observer(workspace_ids):
                     ignore_patterns = repo_cfg.get("repo_ignore_patterns")
                 else:
                     ignore_patterns = list(global_patterns)
-
+                ignore_exceptions = repo_cfg.get("ignore_exceptions") or []
                 handler = FileSystemObserver(
                     workspace_id=ws_id,
                     repo_dir=r_dir,
                     target_path=target_path,
                     ignore_dirs=ignore_dirs,
-                    ignore_patterns=ignore_patterns
+                    ignore_patterns=ignore_patterns,
+                    ignore_exceptions=ignore_exceptions
                 )
                 observer.schedule(handler, target_path, recursive=True)
                 has_watches = True
