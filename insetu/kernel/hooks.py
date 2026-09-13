@@ -48,6 +48,16 @@ class HookRegistry:
             with self._lock:
                 if event_name not in self._hooks:
                     self._hooks[event_name] = []
+
+                # Guardrail: Prevent duplicate registrations from double imports
+                func_file = getattr(func, '__code__', None)
+                func_path = func_file.co_filename if func_file else ''
+                for _, existing_func in self._hooks[event_name]:
+                    existing_file = getattr(existing_func, '__code__', None)
+                    existing_path = existing_file.co_filename if existing_file else ''
+                    if existing_path == func_path and existing_func.__name__ == func.__name__:
+                        return func
+
                 self._hooks[event_name].append((priority, func))
                 self._hooks[event_name].sort(key=lambda item: item[0])
             return func

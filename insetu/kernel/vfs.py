@@ -3,6 +3,21 @@ import queue
 import threading
 from pathlib import Path
 from insetu.kernel.hooks import hooks
+def _resolve_physical_path(filepath, workspace_id, is_absolute_artifact=False):
+    """Centralized SSOT for VFS path resolution."""
+    if not filepath: return None
+    from insetu.kernel.utils import resolve_system_artifact_path, resolve_sandbox_path
+    from pathlib import Path
+
+    check_path = filepath.replace("vfs://", "", 1) if filepath.startswith("vfs://") else filepath
+
+    if is_absolute_artifact and Path(check_path).is_absolute():
+        return resolve_system_artifact_path(check_path, workspace_id)
+
+    from insetu.kernel.hooks import hooks
+    overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
+    resolved = next((r for r in overrides if r), None)
+    return resolved or resolve_sandbox_path(check_path, workspace_id)
 
 _VFS_WRITE_QUEUE = queue.Queue()
 _VFS_WORKER_THREAD = None
@@ -22,11 +37,9 @@ def _vfs_commit_worker():
             try:
                 action = data.get("action", "save")
                 if action == "delete":
-                    from insetu.kernel.utils import resolve_sandbox_path
-                    overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-                    resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
-                    
-                    if os.path.exists(resolved_path):
+                    resolved_path = _resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
+
+                    if resolved_path and os.path.exists(resolved_path):
                         if os.path.isdir(resolved_path):
                             import shutil
                             shutil.rmtree(resolved_path)
@@ -45,14 +58,10 @@ def _vfs_commit_worker():
                     hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[{"filepath": filepath, "operation": "delete", "ignore_ledger": ignore_ledger}])
                 elif action == "move":
                     dest_path = data.get("dest_path")
-                    from insetu.kernel.utils import resolve_sandbox_path
-                    src_overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-                    resolved_src = next((r for r in src_overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
-                    
-                    dest_overrides = hooks.emit('vfs_resolve_path', filepath=dest_path, workspace_id=workspace_id)
-                    resolved_dest = next((r for r in dest_overrides if r), None) or resolve_sandbox_path(dest_path, workspace_id)
-                    
-                    if os.path.exists(resolved_src):
+                    resolved_src = _resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
+                    resolved_dest = _resolve_physical_path(dest_path, workspace_id, data.get("is_absolute_artifact"))
+
+                    if resolved_src and resolved_dest and os.path.exists(resolved_src):
                         os.makedirs(Path(resolved_dest).parent, exist_ok=True)
                         import shutil
                         shutil.move(resolved_src, resolved_dest)
@@ -102,13 +111,11 @@ def stop_vfs_pipeline(**kwargs):
 def execute_vfs_move(workspace_id, filepath, dest_path):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": dest_path}))
     return {"status": "accepted", "message": f"File move queued."}, 202
-
 def execute_vfs_archive(workspace_id, filepath):
     from pathlib import Path
-    from insetu.kernel.utils import resolve_sandbox_path
-    overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-    resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
-    
+    resolved_path = _resolve_physical_path(filepath, workspace_id)
+    if not resolved_path: return {"status": "error", "message": "Path resolution failed."}, 400
+
     archive_dir = Path(resolved_path).parent / "archived"
     new_path = archive_dir / Path(resolved_path).name
 
@@ -137,18 +144,13 @@ def execute_vfs_save(workspace_id, filepath, content, data=None):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, content, data))
     return {"status": "accepted", "message": f"File {filepath} queued for atomic background commit."}
 def execute_vfs_save_physical(workspace_id, filepath, content, data):
+    resolved_path = _resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
+
     try:
-        hooks.emit('pre_file_save', workspace_id=workspace_id, filepath=filepath, content=content, data=data)
+        hooks.emit('pre_file_save', workspace_id=workspace_id, filepath=filepath, resolved_path=resolved_path, content=content, data=data)
     except Exception as e:
         pass
 
-    if data.get("is_absolute_artifact"):
-        from insetu.kernel.utils import resolve_system_artifact_path
-        resolved_path = resolve_system_artifact_path(filepath, workspace_id)
-    else:
-        from insetu.kernel.utils import resolve_sandbox_path
-        overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=workspace_id)
-        resolved_path = next((r for r in overrides if r), None) or resolve_sandbox_path(filepath, workspace_id)
     is_new = not os.path.exists(resolved_path)
 
     # Idempotency Gatekeeper: Kill phantom writes by dropping identical payloads
@@ -228,24 +230,8 @@ class VFSTransaction:
             execute_vfs_save(self.workspace_id, filepath, "", data)
     def read(self, filepath, is_absolute_artifact=False):
         """Safely resolves and reads a file's contents, returning None if missing."""
-        from pathlib import Path
-        from insetu.kernel.utils import resolve_system_artifact_path, resolve_sandbox_path
+        resolved = _resolve_physical_path(filepath, self.workspace_id, is_absolute_artifact)
 
-        check_path = filepath.replace("vfs://", "", 1) if filepath and filepath.startswith("vfs://") else filepath
-        if (is_absolute_artifact and Path(check_path).is_absolute()) or (filepath and filepath.startswith("ctx://")):
-            from insetu.core.routes_fs import resolve_vfs_file
-            if filepath.startswith("ctx://"):
-                resolved, _ = resolve_vfs_file(self.workspace_id, filepath)
-            else:
-                resolved = resolve_system_artifact_path(filepath, self.workspace_id)
-        else:
-            # Let Tier 2 intercept and resolve complex logical paths via the event bus if needed
-            from insetu.kernel.hooks import hooks
-            overrides = hooks.emit('vfs_resolve_path', filepath=filepath, workspace_id=self.workspace_id)
-            resolved = next((r for r in overrides if r), None)
-
-            if not resolved:
-                resolved = resolve_sandbox_path(filepath, self.workspace_id)
         if not resolved or not os.path.exists(resolved):
             return None
         if os.path.isdir(resolved):
@@ -266,30 +252,16 @@ class VFSTransaction:
         if exc_type is None and self._buffer:
             for filepath, content, data in self._buffer:
                 execute_vfs_save(self.workspace_id, filepath, content, data)
-            # Broadcast the atomic commit to the ecosystem
-            try:
-                from insetu.kernel.hooks import hooks
-                mutations = [{"filepath": f[0], "operation": "save", "ignore_ledger": bool((f[2] or {}).get("is_absolute_artifact") or (f[2] or {}).get("ignore_ledger"))} for f in self._buffer]
-                hooks.emit('vfs_mutated', workspace_id=self.workspace_id, mutations=mutations)
-            except Exception:
-                pass
 
         self._buffer = []
     def walk(self, directory_path, exts=None):
         """Safely sweeps a directory within the workspace bounds, yielding strict workspace-relative file paths."""
-        from insetu.kernel.utils import resolve_sandbox_path
         import os
         from pathlib import Path
 
-        # Let Tier 2 intercept and resolve complex logical paths via the event bus
-        from insetu.kernel.hooks import hooks
-        overrides = hooks.emit('vfs_resolve_path', filepath=directory_path, workspace_id=self.workspace_id)
-        resolved_dir = next((r for r in overrides if r), None)
+        resolved_dir = _resolve_physical_path(directory_path, self.workspace_id)
 
-        if not resolved_dir:
-            resolved_dir = resolve_sandbox_path(directory_path, self.workspace_id)
-
-        if not os.path.exists(resolved_dir):
+        if not resolved_dir or not os.path.exists(resolved_dir):
             return
 
         for root, dirs, files in os.walk(resolved_dir):

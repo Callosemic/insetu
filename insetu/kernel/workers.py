@@ -149,9 +149,12 @@ def _execute_immediate_job(job_id, ext_name, callback_name, args_json, target_ws
                     target_ws = kwargs.pop("_workspace_id")
         except Exception as e:
             print(f"⚠️ [Worker] Failed to parse args_json for {job_id}: {e}")
-
+    root_job_id = kwargs.get('root_job_id') or job_id
+    history = list(kwargs.get('chain_history', []))
     chain_data = kwargs.pop('_chain', None)
     step_error = None
+    step_msg = None
+    step_artifact = {}
 
     if func:
         try:
@@ -161,49 +164,82 @@ def _execute_immediate_job(job_id, ext_name, callback_name, args_json, target_ws
                 kwargs['workspace_id'] = target_ws
             if 'job_id' in sig.parameters:
                 kwargs['job_id'] = job_id
-            func(**kwargs)
+
+            result = func(**kwargs)
+            if isinstance(result, str):
+                step_msg = result
+            elif isinstance(result, dict):
+                step_msg = result.get('message')
+                step_artifact = result.get('artifact', {})
+                # Allows the current step to inject data into the downstream pipeline
+                if 'next_kwargs' in result:
+                    kwargs.update(result['next_kwargs'])
+
         except Exception as e:
-            print(f"❌ [Worker] Immediate Job {job_id} failed on workspace [{target_ws}]: {e}")
+            import traceback
+            err_trace = traceback.format_exc()
+            print(f"❌ [Worker] Immediate Job {job_id} failed on workspace [{target_ws}]:\n{err_trace}")
             step_error = str(e)
     else:
         step_error = f"Callback {ext_name}:{callback_name} not found."
         print(f"❌ [Worker] {step_error}")
 
+    history.append({
+        "ext_name": ext_name,
+        "job_id": job_id,
+        "status": "failed" if step_error else "completed",
+        "message": step_error or step_msg or "Step complete."
+    })
+
     # --- STEP CHAINING LOGIC (ADR 0037 - Resilient Handoff) ---
-    if chain_data and chain_data.get('steps'):
+    next_job_id = None
+    if chain_data and chain_data.get('steps') and not step_error:
         next_step = chain_data['steps'][0]
         remaining_steps = chain_data['steps'][1:]
-        
+
         next_chain = {
             "steps": remaining_steps,
             "on_complete_hook": chain_data.get('on_complete_hook')
         }
-        
-        next_kwargs = {k: v for k, v in kwargs.items() if k not in ('job_id', 'workspace_id')}
+
+        next_kwargs = {k: v for k, v in kwargs.items() if k not in ('job_id', 'workspace_id', 'root_job_id', 'chain_history')}
         next_kwargs['_chain'] = next_chain
-        
+        next_kwargs['root_job_id'] = root_job_id
+        next_kwargs['chain_history'] = history
+
         next_args_json = json.dumps(next_kwargs)
-        
-        msg = f"Transitioning to {next_step['ext_name']}..."
-        if step_error:
-            msg = f"Step '{ext_name}' failed. {msg}"
-            
-        update_immediate_job_status(job_id, 'processing', msg, None, target_ws)
-        _executor.submit(_execute_immediate_job, job_id, next_step['ext_name'], next_step['worker_name'], next_args_json, target_ws)
-        return
-        
-    elif chain_data and chain_data.get('on_complete_hook'):
+        import uuid
+        prefix = next_step['ext_name'][:3].lower()
+        next_job_id = f"{prefix}_{uuid.uuid4().hex[:8]}"
+        submit_immediate_job(next_job_id, next_step['ext_name'], next_step['worker_name'], next_args_json, workspace_id=target_ws)
+
+        from insetu.kernel.hooks import hooks
+        hooks.emit_background('job_baton_passed', workspace_id=target_ws, root_job_id=root_job_id, previous_job_id=job_id, next_job_id=next_job_id, ext_name=next_step['ext_name'])
+
+    elif chain_data and chain_data.get('on_complete_hook') and not step_error:
         from insetu.kernel.hooks import hooks
         hooks.emit_background(chain_data['on_complete_hook'], workspace_id=target_ws)
 
-    # Final completion/failure evaluation for the terminal step
+    # Final completion/failure evaluation for current step
     conn = get_connection("workers", workspace_id=target_ws)
-    current = conn.execute("SELECT status FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
-    if current and current['status'] == 'processing':
+    current = conn.execute("SELECT status, artifact_json, status_message FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
+    if current:
+        artifact = json.loads(current['artifact_json']) if current['artifact_json'] else {}
+        if step_artifact:
+            artifact.update(step_artifact)
+
+        artifact['root_job_id'] = root_job_id
+        artifact['chain_history'] = history
+        if next_job_id:
+            artifact['next_job_id'] = next_job_id
+
+        msg = step_msg or current['status_message']
         if step_error:
-            update_immediate_job_status(job_id, 'failed', f"Error: {step_error}", None, target_ws)
+            update_immediate_job_status(job_id, 'failed', f"Error: {step_error}", artifact, target_ws)
         else:
-            update_immediate_job_status(job_id, 'completed', 'Execution finished.', None, target_ws)
+            if next_job_id:
+                msg = 'Step finished. Passing baton...'
+            update_immediate_job_status(job_id, 'completed', msg, artifact, target_ws)
 def register_ephemeral_artifact(filepath, owner, ttl_seconds, workspace_id="default"):
     conn = get_connection("workers", workspace_id=workspace_id)
     now = time.time()

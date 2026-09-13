@@ -175,15 +175,31 @@ def parse_uri(path_str):
     str_path = str(path_str).replace('\\', '/').strip()
 
     import re
-    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', str_path)
-    if match:
-        str_path = match.group(2)
+    has_scheme = False
+    while True:
+        match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', str_path)
+        if match:
+            has_scheme = True
+            str_path = match.group(2)
+        else:
+            break
+
     str_path = str_path.lstrip('/')
     str_path = re.sub(r'^\./+', '', str_path)
     parts = str_path.split('/', 1)
 
-    repo = parts[0] if len(parts) > 1 else ""
-    rel_path = parts[1] if len(parts) > 1 else str_path
+    if len(parts) > 1:
+        repo = parts[0]
+        rel_path = parts[1]
+    else:
+        # If the string was explicitly passed as a URI (e.g. vfs://my_repo), 
+        # the single remaining string is strictly the authority/host (repo boundary).
+        if has_scheme:
+            repo = parts[0]
+            rel_path = ""
+        else:
+            repo = ""
+            rel_path = str_path
 
     return repo, rel_path
 

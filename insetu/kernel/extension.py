@@ -441,10 +441,23 @@ class ExtensionContext:
         tracked_files = set()
         for bucket in vfs_manifest.values():
             tracked_files.update(bucket.get('files', []))
-
         files = []
         with VFSTransaction(self.workspace_id) as vfs:
             for item in items:
+                # Normalize string URIs into polymorphic dicts
+                if isinstance(item, str):
+                    uri = item.strip()
+                    if not uri.startswith('ctx://') and not uri.startswith('vfs://'):
+                        if uri.endswith('_context.txt'): uri = f"ctx://contexts/{uri}"
+                        elif uri.endswith('_diffs.txt'): uri = f"ctx://diffs/{uri}"
+                        elif uri.startswith('prompts/'): uri = f"ctx://{uri}"
+                        else: uri = f"vfs://{uri.lstrip('/')}"
+
+                    if uri.startswith('vfs://') and uri.endswith('/'):
+                        item = {'folderpath': uri[6:]}
+                    else:
+                        item = {'filepath': uri}
+
                 if 'filepath' in item:
                     filepath = item['filepath']
                     if filepath.startswith("ctx://"):
@@ -452,11 +465,13 @@ class ExtensionContext:
                         chunks = next((r for r in responses if r), [filepath])
                         files.extend(chunks)
                     else:
-                        files.append(filepath)
+                        files.append(filepath if filepath.startswith("vfs://") else f"vfs://{filepath}")
                 elif 'folderpath' in item:
-                    for f in vfs.walk(item['folderpath']):
+                    folderpath = item['folderpath']
+                    if folderpath.startswith('vfs://'): folderpath = folderpath[6:]
+                    for f in vfs.walk(folderpath):
                         if f in tracked_files:
-                            files.append(f)
+                            files.append(f"vfs://{f}" if not f.startswith("vfs://") else f)
 
         unique_files = []
         seen = set()
@@ -475,10 +490,15 @@ class ExtensionContext:
         """Halts the current thread until all pending VFS writes are physically flushed to disk."""
         from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
         import time
-        while _VFS_WRITE_QUEUE.unfinished_tasks > 0:
+        timeout_loops = 0
+        while _VFS_WRITE_QUEUE.unfinished_tasks > 0 and timeout_loops < 50:
             if _VFS_SHUTDOWN_SIGNAL.is_set():
                 raise RuntimeError("Transaction aborted mid-flight due to system shutdown or workspace context swap.")
             time.sleep(0.1)
+            timeout_loops += 1
+
+        if timeout_loops >= 50:
+            raise TimeoutError("VFS Barrier Timeout: The async write queue stalled and failed to settle within 5.0 seconds.")
 
     def emit(self, event_name, *args, **kwargs):
         """Emits a synchronous event, automatically injecting the tenant's workspace ID."""
@@ -585,49 +605,11 @@ class InSetuExtension:
             def wrapper(job_id=None, workspace_id=None, **kwargs):
                 ctx = ExtensionContext(self.name, workspace_id, settings_schema=self.settings_schema, job_id=job_id)
                 update_immediate_job_status(job_id, 'processing', "Initializing task...", workspace_id=workspace_id)
-                try:
-                    # Execute the domain logic
-                    _chain = kwargs.pop('_chain', None)
-                    if 'job_id' in inspect.signature(f).parameters:
-                        kwargs['job_id'] = job_id
-                    result = f(ctx, **kwargs)
 
-                    # Evaluate final completion payload
-                    msg = "Task complete."
-                    artifact = {}
-                    if isinstance(result, str):
-                        msg = result
-                    elif isinstance(result, dict):
-                        msg = result.get('message', msg)
-                        artifact = result.get('artifact', {})
-                    # --- AUTOPILOT BATON PASS (Agnostic Job Chain) ---
-                    if _chain:
-                        steps = _chain.get('steps', [])
-                        if steps:
-                            next_step = steps.pop(0)
-                            _chain['steps'] = steps
-                            import json
-                            import uuid
-                            from insetu.kernel.workers import submit_immediate_job
-                            clean_kwargs = {k: v for k, v in kwargs.items() if k not in ['job_id', 'workspace_id']}
-                            clean_kwargs['_chain'] = _chain
-
-                            # Fork the chain into a new background job so the current step can complete and unlock its UI
-                            next_job_id = f"chn_{uuid.uuid4().hex[:8]}"
-                            submit_immediate_job(next_job_id, next_step["ext_name"], next_step["worker_name"], json.dumps(clean_kwargs), workspace_id=workspace_id, coalesce=False)
-                            # Deliberately fall through to mark the current job_id as 'completed'
-                        else:
-                            on_complete = _chain.get('on_complete_hook')
-                            if on_complete:
-                                from insetu.kernel.hooks import hooks
-                                hooks.emit_background(on_complete, workspace_id=workspace_id)
-
-                    update_immediate_job_status(job_id, 'completed', msg, artifact=artifact, workspace_id=workspace_id)
-                except Exception as e:
-                    import traceback
-                    err_trace = traceback.format_exc()
-                    print(f"❌ [Worker: {self.name}:{task_name}] Failed:\n{err_trace}")
-                    update_immediate_job_status(job_id, 'failed', str(e), workspace_id=workspace_id)
+                # Execute the domain logic
+                if 'job_id' in inspect.signature(f).parameters:
+                    kwargs['job_id'] = job_id
+                return f(ctx, **kwargs)
 
             register_callback(self.name, task_name, wrapper)
             return wrapper

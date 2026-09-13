@@ -399,6 +399,12 @@ async function checkManifestVersion() {
                 });
             }
         }
+        if (deltaData.active_modules !== undefined) {
+            AppStore.setState({ activeModules: deltaData.active_modules });
+        }
+        if (deltaData.pending_modules !== undefined) {
+            AppStore.setState({ pendingModules: deltaData.pending_modules });
+        }
 
         if (deltaData.timestamp) {
             lastManifestSyncTs = deltaData.timestamp;
@@ -424,7 +430,6 @@ async function checkManifestVersion() {
                 console.error("VFS Mutation Hook Error:", e);
             }
         }
-
         // 4. Sync UI Status with Kernel Compilation State
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
             if (deltaData.is_compiling) {
@@ -434,6 +439,7 @@ async function checkManifestVersion() {
             }
         }
     } catch (e) {
+        if (e.name === 'TimeoutError' || (e.message && e.message.includes('Failed to fetch'))) return;
         console.warn("Heartbeat delta check failed:", e);
     }
 }
@@ -1124,11 +1130,12 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             const data = await response.json();
             let result = null;
             if (response.status === 202) {
-                const jobId = data.job_id;
+                let jobId = data.job_id;
                 if (jobId === 'offline_queue') {
                     return { status: 'success', message: 'Queued for offline sync.', files: [] };
                 }
                 let retries = 0;
+                const processedSteps = new Set();
                 while (true) {
                     if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
                         result = { status: 'aborted', message: 'Workspace switched.', files: [] };
@@ -1150,6 +1157,44 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
                     }
                     if (!pollRes.ok) throw new Error("Compilation job failed");
                     const pollData = await pollRes.json();
+
+                    // Synchronize extension store loading indicators to active step
+                    const currentExt = pollData.ext_name || (jobId ? jobId.split('_')[0] : '');
+                    if (window.inSetu.stores.Gather) {
+                        window.inSetu.stores.Gather.setState({ 
+                            loading: currentExt === 'gather' || currentExt === 'cmp',
+                            loadingMessage: pollData.message || "Compiling ecosystem contexts..."
+                        });
+                    }
+                    if (window.inSetu.stores.Git) {
+                        window.inSetu.stores.Git.setState({ 
+                            activeDiffJobId: (currentExt === 'git' || currentExt === 'git_diffs') ? jobId : null,
+                            diffJobMessage: (currentExt === 'git' || currentExt === 'git_diffs') ? pollData.message : null
+                        });
+                    }
+                    if (window.inSetu.stores.Flow) {
+                        window.inSetu.stores.Flow.setState({ 
+                            loading: currentExt === 'flow' || currentExt === 'flw' 
+                        });
+                    }
+
+                    if (pollData.artifact && pollData.artifact.chain_history) {
+                        pollData.artifact.chain_history.forEach(step => {
+                            if (!processedSteps.has(step.job_id)) {
+                                processedSteps.add(step.job_id);
+                                if (step.ext_name === 'git') {
+                                    window.inSetu.sys.refreshManifest().then(() => {
+                                        window.inSetu.events.emitHook('insetu:git:diffs-refreshed');
+                                    });
+                                } else if (step.ext_name === 'flow') {
+                                    window.inSetu.sys.refreshManifest().then(() => {
+                                        if (window.inSetu.stores.Flow) window.inSetu.stores.Flow.getState().fetchBatches();
+                                    });
+                                }
+                            }
+                        });
+                    }
+
                     if (pollData.status === 'processing' || pollData.status === 'pending') {
                         const msg = pollData.message || "Compiling...";
                         if (AppStore.getState().activeWorkspace === compilePromiseWs) {
@@ -1163,6 +1208,11 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
                             break;
                         }
                     } else if (pollData.status === 'completed') {
+                        if (pollData.artifact && pollData.artifact.next_job_id) {
+                            jobId = pollData.artifact.next_job_id;
+                            retries = 0;
+                            continue;
+                        }
                         result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
                         break;
                     } else if (pollData.status === 'failed') {
@@ -1190,6 +1240,9 @@ export const executeSystemCompile = (onProgress = null, forceFull = false, start
             if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending');
             throw error;
         } finally {
+            if (window.inSetu.stores.Gather) window.inSetu.stores.Gather.setState({ loading: false });
+            if (window.inSetu.stores.Git) window.inSetu.stores.Git.setState({ activeDiffJobId: null, diffJobMessage: null });
+            if (window.inSetu.stores.Flow) window.inSetu.stores.Flow.setState({ loading: false });
             compilePromise = null;
         }
     })();

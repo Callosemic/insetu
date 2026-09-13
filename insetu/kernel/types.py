@@ -23,7 +23,6 @@ class JobProgressPayload(TypedDict, total=False):
     status: str  # 'pending' | 'processing' | 'completed' | 'failed'
     status_message: Optional[str]
     artifact_json: Optional[str]
-
 class JobSchedulePayload(TypedDict, total=False):
     """Payload defining a scheduled background job."""
     job_id: str
@@ -31,6 +30,16 @@ class JobSchedulePayload(TypedDict, total=False):
     callback_name: str
     interval_ms: int  # 0 indicates a one-shot delayed job; >0 indicates recurring
     delay_ms: Optional[int]
+
+class JobChainStep(TypedDict):
+    """Defines a single execution step within a background worker chain."""
+    ext_name: str
+    worker_name: str
+
+class JobChainPayload(TypedDict, total=False):
+    """Payload formalizing the background worker step-chaining contract (ADR 0037)."""
+    steps: List[JobChainStep]
+    on_complete_hook: Optional[str]
 
 class WorkspacePathsDict(TypedDict):
     """Spatial path mappings for an active tenant workspace."""
