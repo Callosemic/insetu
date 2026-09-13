@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement, bindStoreInput } from '../core/sdk.js';
+import { createExtensionStore, InSetuElement, bindStoreInput } from '/static/extensions/system/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -198,7 +198,7 @@ function _isRepoActive(activePins, repo) {
 }
 
 import { LitElement, html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export class InSetuTrackerTicket extends InSetuElement {
     static properties = {
         task: { type: Object },
@@ -2705,6 +2705,7 @@ window.ExtensionRegistry.registerExtension('tracker', {
     name: "Issue Tracker",
     version: "2.0.0",
     offline_mode: "full",
+    settingsCategory: "Tracker",
     settingsActions: [
         {
             id: 'tracker_domain_vocab',

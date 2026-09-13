@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 export const PublishStore = createExtensionStore('Publish', {

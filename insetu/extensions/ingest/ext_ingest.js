@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 

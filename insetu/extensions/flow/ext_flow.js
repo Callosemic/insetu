@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 const AppStore = window.inSetu.stores.App;
@@ -55,6 +55,7 @@ export class InSetuExtFlow extends InSetuElement {
         loading: { type: Boolean },
         activeModules: { type: Array },
         pendingModules: { type: Array },
+        isPipelineActive: { type: Boolean },
         searchQuery: { type: String },
         _editingBatch: { type: Object },
         _viewingBatch: { type: Object },
@@ -148,6 +149,7 @@ export class InSetuExtFlow extends InSetuElement {
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
             this.activeModules = state.activeModules || [];
             this.pendingModules = state.pendingModules || [];
+            this.isPipelineActive = state.isPipelineActive || false;
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => state.manifest, () => {
@@ -163,6 +165,20 @@ export class InSetuExtFlow extends InSetuElement {
         });
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             FlowStore.getState().fetchBatches();
+        });
+        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
+            const pollData = e.detail;
+            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
+            FlowStore.setState({ loading: currentExt === 'flow' || currentExt === 'flw' });
+        });
+        this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
+            if (e.detail.ext_name === 'flow') {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                    window.inSetu.sys.refreshManifest().then(() => {
+                        FlowStore.getState().fetchBatches();
+                    });
+                }
+            }
         });
 
         const as = AppStore.getState ? AppStore.getState() : {};
@@ -345,8 +361,8 @@ export class InSetuExtFlow extends InSetuElement {
         }
     }
     render() {
-        const isFlowActive = this.loading || (this.activeModules || []).includes('flow');
-        const isFlowPending = (this.pendingModules || []).includes('flow');
+        const isFlowActive = this.loading || (!this.isPipelineActive && (this.activeModules || []).includes('flow'));
+        const isFlowPending = !this.isPipelineActive && (this.pendingModules || []).includes('flow');
         const isFlowLoading = isFlowActive || isFlowPending;
         const loadingMsg = isFlowActive ? "Processing workflows..." : "Waiting for prerequisite contexts to compile...";
 

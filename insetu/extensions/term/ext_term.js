@@ -1,6 +1,6 @@
 // ext_term.js - Terminal Extension
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 

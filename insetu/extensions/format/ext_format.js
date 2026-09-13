@@ -1,4 +1,4 @@
-import { createExtensionStore } from '../core/sdk.js';
+import { createExtensionStore } from '/static/extensions/system/sdk.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {}, utils: {} };
 

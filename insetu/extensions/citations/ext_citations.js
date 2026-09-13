@@ -1,4 +1,4 @@
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const CitationStore = createExtensionStore('Citations', {
@@ -17,7 +17,7 @@ export const CitationStore = createExtensionStore('Citations', {
 
 window.inSetu.stores.Citations = CitationStore;
 import { html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export class InSetuExtCitations extends InSetuElement {
     static properties = {
         importingIds: { type: Object },
@@ -247,7 +247,7 @@ export class InSetuExtCitations extends InSetuElement {
                     const jobId = data.job_id;
                     while (true) {
                         await new Promise(resolve => setTimeout(resolve, 1000));
-                        const pollRes = await window.inSetu.api.system.get(`jobs/${jobId}`);
+                        const pollRes = await window.inSetu.api.workspace.get(`system/jobs/${jobId}`);
                         if (!pollRes.ok) throw new Error("Search job failed");
                         const pollData = await pollRes.json();
                         if (pollData.status === 'completed') return pollData.artifact?.results || [];

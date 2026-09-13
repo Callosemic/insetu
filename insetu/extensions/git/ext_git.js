@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 
 const AppStore = window.inSetu.stores.App;
 export const GitStore = createExtensionStore('Git', {
@@ -45,10 +45,9 @@ export async function generateDiffs(force = false) {
         ? null 
         : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
     gitStoreObj.setState({ activeDiffJobId: 'starting', diffJobError: null });
-
-    if (window.inSetu?.sys?.executeSystemCompile) {
+    if (window.inSetu?.stores?.Gather) {
         try {
-            await window.inSetu.sys.executeSystemCompile((msg) => {
+            await window.inSetu.stores.Gather.getState().executeCompile((msg) => {
                 gitStoreObj.setState({ diffJobMessage: msg });
             }, false, 'git_diffs', targetRepos);
             gitStoreObj.setState({  
@@ -84,6 +83,7 @@ export class InSetuExtGitDiffs extends InSetuElement {
         activePushJobId: { type: String },
         activeModules: { type: Array },
         pendingModules: { type: Array },
+        isPipelineActive: { type: Boolean },
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
@@ -117,27 +117,25 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.activePushJobId = state.activePushJobId;
             this.requestUpdate();
         });
-        this.subscribe(window.inSetu.stores.Gather, (state) => {
-            this.categoryOrder = state.categoryOrder || [];
-            this.hiddenOutputs = state.hiddenOutputs || [];
-            this.requestUpdate();
-        });
         this.subscribe(GitStore, (state) => {
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => {
             this.activeModules = state.activeModules || [];
             this.pendingModules = state.pendingModules || [];
+            this.isPipelineActive = state.isPipelineActive || false;
+            this.categoryOrder = state.categoryOrder || [];
+            this.hiddenOutputs = state.hiddenOutputs || [];
             this.requestUpdate();
         });
         const gitState = GitStore.getState();
-        const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};
+        const appState = AppStore.getState();
         this.activeDiffJobId = gitState.activeDiffJobId;
         this.diffJobMessage = gitState.diffJobMessage;
         this.diffJobError = gitState.diffJobError;
         this.activePushJobId = gitState.activePushJobId;
-        this.categoryOrder = gatherState.categoryOrder || [];
-        this.hiddenOutputs = gatherState.hiddenOutputs || [];
+        this.categoryOrder = appState.categoryOrder || [];
+        this.hiddenOutputs = appState.hiddenOutputs || [];
         this.registerGlobalListener('insetu:git:generate-diffs', window, (e) => generateDiffs(e.detail?.force));
         this.registerGlobalListener('insetu:git:open-push-modal', window, this._handleOpenPush.bind(this));
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
@@ -171,6 +169,23 @@ export class InSetuExtGitDiffs extends InSetuElement {
             const payload = e.detail;
             if (payload && payload.ext_name === 'git' && payload.next_job_id) {
                 GitStore.setState({ activeDiffJobId: payload.next_job_id });
+            }
+        });
+        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
+            const pollData = e.detail;
+            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
+            GitStore.setState({
+                activeDiffJobId: (currentExt === 'git' || currentExt === 'git_diffs') ? pollData.id : null,
+                diffJobMessage: (currentExt === 'git' || currentExt === 'git_diffs') ? pollData.message : null
+            });
+        });
+        this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
+            if (e.detail.ext_name === 'git') {
+                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                    window.inSetu.sys.refreshManifest().then(() => {
+                        window.inSetu.events.emitHook('insetu:git:diffs-refreshed');
+                    });
+                }
             }
         });
         this._fetchSweepStatusSilent();
@@ -363,8 +378,8 @@ disconnectedCallback() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-        const isGitActive = this.activeDiffJobId || (this.activeModules || []).includes('git');
-        const isGitPending = (this.pendingModules || []).includes('git');
+        const isGitActive = this.activeDiffJobId || (!this.isPipelineActive && (this.activeModules || []).includes('git'));
+        const isGitPending = !this.isPipelineActive && (this.pendingModules || []).includes('git');
         const isGitLoading = isGitActive || isGitPending;
         const loadingMsg = this.diffJobMessage || (isGitActive ? "Analyzing Git trees across sister repositories... please wait." : "Waiting for prerequisite contexts to compile...");
 

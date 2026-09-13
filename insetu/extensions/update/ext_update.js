@@ -1,6 +1,6 @@
 import { html, css } from 'lit';
-import { createExtensionStore, InSetuElement } from '../core/sdk.js';
-import { sharedStyles } from '../../vendor/sutram/js/shared_styles.js';
+import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
+import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
@@ -104,7 +104,7 @@ export const UpdateStore = createExtensionStore('Update', {
     },
     checkDependencies: async () => {
         try {
-            const res = await window.inSetu.api.system.get('config');
+            const res = await window.inSetu.api.workspace.get('system/config');
             if (res.ok) {
                 const data = await res.json();
                 const extMeta = (data.meta?.available_extensions || []).find(e => e.id === 'update');

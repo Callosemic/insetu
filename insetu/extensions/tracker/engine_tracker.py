@@ -452,6 +452,9 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
     conn.commit()
 
     ctx.vfs.save(ticket_path, content)
+
+    from insetu.kernel.hooks import hooks
+    hooks.emit('vfs_mutated', workspace_id=ctx.workspace_id, mutations=[{"filepath": ticket_path, "operation": "save"}])
     return ticket_path
 @tracker_bp.worker("harmonize_vocab_task")
 def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
@@ -540,6 +543,12 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
         WHERE filepath = ?
     """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, tier, canonical_current_rel))
     conn.commit()
+
+    from insetu.kernel.hooks import hooks
+    mutations = [{"filepath": new_rel_path, "operation": "save"}]
+    if canonical_current_rel != new_rel_path:
+        mutations.append({"filepath": canonical_current_rel, "operation": "delete"})
+    hooks.emit('vfs_mutated', workspace_id=ctx.workspace_id, mutations=mutations)
 
     return new_rel_path
 @tracker_bp.worker("enforce_tickets_task")
@@ -801,9 +810,27 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     try:
                         if decl_tags and decl_tags != '[]': new_data["tags"] = json.loads(decl_tags)
                     except Exception: pass
-
                     new_content = update_frontmatter(content, new_data)
                     ctx.vfs.save(intended_rel_path, new_content, data={"delete_source": current_rel_path if current_rel_path != intended_rel_path else None})
+
+                    _parse_and_upsert_ticket(intended_path, intended_rel_path, workspace_id)
+                    if current_rel_path != intended_rel_path:
+                        ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (current_rel_path,))
+                        ctx.db.commit()
+
+                        from insetu.kernel.db import get_connection
+                        import time
+                        w_conn = get_connection("workers", workspace_id=workspace_id)
+                        now_ts = time.time()
+                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (current_rel_path, 'delete', now_ts))
+                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (intended_rel_path, 'save', now_ts))
+                        w_conn.commit()
+
+                        from insetu.kernel.hooks import hooks
+                        hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                            {"filepath": current_rel_path, "operation": "delete"},
+                            {"filepath": intended_rel_path, "operation": "save"}
+                        ])
                     enforced_count += 1
             except Exception as e:
                 print(f"Warning: Ticket Housekeeping failed on {ws_rel_path}: {e}")
@@ -942,6 +969,12 @@ def archive_stale_tickets(workspace_id=None):
                                 new_content = update_frontmatter(content, yaml_data)
                                 new_rel_path = Path(f"{repo}/.tracker/log").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
+
+                                from insetu.kernel.hooks import hooks
+                                hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                                    {"filepath": ws_rel_path, "operation": "delete"},
+                                    {"filepath": new_rel_path, "operation": "save"}
+                                ])
                                 archived_count += 1
                         except Exception:
                             pass
@@ -967,6 +1000,12 @@ def archive_stale_tickets(workspace_id=None):
                                 new_content = update_frontmatter(content, yaml_data)
                                 new_rel_path = Path(f"{repo}/.tracker/log/archived").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
+
+                                from insetu.kernel.hooks import hooks
+                                hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                                    {"filepath": ws_rel_path, "operation": "delete"},
+                                    {"filepath": new_rel_path, "operation": "save"}
+                                ])
                                 archived_count += 1
                         except Exception:
                             pass
