@@ -535,7 +535,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at, patch_count, chunks_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (patch_id, pid, current_repo, filepath, s_block, r_block, post_patch_hash, 1 if is_snapshot else 0, compressed_state, now_ts, ttl_48h, patch_count, chunks_json))
-
             # Phase 4: Restore target file EOL format (CRLF drift prevention)
             if '\r\n' in orig_content and '\r\n' not in final_content:
                 final_content = final_content.replace('\n', '\r\n')
@@ -543,6 +542,16 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             mutations.append({"filepath": filepath, "operation": "save", "ignore_ledger": False})
 
         db_conn.commit()
+        
+        # Correctly use the global workers connection for the event log
+        from insetu.kernel.db import get_connection
+        w_conn = get_connection("workers", workspace_id=workspace_id)
+        for m in mutations:
+            w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (m['filepath'], m['operation'], now_ts))
+        w_conn.commit()
+        
+        from insetu.kernel.hooks import hooks
+        hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=mutations)
         telemetry["status"] = "committed"
 
     elif dry_run:
