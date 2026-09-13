@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "archived"
 id: phase-6-infrastructure-polish

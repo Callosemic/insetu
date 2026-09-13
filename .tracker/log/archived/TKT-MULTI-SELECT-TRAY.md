@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "archived"
 id: TKT-MULTI-SELECT-TRAY

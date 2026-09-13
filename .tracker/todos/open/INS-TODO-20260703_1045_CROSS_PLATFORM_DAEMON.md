@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "open"
 id: INS-TODO-20260703_1045_CROSS_PLATFORM_DAEMON

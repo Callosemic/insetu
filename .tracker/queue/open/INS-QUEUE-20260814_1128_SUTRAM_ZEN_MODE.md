@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 id: "INS-QUEUE-20260814_1128_SUTRAM_ZEN_MODE"

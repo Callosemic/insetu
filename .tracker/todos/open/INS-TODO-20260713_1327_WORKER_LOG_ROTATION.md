@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "open"
 id: "INS-TODO-20260713_1327_WORKER_LOG_ROTATION"

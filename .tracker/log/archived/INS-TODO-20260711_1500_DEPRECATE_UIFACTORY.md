@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "archived"
 id: INS-TODO-20260711_1500_DEPRECATE_UIFACTORY

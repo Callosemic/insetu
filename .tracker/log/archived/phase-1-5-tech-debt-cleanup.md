@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "archived"
 id: phase-1-5-tech-debt-cleanup

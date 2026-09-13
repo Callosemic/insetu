@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "archived"
 id: INS-TODO-20260713_1326_EINK_CSS_PROPERTIES

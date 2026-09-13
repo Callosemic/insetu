@@ -1,6 +1,6 @@
 ---
 id: "INS-QUEUE-20260807_1153_UNIFIED_RESOURCE_EDITOR"
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 title: "Unify File Creation, VFS Code Editing, and Frontmatter Drawers into <insetu-resource-editor>"

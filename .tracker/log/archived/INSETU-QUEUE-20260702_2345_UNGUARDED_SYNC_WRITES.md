@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "archived"
 id: INSETU-QUEUE-20260702_2345_UNGUARDED_SYNC_WRITES

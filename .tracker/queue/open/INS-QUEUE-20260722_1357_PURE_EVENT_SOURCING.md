@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 id: "INS-QUEUE-20260722_1357_PURE_EVENT_SOURCING"

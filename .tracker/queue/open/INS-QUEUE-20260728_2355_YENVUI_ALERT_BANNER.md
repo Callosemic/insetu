@@ -1,6 +1,6 @@
 ---
 id: "INS-QUEUE-20260728_2355_YENVUI_ALERT_BANNER"
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 title: "Generalize System Banner Alerts into <yenvui-alert-banner> Component"

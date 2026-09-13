@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "open"
 id: INS-QUEUE-20260705_0141_FORMATTER_HOOKS

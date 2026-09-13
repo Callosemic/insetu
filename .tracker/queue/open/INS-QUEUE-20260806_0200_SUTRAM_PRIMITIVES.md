@@ -1,6 +1,6 @@
 ---
 id: "INS-QUEUE-20260806_0200_SUTRAM_PRIMITIVES"
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 title: "Generalize Spinner and Empty-State Components into Vendorized Sutram Primitives"

@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "todo"
 status: "archived"
 id: INS-TODO-20260701_1300_NAMESPACE_GLOBAL_STORES

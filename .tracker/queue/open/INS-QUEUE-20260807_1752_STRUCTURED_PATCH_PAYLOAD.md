@@ -1,5 +1,5 @@
 ---
-repo: "insetu"
+repo: "inSetu"
 type: "queue"
 status: "open"
 id: "INS-QUEUE-20260807_1752_STRUCTURED_PATCH_PAYLOAD"
