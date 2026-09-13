@@ -161,10 +161,9 @@ export async function shareFiles(baseFile, chunks = null, isFS = false) {
 
             if (!fetchUrl) {
                 const fileIsFS = (chunks && chunks.length > 1) ? false : isFS;
-                const cleanPath = filepath.replace(/^(ctx|system):\/\//, '');
                 fetchUrl = fileIsFS 
                     ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(filepath)}`
-                    : `/download/${cleanPath.split('/').map(encodeURIComponent).join('/')}`;
+                    : `/download/${encodeURIComponent(filepath)}`;
             }
 
             const res = await window.inSetu.api.request(fetchUrl, {}, activeWs);
@@ -211,12 +210,9 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     await sutramDownloadFile(fetchUrl, fallbackFilename, fetchOptions);
 }
 export async function viewAndCopy(filename) {
-    let cleanName = filename ? filename.replace(/^system:\/\/contexts\//, '') : filename;
-    cleanName = cleanName ? cleanName.replace(/^ctx:\/\/(?:contexts\/)?/, '') : cleanName;
-
-    const chunks = getChunks(cleanName);
+    const chunks = getChunks(filename);
     // If the requested filename is explicitly a known chunk, respect it. Otherwise default to the first chunk of the payload.
-    const targetFile = (chunks && chunks.length > 0 && !chunks.includes(cleanName)) ? chunks[0] : cleanName;
+    const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
 
     const { ext, mode: codeMode, isSupported: isSupportedEditor, isMarkdown } = resolveEditorMode(targetFile);
     const browserState = AppStore.getState().browserConfig;
@@ -487,7 +483,7 @@ async function downloadFromModal() {
             const blob = new Blob([text], { type: 'text/plain' });
             downloadBlob(blob, state.filename);
         } else {
-            let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${state.filename}`;
+            let fetchUrl = state.isFS ? `fs/fetch?file=${encodeURIComponent(state.filename)}` : `/download/${encodeURIComponent(state.filename)}`;
             const overrideUrl = window.inSetu.events.emitHook('insetu:file-fetch-url', state.filename);
             if (overrideUrl) fetchUrl = overrideUrl;
             if (fetchUrl.startsWith('/') || fetchUrl.startsWith('http')) {
@@ -803,8 +799,7 @@ window.ExtensionRegistry.registerExtension('fs', {
             order: 80,
             match: (data) => !data.isSkeleton,
             onClick: (data, e) => {
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(basename);
+                if (window.inSetu.ui.openBrowseModal) window.inSetu.ui.openBrowseModal(data.filepath);
             }
         },
         {
@@ -831,8 +826,7 @@ window.ExtensionRegistry.registerExtension('fs', {
                     return;
                 }
 
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
 
                 await shareFiles(data.filepath, chunks, data.isFS);
             }
@@ -847,12 +841,11 @@ window.ExtensionRegistry.registerExtension('fs', {
             match: (data) => {
                 if (data.isSkeleton) return false;
                 // Fast-path: Utilize the pre-computed chunks array passed by the UI cards
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath ? data.filepath.split('/').pop() : null);
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
                 return chunks && chunks.length > 1;
             },
             onClick: (data, e) => {
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: basename } }));
+                window.dispatchEvent(new CustomEvent('insetu:vfs:view-parts', { detail: { filepath: data.filepath } }));
             }
         },
         {
@@ -869,14 +862,12 @@ window.ExtensionRegistry.registerExtension('fs', {
                     return;
                 }
 
-                const basename = data.filepath ? data.filepath.split('/').pop() : data.filepath;
-                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, basename);
+                const chunks = data.chunks && data.chunks.length > 0 ? data.chunks : window.inSetu.utils.extractManifestFiles(window.inSetu.stores.App?.getState()?.manifest, data.filepath);
                 if (chunks && chunks.length > 1) {
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⬇️ Downloading multi-part context...", 2000);
                     for (const f of chunks) {
-                        const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                        const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
-                        await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                        const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                        await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                         await new Promise(r => setTimeout(r, 300));
                     }
                 } else {
@@ -885,10 +876,9 @@ window.ExtensionRegistry.registerExtension('fs', {
                     // ADR 0016: Explicitly inject the tenant scope to prevent 404 routing failures
                     if (!fetchUrl) {
                         const activeWs = window.inSetu.utils.getActiveWorkspace();
-                        const cleanPath = data.filepath.replace(/^(ctx|system):\/\//, '');
                         fetchUrl = data.isFS 
                             ? `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(data.filepath)}`
-                            : `/download/${cleanPath.split('/').map(encodeURIComponent).join('/')}`;
+                            : `/download/${encodeURIComponent(data.filepath)}`;
                     }
                     await window.inSetu.vfs.fetchAndDownloadState(data.filepath, fetchUrl);
                 }
@@ -1169,12 +1159,12 @@ function _handleBrowserCardClick(detail) {
 export function openFolderBrowser(callback = null) {
     openWorkspaceBrowser({ mode: 'folder', title: 'Select Destination Folder', callback: callback });
 }
-
 function confirmFolderSelection() {
     const { currentBrowsePath, browserConfig } = AppStore.getState();
     const selectedPath = (currentBrowsePath || []).join('/');
     if (browserConfig && browserConfig.callback) {
-        browserConfig.callback(selectedPath);
+        const finalPath = selectedPath ? (selectedPath.endsWith('/') ? selectedPath : selectedPath + '/') : '/';
+        browserConfig.callback(finalPath);
         closeBrowseModal();
         return;
     }
@@ -1481,13 +1471,11 @@ export class InSetuFileModal extends InSetuElement {
 }
 customElements.define('insetu-file-modal', InSetuFileModal);
 export const extractManifestFiles = (...args) => window.inSetu.utils.extractManifestFiles(...args);
-
 export function getChunks(filepath) {
     if (!filepath) return [];
-    const basename = filepath.split('/').pop();
     const manifest = AppStore.getState().manifest || {};
     const isContext = filepath.startsWith('ctx://') || filepath.endsWith('_context.txt') || filepath.endsWith('_diffs.txt');
-    return extractManifestFiles(manifest, basename, isContext ? 'ctx' : 'vfs');
+    return extractManifestFiles(manifest, filepath, isContext ? 'ctx' : 'vfs');
 }
 
 window.inSetu.utils = window.inSetu.utils || {};
@@ -1497,12 +1485,11 @@ window.inSetu.vfs = window.inSetu.vfs || {};
 window.inSetu.ui = window.inSetu.ui || {};
 export function openPartsModal(filepath) {
     if (!filepath) return;
-    const basename = filepath.split('/').pop();
-    const chunks = getChunks(basename);
+    const chunks = getChunks(filepath);
     if (chunks && chunks.length > 0) {
         openWorkspaceBrowser({
             mode: 'parts',
-            title: `Parts: ${basename}`,
+            title: `Parts: ${filepath.split('/').pop()}`,
             files: chunks,
             autoDrilldown: false,
             isParts: true
@@ -1820,9 +1807,8 @@ export class InSetuVFSModals extends InSetuElement {
                         </div>
                         <div style="display: flex; flex-direction: column;">
                             ${manifest.map((f, idx) => {
-                                const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                                const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
-                                const partMatch = cleanName.match(/_part(\d+)/i);
+                                const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                                const partMatch = f.match(/_part(\d+)/i);
                                 const displayTitle = partMatch ? `Part ${partMatch[1]}` : `Part ${idx + 1}`;
 
                                 return html`
@@ -1838,7 +1824,7 @@ export class InSetuVFSModals extends InSetuElement {
                                                 style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
                                                 .onClick=${async () => {
                                                     if (window.inSetu.vfs.viewAndCopy) {
-                                                        window.inSetu.vfs.viewAndCopy(cleanName);
+                                                        window.inSetu.vfs.viewAndCopy(f);
                                                     }
                                                 }}>
                                             </sutram-async-btn>
@@ -1847,7 +1833,7 @@ export class InSetuVFSModals extends InSetuElement {
                                                 intent="primary"
                                                 style="margin: 0; padding: 6px 12px; font-size: 0.85rem;"
                                                 .onClick=${async () => {
-                                                    await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                                    await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                                                 }}>
                                             </sutram-async-btn>
                                         </div>
@@ -1880,9 +1866,8 @@ export class InSetuVFSModals extends InSetuElement {
             .onClick=${async () => {
                 const manifestFiles = m.browser?.manifest || [];
                 for (const f of manifestFiles) {
-                    const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                    const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
-                    await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                    const fetchUrl = `/download/${encodeURIComponent(f)}`;
+                    await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                     await new Promise(r => setTimeout(r, 300));
                 }
             }}>

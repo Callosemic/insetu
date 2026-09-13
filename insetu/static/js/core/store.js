@@ -32,6 +32,8 @@ export const AppStore = createExtensionStore('App', {
     outboxCount: 0,
     pendingMutations: new Set(),
     deletedMutations: new Set(),
+    activeModules: [],
+    pendingModules: [],
 
     activeTab: 'context',
     activeSubTabs: {},

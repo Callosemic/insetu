@@ -323,11 +323,10 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
     }
-
     _deselectSpecificPatch(file, patchIdx) {
         const cells = BridgeStore.getState().cells || [];
-        const activeGroupCells = cells.filter(c => c.file === file && c.active);
-        const targetCell = activeGroupCells[patchIdx];
+        const fileCells = cells.filter(c => c.file === file);
+        const targetCell = fileCells[patchIdx];
         if (targetCell) {
             const updatedCells = cells.map(c => 
                 c.id === targetCell.id ? { ...c, active: false } : c
@@ -467,13 +466,14 @@ export class InSetuExtBridge extends InSetuElement {
                         if (safePatches.length === 0) {
                             return html`<div style="padding: 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text-muted); font-style: italic;">No patch data available for this transaction.</div>`;
                         }
-
                         const groupedPatches = safePatches.reduce((acc, p) => {
-                            const file = p.original_file || 'Unknown File';
+                            const file = p.resolved_file || p.original_file || 'Unknown File';
                             if (!acc[file]) acc[file] = [];
                             acc[file].push(p);
                             return acc;
                         }, {});
+
+                        const origFileCounters = {};
 
                         return Object.entries(groupedPatches).map(([file, filePatches]) => {
                             const hasError = filePatches.some(p => p.status === 'failed' || p.status === 'syntax_error');
@@ -486,7 +486,7 @@ export class InSetuExtBridge extends InSetuElement {
                             else if (hasWarning) { intentColor = 'var(--intent-warning)'; icon = '⚠️'; }
                             else if (isSkipped) { intentColor = 'var(--intent-neutral)'; icon = '⏭️'; }
 
-                            const targetEntityFile = filePatches[0]?.resolved_file || file;
+                            const targetEntityFile = file;
                             return html`
                                 <insetu-card 
                                     titleText="${icon} ${file}" 
@@ -496,8 +496,13 @@ export class InSetuExtBridge extends InSetuElement {
                                     .entityData=${{ filepath: targetEntityFile, isFS: true, suppress: ['file-browse'] }}>
 
                                     <div style="padding: 2px 0; font-size: 0.9rem; color: var(--text);">
-                                        ${filePatches.map((p, idx) => html`
-                                            <div style="border-bottom: ${idx < filePatches.length - 1 ? '1px solid var(--border)' : 'none'}; padding-bottom: ${idx < filePatches.length - 1 ? '12px' : '0'}; margin-bottom: ${idx < filePatches.length - 1 ? '12px' : '0'};">
+                                        ${filePatches.map((p) => {
+                                            const origFile = p.original_file;
+                                            const origFileIdx = origFileCounters[origFile] || 0;
+                                            origFileCounters[origFile] = origFileIdx + 1;
+
+                                            return html`
+                                            <div style="border-bottom: ${origFileIdx < filePatches.length - 1 ? '1px solid var(--border)' : 'none'}; padding-bottom: ${origFileIdx < filePatches.length - 1 ? '12px' : '0'}; margin-bottom: ${origFileIdx < filePatches.length - 1 ? '12px' : '0'};">
                                                 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                                                     <p style="margin: 0; font-weight: bold; color: var(--text-muted);">Patch #${(p.patch_index || 0) + 1}: <span style="color: var(--text);">${(p.status || 'unknown').replace('_', ' ')}</span></p>
                                                     ${p.flags && p.flags.length > 0 ? html`
@@ -534,13 +539,14 @@ export class InSetuExtBridge extends InSetuElement {
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
                                                         <div style="display: flex; align-items: center; gap: 6px;">
-                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-patch-idx="${idx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
+                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-patch-idx="${origFileIdx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
                                                             <button data-action="deselect-all-file-patches" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">Deselect All File Patches</button>
                                                         </div>
                                                     ` : ''}
                                                 </div>
                                             </div>
-                                        `)}
+                                        `;
+                                        })}
                                     </div>
                                 </insetu-card>
                             `;

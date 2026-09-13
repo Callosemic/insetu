@@ -119,6 +119,8 @@ export class InSetuExtGather extends InSetuElement {
         searchQuery: { type: String },
         pinnedRepos: { type: Object },
         allRepos: { type: Array },
+        activeModules: { type: Array },
+        pendingModules: { type: Array },
         _showFilters: { type: Boolean },
         _expandedCats: { type: Object },
         _syncState: { type: String }
@@ -152,6 +154,8 @@ export class InSetuExtGather extends InSetuElement {
         });
         this.subscribe(AppStore, state => {
             this.manifestFiles = Object.keys(state.manifest?.ctx || {});
+            this.activeModules = state.activeModules || [];
+            this.pendingModules = state.pendingModules || [];
             this.requestUpdate();
         });
         this.subscribe(AppStore, state => state.gatherForceRefreshTick, (tick) => {
@@ -213,7 +217,12 @@ export class InSetuExtGather extends InSetuElement {
 
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
-        if (this.loading) {
+        const isGatherActive = this.loading || (this.activeModules || []).includes('gather');
+        const isGatherPending = (this.pendingModules || []).includes('gather');
+        const isGatherLoading = isGatherActive || isGatherPending;
+        const displayLoadingMsg = isGatherActive ? this.loadingMessage : "Waiting for prerequisite contexts to compile...";
+
+        if (isGatherLoading) {
             const { targetConfigs } = GatherStore.getState();
             if (targetConfigs) {
                 targetConfigs.forEach(cfg => {
@@ -259,18 +268,18 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${this._syncState === 'pending' && !this.loading ? html`
+                ${this._syncState === 'pending' && !isGatherLoading ? html`
                     <div style="background: var(--intent-warning); color: #000; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); font-size: 0.85rem; flex-shrink: 0;">
                         <div><strong>⚠️ Contexts Stale:</strong> Pending changes are waiting for the compilation slew limiter.</div>
                         <button class="btn-sm" style="background: #000; color: var(--intent-warning); margin: 0; border: 1px solid #000; font-weight: bold; padding: 4px 10px;" @click=${() => this.loadContext(false)}>Compile Now</button>
                     </div>
                 ` : ''}
-                ${this.loading ? html`
+                ${isGatherLoading ? html`
                     <div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;">
-                        <sutram-spinner text=${this.loadingMessage}></sutram-spinner>
+                        <sutram-spinner text=${displayLoadingMsg}></sutram-spinner>
                     </div>
                 ` : ''}
-                <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
+                <div style="display: flex; flex-direction: column; opacity: ${isGatherLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isGatherLoading ? 'none' : 'auto'};">
                     ${(() => {
                         const groups = {};
                         filteredFiles.forEach(f => {
@@ -330,16 +339,16 @@ export class InSetuExtGather extends InSetuElement {
                                         ${groups[cat].map(f => html`
                                             <insetu-card
                                                 .filename=${f.filename}
-                                                .titleText=${f.finalTitle || f.filename}
+                                                .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
                                                 .descriptionText=${f.finalDesc || ''}
                                                 .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
-                                                .detailText=${f.filename}
+                                                .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
                                                 .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
                                                 icon="📦"
                                                 intentColor="var(--intent-highlight)"
                                                 entityType="file:context"
                                                 .entityData=${{ 
-                                                    filepath: `ctx://contexts/${f.filename}`, 
+                                                    filepath: f.filename, 
                                                     repoDir: f.repoDir, 
                                                     isFS: false, 
                                                     isSkeleton: f.isSkeleton,  
@@ -444,17 +453,16 @@ window.ExtensionRegistry.registerExtension('gather', {
                     if (artifact.chunks && artifact.chunks.length > 1) {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading Parts...", 2000);
                         for (const f of artifact.chunks) {
-                            const cleanName = f.includes('/') ? f.split('/').pop() : f;
-                            const fetchUrl = `/download/${encodeURIComponent(cleanName)}`;
+                            const fetchUrl = `/download/${encodeURIComponent(f)}`;
                             if (window.inSetu.vfs.fetchAndDownloadState) {
-                                await window.inSetu.vfs.fetchAndDownloadState(cleanName, fetchUrl);
+                                await window.inSetu.vfs.fetchAndDownloadState(f, fetchUrl);
                                 await new Promise(r => setTimeout(r, 300));
                             }
                         }
                     } else {
                         if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus("⚡ Quickpack Ready. Downloading...", 2000);
                         if (window.inSetu.vfs.fetchAndDownloadState) {
-                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${artifact.base_filename}`);
+                            await window.inSetu.vfs.fetchAndDownloadState(artifact.base_filename, `/download/${encodeURIComponent(artifact.base_filename)}`);
                         }
                     }
                 } catch (err) {
