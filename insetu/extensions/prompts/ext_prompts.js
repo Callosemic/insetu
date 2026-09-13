@@ -59,9 +59,8 @@ export class InSetuExtPrompts extends InSetuElement {
         this.subscribe(AppStore, state => state.promptsForceRefreshTick, (tick) => {
             if (tick) PromptsStore.getState().fetchPrompts();
         });
-
         this.registerGlobalListener('insetu:context-metadata', window, (e) => {
-            if (e.detail === 'prompts_context.txt') {
+            if (e.detail === 'ctx://contexts/prompts_context.txt' || e.detail === 'prompts_context.txt') {
                 e.inSetuResponses.push({
                     cat: "Prompts & State",
                     desc: "The Master Ingestion Prompt and CLI templates.",
@@ -70,11 +69,6 @@ export class InSetuExtPrompts extends InSetuElement {
             }
         });
 
-        this.registerGlobalListener('sutram-route-changed', window, (e) => {
-            if (e.detail.tab === 'context') {
-                syncPromptsState();
-            }
-        });
 
         this.registerGlobalListener('insetu:file-fetch-url', window, (e) => {
             if (e.detail && isPromptPath(e.detail)) {
@@ -110,6 +104,9 @@ export class InSetuExtPrompts extends InSetuElement {
     }
     onWorkspaceLoad(workspaceId) {
         PromptsStore.getState().fetchPrompts();
+    }
+    onViewActivated() {
+        syncPromptsState();
     }
     onForceRefresh() {
         PromptsStore.getState().fetchPrompts();
@@ -275,7 +272,10 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
                 const match = p.match(/\.insetu\/prompts\/(.+)$/) || p.match(/prompts\/(.+)$/);
                 return match ? match[1] : p.split('/').pop();
             });
-            PromptsStore.setState({ prompts: cleanPrompts });
+            const currentPrompts = PromptsStore.getState().prompts;
+            if (JSON.stringify(currentPrompts) !== JSON.stringify(cleanPrompts)) {
+                PromptsStore.setState({ prompts: cleanPrompts });
+            }
             // Offline Cache Warming: Pre-fetch fully resolved prompt blobs silently
             const activeWs = window.inSetu.utils.getActiveWorkspace();
             const urlsToWarm = cleanPrompts.map(p => {
@@ -283,18 +283,25 @@ const syncPromptsState = window.inSetu.utils.coalescedAsync(async () => {
                 return `/api/${activeWs}/prompts/resolve?file=${encodeURIComponent(fullPath)}`;
             });
             if (urlsToWarm.length > 0 && window.inSetu?.stores?.App) {
-                window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
+                const currentQueue = window.inSetu.stores.App.getState().warmingQueue || new Set();
+                const hasNew = urlsToWarm.some(u => !currentQueue.has(u));
+                if (hasNew) {
+                    window.inSetu.stores.App.getState().enqueueWarming(urlsToWarm);
+                }
             }
 
             const gatherStore = window.inSetu?.stores?.Gather;
             if (gatherStore && typeof gatherStore.setState === 'function') {
-                gatherStore.setState(state => ({
-                    gatherOptions: {
-                        ...(state?.gatherOptions || {}),
-                        prompts: rawPrompts,
-                        profileDir: data.profile_dir || ".insetu/profiles/default"
-                    }
-                }));
+                const currentOpts = gatherStore.getState().gatherOptions || {};
+                if (JSON.stringify(currentOpts.prompts) !== JSON.stringify(rawPrompts)) {
+                    gatherStore.setState(state => ({
+                        gatherOptions: {
+                            ...(state?.gatherOptions || {}),
+                            prompts: rawPrompts,
+                            profileDir: data.profile_dir || ".insetu/profiles/default"
+                        }
+                    }));
+                }
             }
         }
     } catch (e) {

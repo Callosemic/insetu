@@ -10,25 +10,35 @@ export const FlowStore = createExtensionStore('Flow', {
     searchQuery: '',
     fetchBatches: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('flow')) return;
-        FlowStore.setState({ loading: true });
+        if ((FlowStore.getState().batches || []).length === 0) {
+            FlowStore.setState({ loading: true });
+        }
         try {
             const res = await window.inSetu.api.get('flow/batches');
             if (res.ok) {
                 const data = await res.json();
                 const gatherStore = window.inSetu?.stores?.Gather;
                 if (gatherStore && typeof gatherStore.setState === 'function') {
-                    gatherStore.setState(state => ({
-                        gatherOptions: {
-                            ...(state?.gatherOptions || {}),
-                            contexts: data.available_contexts || [],
-                            diffs: data.available_diffs || [],
-                            prompts: data.available_prompts || [],
-                            artifactsDir: data.artifacts_dir || ".insetu/data",
-                            profileDir: data.profile_dir || ".insetu"
-                        }
-                    }));
+                    const currentOpts = gatherStore.getState()?.gatherOptions || {};
+                    if (JSON.stringify(currentOpts.contexts) !== JSON.stringify(data.available_contexts) ||
+                        JSON.stringify(currentOpts.diffs) !== JSON.stringify(data.available_diffs) ||
+                        JSON.stringify(currentOpts.prompts) !== JSON.stringify(data.available_prompts)) {
+                        gatherStore.setState(state => ({
+                            gatherOptions: {
+                                ...(state?.gatherOptions || {}),
+                                contexts: data.available_contexts || [],
+                                diffs: data.available_diffs || [],
+                                prompts: data.available_prompts || [],
+                                artifactsDir: data.artifacts_dir || ".insetu/data",
+                                profileDir: data.profile_dir || ".insetu"
+                            }
+                        }));
+                    }
                 }
-                FlowStore.setState({ batches: data.batches || [] });
+                const currentBatches = FlowStore.getState().batches;
+                if (JSON.stringify(currentBatches) !== JSON.stringify(data.batches)) {
+                    FlowStore.setState({ batches: data.batches || [] });
+                }
             }
         } catch (e) {
             console.error("Error loading batches:", e);
@@ -43,6 +53,8 @@ export class InSetuExtFlow extends InSetuElement {
     static properties = {
         batches: { type: Array },
         loading: { type: Boolean },
+        activeModules: { type: Array },
+        pendingModules: { type: Array },
         searchQuery: { type: String },
         _editingBatch: { type: Object },
         _viewingBatch: { type: Object },
@@ -85,9 +97,30 @@ export class InSetuExtFlow extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         FlowStore.getState().fetchBatches();
     }
-    onForceRefresh() {
-        if (this.sys && this.sys.refreshManifest) this.sys.refreshManifest();
+    onViewActivated() {
         FlowStore.getState().fetchBatches();
+    }
+    async onForceRefresh() {
+        if (this.compileSystem) {
+            await this.compileSystem(null, true, 'flow_workflows');
+        }
+        await FlowStore.getState().fetchBatches();
+    }
+    getBatchRepos(batch) {
+        if (!batch || !batch.includes) return [];
+        const manifestCtx = AppStore.getState()?.manifest?.ctx || {};
+        const repos = new Set();
+        batch.includes.forEach(uri => {
+            if (uri.startsWith('ctx://')) {
+                const meta = manifestCtx[uri]?.meta || {};
+                const itemRepos = meta.repos || (meta.repo ? [meta.repo] : []);
+                itemRepos.forEach(r => repos.add(r));
+            } else {
+                const { repo } = this.utils.parseURI(uri);
+                if (repo) repos.add(repo);
+            }
+        });
+        return Array.from(repos);
     }
     connectedCallback() {
         super.connectedCallback();
@@ -107,19 +140,18 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('insetu:flow:refresh-prompt', window, () => {
             if (this._viewModalOpen && this._viewingBatch) this.openBatchModal(this._viewingBatch);
         });
-        this.subscribe(AppStore, state => state.manifest, () => this._debouncedFetchBatches());
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             this._debouncedManifestRefresh();
         });
         this.subscribe(AppStore, state => {
             this.allRepos = state.allRepos || [];
             this.pinnedRepos = state.pinnedRepos || new Set(['ALL']);
+            this.activeModules = state.activeModules || [];
+            this.pendingModules = state.pendingModules || [];
             this.requestUpdate();
         });
-        this.registerGlobalListener('sutram-route-changed', window, (e) => {
-            if (e.detail.tab === 'context' && e.detail.subTabs['context'] === 'flow') {
-                FlowStore.getState().fetchBatches();
-            }
+        this.subscribe(AppStore, state => state.manifest, () => {
+            this.requestUpdate();
         });
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
@@ -129,7 +161,6 @@ export class InSetuExtFlow extends InSetuElement {
                 this.dispatch('insetu:flow:refresh-prompt');
             }
         });
-
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             FlowStore.getState().fetchBatches();
         });
@@ -137,8 +168,6 @@ export class InSetuExtFlow extends InSetuElement {
         const as = AppStore.getState ? AppStore.getState() : {};
         this.pinnedRepos = as.pinnedRepos || new Set(['ALL']);
         this.allRepos = as.allRepos || [];
-
-        FlowStore.getState().fetchBatches();
     }
     disconnectedCallback() {
         super.disconnectedCallback();
@@ -155,14 +184,27 @@ export class InSetuExtFlow extends InSetuElement {
             }
             return cleanSavedPrompt;
         })();
+        const canonicalize = (uri) => {
+            if (!uri) return '';
+            let s = uri.replace(/\\/g, '/').trim();
+            if (s.startsWith('vfs://') || s.startsWith('ctx://')) return s;
+            while (s.includes('://')) {
+                s = s.split('://').pop();
+            }
+            if (uri.includes('diffs/') || s.endsWith('_diffs.txt')) return `ctx://diffs/${s.replace(/^diffs\//, '')}`;
+            if (uri.includes('workflows/') || s.endsWith('_workflow_context.txt')) return `ctx://workflows/${s.replace(/^workflows\//, '')}`;
+            if (uri.includes('prompts/')) return `ctx://prompts/${s.replace(/^prompts\//, '')}`;
+            if (s.endsWith('_context.txt')) return `ctx://contexts/${s.replace(/^contexts\//, '')}`;
+            return `vfs://${s.replace(/^\/+/, '')}`;
+        };
 
         this._editForm = {
             id: batch ? batch.id : '',
             title: batch ? batch.title : '',
             domain: batch && batch.domain ? batch.domain : 'Workflows',
-            includes: batch && batch.includes ? [...batch.includes] : [],
-            showIfExists: batch && batch.show_if_exists ? [...batch.show_if_exists] : [],
-            showIfMissing: batch && batch.show_if_missing ? [...batch.show_if_missing] : [],
+            includes: batch && batch.includes ? batch.includes.map(canonicalize) : [],
+            showIfExists: batch && batch.show_if_exists ? batch.show_if_exists.map(canonicalize) : [],
+            showIfMissing: batch && batch.show_if_missing ? batch.show_if_missing.map(canonicalize) : [],
             hasPrompt: batch ? !!batch.include_prompt : false,
             prompt: matchedPrompt,
             hasResponse: batch ? !!batch.response_path : false,
@@ -303,7 +345,12 @@ export class InSetuExtFlow extends InSetuElement {
         }
     }
     render() {
-            const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
+        const isFlowActive = this.loading || (this.activeModules || []).includes('flow');
+        const isFlowPending = (this.pendingModules || []).includes('flow');
+        const isFlowLoading = isFlowActive || isFlowPending;
+        const loadingMsg = isFlowActive ? "Processing workflows..." : "Waiting for prerequisite contexts to compile...";
+
+        const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
             const appState = appStore?.getState ? appStore.getState() : {};
             const categoryOrder = appState?.categoryOrder || [];
             const manifest = appState?.manifest?.ctx || {};
@@ -317,26 +364,27 @@ export class InSetuExtFlow extends InSetuElement {
                 ...(gatherOptions?.prompts || [])
             ];
             const repoFilteredBatches = this.batches.map(b => {
-                const actualFilename = `workflow_${b.id}_context.txt`;
+                const actualFilename = `ctx://workflows/workflow_${b.id}_context.txt`;
                 const manifestObj = manifest[actualFilename] || {};
-                const repos = manifestObj.meta?.repos || [];
+                const repos = (manifestObj.meta?.repos && manifestObj.meta.repos.length > 0)
+                    ? manifestObj.meta.repos
+                    : this.getBatchRepos(b);
                 return { ...b, _repos: repos, _filename: actualFilename };
             }).filter(b => {
                 if (this._applyVisibilityFilter) {
                     // Literal existence check: Must be physically present in the active manifest or prompt list
                     const checkLiteralExists = (f) => {
-                        const filename = f.split('/').pop();
-                        if (manifest[filename]) return true;
-
-                        const checkName = f.startsWith('ctx://') ? f.replace('ctx://', '') : f;
-                        return (gatherOptions?.prompts || []).includes(checkName);
+                        if (manifest[f]) return true;
+                        return (gatherOptions?.prompts || []).includes(f) || (gatherOptions?.prompts || []).some(p => p.endsWith(f));
                     };
 
-                    if (b.show_if_exists && b.show_if_exists.length > 0) {
-                        if (!b.show_if_exists.every(checkLiteralExists)) return false;
+                    const existsArr = Array.isArray(b.show_if_exists) ? b.show_if_exists : (b.show_if_exists ? [b.show_if_exists] : []);
+                    if (existsArr.length > 0) {
+                        if (!existsArr.every(checkLiteralExists)) return false;
                     }
-                    if (b.show_if_missing && b.show_if_missing.length > 0) {
-                        if (b.show_if_missing.some(checkLiteralExists)) return false;
+                    const missingArr = Array.isArray(b.show_if_missing) ? b.show_if_missing : (b.show_if_missing ? [b.show_if_missing] : []);
+                    if (missingArr.length > 0) {
+                        if (missingArr.some(checkLiteralExists)) return false;
                     }
                 }
 
@@ -352,9 +400,10 @@ export class InSetuExtFlow extends InSetuElement {
                 ? window.inSetu.utils.fuzzyFilterObjects(repoFilteredBatches, this.searchQuery, b => `${(b._repos || []).join(' ')} ${b.title} ${b.id} ${b.domain}`) 
                 : repoFilteredBatches;
             const artifactsDir = gatherOptions?.artifactsDir || ".insetu/profiles/default/data";
-            return html`
-                <sutram-toolbar
-                    searchPlaceholder="🔍 Fuzzy search workflows..."
+            try {
+                return html`
+                    <sutram-toolbar
+                        searchPlaceholder="🔍 Fuzzy search workflows..."
                     .searchQuery=${this.searchQuery}
                     @search-changed=${(e) => FlowStore.setState({ searchQuery: e.detail.value })}
                     .enableFilterDropdown=${true}
@@ -374,8 +423,8 @@ export class InSetuExtFlow extends InSetuElement {
                     </div>
                 </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${this.loading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text="Loading batches..."></sutram-spinner></div>` : ''}
-                <div style="display: flex; flex-direction: column; opacity: ${this.loading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.loading ? 'none' : 'auto'};">
+                ${isFlowLoading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${loadingMsg}></sutram-spinner></div>` : ''}
+                <div style="display: flex; flex-direction: column; opacity: ${isFlowLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isFlowLoading ? 'none' : 'auto'};">
                         ${this.batches.length === 0 ? html`<div style="padding: 20px;"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
                         ${this.batches.length > 0 && filteredBatches.length === 0 ? html`<div style="padding: 20px;"><sutram-empty-state text="All workflows hidden by current filters."></sutram-empty-state></div>` : ''}
                         ${(() => {
@@ -413,7 +462,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                 <insetu-card
                                                         .filename=${b.id}
                                                         .titleText=${`📦 ${b.title || b.id}`}
-                                                        .descriptionText=${`${b.includes.length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
+                                                        .descriptionText=${`${(b.includes || []).length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
                                                         .detailPrefix=${repoStr}
                                                         .detailText=${filename}
                                                         .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
@@ -462,17 +511,28 @@ export class InSetuExtFlow extends InSetuElement {
                                                         this._editForm?.includes?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
+
+                                                            // Candidate Healing Search
+                                                            const candidate = isMissing ? (() => {
+                                                                const base = inc.split('/').pop().replace(/^ctx:\/\//, '');
+                                                                return allFiles.find(f => f === `ctx://contexts/${base}` || f === `ctx://diffs/${base}` || f.endsWith(base));
+                                                            })() : null;
 
                                                             const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
                                                             return html`
                                                             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px;">
+                                                                <div style="display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; flex-wrap: wrap;">
                                                                     <span style="font-size: 1.1rem; opacity: 0.8;">${icon}</span>
                                                                     <span style="font-family: monospace; font-size: 0.85rem; color: ${isMissing ? 'var(--intent-danger)' : (isSystem ? 'var(--intent-primary)' : 'var(--text)')}; word-break: break-all; text-decoration: ${isMissing ? 'line-through' : 'none'}; opacity: ${isMissing ? '0.8' : '1'}; font-weight: ${isSystem ? 'bold' : 'normal'};">${inc}</span>
-                                                                    ${isMissing ? html`<span style="margin-left: 8px; font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
+                                                                    ${isMissing ? html`<span style="font-size: 0.7rem; background: transparent; color: var(--intent-danger); border: 1px solid var(--intent-danger); padding: 1px 6px; border-radius: 10px; font-weight: bold; white-space: nowrap;">⚠️ Missing</span>` : ''}
+                                                                    ${candidate ? html`
+                                                                        <button class="btn-sm" style="background: var(--intent-success); color: white; margin: 0; padding: 2px 8px; font-size: 0.75rem;" @click=${() => {
+                                                                            this._editForm.includes[idx] = candidate;
+                                                                            this.requestUpdate();
+                                                                        }}>✨ Fix → ${candidate}</button>
+                                                                    ` : ''}
                                                                 </div>
                                                                 <button class="btn-sm" style="background: transparent; color: var(--intent-danger); border: none; padding: 0 5px; flex-shrink: 0;" @click=${() => {
                                                                     this._editForm.includes.splice(idx, 1);
@@ -489,9 +549,12 @@ export class InSetuExtFlow extends InSetuElement {
                                                             mode: 'file',
                                                             title: 'Select File',
                                                             callback: (filepath) => {
-                                                                if (!this._editForm.includes.includes(filepath)) {
-                                                                    this._editForm.includes = [...this._editForm.includes, filepath];
-                                                                    this.requestUpdate();
+                                                                if (filepath) {
+                                                                    const uri = (filepath.startsWith('vfs://') || filepath.startsWith('ctx://')) ? filepath : `vfs://${filepath.replace(/^\/+/, '')}`;
+                                                                    if (!this._editForm.includes.includes(uri)) {
+                                                                        this._editForm.includes = [...this._editForm.includes, uri];
+                                                                        this.requestUpdate();
+                                                                    }
                                                                 }
                                                             }
                                                         });
@@ -503,9 +566,13 @@ export class InSetuExtFlow extends InSetuElement {
                                                             mode: 'folder',
                                                             title: 'Select Folder',
                                                             callback: (folderpath) => {
-                                                                if (folderpath && !this._editForm.includes.includes(folderpath)) {
-                                                                    this._editForm.includes = [...this._editForm.includes, folderpath];
-                                                                    this.requestUpdate();
+                                                                if (folderpath) {
+                                                                    let uri = (folderpath.startsWith('vfs://') || folderpath.startsWith('ctx://')) ? folderpath : `vfs://${folderpath.replace(/^\/+/, '')}`;
+                                                                    if (!uri.endsWith('/')) uri += '/';
+                                                                    if (!this._editForm.includes.includes(uri)) {
+                                                                        this._editForm.includes = [...this._editForm.includes, uri];
+                                                                        this.requestUpdate();
+                                                                    }
                                                                 }
                                                             }
                                                         });
@@ -521,8 +588,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                         this._editForm?.showIfExists?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
 
                                                             const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
@@ -547,8 +613,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                         this._editForm?.showIfMissing?.map((inc, idx) => {
                                                             const isSystem = inc.startsWith('ctx://');
                                                             const isContextOrDiff = isSystem || inc.includes('contexts/') || inc.includes('diffs/') || inc.endsWith('_context.txt') || inc.endsWith('_diffs.txt');
-                                                            const checkName = isSystem ? inc.replace('ctx://', '') : inc;
-                                                            const isMissing = isContextOrDiff && !allFiles.includes(checkName);
+                                                            const isMissing = isContextOrDiff && !allFiles.includes(inc);
 
                                                             const icon = inc.includes('diffs/') ? "🔄" : (inc.includes('contexts/') ? "📦" : (inc.endsWith('/') || (!isSystem && !inc.includes('.')) ? "📁" : "📄"));
 
@@ -598,10 +663,10 @@ export class InSetuExtFlow extends InSetuElement {
                                     <sutram-input placeholder="🔍 Fuzzy search contexts..." .value=${this._contextSearchQuery} @sutram-input-changed=${(e) => { this._contextSearchQuery = e.detail.value; }}></sutram-input>
                                     <div style="display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1;">
                                             ${(this._contextSearchQuery ? window.inSetu.utils.fuzzyFilterObjects(allFiles, this._contextSearchQuery) : allFiles).map(file => {
-                                                const systemUri = `ctx://${file}`;
-                                                const isChecked = this._tempContexts.includes(systemUri) || this._tempContexts.includes(file); // Handle legacy untyped files
+                                                const systemUri = file; // The file is already a fully-qualified URI from the backend
+                                                const isChecked = this._tempContexts.includes(systemUri);
                                                 const isDiff = file.includes('diffs/');
-                                                const manifestObj = manifest[file.split('/').pop()] || {};
+                                                const manifestObj = manifest[file] || {};
                                                 const meta = manifestObj.meta || {};
                                                 const sizeStr = this.utils.formatArtifactSize(meta);
 
@@ -610,14 +675,12 @@ export class InSetuExtFlow extends InSetuElement {
                                                             <input type="checkbox" .checked=${isChecked} style="cursor: pointer; transform: scale(1.2);"
                                                                     @change=${() => { 
                                                                         const set = new Set(this._tempContexts); 
-                                                                        if (set.has(file)) set.delete(file); // Clean up legacy string if modifying
                                                                         set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri); 
                                                                         this._tempContexts = Array.from(set); 
                                                                         this.requestUpdate(); 
                                                                     }}>
                                                             <div style="display: flex; flex-direction: column; flex: 1; cursor: pointer;" @click=${() => {
                                                                 const set = new Set(this._tempContexts);
-                                                                if (set.has(file)) set.delete(file);
                                                                 set.has(systemUri) ? set.delete(systemUri) : set.add(systemUri);
                                                                 this._tempContexts = Array.from(set);
                                                                 this.requestUpdate();
@@ -649,12 +712,12 @@ export class InSetuExtFlow extends InSetuElement {
                                                     <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">1. Compiled Context Payload</h4>
                                                     <div style="background: var(--input-bg); padding: 10px 15px; border-radius: 4px; border: 1px solid var(--border); margin-bottom: 10px; max-height: 250px; overflow-y: auto;">
                                                             <ul style="margin: 0; font-family: monospace; font-size: 0.85rem; color: var(--text); opacity: 0.8; padding-left: 20px;">
-                                                                    ${this._viewingBatch.includes.length > 0 ? this._viewingBatch.includes.map(inc => html`<li style="padding: 2px 0; word-break: break-all;">${inc}</li>`) : html`<li style="color: var(--intent-danger); list-style: none; margin-left: -20px;">No files mapped to this batch.</li>`}
+                                                                    ${(this._viewingBatch.includes || []).length > 0 ? this._viewingBatch.includes.map(inc => html`<li style="padding: 2px 0; word-break: break-all;">${inc}</li>`) : html`<li style="color: var(--intent-danger); list-style: none; margin-left: -20px;">No files mapped to this batch.</li>`}
                                                             </ul>
                                                     </div>
                                                     <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; width: 100%;">
                                                             ${(() => {
-                                                                const baseFile = `workflow_${this._viewingBatch.id}_context.txt`;
+                                                                const baseFile = `ctx://workflows/workflow_${this._viewingBatch.id}_context.txt`;
                                                                 const manifestCtx = AppStore.getState().manifest?.ctx || {};
                                                                 const manifestObj = manifestCtx[baseFile] || {};
                                                                 return html`
@@ -705,8 +768,18 @@ export class InSetuExtFlow extends InSetuElement {
                                     ` : ''}
                             </div>
                     </sutram-modal>
-    `;
-}
+        `;
+        } catch (err) {
+            console.error("Flow UI Render Crash:", err);
+            return html`
+                <div style="padding: 20px; color: var(--intent-danger); background: var(--input-bg); border: 1px solid var(--intent-danger); border-radius: 6px; margin: 20px;">
+                    <h3 style="margin-top: 0;">💥 UI Render Crash</h3>
+                    <p>The Flow interface encountered a fatal data corruption error and could not render.</p>
+                    <pre style="background: var(--bg); padding: 10px; border-radius: 4px; overflow-x: auto;">${err.stack || err.message}</pre>
+                </div>
+            `;
+        }
+    }
 }
 customElements.define('insetu-ext-flow', InSetuExtFlow);
 export class InSetuExtFlowActions extends InSetuElement {

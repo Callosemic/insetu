@@ -39,6 +39,8 @@ def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
         conn = ctx.db
         now = time.time()
         for m in mutations:
+            if m.get("ignore_ledger"):
+                continue
             filepath = m.get("filepath")
             if filepath:
                 ctx.parse_uri(filepath)

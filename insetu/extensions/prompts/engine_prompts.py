@@ -27,17 +27,32 @@ def hook_prompts_request_paths(workspace_id=None, **kwargs):
     except Exception:
         return {}
 @hooks.on('vfs_resolve_file')
-def resolve_prompt_artifacts(filename=None, workspace_id=None, **kwargs):
-    """Resolves ctx://prompts URIs and prompt fallback searches."""
-    if not filename: return None
+@hooks.on('vfs_resolve_path', priority=10)
+def resolve_prompt_artifacts(filename=None, filepath=None, workspace_id=None, **kwargs):
+    """Resolves ctx://prompts URIs, .insetu/prompts/, and prompts/ paths while preserving subdirectories."""
+    target_name = filename or filepath
+    if not target_name: return None
     from pathlib import Path
     import os
     ctx = prompts_bp.get_context(workspace_id)
-    safe_basename = Path(filename).name
-    cand = Path(ctx.paths["prompts_dir"]).joinpath(safe_basename).as_posix()
-    if filename.startswith("ctx://prompts/") or filename.startswith(".insetu/prompts/"):
-        if os.path.exists(cand):  
-            return cand, True
+
+    clean_name = target_name
+    while clean_name.startswith("ctx://"):
+        clean_name = clean_name[6:]
+
+    prompts_dir = ctx.paths.get("prompts_dir", ".insetu/prompts")
+
+    if clean_name.startswith(".insetu/prompts/"):
+        rel_subpath = clean_name[16:]
+    elif clean_name.startswith("prompts/"):
+        rel_subpath = clean_name[8:]
+    else:
+        rel_subpath = clean_name
+
+    cand = Path(prompts_dir).joinpath(rel_subpath).as_posix()
+
+    if clean_name.startswith("prompts/") or clean_name.startswith(".insetu/prompts/") or target_name.startswith("ctx://prompts/"):
+        return (cand, True) if filename else cand
     return None
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
@@ -74,17 +89,24 @@ def api_prompts_resolve(ctx):
     if not filename:
         return jsonify({"error": "File required"}), 400
 
-    if filename.startswith('prompts/'):
-        filename = f".insetu/{filename}"
+    clean_filename = filename
+    while clean_filename.startswith("ctx://"):
+        clean_filename = clean_filename[6:]
 
-    content = ctx.vfs.read(filename)
+    if clean_filename.startswith('prompts/'):
+        clean_filename = f".insetu/{clean_filename}"
+
+    content = ctx.vfs.read(clean_filename)
     if content is not None:
         def read_prompt(target_path):
-            if target_path.startswith('prompts/'):
-                target_path = f".insetu/{target_path}"
-            return ctx.vfs.read(target_path)
+            clean_target = target_path
+            while clean_target.startswith("ctx://"):
+                clean_target = clean_target[6:]
+            if clean_target.startswith('prompts/'):
+                clean_target = f".insetu/{clean_target}"
+            return ctx.vfs.read(clean_target)
         pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(content, filename, pattern, read_prompt)
+        resolved_content = resolve_macro_includes(content, clean_filename, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

@@ -153,20 +153,20 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
 
     for m in mutations:
         filepath = m.get("filepath", "")
-        op = m.get("operation")
+        op = m.get("operation") or m.get("mutation_type")
 
         repo_dir, clean_rel = ctx.parse_uri(filepath)
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
 
         if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
-            if op == "save":
+            if op in ("save", "added", "modified", "create", "created"):
                 abs_path = ctx.resolve_path(canonical_rel_path)
                 if os.path.exists(abs_path):
                     _parse_and_upsert_ticket(abs_path, canonical_rel_path, workspace_id)
                     # Offload single-file AST enforcement to prevent synchronous write-blocking
                     ctx.jobs.submit("enforce_tickets_task", specific_file=canonical_rel_path)
-            elif op == "delete":
-                ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (canonical_rel_path,))
+            elif op in ("delete", "deleted", "remove", "removed"):
+                ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ? OR filepath = ?", (canonical_rel_path, filepath))
                 ctx.db.commit()
 def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     """Surgically parses a single markdown ticket and UPSERTs it into the cache."""
@@ -174,6 +174,9 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     ctx = tracker_bp.get_context(workspace_id)
     try:
         content = ctx.vfs.read(rel_path)
+        if content is None and os.path.exists(abs_path):
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
         if content is None:
             return
 
@@ -727,19 +730,24 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 decl_tier = yaml_data.get('tier')
                 if decl_tier is None:
                     decl_tier = db_tier if db_tier else _resolve_tier(ctx, decl_repo, decl_type)
+                # Safe date comparison to survive PyYAML datetime auto-parsing (T vs Space mismatch)
+                def _safe_date_cmp(d1, d2):
+                    s1 = str(d1).replace('T', ' ').strip() if d1 and str(d1).lower() != 'null' else 'null'
+                    s2 = str(d2).replace('T', ' ').strip() if d2 and str(d2).lower() != 'null' else 'null'
+                    return s1 == s2
 
                 # Determine if we need to rewrite YAML (fields missing or mismatched)
                 needs_rewrite = (
                     'repo' not in yaml_data or
-                    yaml_data.get('repo') != decl_repo or
+                    str(yaml_data.get('repo', '')).lower() != str(decl_repo).lower() or
                     'type' not in yaml_data or
-                    yaml_data.get('type') != decl_type or
+                    str(yaml_data.get('type', '')).lower() != str(decl_type).lower() or
                     'status' not in yaml_data or
-                    yaml_data.get('status') != decl_status or
+                    str(yaml_data.get('status', '')).lower() != str(decl_status).lower() or
                     'tier' not in yaml_data or
                     int(yaml_data.get('tier', 0)) != int(db_tier) or
-                    clean_date_str(yaml_data.get('created_at')) != decl_created or
-                    (clean_date_str(yaml_data.get('closed_at')) or 'null') != decl_closed
+                    not _safe_date_cmp(clean_date_str(yaml_data.get('created_at')), decl_created) or
+                    not _safe_date_cmp(clean_date_str(yaml_data.get('closed_at')), decl_closed)
                 )
                 # Determine intended physical destination based on declarative state
                 intended_dir = get_tracker_path(decl_repo, decl_type, decl_status)
@@ -748,7 +756,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                 current_rel_path = ws_rel_path
                 intended_path = ctx.resolve_path(intended_rel_path)
                 # Self-Healing: Duplicate / Ghost File Detection
-                if current_rel_path != intended_rel_path and Path(intended_path).exists():
+                if current_rel_path.lower() != intended_rel_path.lower() and Path(intended_path).exists():
                     current_mtime = Path(filepath).stat().st_mtime
                     intended_mtime = Path(intended_path).stat().st_mtime
 
@@ -763,7 +771,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                     if should_delete_ghost:
                         ctx.vfs.delete(current_rel_path)
                         continue
-                if current_rel_path != intended_rel_path or needs_rewrite:
+                if current_rel_path.lower() != intended_rel_path.lower() or needs_rewrite:
                     # Extract and preserve structural attributes
                     decl_parent_id = yaml_data.get('parent_id') or yaml_data.get('parent') or db_parent
                     if str(decl_parent_id).lower() in ('null', 'none', ''): decl_parent_id = None

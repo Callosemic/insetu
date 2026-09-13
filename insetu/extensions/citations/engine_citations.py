@@ -19,7 +19,7 @@ citations_bp = InSetuExtension('citations', __name__, title="Reference Library",
     "title": "Global Reference Library",
     "domain": "Reference Library",
     "description": "Academic citations and bibliography records.",
-    "out_file": "citations_context.txt"
+    "out_file": "ctx://contexts/citations_context.txt"
 }])
 __depends__ = []
 @hooks.on('mutate_workspace_config')
@@ -52,8 +52,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
         cursor = conn.execute("SELECT raw_json, attachments FROM citations ORDER BY id ASC")
         rows = cursor.fetchall()
         if rows:
-            def write_citation_bucket(filename, items, list_title):
-                out_path = Path(paths["contexts_dir"]).joinpath(filename).as_posix()
+            def write_citation_bucket(uri, items, list_title):
                 content_lines = []
                 content_lines.append("============================================================")
                 content_lines.append(f"INSETU TOPOLOGY ({list_title})")
@@ -68,8 +67,8 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                     content_lines.append(f"Author(s): {authors}")
                     content_lines.append(f"Type: {item.get('type', 'unknown')}")
                     content_lines.append(f"Raw CSL-JSON: {json.dumps(item)}\n")
-                ctx.vfs.save(out_path, "\n".join(content_lines), data={"is_absolute_artifact": True})
-                manifest[filename] = {
+                ctx.vfs.save(uri, "\n".join(content_lines), data={"is_absolute_artifact": True})
+                manifest[uri] = {
                     "files": ["data/citations.db"],
                     "meta": {"type": "citation", "title": list_title, "domain": "Reference Library", "desc": f"Academic citations scoped to {list_title}."}
                 }
@@ -92,11 +91,10 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
                             rb_key = f"{repo}_{bucket}"
                             if rb_key not in bucketed_items: bucketed_items[rb_key] = []
                             if item not in bucketed_items[rb_key]: bucketed_items[rb_key].append(item)
-
-            write_citation_bucket("citations_context.txt", global_items, "GLOBAL REFERENCE LIBRARY")
+            write_citation_bucket("ctx://contexts/citations_context.txt", global_items, "GLOBAL REFERENCE LIBRARY")
             v_ctxs = []
             for k, items in bucketed_items.items():
-                out_file = f"{k}_citations_context.txt"
+                out_file = f"ctx://contexts/{k}_citations_context.txt"
                 ui_title = k.replace('_', '/')
                 write_citation_bucket(out_file, items, f"REFERENCE LIBRARY ({k.upper()})")
                 v_ctxs.append({
@@ -253,13 +251,8 @@ def search_global_citations(ctx):
 
     if not query and not category:
         return jsonify({"citations": []})
-
     job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-# REMOVE OLD LOGIC
-def _dummy_for_patching():
-    pass
 
 @citations_bp.route('import', methods=['POST'])
 def import_citations(ctx):

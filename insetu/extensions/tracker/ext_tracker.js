@@ -385,7 +385,10 @@ constructor() {
             const touchedTracker = payload.mutations.filter(m => m.filepath && m.filepath.includes('.tracker/') && m.filepath.endsWith('.md'));
             if (touchedTracker.length > 0) {
                 const isOffline = window.inSetu?.stores?.App?.getState()?.isOffline;
-                if (isOffline) {
+
+                // Guardrail: Prevent N+1 fetch storms during bulk boot syncs. 
+                // Optimistic offline reads are only needed for single-file user edits.
+                if (isOffline && touchedTracker.length <= 3) {
                     for (const m of touchedTracker) {
                         if (m.operation === 'save') {
                             try {

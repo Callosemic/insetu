@@ -12,8 +12,7 @@ export const GitStore = createExtensionStore('Git', {
     activeDiffJobId: null,
     diffJobMessage: null,
     diffJobError: null,
-    dirtyDiffRepos: new Set(["ALL"]),
-    cachedDiffFiles: null,
+    dirtyDiffRepos: new Set(),
     fetchStatus: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         try {
@@ -31,16 +30,20 @@ window.inSetu.stores.Git = GitStore;
 export async function generateDiffs(force = false) {
     const gitStoreObj = typeof GitStore !== 'undefined' ? GitStore : window.inSetu?.stores?.Git;
     if (!gitStoreObj || !gitStoreObj.getState) return;
-    const { cachedDiffFiles, dirtyDiffRepos, activeDiffJobId } = gitStoreObj.getState();
+    const { dirtyDiffRepos, activeDiffJobId } = gitStoreObj.getState();
     if (activeDiffJobId) return; // Prevent concurrent diff generation loops
 
-    const targetRepos = (force || !cachedDiffFiles || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
-        ? null 
-        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
+    const manifestCtx = AppStore?.getState?.()?.manifest?.ctx || {};
+    const hasCachedDiffs = Object.keys(manifestCtx).some(k => k.endsWith('_diffs.txt'));
 
-    if (!targetRepos && !force && cachedDiffFiles && !(dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) {
+    // Skip recompiling if not forced, no repos are marked dirty, and diffs exist in manifest
+    if (!force && hasCachedDiffs && (!dirtyDiffRepos || dirtyDiffRepos.size === 0)) {
         return;
     }
+
+    const targetRepos = (force || !hasCachedDiffs || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
+        ? null 
+        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
     gitStoreObj.setState({ activeDiffJobId: 'starting', diffJobError: null });
 
     if (window.inSetu?.sys?.executeSystemCompile) {
@@ -63,7 +66,6 @@ export async function generateDiffs(force = false) {
 export class InSetuExtGitDiffs extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
-        cachedDiffFiles: { type: Array },
         activeDiffJobId: { type: String },
         diffJobMessage: { type: String },
         diffJobError: { type: String },
@@ -80,6 +82,8 @@ export class InSetuExtGitDiffs extends InSetuElement {
         currentPushRepo: { type: String },
         currentPushDiffFile: { type: String },
         activePushJobId: { type: String },
+        activeModules: { type: Array },
+        pendingModules: { type: Array },
         _showFilters: { type: Boolean }
     };
     static styles = [sharedStyles, css`
@@ -87,7 +91,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
     `];
     constructor() {
         super();
-        this.cachedDiffFiles = [];
         this.activeDiffJobId = null;
         this.diffJobMessage = null;
         this.diffJobError = null;
@@ -108,43 +111,27 @@ export class InSetuExtGitDiffs extends InSetuElement {
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(GitStore, (state) => {
-            const manifestCtx = AppStore.getState().manifest?.ctx || {};
-            const cached = state.cachedDiffFiles || Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
-                filename: k,
-                repo: manifestCtx[k].meta?.repo
-            }));
-            this.cachedDiffFiles = cached || [];
             this.activeDiffJobId = state.activeDiffJobId;
             this.diffJobMessage = state.diffJobMessage;
             this.diffJobError = state.diffJobError;
             this.activePushJobId = state.activePushJobId;
             this.requestUpdate();
         });
-        this.subscribe('Gather', (state) => {
+        this.subscribe(window.inSetu.stores.Gather, (state) => {
             this.categoryOrder = state.categoryOrder || [];
             this.hiddenOutputs = state.hiddenOutputs || [];
             this.requestUpdate();
         });
-        this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
+        this.subscribe(GitStore, (state) => {
             this.requestUpdate();
         });
-        this.subscribe(AppStore, state => state.manifest, (manifest) => {
-            const manifestCtx = manifest?.ctx || {};
-            this.cachedDiffFiles = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
-                filename: k,
-                repo: manifestCtx[k].meta?.repo
-            }));
+        this.subscribe(AppStore, state => {
+            this.activeModules = state.activeModules || [];
+            this.pendingModules = state.pendingModules || [];
             this.requestUpdate();
         });
-        const state = AppStore.getState();
         const gitState = GitStore.getState();
         const gatherState = window.inSetu?.stores?.Gather?.getState?.() || {};
-        const manifestCtx = state.manifest?.ctx || {};
-        const cached = gitState.cachedDiffFiles || Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
-            filename: k,
-            repo: manifestCtx[k]?.meta?.repo
-        }));
-        this.cachedDiffFiles = cached || [];
         this.activeDiffJobId = gitState.activeDiffJobId;
         this.diffJobMessage = gitState.diffJobMessage;
         this.diffJobError = gitState.diffJobError;
@@ -153,7 +140,10 @@ export class InSetuExtGitDiffs extends InSetuElement {
         this.hiddenOutputs = gatherState.hiddenOutputs || [];
         this.registerGlobalListener('insetu:git:generate-diffs', window, (e) => generateDiffs(e.detail?.force));
         this.registerGlobalListener('insetu:git:open-push-modal', window, this._handleOpenPush.bind(this));
-        this.registerGlobalListener('insetu:git:diffs-refreshed', window, this._fetchSweepStatusSilent.bind(this));
+        this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
+            this._fetchSweepStatusSilent();
+            this.requestUpdate();
+        });
         this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
@@ -173,18 +163,26 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 GitStore.setState({ dirtyDiffRepos: newDirty });
             }
         });
-
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             this._fetchSweepStatusSilent();
             GitStore.getState().fetchStatus();
         });
-
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            const payload = e.detail;
+            if (payload && payload.ext_name === 'git' && payload.next_job_id) {
+                GitStore.setState({ activeDiffJobId: payload.next_job_id });
+            }
+        });
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
     }
 disconnectedCallback() {
         super.disconnectedCallback();
 }
+    onViewActivated() {
+        this._fetchSweepStatusSilent();
+        GitStore.getState().fetchStatus();
+    }
     onWorkspaceLoad(workspaceId) {
         this._fetchSweepStatusSilent();
         GitStore.getState().fetchStatus();
@@ -254,12 +252,11 @@ disconnectedCallback() {
                     this.requestUpdate();
                 },
                 onError: (err) => {
-                    console.error("Error scanning workspaces: ", err.message);
                     this.sweepLoading = false;
                 }
             });
         } catch (err) {
-            console.error("Error starting scan: ", err.message);
+            // Silently swallow network/boot errors for background telemetry
             this.sweepLoading = false;
         }
     }
@@ -316,8 +313,14 @@ disconnectedCallback() {
         try { await this._getRepoSweepAction(repo)(); } catch(e) {}
     }
     render() {
+        const manifestCtx = AppStore.getState().manifest?.ctx || {};
+        const diffFiles = Object.keys(manifestCtx).filter(k => k.endsWith('_diffs.txt')).map(k => ({
+            filename: k,
+            repo: manifestCtx[k].meta?.repo
+        }));
+
         const categories = {};
-        const repoFilteredFiles = this.cachedDiffFiles.filter(f => {
+        const repoFilteredFiles = diffFiles.filter(f => {
             if (this.ecosystem.pinnedRepos.has('ALL')) return true;
             const fileStr = typeof f === 'string' ? f : f.filename;
             const repoDir = typeof f === 'object' ? f.repo : null;
@@ -331,14 +334,14 @@ disconnectedCallback() {
             const repoDir = typeof fileObj === 'object' ? fileObj.repo : null;
             if (this.hiddenOutputs && this.hiddenOutputs.includes(file)) return;
             const safeFile = file.split('/').pop();
-            const baseFile = safeFile.replace('_diffs.txt', '_context.txt');
+            const baseFileUri = file.replace('ctx://diffs/', 'ctx://contexts/').replace('_diffs.txt', '_context.txt');
             const ctxManifest = AppStore.getState().manifest?.ctx || {};
-            const contextManifestObj = ctxManifest[baseFile] || {};
-            const diffManifestObj = ctxManifest[safeFile] || {};
+            const contextManifestObj = ctxManifest[baseFileUri] || {};
+            const diffManifestObj = ctxManifest[file] || {};
 
             const diffMeta = diffManifestObj.meta || {};
             const contextMeta = contextManifestObj.meta || { title: diffMeta.title || safeFile, domain: diffMeta.domain || "Workspaces", desc: "Pending diff payload." };
-            const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', baseFile);
+            const extMeta = window.inSetu.events.emitHook('insetu:context-metadata', baseFileUri);
             const finalCat = extMeta ? extMeta.cat : contextMeta.domain;
             const finalDesc = extMeta ? extMeta.desc : diffMeta.desc || contextMeta.desc;
             const finalTitle = extMeta ? extMeta.displayName.replace('.txt', '_diffs.txt') : contextMeta.title + (contextMeta.title.includes('(Diffs)') ? '' : " (Diffs)");
@@ -360,6 +363,11 @@ disconnectedCallback() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
+        const isGitActive = this.activeDiffJobId || (this.activeModules || []).includes('git');
+        const isGitPending = (this.pendingModules || []).includes('git');
+        const isGitLoading = isGitActive || isGitPending;
+        const loadingMsg = this.diffJobMessage || (isGitActive ? "Analyzing Git trees across sister repositories... please wait." : "Waiting for prerequisite contexts to compile...");
+
         return html`
             <sutram-toolbar
                 searchPlaceholder="🔍 Fuzzy search pending diffs..."
@@ -376,9 +384,9 @@ disconnectedCallback() {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-            ${this.activeDiffJobId ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${this.diffJobMessage || "Analyzing Git trees across sister repositories... please wait."}></sutram-spinner></div>` : ''}
+            ${isGitLoading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${loadingMsg}></sutram-spinner></div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-            <div style="display: flex; flex-direction: column; opacity: ${this.activeDiffJobId ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${this.activeDiffJobId ? 'none' : 'auto'};">
+            <div style="display: flex; flex-direction: column; opacity: ${isGitLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isGitLoading ? 'none' : 'auto'};">
                 ${sortedCats.map(catName => html`
                     <sutram-collapsible 
                         titleText=${catName} 
@@ -405,7 +413,7 @@ disconnectedCallback() {
                                     intentColor="var(--intent-highlight)"
                                     entityType="file:diff"
                                     .entityData=${{ 
-                                        filepath: `ctx://diffs/${f.filename}`, 
+                                        filepath: f.filename, 
                                         repoDir: f.repoDir, 
                                         isFS: f.isFS,
                                         chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
@@ -416,8 +424,8 @@ disconnectedCallback() {
                         </div>
                     </sutram-collapsible>
                 `)}
-                ${!this.activeDiffJobId && this.cachedDiffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0 20px;">Diffs automatically map when this tab is opened.</p>` : ''}
-                ${!this.activeDiffJobId && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
+                ${!isGitLoading && diffFiles.length > 0 ? html`<p style="color: var(--text-muted); font-style: italic; margin-top: 15px; padding: 0 20px;">Diffs automatically map when this tab is opened.</p>` : ''}
+                ${!isGitLoading && Object.keys(this.sweepFiles).some(r => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)) ? html`
                     <sutram-collapsible 
                         titleText="🧹 Sweepable State" 
                         intent="neutral" 
@@ -475,7 +483,7 @@ disconnectedCallback() {
                         </div>
                     </sutram-collapsible>
                 ` : ''}
-                ${!this.activeDiffJobId && this.cachedDiffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
+                ${!isGitLoading && diffFiles.length === 0 && Object.keys(this.sweepFiles).length === 0 && !this.sweepLoading ? html`
                     <div style="background: var(--input-bg); border: 1px dashed var(--border); border-radius: 6px; padding: 30px 15px; text-align: center; margin: 20px;">
                         <div style="font-size: 2.5rem; margin-bottom: 10px;">✨</div>
                         <h3 style="margin: 0 0 5px 0; color: var(--text);">Working Tree Clean</h3>
@@ -552,8 +560,8 @@ export class InSetuExtGitCtrl extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-        this.subscribe(GitStore, state => state.reposStatus, (reposStatus) => {
-            this.reposStatus = reposStatus || {};
+        this.subscribe(GitStore, (state) => {
+            this.reposStatus = state.reposStatus || {};
             this.requestUpdate();
         });
         this.reposStatus = GitStore.getState().reposStatus || {};
