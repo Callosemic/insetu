@@ -116,19 +116,15 @@ def execute_vfs_move(workspace_id, filepath, dest_path):
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": dest_path}))
     return {"status": "accepted", "message": f"File move queued."}, 202
 def execute_vfs_archive(workspace_id, filepath):
-    from pathlib import Path
-    resolved_path = _resolve_physical_path(filepath, workspace_id)
-    if not resolved_path: return {"status": "error", "message": "Path resolution failed."}, 400
+    parts = filepath.split('/')
+    filename = parts.pop()
 
-    archive_dir = Path(resolved_path).parent / "archived"
-    new_path = archive_dir / Path(resolved_path).name
-
-    from insetu.kernel.utils import get_workspace_physics
-    _, ws_root, _ = get_workspace_physics(workspace_id)
-    try:
-        rel_dest = Path(new_path).relative_to(ws_root).as_posix()
-    except ValueError:
-        rel_dest = new_path.as_posix()
+    if not parts:
+        rel_dest = f"archived/{filename}"
+    else:
+        parts.append("archived")
+        parts.append(filename)
+        rel_dest = "/".join(parts)
 
     _VFS_WRITE_QUEUE.put((workspace_id, filepath, "", {"action": "move", "dest_path": rel_dest}))
     return {"status": "accepted", "message": f"File archive queued.", "new_path": rel_dest}, 202

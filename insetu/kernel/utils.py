@@ -247,10 +247,7 @@ def resolve_sandbox_path(filepath, workspace_id=None):
     ws_root_path = Path(workspace_root).resolve()
 
     # Strip logical scheme wrappers to prevent creating literal "vfs:" folders on disk
-    norm_path = str(filepath).strip()
-    match = re.match(r'^([a-zA-Z0-9_-]+)://(.*)$', norm_path)
-    if match:
-        norm_path = match.group(2)
+    _, norm_path = parse_uri(str(filepath).strip())
 
     if Path(norm_path).is_absolute():
         resolved_abs = Path(norm_path).resolve()
