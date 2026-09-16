@@ -32,13 +32,13 @@ def api_fs_fetch(ctx):
     """Fetches raw content of a target VFS path for frontend viewing."""
     workspace_id = ctx.workspace_id
     filename = ctx.req.args.get('file', '').strip()
-    is_absolute_artifact = ctx.req.args.get('is_absolute_artifact', 'false').lower() == 'true'
+
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
     from insetu.kernel.vfs import VFSTransaction
     with VFSTransaction(workspace_id) as vfs:
-        content = vfs.read(filename, is_absolute_artifact=is_absolute_artifact)
+        content = vfs.read(filename)
 
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
@@ -57,11 +57,11 @@ def download_file(filename):
     safe_basename = Path(resolved_path).name
     base, ext = os.path.splitext(safe_basename)
     dl_name = f"{base}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-
-    if request.args.get('inline') == '1':
-        return send_file(resolved_path, as_attachment=False)
-
-    return send_file(resolved_path, as_attachment=True, download_name=dl_name, mimetype='application/octet-stream')
+    res = send_file(resolved_path, as_attachment=(request.args.get('inline') != '1'), download_name=dl_name, mimetype='application/octet-stream')
+    res.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    res.headers['Pragma'] = 'no-cache'
+    res.headers['Expires'] = '0'
+    return res
 def _background_fs_search(job_id, workspace_id, query, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
@@ -184,8 +184,12 @@ def api_fs_save(ctx):
         if not data:
                 return jsonify({"error": "Invalid or missing JSON payload"}), 400
 
+        # Protect VFS sandbox and ledger parity from malicious API injections
         if "is_absolute_artifact" in data:
                 del data["is_absolute_artifact"]
+        if "ignore_ledger" in data:
+                del data["ignore_ledger"]
+
         filepath, content = data.get("filepath", "").strip(), data.get("content", "")
         if not filepath: 
                 return jsonify({"error": "Filepath is required"}), 400
@@ -194,17 +198,21 @@ def api_fs_save(ctx):
         if base_hash:
             import hashlib
 
-            resolved_path = resolve_physical_path(filepath, workspace_id, data.get("is_absolute_artifact"))
-
-            if resolved_path and os.path.exists(resolved_path):
-                with open(resolved_path, 'r', encoding='utf-8') as f:
-                    current_disk_content = f.read()
+            current_disk_content = ctx.vfs.read(filepath)
+            if current_disk_content is not None:
                 current_hash = hashlib.sha256(current_disk_content.encode('utf-8')).hexdigest()
                 if current_hash != base_hash and current_disk_content != content:
                     import time
-                    conflict_name = f"{Path(resolved_path).stem}.conflict_{int(time.time())}{Path(resolved_path).suffix}"
-                    conflict_path = Path(resolved_path).parent.joinpath(conflict_name).as_posix()
-                    execute_vfs_save(workspace_id, conflict_path, content, data={"is_absolute_artifact": True})
+
+                    # Preserve logical URI boundaries using pure string math to avoid Pathlib stripping '://'
+                    parts = filepath.split('/')
+                    filename = parts[-1]
+                    conflict_name = f"{Path(filename).stem}.conflict_{int(time.time())}{Path(filename).suffix}"
+
+                    parts[-1] = conflict_name
+                    conflict_path = "/".join(parts)
+
+                    execute_vfs_save(workspace_id, conflict_path, content, data={})
                     return jsonify({"error": f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"}), 409
 
         result = execute_vfs_save(workspace_id, filepath, content, data)

@@ -98,7 +98,7 @@ def parse_string_enum(raw_val):
 _NATIVE_VFS_WRITES = {}
 _WATCHDOG_PENDING = {}
 _WATCHDOG_LOCK = threading.Lock()
-_WATCHDOG_DEBOUNCE_WINDOW = 10.0
+_WATCHDOG_DEBOUNCE_WINDOW = 2.0
 _WATCHDOG_THREAD = None
 
 def _watchdog_debouncer_loop():
@@ -109,15 +109,16 @@ def _watchdog_debouncer_loop():
         now = time.time()
         to_emit = {}
         with _WATCHDOG_LOCK:
-            for path, data in list(_WATCHDOG_PENDING.items()):
+            for cache_key, data in list(_WATCHDOG_PENDING.items()):
+                abs_key = data['abs_key']
                 # Final Guardrail: Ensure the VFS didn't touch it while the timer was ticking
-                if time.time() - _NATIVE_VFS_WRITES.get(path, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
-                    del _WATCHDOG_PENDING[path]
+                if time.time() - _NATIVE_VFS_WRITES.get(abs_key, 0) < _WATCHDOG_DEBOUNCE_WINDOW:
+                    del _WATCHDOG_PENDING[cache_key]
                     continue
 
                 if now - data['ts'] >= _WATCHDOG_DEBOUNCE_WINDOW:
-                    to_emit[path] = data
-                    del _WATCHDOG_PENDING[path]
+                    to_emit[cache_key] = data
+                    del _WATCHDOG_PENDING[cache_key]
         if to_emit:
             ws_groups = {}
             for abs_key, data in to_emit.items():
@@ -128,7 +129,7 @@ def _watchdog_debouncer_loop():
                 ws_groups[ws_id].append({"filepath": logical_path, "operation": data['op'], "ignore_ledger": False, "is_watchdog": True})
                 try:
                     w_conn = get_connection("workers", workspace_id=ws_id)
-                    w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (path, data['op'], now))
+                    w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (logical_path, data['op'], now))
                     w_conn.commit()
                 except Exception: pass
 
@@ -146,13 +147,13 @@ def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=Non
         expired = [k for k, v in _NATIVE_VFS_WRITES.items() if now - v > _WATCHDOG_DEBOUNCE_WINDOW * 2]
         for k in expired:
             del _NATIVE_VFS_WRITES[k]
-
     if resolved_path:
         abs_key = os.path.abspath(resolved_path).lower()
         _NATIVE_VFS_WRITES[abs_key] = now
-        if abs_key in _WATCHDOG_PENDING:
-            with _WATCHDOG_LOCK:
-                _WATCHDOG_PENDING.pop(abs_key, None)
+        with _WATCHDOG_LOCK:
+            keys_to_remove = [k for k in _WATCHDOG_PENDING.keys() if k[1] == abs_key]
+            for k in keys_to_remove:
+                del _WATCHDOG_PENDING[k]
 def start_filesystem_observer(workspace_ids):
     """Initializes a unified Watchdog observer for all active workspaces."""
     from insetu.kernel.extension import SettingsManager
@@ -184,11 +185,12 @@ def start_filesystem_observer(workspace_ids):
         def process_event(self, event, filepath_override=None, op_override=None, is_dir_override=None):
             src_path = filepath_override or event.src_path
             is_dir = is_dir_override if is_dir_override is not None else getattr(event, 'is_directory', False)
+
             # 🚨 O(N^2) STORM PREVENTER 🚨
-            # Watchdog fires events for directories whenever their contents change.
-            # Since Watchdog natively fires individual events for all files *inside* dragged-and-dropped folders anyway, 
-            # we can completely ban directory events to prevent telemetry flooding and recursive OS walks.
-            if is_dir:
+            # Watchdog fires 'modified' events for directories whenever a child file changes.
+            # We explicitly drop these to prevent telemetry storms, but we MUST preserve 
+            # directory creations, deletions, and moves to catch atomic folder operations.
+            if is_dir and event.event_type == 'modified':
                 return
 
             filename = Path(src_path).name
@@ -223,7 +225,8 @@ def start_filesystem_observer(workspace_ids):
                 # Deduplication 2: Unified Trailing Debounce
                 global _WATCHDOG_THREAD
                 with _WATCHDOG_LOCK:
-                    _WATCHDOG_PENDING[abs_key] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time(), 'logical_path': logical_path}
+                    cache_key = (self.workspace_id, abs_key)
+                    _WATCHDOG_PENDING[cache_key] = {'op': op, 'workspace_id': self.workspace_id, 'ts': time.time(), 'logical_path': logical_path, 'abs_key': abs_key}
                     if _WATCHDOG_THREAD is None or not _WATCHDOG_THREAD.is_alive():
                         _WATCHDOG_THREAD = threading.Thread(target=_watchdog_debouncer_loop, daemon=True)
                         _WATCHDOG_THREAD.start()
@@ -380,18 +383,18 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
     import os
     from pathlib import Path
 
-    if not os.path.exists(domain_dir):
+    resolved_dir = ctx.resolve_path(domain_dir)
+    if not resolved_dir or not os.path.exists(resolved_dir):
         return
 
     exemptions = exempt_abs_paths or set()
-
     for ws_rel_path in ctx.vfs.walk(domain_dir, exts=['.txt']):
         f_path = ctx.resolve_path(ws_rel_path)
-        f_basename = Path(f_path).name
+        f_basename = ws_rel_path.split('/')[-1]
 
         if f_path not in exemptions and f_basename not in expected_artifacts_set and f_basename != "manifest.json":
             try:
-                ctx.vfs.delete(ws_rel_path)
+                ctx.vfs.delete(ws_rel_path, data={"ignore_ledger": True})
             except Exception:
                 pass
 def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_dir, filename_suffix="_context.txt", target_repos=None):
@@ -403,13 +406,12 @@ def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_
     current_manifest = ctx.manifest.get("ctx", {})
     expected_artifacts = set()
     active_keys = set()
-
     # 1. Register new/updated deltas
     for filename, entry in manifest_deltas.items():
         if entry:
             active_keys.add(filename)
             chunks = entry.get("chunks", [filename])
-            expected_artifacts.update(Path(c).name for c in chunks)
+            expected_artifacts.update(c.split('/')[-1] for c in chunks)
 
     # 2. Identify orphaned manifest keys in this domain
     for k, v in list(current_manifest.items()):
@@ -420,7 +422,7 @@ def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_
                 manifest_deltas[k] = None
             else:
                 chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
-                expected_artifacts.update(Path(c).name for c in chunks)
+                expected_artifacts.update(c.split('/')[-1] for c in chunks)
 
     # 3. Commit manifest changes & sync barrier
     if manifest_deltas:
@@ -524,21 +526,33 @@ def resolve_logical_path(path, workspace_id=None):
     rel_path_str = re.sub(r'\.\.(?=/|$)', '', rel_path_str)
     rel_path_str = re.sub(r'/+', '/', rel_path_str).strip('/')
     target_repos = cfg.get("target_repos", [])
-    # Map logical workspace bounds ({repo}/path) to physical disk paths deterministically
-    for repo in target_repos:
-        if repo_dir == repo.get("repo_dir"):
-            p_path = repo.get("physical_path")
-            if p_path:
-                repo_base = Path(p_path).expanduser().resolve()
-            elif ws_root_path.name == repo_dir:
-                repo_base = ws_root_path
-            else:
-                repo_base = (ws_root_path / repo_dir).resolve()
 
-            return repo_base.joinpath(rel_path_str).resolve().as_posix()
-
-    # Fallback to standard sandbox resolution (reconstruct clean path without schemes)
+    # Reconstruct the full logical path to bypass parse_uri's naive first-slash split
     clean_fallback = f"{repo_dir}/{rel_path_str}".strip('/')
+
+    # Map logical workspace bounds by matching the longest registered repo_dir prefix
+    best_repo = None
+    best_rel_path = ""
+    for repo in target_repos:
+        r_dir = repo.get("repo_dir")
+        if not r_dir: continue
+        if clean_fallback == r_dir or clean_fallback.startswith(r_dir + '/'):
+            if not best_repo or len(r_dir) > len(best_repo.get("repo_dir")):
+                best_repo = repo
+                best_rel_path = clean_fallback[len(r_dir):].lstrip('/')
+
+    if best_repo:
+        p_path = best_repo.get("physical_path")
+        if p_path:
+            repo_base = Path(p_path).expanduser().resolve()
+        elif ws_root_path.name == best_repo.get("repo_dir"):
+            repo_base = ws_root_path
+        else:
+            repo_base = (ws_root_path / best_repo.get("repo_dir")).resolve()
+
+        return repo_base.joinpath(best_rel_path).resolve().as_posix()
+
+    # Fallback to standard sandbox resolution
     return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
 
 

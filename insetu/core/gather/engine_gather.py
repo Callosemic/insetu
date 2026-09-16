@@ -78,8 +78,7 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
     if existing_entry and existing_entry.get("meta", {}).get("content_hash") == content_hash:
         # Physical disk guardrail: Heal the context if it was deleted or misrouted by a previous bug
-        from insetu.kernel.vfs import _resolve_physical_path
-        resolved_disk_path = _resolve_physical_path(base_uri, workspace_id)
+        resolved_disk_path = ctx.resolve_path(base_uri)
         if resolved_disk_path and os.path.exists(resolved_disk_path):
             return existing_entry  # Skip all disk I/O. The content hasn't changed and file physically exists.
 
@@ -100,12 +99,29 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
 
     for block in text_blocks:
         block_bytes = len(block.encode('utf-8'))
-        # If a single monolithic block exceeds the max_bytes threshold, slice it cleanly into segments
+        # Safe chunking: Respect newlines to prevent bisecting multi-byte chars or syntax
         if block_bytes > max_bytes and max_bytes != float('inf'):
             split_blocks = []
             chunk_size = int(max_bytes * 0.95)
-            for i in range(0, len(block), chunk_size):
-                split_blocks.append(block[i:i+chunk_size])
+            i = 0
+            block_len = len(block)
+
+            while i < block_len:
+                if block_len - i <= chunk_size:
+                    split_blocks.append(block[i:])
+                    break
+
+                window = block[i:i+chunk_size]
+                split_index = window.rfind('\n')
+
+                if split_index == -1:
+                    # Failsafe: No newline found (e.g., minified JS). Fallback to hard slice.
+                    split_index = chunk_size
+                else:
+                    split_index += 1
+
+                split_blocks.append(block[i:i+split_index])
+                i += split_index
         else:
             split_blocks = [block]
 
@@ -130,7 +146,7 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     for i, b in enumerate(bins):
         chunk_name = get_chunk_name(i + 1)
         # Use the URI directly, the VFS now natively understands it
-        vfs.save(chunk_name, b["content"], data={"is_absolute_artifact": True})
+        vfs.save(chunk_name, b["content"], data={"ignore_ledger": True})
         chunks.append(chunk_name)
         chunk_sizes.append(b["size"])
 
@@ -170,18 +186,20 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
             old_events = old_args.get('ledger_events', [])
             def _get_fp(item):
                 raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
-                clean_fp = raw_fp.replace('\\', '/').strip('/')
-                if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
-                    clean_fp = f"vfs://{clean_fp}"
+                from insetu.kernel.utils import parse_uri
+                repo, rel = parse_uri(raw_fp)
+                clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
+                if raw_fp.endswith('/') and not clean_fp.endswith('/'):
+                    clean_fp += '/'
                 return clean_fp
 
-            seen_paths = {_get_fp(e) for e in events}
+            event_dict = {_get_fp(e): e for e in events}
             for oe in old_events:
                 oe_fp = _get_fp(oe)
-                if oe_fp and oe_fp not in seen_paths:
+                if oe_fp and oe_fp not in event_dict:
                     m_type = oe.get('mutation_type', 'save') if isinstance(oe, dict) else 'save'
-                    events.append({"filepath": oe_fp, "mutation_type": m_type})
-                    seen_paths.add(oe_fp)
+                    event_dict[oe_fp] = {"filepath": oe_fp, "mutation_type": m_type}
+            events = list(event_dict.values())
         except Exception:
             pass
     args_json = json.dumps({
@@ -270,11 +288,9 @@ def hook_vfs_search(workspace_id=None, query=None, **kwargs):
             md_files.add(filepath)
     results = []
     for filepath in md_files:
-        abs_path = resolve_logical_path(filepath, workspace_id)
-        if not os.path.exists(abs_path): continue
         try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            content = ctx.vfs.read(filepath)
+            if content is None: continue
 
             content_lower = content.lower()
             score = 0
@@ -304,11 +320,11 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     # Read-Consistency Guard: Drain pending events before querying topology_ledger
     drained = resolve_topology_buffer(workspace_id)
     if drained and isinstance(ledger_events, list):
-        seen_paths = {e['filepath'] for e in ledger_events}
+        event_dict = {e['filepath']: e for e in ledger_events}
         for de in drained:
-            if de['filepath'] not in seen_paths:
-                ledger_events.append(de)
-                seen_paths.add(de['filepath'])
+            event_dict[de['filepath']] = de
+        ledger_events.clear()
+        ledger_events.extend(event_dict.values())
 
     ctx = gather_bp.get_context(workspace_id)
     cfg = ctx.config
@@ -369,10 +385,15 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         if sub_buckets:
             buckets = {}
             for b in sub_buckets:
-                if not b.get("dynamic_split_prefix"):
+                if b.get("dynamic_split_prefix"):
+                    for mod_name in b.get("meta_map", {}).keys():
+                        if mod_name not in dynamic_files:
+                            dynamic_files[mod_name] = {"files": [], "cfg": b}
+                else:
                     b_id = b.get("id") or slugify(b.get("title", "untitled_bucket"))
                     b["id"] = b_id
                     buckets[b_id] = {"files": [], "cfg": b}
+
             for filepath in final_list:
                 b, module = resolve_file_bucket(filepath, sub_buckets, repo_dir=repo_dir)
                 if b and module:
@@ -412,13 +433,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 text_blocks = []
                 for f in filepaths:
                     try:
-                        content = vfs.read(f"{current_repo_dir}/{f}")
-                        if content is None:
-                            # Indestructible Physical Fallback: Bypass logical routing for nested structures
-                            fallback_path = Path(physical_repo_path).joinpath(f).as_posix()
-                            if os.path.exists(fallback_path):
-                                with open(fallback_path, 'r', encoding='utf-8') as f_in:
-                                    content = f_in.read()
+                        content = vfs.read(f"vfs://{current_repo_dir}/{f}")
                         if content is not None:
                             text_blocks.append(f"\n\n{'='*60}\n>>>NEW FILE :: {current_repo_dir}/{f} | {b_domain}\n{'='*60}\n\n{content}")
                     except Exception: pass
@@ -442,7 +457,6 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 return None
             return _gen, _recall
         for b_id, data in buckets.items():
-            if not data["files"]: continue
             if data["cfg"].get("exclude_from_context"): continue
             safe_out = f"ctx://contexts/{safe_r_dir}_context.txt" if b_id == "main" else f"ctx://contexts/{safe_r_dir}_{b_id}_context.txt"
             b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
@@ -456,7 +470,6 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                 "recall_callback": rec_cb
             })
         for module, data in dynamic_files.items():
-            if not data["files"]: continue
             out_name = f"ctx://contexts/{safe_r_dir}_{module}_context.txt"
             c = data["cfg"]
             meta = c.get("meta_map", {}).get(module, {})
@@ -500,46 +513,44 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
 
         from insetu.core.topology.engine_topology import resolve_topology_buffer
         drained = resolve_topology_buffer(workspace_id)
-
         raw_ledger_events = kwargs.get("ledger_events") or []
-        ledger_events = []
-        seen_paths = set()
+        event_dict = {}
         def _to_canonical_event(item, default_op="save"):
             raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
             m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
 
-            clean_fp = raw_fp.replace('\\', '/').strip('/')
-            if not clean_fp.startswith('vfs://') and not clean_fp.startswith('ctx://'):
-                clean_fp = f"vfs://{clean_fp}"
+            from insetu.kernel.utils import parse_uri
+            repo, rel = parse_uri(raw_fp)
+            clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
+
+            if raw_fp.endswith('/') and not clean_fp.endswith('/'):
+                clean_fp += '/'
 
             return {"filepath": clean_fp, "mutation_type": m_type}
 
         for item in raw_ledger_events:
             ev = _to_canonical_event(item)
-            if ev["filepath"] and ev["filepath"] not in seen_paths:
-                seen_paths.add(ev["filepath"])
-                ledger_events.append(ev)
+            if ev["filepath"]:
+                event_dict[ev["filepath"]] = ev
 
         if files:
             for f in files:
                 ev = _to_canonical_event(f)
-                if ev["filepath"] and ev["filepath"] not in seen_paths:
-                    seen_paths.add(ev["filepath"])
-                    ledger_events.append(ev)
+                if ev["filepath"]:
+                    event_dict[ev["filepath"]] = ev
 
         if filepath:
             ev = _to_canonical_event(filepath)
-            if ev["filepath"] and ev["filepath"] not in seen_paths:
-                seen_paths.add(ev["filepath"])
-                ledger_events.append(ev)
+            if ev["filepath"]:
+                event_dict[ev["filepath"]] = ev
 
         if drained:
             for de in drained:
                 ev = _to_canonical_event(de)
-                if ev["filepath"] and ev["filepath"] not in seen_paths:
-                    seen_paths.add(ev["filepath"])
-                    ledger_events.append(ev)
+                if ev["filepath"]:
+                    event_dict[ev["filepath"]] = ev
 
+        ledger_events = list(event_dict.values())
         if not ledger_events:
             return
 
@@ -579,7 +590,6 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                 return decl['filename'], entry
             else:
                 return decl['filename'], "DELETE"
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(process_differential, d) for d in declarations]
             for future in concurrent.futures.as_completed(futures):
@@ -588,8 +598,27 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
                     dirty = True
                     if entry == "DELETE":
                         touched_manifest[filename] = None # Marker for deletion
+                        chunks = ctx.get_manifest_files(target_key=filename)
+                        if not chunks: chunks = [filename]
+                        for chunk in chunks:
+                            ctx.vfs.delete(chunk, data={"ignore_ledger": True})
                     else:
                         touched_manifest[filename] = entry
+
+        declared_filenames = {d['filename'] for d in declarations}
+        old_ctx_manifest = ctx.manifest.get("ctx", {})
+        for old_key, old_entry in old_ctx_manifest.items():
+            is_gather = isinstance(old_entry, dict) and old_entry.get("meta", {}).get("type") == "gather"
+            if is_gather:
+                old_repo = old_entry.get("meta", {}).get("repo")
+                if old_repo in affected_repos and old_key not in declared_filenames and old_key not in touched_manifest:
+                    touched_manifest[old_key] = None
+                    dirty = True
+                    chunks = ctx.get_manifest_files(target_key=old_key)
+                    if not chunks: chunks = [old_key]
+                    for chunk in chunks:
+                        ctx.vfs.delete(chunk, data={"ignore_ledger": True})
+
         if dirty:
             ctx.sync_vfs_barrier()
             ctx.save_manifest(touched_manifest, is_full_compile=False)
@@ -636,22 +665,24 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 manifest[filename] = entry
                 # Track all constituent chunks for the global vacuum
                 chunks = entry.get("chunks", [filename])
-                expected_artifacts.update(Path(c).name for c in chunks)
+                expected_artifacts.update(c.split('/')[-1] for c in chunks)
     # 3. Global Vacuum: Purge physical files that aren't explicitly declared
     if target_repos is None:
         from insetu.core.utils_core import vacuum_manifest_artifacts
-        vacuum_manifest_artifacts(ctx, paths["contexts_dir"], expected_artifacts, exempt_abs_paths=active_ephemerals)
+        vacuum_manifest_artifacts(ctx, "ctx://contexts", expected_artifacts, exempt_abs_paths=active_ephemerals)
     # Re-inject surviving Ephemeral Artifacts into the manifest
     old_manifest = ctx.manifest.get("ctx", {})
     restored_ephemerals = set()
 
     for k, v in old_manifest.items():
         if v.get("meta", {}).get("domain") in ("Quickpacks", "Exported Contexts"):
-            base_path = Path(paths["contexts_dir"]).joinpath(k).as_posix()
+            safe_k = k.split('/')[-1]
+            base_path = Path(paths["contexts_dir"]).joinpath(safe_k).as_posix()
             if base_path in active_ephemerals:
                 manifest[k] = v
                 for chunk in ctx.get_manifest_files(target_key=k):
-                    chunk_path = Path(paths["contexts_dir"]).joinpath(chunk).as_posix()
+                    safe_chunk = chunk.split('/')[-1]
+                    chunk_path = Path(paths["contexts_dir"]).joinpath(safe_chunk).as_posix()
                     restored_ephemerals.add(chunk_path)
     for f_path in active_ephemerals:
         if f_path.startswith(paths["contexts_dir"]) and f_path not in restored_ephemerals:
@@ -662,15 +693,21 @@ def generate_context_file(workspace_id=None, target_repos=None):
             title_name = "⚡ Quickpack" if is_quickpack else f"📦 {f_name.replace('.txt','')}"
             uri_key = f"ctx://contexts/{f_name}"
             manifest[uri_key] = {
-                "files": [f"data/contexts/{f_name}"],
+                "files": [uri_key],
                 "meta": {"type": "gather", "title": title_name, "domain": domain_name, "desc": "Ephemeral context payload.", "size_bytes": size_bytes}
             }
-
-    # Add tombstones for orphaned contexts to prevent global vacuum from wiping other extensions
-    if target_repos is None:
-        for k, v in old_manifest.items():
-            if k.startswith("ctx://contexts/") and k.endswith("_context.txt") and k not in manifest:
+    # Add tombstones and execute targeted physical vacuum for orphaned contexts 
+    # to prevent Targeted Sweeps from leaking empty bucket artifacts.
+    for k, v in old_manifest.items():
+        is_gather = isinstance(v, dict) and v.get("meta", {}).get("type") == "gather"
+        if is_gather and k not in manifest:
+            repo = v.get("meta", {}).get("repo")
+            if target_repos is None or repo in target_repos:
                 manifest[k] = None
+                if target_repos is not None:
+                    chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
+                    for chunk in chunks:
+                        ctx.vfs.delete(chunk, data={"ignore_ledger": True})
 
     ctx.save_manifest(manifest, is_full_compile=False)
     ctx.sync_vfs_barrier()
@@ -693,16 +730,10 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     with VFSTransaction(ctx.workspace_id) as vfs:
         for filepath in files:
             try:
-                clean_path = filepath.replace("vfs://", "", 1) if filepath.startswith("vfs://") else filepath
-                is_artifact = clean_path.startswith("ctx://") or clean_path.startswith(".insetu/") or clean_path.startswith("data/")
-                content = vfs.read(clean_path, is_absolute_artifact=is_artifact)
-
-                # Fallback for standard files
-                if content is None and not is_artifact:
-                    content = vfs.read(clean_path, is_absolute_artifact=True)
+                content = vfs.read(filepath)
 
                 if content is not None:
-                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {clean_path} | Selection\n{'='*60}\n\n{content}\n\n")
+                    text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n{content}\n\n")
                 else:
                     text_blocks.append(f"{'='*60}\n>>>NEW FILE :: {filepath} | Selection\n{'='*60}\n\n[Error reading file: Not found]\n\n")
             except Exception as e:
@@ -753,7 +784,7 @@ def api_clear_quickpacks(ctx):
         if not chunks:
             chunks = [k]
         for chunk in chunks:
-            ctx.vfs.delete(chunk, data={"is_absolute_artifact": True})
+            ctx.vfs.delete(chunk, data={"ignore_ledger": True})
         tombstones[k] = None
 
     ctx.save_manifest(tombstones, is_full_compile=False)
@@ -782,7 +813,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         raise RuntimeError("Compiler lock timeout. A previous compilation or hook is stalled and holding the lock.")
     try:
         # VFS Barrier: Wait for async physical disk moves/deletes in queue to complete
-        ctx.sync_vfs_barrier()
+        ctx.sync_vfs_barrier(timeout=15.0)
         if ledger_events is None:
             ledger_events = []
 
@@ -841,11 +872,11 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         if delta_manifest:
             ctx.save_manifest(delta_manifest, is_full_compile=False)
             touched_buckets.extend(list(delta_manifest.keys()))
-
         # Retrieve the final unified keys directly from the SSOT database
         manifest_keys = [r['filepath'] for r in get_connection("vfs_index", workspace_id=ctx.workspace_id).execute("SELECT filepath FROM manifest_ledger").fetchall()]
-        if not manifest_keys and os.path.exists(paths["contexts_dir"]):
-            manifest_keys = [f for f in os.listdir(paths["contexts_dir"]) if f.endswith('.txt')]
+        if not manifest_keys:
+            # Fallback to logical VFS sweep instead of raw disk I/O
+            manifest_keys = list(ctx.vfs.walk("ctx://contexts", exts=['.txt']))
 
         return {
             "message": "Base contexts generated successfully.",
@@ -919,7 +950,6 @@ def hook_request_paths(workspace_id=None, **kwargs):
         "contexts_dir": get_domain_artifact_path(workspace_id, "contexts")
     }
 _manifest_thread_cache = threading.local()
-
 @hooks.on('request_manifest')
 def hook_request_manifest(workspace_id=None, **kwargs):
     import time
@@ -933,11 +963,15 @@ def hook_request_manifest(workspace_id=None, **kwargs):
 
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
-        rows = conn.execute("SELECT filepath, entry_json FROM manifest_ledger").fetchall()
+        rows = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger").fetchall()
         manifest = {}
         for r in rows:
             if r['entry_json']:
-                manifest[r['filepath']] = json.loads(r['entry_json'])
+                entry = json.loads(r['entry_json'])
+                if isinstance(entry, dict):
+                    if 'meta' not in entry: entry['meta'] = {}
+                    entry['meta']['timestamp'] = r['timestamp']
+                manifest[r['filepath']] = entry
 
         _manifest_thread_cache.data[workspace_id] = {'ts': time.time(), 'manifest': manifest}
         return manifest
@@ -989,11 +1023,10 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
                         "INSERT OR REPLACE INTO manifest_ledger (filepath, entry_json, timestamp) VALUES (?, ?, ?)",
                         (fp, new_json, now_ts)
                     )
-
-            # Global vacuum: delete anything no longer present in the full sweep
+            # Global vacuum: tombstone anything no longer present in the full sweep
             to_delete = [fp for fp in existing_map.keys() if fp not in seen_paths]
             for fp in to_delete:
-                conn.execute("DELETE FROM manifest_ledger WHERE filepath = ?", (fp,))
+                conn.execute("UPDATE manifest_ledger SET entry_json = NULL, timestamp = ? WHERE filepath = ?", (now_ts, fp))
 
             conn.execute(
                 "INSERT OR REPLACE INTO sync_metadata (key, value) VALUES ('last_full_compile_time', ?)",
@@ -1003,7 +1036,7 @@ def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=N
             if manifest_data:
                 for fp, entry in manifest_data.items():
                     if entry is None:
-                        conn.execute("DELETE FROM manifest_ledger WHERE filepath = ?", (fp,))
+                        conn.execute("UPDATE manifest_ledger SET entry_json = NULL, timestamp = ? WHERE filepath = ?", (now_ts, fp))
                     else:
                         new_json = json.dumps(entry, sort_keys=True, separators=(',', ':'))
                         if existing_map.get(fp) == new_json:
@@ -1029,10 +1062,10 @@ def api_manifest_version(ctx):
 def hook_gather_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     """Yields lightweight context artifact signatures for the ctx domain."""
     conn = get_connection("vfs_index", workspace_id=workspace_id)
-    rows = conn.execute("SELECT filepath, timestamp FROM manifest_ledger WHERE timestamp > ?", (since_ts,)).fetchall()
+    rows = conn.execute("SELECT filepath, timestamp, entry_json FROM manifest_ledger WHERE timestamp > ?", (since_ts,)).fetchall()
     ctx_sigs = {}
     for r in rows:
-        ctx_sigs[r['filepath']] = r['timestamp']
+        ctx_sigs[r['filepath']] = r['timestamp'] if r['entry_json'] else None
     return {"ctx": ctx_sigs}
 @gather_bp.route('manifest/entry', methods=['GET'])
 def api_gather_manifest_entry(ctx):

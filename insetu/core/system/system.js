@@ -1,4 +1,5 @@
 import { AppStore } from '/static/extensions/system/store.js';
+import { SutramDB } from '/static/vendor/sutram/js/offline.js';
 import '/static/vendor/sutram/js/app_shell.js';
 export function bootServiceWorker() {
     if ('serviceWorker' in navigator) {
@@ -273,34 +274,34 @@ async function checkManifestVersion() {
             }
         }
         const pathsToWarm = [];
-
         // 2. Evaluate CTX Artifact Signatures
         if (sigs.ctx) {
+            const activeWs = window.inSetu.utils.getActiveWorkspace();
             for (const [path, ts] of Object.entries(sigs.ctx)) {
+                const dlUrl = `/download/${encodeURIComponent(path)}`;
                 if (ts === null) {
                     delete currentManifest.ctx[path];
                     delete localCtxSignatures[path];
+                    SutramDB.deleteVFSBlob(activeWs, dlUrl).catch(()=>{});
                     manifestUpdated = true;
                 } else if (localCtxSignatures[path] !== ts) {
-                    // Short-circuit N+1 fetches on workspace swap/boot if we already have the data
-                    if (lastManifestSyncTs === 0 && currentManifest.ctx && currentManifest.ctx[path]) {
-                        localCtxSignatures[path] = ts;
-                        continue;
-                    }
                     const entryRes = await window.inSetu.api.workspace.get(`gather/manifest/entry?path=${encodeURIComponent(path)}`);
                     if (entryRes.ok) {
                         const entryData = await entryRes.json();
                         if (entryData.entry) {
                             currentManifest.ctx[path] = entryData.entry;
-                            pathsToWarm.push(`/download/${encodeURIComponent(path)}`);
+                            SutramDB.deleteVFSBlob(activeWs, dlUrl).catch(()=>{});
+                            pathsToWarm.push(dlUrl);
                         } else {
                             delete currentManifest.ctx[path];
+                            SutramDB.deleteVFSBlob(activeWs, dlUrl).catch(()=>{});
                         }
                         localCtxSignatures[path] = ts;
                         manifestUpdated = true;
                     } else if (entryRes.status === 404) {
                         delete currentManifest.ctx[path];
                         delete localCtxSignatures[path];
+                        SutramDB.deleteVFSBlob(activeWs, dlUrl).catch(()=>{});
                         manifestUpdated = true;
                     }
                 }
@@ -321,6 +322,8 @@ async function checkManifestVersion() {
                     const currentSig = sigs.vfs[repo];
                     if (offlineRepos.includes(repo) && currentSig && warmedVfsSignatures[repo] !== currentSig) {
                         (bucket.files || []).forEach(f => {
+                            const cacheKeyUrl = `/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}`;
+                            SutramDB.deleteVFSBlob(activeWs, cacheKeyUrl).catch(()=>{});
                             pathsToWarm.push(`/api/${activeWs}/fs/fetch?file=${encodeURIComponent(f)}&t=${Date.now()}`);
                         });
                         warmedVfsSignatures[repo] = currentSig;
@@ -1111,7 +1114,8 @@ async function simulatePanic() {
     AppStore.setState({ isRebooting: true, rebootType: 'panic' });
 
     try {
-        await window.inSetu.api.workspace.post('system/panic', {});
+        // Raw fetch bypasses tenant injection, hitting the global app.py route natively
+        await fetch('/api/system/panic', { method: 'POST', headers: window.inSetu.api._getHeaders() });
         setInterval(async () => {
             try {
                 // The lifeboat OS does not serve a manifest, so we ping the root HTML
@@ -1245,8 +1249,13 @@ async function performSoftRefresh() {
         } else {
             // Instant soft switch using cached state or a clean empty baseline
             AppStore.setState({ manifest: { vfs: manifestData.vfs || {}, ctx: manifestData.ctx || {} } });
-            // Trust the background watchdog/metronome to maintain SOTU differential syncs;  
-            // no need to thrash the compiler heavily on every UI tab swap.
+            if (manifestData.ctx) {
+                Object.entries(manifestData.ctx).forEach(([p, entry]) => {
+                    if (entry && entry.meta && entry.meta.timestamp) {
+                        localCtxSignatures[p] = entry.meta.timestamp;
+                    }
+                });
+            }
         }
         // 4. Hydrate active DOM views using native routing
         window.inSetu.events.emitHook('insetu:soft-refresh', currentWs);

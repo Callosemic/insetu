@@ -67,14 +67,11 @@ def _background_scan_topology(ctx, ledger_events=None, **kwargs):
 
     from insetu.core.topology.engine_topology import resolve_topology_buffer
     drained_events = resolve_topology_buffer(ctx.workspace_id)
-
     all_events = ledger_events or []
-    seen_paths = {e['filepath'] for e in all_events}
+    event_dict = {e['filepath']: e for e in all_events}
 
     for de in drained_events:
-        if de['filepath'] not in seen_paths:
-            all_events.append(de)
-            seen_paths.add(de['filepath'])
+        event_dict[de['filepath']] = de
 
     # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
     delayed_job_id = f"cmp_del_{ctx.workspace_id}"
@@ -85,11 +82,11 @@ def _background_scan_topology(ctx, ledger_events=None, **kwargs):
             import json
             delayed_args = json.loads(delayed_job['args_json'])
             for de in delayed_args.get('ledger_events', []):
-                if de['filepath'] not in seen_paths:
-                    all_events.append(de)
-                    seen_paths.add(de['filepath'])
+                event_dict[de['filepath']] = de
         except Exception:
             pass
+
+    all_events = list(event_dict.values())
 
     from insetu.kernel.workers import cancel_job
     cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
@@ -226,22 +223,21 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     conn = ctx.db
     now = time.time()
     buffered_count = 0
-
     for m in mutations:
         if m.get("ignore_ledger"):
             continue
         filepath = m.get("filepath")
         if not filepath:
             continue
-        # Gatekeeper: Filter out internal system artifacts, VFS context streams, and index files
-        import re
-        norm_path = filepath.replace('\\', '/').strip('/')
-        norm_path = re.sub(r'^\./+', '', norm_path)
-        if norm_path.startswith("ctx://") or "/data/" in norm_path or ".insetu/data/" in norm_path or norm_path.endswith("CODE_INDEX.md"):
-            continue
 
-        if not norm_path.startswith("vfs://"):
-            norm_path = f"vfs://{norm_path}"
+        from insetu.kernel.utils import parse_uri
+        is_dir = filepath.endswith('/') or filepath.endswith('\\')
+
+        repo, rel_path = parse_uri(filepath)
+        norm_path = f"vfs://{repo}/{rel_path}".strip('/') if rel_path else f"vfs://{repo}"
+
+        if is_dir and not norm_path.endswith('/'):
+            norm_path += '/'
 
         op = m.get("operation", "save")
         conn.execute(
@@ -283,19 +279,25 @@ def resolve_topology_buffer(workspace_id):
     import os
 
     final_events = []
-
     # Safely expand directories without iterating over a mutating list
     for e in events:
         raw_fp = e["filepath"]
         op = e["mutation_type"]
 
-        repo_dir, rel_path = parse_uri(raw_fp)
+        naive_repo, naive_rel = parse_uri(raw_fp)
+        clean_fp = f"{naive_repo}/{naive_rel}".strip('/')
 
-        if repo_dir and repo_dir not in target_repos_map and not rel_path:
-            rel_path = repo_dir
-            repo_dir = "global"
-        else:
-            repo_dir = repo_dir or "global"
+        repo_dir = "global"
+        rel_path = clean_fp
+
+        # Determine true repo_dir via longest prefix match
+        best_repo_len = -1
+        for r_dir in target_repos_map.keys():
+            if clean_fp == r_dir or clean_fp.startswith(r_dir + '/'):
+                if len(r_dir) > best_repo_len:
+                    best_repo_len = len(r_dir)
+                    repo_dir = r_dir
+                    rel_path = clean_fp[len(r_dir):].lstrip('/')
 
         is_dir = raw_fp.endswith('/')
         if not is_dir and op == "save":
@@ -304,36 +306,33 @@ def resolve_topology_buffer(workspace_id):
                 target_dir = repo_base / rel_path.strip('/')
                 if target_dir.exists() and target_dir.is_dir():
                     is_dir = True
-
         # Prevent root repository directories from expanding and causing an infinite loop
         if op == "save" and is_dir and rel_path.strip('/'):
             repo_cfg = target_repos_map.get(repo_dir)
             if repo_cfg:
-                repo_base = Path(ctx.get_repo_path(repo_dir))
-                rel_dir = rel_path.strip('/')
-                target_dir = repo_base / rel_dir if rel_dir else repo_base
-                if target_dir.exists() and target_dir.is_dir():
-                    for root, dirs, files in os.walk(target_dir):
-                        dirs[:] = [d for d in dirs if d not in ['.git', 'node_modules', '__pycache__', 'venv', '.insetu']]
-                        for f in files:
-                            f_path = Path(root).joinpath(f).as_posix()
-                            try:
-                                rel_file = os.path.relpath(f_path, repo_base).replace('\\', '/')
-                                final_events.append({"filepath": f"vfs://{repo_dir}/{rel_file}", "mutation_type": "save"})
-                            except ValueError:
-                                pass
+                # Let the VFS walk the logical directory, natively handling all exclusions and slashes
+                logical_target = f"vfs://{repo_dir}/{rel_path.strip('/')}"
+                for vfs_fp in ctx.vfs.walk(logical_target):
+                    final_events.append({"filepath": vfs_fp, "mutation_type": "save"})
         else:
             final_events.append({"filepath": raw_fp, "mutation_type": op})
-
     for e in final_events:
         raw_fp = e["filepath"]
-        repo_dir, rel_path = parse_uri(raw_fp)
 
-        if repo_dir and repo_dir not in target_repos_map and not rel_path:
-            rel_path = repo_dir
-            repo_dir = "global"
-        else:
-            repo_dir = repo_dir or "global"
+        naive_repo, naive_rel = parse_uri(raw_fp)
+        clean_fp = f"{naive_repo}/{naive_rel}".strip('/')
+
+        repo_dir = "global"
+        rel_path = clean_fp
+
+        # Determine true repo_dir via longest prefix match
+        best_repo_len = -1
+        for r_dir in target_repos_map.keys():
+            if clean_fp == r_dir or clean_fp.startswith(r_dir + '/'):
+                if len(r_dir) > best_repo_len:
+                    best_repo_len = len(r_dir)
+                    repo_dir = r_dir
+                    rel_path = clean_fp[len(r_dir):].lstrip('/')
 
         clean_filepath = f"{repo_dir}/{rel_path}" if repo_dir != "global" else rel_path
         vfs_fp = f"vfs://{clean_filepath}"
@@ -344,7 +343,7 @@ def resolve_topology_buffer(workspace_id):
         dirty_repos.add(repo_dir)
         if op in ("delete", "deleted", "remove", "removed"):
             if raw_fp.endswith('/'):
-                conn.execute("DELETE FROM topology_ledger WHERE filepath LIKE ?", (filepath + "%",))
+                conn.execute("DELETE FROM topology_ledger WHERE filepath = ? OR filepath LIKE ?", (filepath, filepath + "/%"))
             else:
                 conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
         else:
@@ -373,11 +372,12 @@ def resolve_topology_buffer(workspace_id):
                         print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_dirs): {filepath}")
                         is_ignored = True
                     else:
-                        ext = Path(filepath).suffix.lower()
-                        allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
-                        if ext not in allowed_exts and filename not in allowed_exts:
-                            print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (exts): {filepath} | ext '{ext}' not in {allowed_exts}")
-                            is_ignored = True
+                        if filename not in (".gitkeep", ".keep"):
+                            ext = Path(filepath).suffix.lower()
+                            allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
+                            if ext not in allowed_exts and filename not in allowed_exts:
+                                print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (exts): {filepath} | ext '{ext}' not in {allowed_exts}")
+                                is_ignored = True
 
             if is_ignored:
                 continue
@@ -484,7 +484,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                     subprocess.run(['git', 'init'], capture_output=True, cwd=repo_path)
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
                         from insetu.kernel.vfs import execute_vfs_save
-                        execute_vfs_save(workspace_id, Path(repo_path).joinpath('.gitkeep').as_posix(), "", data={"is_absolute_artifact": True, "ignore_ledger": True})
+                        execute_vfs_save(workspace_id, f"vfs://{config.get('repo_dir')}/.gitkeep", "", data={"ignore_ledger": True})
             except Exception:
                 pass
         try:
@@ -576,37 +576,39 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
 def resolve_owning_workspaces(filepath=None, **kwargs):
     """Deterministically maps a physical path back to all owning tenant workspaces."""
     if not filepath: return set()
-
-    from insetu.kernel.utils import load_json_file, get_workspace_physics, load_config, _cwd
-    import os
+    from insetu.kernel.utils import get_all_workspace_ids, get_workspace_physics, load_config, parse_uri
     from pathlib import Path
 
-    clean_fp = str(filepath).replace('vfs://', '').replace('ctx://', '').lstrip('/')
-    index_path = Path(_cwd).joinpath(".insetu", "system.json").as_posix()
+    raw_path_str = str(filepath).replace("vfs://", "").replace("ctx://", "").strip()
+    is_abs = Path(raw_path_str).is_absolute()
+    naive_repo, naive_rel = parse_uri(filepath)
+    clean_fp = f"{naive_repo}/{naive_rel}".strip('/') if naive_rel else naive_repo
 
     owning_workspaces = set()
-    if os.path.exists(index_path):
-        w_data = load_json_file(index_path, {})
-        for ws_id in w_data.get("workspaces", {}).keys():
-            try:
-                _, ws_root, _ = get_workspace_physics(ws_id)
-                abs_ws_root = Path(ws_root).resolve().as_posix()
-                if Path(clean_fp).is_absolute():
-                    abs_target = Path(clean_fp).resolve().as_posix()
-                else:
-                    abs_target = Path(abs_ws_root).joinpath(clean_fp).resolve().as_posix()
+    for ws_id in get_all_workspace_ids():
+        try:
+            _, ws_root, _ = get_workspace_physics(ws_id)
+            abs_ws_root = Path(ws_root).resolve().as_posix()
+            cfg = load_config(ws_id)
+            target_repos = cfg.get("target_repos", [])
+            repo_dirs = {r.get("repo_dir") for r in target_repos if r.get("repo_dir")}
 
-                if abs_target.startswith(abs_ws_root):
+            if is_abs:
+                abs_target = Path(raw_path_str).resolve().as_posix()
+                if abs_target.startswith(abs_ws_root + '/') or abs_target == abs_ws_root:
                     owning_workspaces.add(ws_id)
                     continue
-
-                cfg = load_config(ws_id)
-                for repo in cfg.get("target_repos", []):
+                for repo in target_repos:
                     p_path = repo.get("physical_path")
-                    if p_path and abs_target.startswith(Path(p_path).expanduser().resolve().as_posix()):
-                        owning_workspaces.add(ws_id)
-                        break
-            except Exception:
-                continue
+                    if p_path:
+                        abs_p = Path(p_path).expanduser().resolve().as_posix()
+                        if abs_target.startswith(abs_p + '/') or abs_target == abs_p:
+                            owning_workspaces.add(ws_id)
+                            break
+            else:
+                if naive_repo in repo_dirs or clean_fp in repo_dirs:
+                    owning_workspaces.add(ws_id)
+        except Exception:
+            continue
 
     return owning_workspaces

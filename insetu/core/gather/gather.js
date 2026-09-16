@@ -290,12 +290,27 @@ export class InSetuExtGather extends InSetuElement {
                 GatherStore.setState({ loading: false });
                 return;
             }
-            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
-            GatherStore.setState(state => ({ 
-                loading: currentExt === 'gather' || currentExt === 'cmp',
-                // Preserve the previous message during the 250ms handoff to prevent visual flickering
-                loadingMessage: pollData.status === 'completed' ? state.loadingMessage : (pollData.message || "Compiling ecosystem contexts...")
-            }));
+
+            const currentExt = pollData.ext_name || '';
+            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
+            const hasRun = history.some(step => step.ext_name === 'gather');
+
+            const isMyTurn = currentExt === 'gather';
+            const isWaiting = !isMyTurn && !hasRun;
+
+            GatherStore.setState(state => {
+                let nextMsg = state.loadingMessage;
+                if (isMyTurn) {
+                    nextMsg = pollData.status === 'completed' ? state.loadingMessage : (pollData.message || "Compiling ecosystem contexts...");
+                } else if (isWaiting) {
+                    nextMsg = "Waiting for prerequisite contexts to compile...";
+                }
+
+                return { 
+                    loading: isMyTurn || isWaiting,
+                    loadingMessage: nextMsg
+                };
+            });
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
@@ -346,10 +361,11 @@ export class InSetuExtGather extends InSetuElement {
 
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
-        const isGatherActive = this.loading || (!this.isPipelineActive && (this.activeModules || []).includes('gather'));
-        const isGatherPending = !this.isPipelineActive && (this.pendingModules || []).includes('gather');
-        const isGatherLoading = isGatherActive || isGatherPending;
-        const displayLoadingMsg = isGatherActive ? this.loadingMessage : "Waiting for prerequisite contexts to compile...";
+        const isHeartbeatActive = !this.isPipelineActive && (this.activeModules || []).includes('gather');
+        const isHeartbeatPending = !this.isPipelineActive && (this.pendingModules || []).includes('gather');
+
+        const isGatherLoading = this.loading || isHeartbeatActive || isHeartbeatPending;
+        const displayLoadingMsg = this.loading ? this.loadingMessage : (isHeartbeatActive ? "Compiling ecosystem contexts..." : "Waiting for prerequisite contexts to compile...");
 
         if (isGatherLoading) {
             const { targetConfigs } = GatherStore.getState();

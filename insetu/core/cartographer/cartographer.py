@@ -146,14 +146,12 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
-        try:
-            rel_index_path = index_path.relative_to(ws_root_path).as_posix()
-        except ValueError:
-            rel_index_path = index_path.as_posix()
+
+        logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
         from insetu.kernel.vfs import execute_vfs_save
 
         # ADR 0018: Ignore Ledger to prevent Cartographer from triggering infinite recompilation loops
-        execute_vfs_save(workspace_id, rel_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
+        execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
         if missing > 0:
