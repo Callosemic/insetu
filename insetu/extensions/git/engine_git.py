@@ -65,13 +65,12 @@ def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs
 
     if isinstance(force_full, list):
         target_repos = force_full
-
     touched_buckets = kwargs.get('touched_buckets')
-    _, manifest_deltas = generate_diff_context(ctx.workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
+    _, manifest_deltas, truly_modified_diffs = generate_diff_context(ctx.workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
 
     return {
         "message": "Git diffs evaluated successfully.",
-        "next_kwargs": {"touched_diffs": list(manifest_deltas.keys()) if touched_buckets is not None else None}
+        "next_kwargs": {"touched_diffs": list(truly_modified_diffs) if touched_buckets is not None else None}
     }
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.utils_core import get_safe_repo_id
@@ -86,14 +85,12 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     working_manifest = manifest_ref if not is_standalone else ctx.manifest.get("ctx", {})
     diff_manifest = []
     manifest_deltas = {}
-    active_generated_diffs = set()
-
-    touched_diff_buckets = set(b.replace('_context.txt', '_diffs.txt').replace('ctx://contexts/', 'ctx://diffs/') for b in touched_buckets) if touched_buckets is not None else None
+    truly_modified_diffs = set()
 
     def process_repo(config):
         local_diff_manifest = []
         local_manifest_deltas = {}
-        local_active_diffs = set()
+        local_modified_diffs = set()
 
         if target_repos and config.get("repo_dir") not in target_repos: return None
         if config.get("exclude_from_diffs"): return None
@@ -173,13 +170,6 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         "domain": config.get("domain", "Workspaces")
                     }
             for out_filename, files_in_bucket in bucketed_files.items():
-                if touched_diff_buckets is not None and out_filename not in touched_diff_buckets:
-                    if out_filename in working_manifest:
-                        local_manifest_deltas[out_filename] = working_manifest[out_filename]
-                        local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
-                        local_active_diffs.add(out_filename)
-                    continue
-
                 header_lines = []
                 header_lines.append(f"============================================================")
                 header_lines.append(f">>> DIFF SUMMARY :: {len(files_in_bucket)} FILE(S) CHANGED")
@@ -248,7 +238,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         block_lines.append(f">>>NEW FILE :: {config['repo_dir']}/{rel_path} | CURRENT CONTENTS")
                         block_lines.append(f"============================================================")
                         try:
-                            content = ctx.vfs.read(abs_filepath.as_posix())
+                            content = ctx.vfs.read(f"vfs://{config['repo_dir']}/{rel_path}")
                             if content: block_lines.append(content)
                             else: block_lines.append("[Binary or unreadable file]")
                         except Exception:
@@ -292,20 +282,21 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         responses = ctx.emit('resolve_payload_chunks', uri=out_filename, manifest=working_manifest)
                         chunks = next((r for r in responses if r), [out_filename])
                         for c in chunks:
-                            chunk_text = ctx.vfs.read(c, is_absolute_artifact=True)
+                            chunk_text = ctx.vfs.read(c)
                             if chunk_text:
                                 existing_content += chunk_text
                     except Exception:
                         pass
                     if existing_content == new_content_full and out_filename in working_manifest:
                         local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
-                        local_active_diffs.add(out_filename)
                         local_manifest_deltas[out_filename] = working_manifest[out_filename]
                         continue
+
+                    local_modified_diffs.add(out_filename)
                     b_meta = bucket_meta.get(out_filename, {})
                     meta = {
                         "type": "diff",
-                        "title": b_meta.get("title", Path(out_filename).name.replace('_diffs.txt', '').replace('_', ' ').title()),
+                        "title": b_meta.get("title", out_filename.split('/')[-1].replace('_diffs.txt', '').replace('_', ' ').title()),
                         "domain": b_meta.get("domain", "Git Diffs"),
                         "desc": "Just-In-Time generated diff payload.",
                         "repo": config['repo_dir']
@@ -321,11 +312,10 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                     )
                     local_manifest_deltas[out_filename] = manifest_entry
                     local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
-                    local_active_diffs.add(out_filename)
         except Exception as e:
             print(f"Skipping diff generation for {config.get('repo_dir', 'Unknown')}: {e}")
 
-        return (local_diff_manifest, local_manifest_deltas, local_active_diffs)
+        return (local_diff_manifest, local_manifest_deltas, local_modified_diffs)
 
     # OPTIMIZATION 2: ThreadPoolExecutor processes independent repositories in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -333,22 +323,21 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         for future in concurrent.futures.as_completed(futures):
             res = future.result()
             if res:
-                lm_diff, lm_delta, l_active = res
+                lm_diff, lm_delta, l_mod = res
                 diff_manifest.extend(lm_diff)
                 manifest_deltas.update(lm_delta)
                 working_manifest.update(lm_delta)
-                active_generated_diffs.update(l_active)
+                truly_modified_diffs.update(l_mod)
     from insetu.core.utils_core import reconcile_and_vacuum_domain
     reconcile_and_vacuum_domain(
         ctx,
         domain_uri_prefix="ctx://diffs/",
         manifest_deltas=manifest_deltas,
-        domain_dir=diffs_dir_path.as_posix(),
+        domain_dir="ctx://diffs",
         filename_suffix="_diffs.txt",
         target_repos=target_repos
     )
-
-    return diff_manifest, manifest_deltas
+    return diff_manifest, manifest_deltas, truly_modified_diffs
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
     from insetu.kernel.utils import get_workspace_physics
@@ -493,7 +482,7 @@ def _background_git_push(ctx, repo, message, diff_file):
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
     safe_r_dir = get_safe_repo_id(repo)
-    target_diff_name = Path(diff_file).name if diff_file else None
+    target_diff_name = diff_file.split('/')[-1] if diff_file else None
     # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
     status_res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
@@ -526,7 +515,7 @@ def _background_git_push(ctx, repo, message, diff_file):
                     b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
 
                 # Only stage the file if it maps to the exact bucket the user clicked
-                if Path(b_id).name == target_diff_name:
+                if b_id.split('/')[-1] == target_diff_name:
                     files_to_stage.add(rel_to_repo)
             else:
                 # Fallback to sweeping the whole repo if no specific diff bucket was targeted

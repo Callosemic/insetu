@@ -72,10 +72,8 @@ def _background_compile_workflows(ctx, **kwargs):
                 elif inc.endswith('_diffs.txt'): inc = f"ctx://diffs/{inc}"
                 elif inc.startswith('prompts/'): inc = f"ctx://{inc}"
                 else: inc = f"vfs://{inc.lstrip('/')}"
-
             if inc.startswith('vfs://') and not inc.endswith('/'):
-                from insetu.kernel.vfs import _resolve_physical_path
-                cand_path = _resolve_physical_path(inc[6:], ctx.workspace_id)
+                cand_path = ctx.resolve_path(inc[6:])
                 if cand_path and os.path.isdir(cand_path):
                     inc += '/'
             healed_includes.append(inc)
@@ -84,13 +82,12 @@ def _background_compile_workflows(ctx, **kwargs):
         # Centralized SSOT Expansion (handles raw strings, ctx:// chunks, and vfs:// folders natively)
         expanded_chunks = ctx.expand_selection(healed_includes)
         import re
-
         for chunk_identifier in expanded_chunks:
-            safe_chunk_base = Path(chunk_identifier).name
-            display_name = f"{Path(chunk_identifier).parent.as_posix()}/{safe_chunk_base}" if "/" in chunk_identifier else chunk_identifier
+            safe_chunk_base = chunk_identifier.split('/')[-1]
+            display_name = chunk_identifier
             try:
                 # Let the Kernel VFS handle artifact detection and path resolution natively
-                content = ctx.vfs.read(chunk_identifier, is_absolute_artifact=False)
+                content = ctx.vfs.read(chunk_identifier)
                 if content is not None:
                     text_blocks.append(f"--- {display_name} ---\n{content}\n\n")
                     resolved_files.append(display_name)
@@ -175,13 +172,12 @@ def _background_compile_workflows(ctx, **kwargs):
         filename, entry = process_batch(b)
         if entry:
             manifest_deltas[filename] = entry
-
     from insetu.core.utils_core import reconcile_and_vacuum_domain
     reconcile_and_vacuum_domain(
         ctx,
         domain_uri_prefix="ctx://workflows/workflow_",
         manifest_deltas=manifest_deltas,
-        domain_dir=ctx.paths["workflows_dir"],
+        domain_dir="ctx://workflows",
         target_repos=target_repos
     )
 
@@ -265,28 +261,24 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
         original_response_path = data.get("original_response_path")
         if archive_path and original_response_path and "{date}" in original_response_path:
             ctx = flow_bp.get_context(workspace_id)
-            resolved_archive = ctx.resolve_path(archive_path)
-            os.makedirs(resolved_archive, exist_ok=True)
-
             basename = Path(original_response_path).name
             prefix = basename.split("{date}")[0]
 
-            resolved_path = ctx.resolve_path(filepath)
-            if data.get("is_absolute_artifact"):
-                from insetu.kernel.utils import resolve_system_artifact_path
-                resolved_path = resolve_system_artifact_path(filepath, workspace_id)
+            parts = filepath.split('/')
+            parts.pop()
+            logical_target_dir = "/".join(parts)
 
-            resolved_target_dir = Path(resolved_path).parent.as_posix()
-            if os.path.exists(resolved_target_dir):
-                for f in os.listdir(resolved_target_dir):
-                    if f.startswith(prefix) and os.path.isfile(Path(resolved_target_dir).joinpath(f).as_posix()):
-                        src_path = Path(resolved_target_dir).joinpath(f).as_posix()
-                        dest_path = Path(resolved_archive).joinpath(f).as_posix()
+            for walk_path in ctx.vfs.walk(logical_target_dir):
+                # Ensure we only check immediate children, not deep recursion
+                if Path(walk_path).parent.as_posix() == logical_target_dir or (not logical_target_dir and '/' not in walk_path):
+                    f_name = Path(walk_path).name
+                    if f_name.startswith(prefix):
+                        dest_path = Path(archive_path).joinpath(f_name).as_posix()
 
-                        content = ctx.vfs.read(src_path, is_absolute_artifact=True)
+                        content = ctx.vfs.read(walk_path)
                         if content is not None:
-                            ctx.vfs.save(dest_path, content, data={"is_absolute_artifact": True})
-                            ctx.vfs.save(src_path, "", data={"action": "delete", "ignore_ledger": True, "is_absolute_artifact": True})
+                            ctx.vfs.save(dest_path, content)
+                            ctx.vfs.delete(walk_path, data={"ignore_ledger": True})
 @flow_bp.route('batches/save', methods=['POST'])
 def api_flow_batches_save(ctx):
     data = ctx.req.json
