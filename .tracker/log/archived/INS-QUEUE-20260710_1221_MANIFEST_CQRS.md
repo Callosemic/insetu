@@ -19,7 +19,7 @@ tier: 3
 The ecosystem currently relies on a flat `manifest.json` file as the central index for all workspace contexts and topologies. As workspaces scale, this monolithic JSON approach violates several core engineering principles:
 
 1. **The Monolithic Write Bottleneck:** Any single file mutation (e.g., via the Yomama Sync Bridge or a VFS commit) forces the engine to serialize and rewrite the entire JSON ecosystem to disk.
-2. **Synchronous I/O Block:** The `save_json_file` utility explicitly bypasses the asynchronous `_VFS_WRITE_QUEUE` for `manifest.json`, meaning these massive rewrites execute synchronously on the main HTTP event loop, risking thread starvation.
+2. **Synchronous I/O Block:** The `save_json_config` utility explicitly bypasses the asynchronous `_VFS_WRITE_QUEUE` for `manifest.json`, meaning these massive rewrites execute synchronously on the main HTTP event loop, risking thread starvation.
 3. **Frontend Polling Inefficiency:** Following a VFS commit, the frontend blindly re-fetches the entire manifest via `/api/<workspace_id>/manifest` to rehydrate its Zustand state, wasting bandwidth and triggering heavy reconciliation cycles.
 ### Action Items
 - [x] **Schema Isolation (`vfs_index.db`):** Explicitly call `register_schema('vfs_index', {...})` to isolate the `manifest_ledger` and `sync_metadata` tables from the standard `gather.db`.

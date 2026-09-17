@@ -1,7 +1,7 @@
 ---
 repo: "insetu"
 type: "todo"
-status: "logged"
+status: "archived"
 id: "INS-TODO-20260807_1142_MIGRATE_API_POST"
 title: "Migrate extension API calls to consume window.inSetu.api.post shorthand"
 created_at: "2026-08-07T11:42:00"
