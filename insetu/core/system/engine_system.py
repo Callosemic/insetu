@@ -5,10 +5,10 @@ import json
 import threading
 import time
 from flask import request, jsonify
-from insetu.kernel.utils import load_config, save_json_file, load_json_file, get_workspace_physics, sniff_tenant_id
-import insetu.kernel.utils as utils
-from insetu.kernel.hooks import hooks
-from insetu.kernel.sync import get_system_deltas
+from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id
+import akasa.utils as utils
+from akasa.hooks import hooks
+from akasa.sync import get_system_deltas
 from insetu.core.sdk import InSetuExtension
 
 SYSTEM_SETTINGS_SCHEMA = [
@@ -69,25 +69,140 @@ system_bp = InSetuExtension(
     core=True,
     settings_schema=SYSTEM_SETTINGS_SCHEMA
 )
+@hooks.on('system_boot', priority=5)
+def migrate_physical_sandboxes(**kwargs):
+    """Phase 3 Data Sovereignty: Safely migrate legacy directories into explicit extension sandboxes."""
+    import os, shutil
+    from pathlib import Path
+    from akasa.utils import _cwd
 
+    base_dir = Path(_cwd).joinpath(".insetu")
+
+    # Migrate prompts
+    legacy_prompts = base_dir.joinpath("prompts")
+    new_prompts = base_dir.joinpath("ext", "prompts", "data")
+    if legacy_prompts.exists() and legacy_prompts.is_dir():
+        os.makedirs(new_prompts.parent, exist_ok=True)
+        if not new_prompts.exists():
+            shutil.move(legacy_prompts.as_posix(), new_prompts.as_posix())
+
+    # Migrate core data domains (contexts, diffs, workflows)
+    legacy_data = base_dir.joinpath("data")
+    if legacy_data.exists() and legacy_data.is_dir():
+        for domain, ext_name in [("contexts", "gather"), ("diffs", "git"), ("workflows", "flow")]:
+            legacy_domain = legacy_data.joinpath(domain)
+            new_domain = base_dir.joinpath("ext", ext_name, "data", domain)
+            if legacy_domain.exists() and legacy_domain.is_dir() and not new_domain.exists():
+                os.makedirs(new_domain.parent, exist_ok=True)
+                shutil.move(legacy_domain.as_posix(), new_domain.as_posix())
+
+        # Cleanup if empty
+        try:
+            if not os.listdir(legacy_data.as_posix()):
+                os.rmdir(legacy_data.as_posix())
+        except Exception:
+            pass
+@hooks.on('register_core_modules')
+def provide_core_modules(**kwargs):
+    import os
+    from pathlib import Path
+
+    # Inject headless structural modules specific to inSetu
+    modules = {'core_text_blobs'}
+
+    core_dir = Path(__file__).resolve().parent.parent
+    if core_dir.exists():
+        for item in os.listdir(core_dir):
+            if core_dir.joinpath(item).is_dir() and not item.startswith('__'):
+                modules.add(item)
+
+    kernel_dir = core_dir.parent.joinpath("kernel")
+    if kernel_dir.exists():
+        for item in os.listdir(kernel_dir):
+            if kernel_dir.joinpath(item).is_dir() and not item.startswith('__'):
+                modules.add(item)
+    return list(modules)
 @hooks.on('system_settings_updated')
 def core_system_settings_updated(workspace_id=None, **kwargs):
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
     return {"requires_refresh": True}
+@hooks.on('execute_identity_handshake')
+def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs):
+    """Tier 2 Core OS: Evaluates daemon-level host identity protocols (e.g., Tailscale WHOIS)."""
+    if not request or not client_ip or not config: return None
+    import os, socket, json
+
+    user_email = request.headers.get('Tailscale-User-Login')
+
+    if not user_email:
+        # Fallback to Unix socket WHOIS for direct Tailnet IP connections
+        sock_path = "/var/run/tailscale/tailscaled.sock"
+        if os.path.exists(sock_path):
+            try:
+                payload = f"GET /localapi/v0/whois?ip={client_ip} HTTP/1.1\r\nHost: local-tailscaled.sock\r\n\r\n"
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(0.5)
+                s.connect(sock_path)
+                s.sendall(payload.encode('utf-8'))
+
+                response = b""
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk: break
+                    response += chunk
+                s.close()
+
+                if b"\r\n\r\n" in response:
+                    body = response.split(b"\r\n\r\n", 1)[1]
+                    profile = json.loads(body.decode('utf-8'))
+                    user_email = profile.get("UserProfile", {}).get("LoginName")
+            except Exception:
+                pass
+
+    if user_email:
+        allowed_emails = config.get("allowed_dev_emails", [])
+        # Trust On First Use (TOFU)
+        if not allowed_emails:
+            from akasa.utils import get_workspace_physics, load_json_config, save_json_config
+            cfg_path, _ = get_workspace_physics()
+            raw_cfg = load_json_config(cfg_path, {})
+            raw_cfg["allowed_dev_emails"] = [user_email]
+            save_json_config(cfg_path, raw_cfg)
+            return {"status": "authenticated", "method": "tailscale_tofu", "user": user_email}
+        elif user_email in allowed_emails:
+            return {"status": "authenticated", "method": "tailscale", "user": user_email}
+
+    return None
+@hooks.on('request_vfs_ignore_dirs')
+def provide_vfs_ignores(workspace_id=None, **kwargs):
+    """Host application declaration of directories the VFS should never traverse natively."""
+    return ['.git', 'node_modules', '__pycache__', 'venv']
+
+@hooks.on('evaluate_blocking_task')
+def evaluate_blocking_task(task_name=None, **kwargs):
+    """Host declaration of tasks that should lock the UI into a 'compiling' state."""
+    if not task_name: 
+        return False
+    return task_name.startswith('compile_') or task_name in (
+        'pack_selection_task', 
+        'execute_delayed_compile', 
+        'boot_scan_task', 
+        'resolve_topology_task', 
+        'scan_topology_task'
+    )
 
 @system_bp.route('deltas', methods=['GET'])
 def api_system_deltas(ctx):
     since = float(ctx.req.args.get('since', 0.0))
     return jsonify(get_system_deltas(ctx.workspace_id, since_ts=since))
-
 @hooks.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):
         repo_dir = data.get("repo_dir")
-        from insetu.kernel.utils import load_json_file, get_workspace_physics, save_json_file
+        from akasa.utils import load_json_config, get_workspace_physics, save_json_config
         from insetu.core.utils_core import sanitize_workspace_config, get_default_repo_template
-        cfg_path, _, _ = get_workspace_physics(workspace_id)
-        cfg = load_json_file(cfg_path, {})
+        cfg_path, _ = get_workspace_physics(workspace_id)
+        cfg = load_json_config(cfg_path, {})
         cfg = sanitize_workspace_config(cfg)
 
         targets = cfg.get("target_repos", [])
@@ -104,11 +219,11 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
             )
             targets.append(new_repo)
             cfg["target_repos"] = targets
-            save_json_file(cfg_path, cfg, workspace_id)
+            save_json_config(cfg_path, cfg, workspace_id)
 def get_system_config(workspace_id):
     data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
-    from insetu.kernel.utils import CORE_MODULES
+    from akasa.utils import CORE_MODULES
     available_ids = set()
     available = []
     extensions_dir = Path(script_dir).parent.joinpath("extensions").as_posix()
@@ -174,7 +289,7 @@ def get_system_config(workspace_id):
                                             if not shutil.which(binary):
                                                     missing_bins.append(binary)
                             available.append({"id": ext_name, "title": title, "description": desc, "missing_externals": missing_exts, "missing_binaries": missing_bins})
-    from insetu.kernel.extension import _REGISTERED_SETTINGS_SCHEMAS
+    from akasa.extension import _REGISTERED_SETTINGS_SCHEMAS
 
     evaluated_schemas = {}
     for ext_id, schema_spec in _REGISTERED_SETTINGS_SCHEMAS.items():
@@ -192,8 +307,8 @@ def get_system_config(workspace_id):
         }
     }
 def save_system_config(workspace_id, payload):
-    cfg_path, _, _ = get_workspace_physics(workspace_id)
-    existing_cfg = load_json_file(cfg_path, {})
+    cfg_path, _ = get_workspace_physics(workspace_id)
+    existing_cfg = load_json_config(cfg_path, {})
     merged_cfg = {**existing_cfg, **payload}
 
     # Security Guardrail: Enforce the core config UI is never locked out
@@ -202,10 +317,10 @@ def save_system_config(workspace_id, payload):
     from insetu.core.utils_core import sanitize_workspace_config
 
     merged_cfg = sanitize_workspace_config(merged_cfg)
-    save_json_file(cfg_path, merged_cfg, workspace_id)
+    save_json_config(cfg_path, merged_cfg, workspace_id)
 
     # Invalidate the mutated config cache so backend physics immediately see changes
-    from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    from akasa.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
 @system_bp.route('reboot', methods=['POST'])
@@ -213,7 +328,7 @@ def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
     import os, sys, threading, time
     def restart():
-        from insetu.kernel.hooks import hooks
+        from akasa.hooks import hooks
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
@@ -255,7 +370,7 @@ def api_system_topology(ctx):
         from pathlib import Path
         cfg = load_config(ctx.workspace_id)
         targets = cfg.get("target_repos", []) or []
-        cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
+        cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
 
         for c in targets:
             if not c: continue
@@ -303,9 +418,9 @@ def api_create_workspace(ctx):
         if not ws_id or ws_id in ['default', 'none']:
             return jsonify({"error": "A unique, valid alphanumeric workspace ID is required"}), 400
         index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-        from insetu.kernel.utils import load_json_file, save_json_file
+        from akasa.utils import load_json_config, save_json_config
 
-        w_data = load_json_file(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
+        w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
@@ -332,19 +447,19 @@ def api_create_workspace(ctx):
             w_data["workspaces"] = {}
         w_data["workspaces"][ws_id] = {"title": ws_id.title(), "config_path": config_rel_path}
 
-        # Use save_json_file to ensure _JSON_CACHE is updated synchronously for immediate reads
-        save_json_file(index_path, w_data, workspace_id="default")
+        # Use save_json_config to ensure _JSON_CACHE is updated synchronously for immediate reads
+        save_json_config(index_path, w_data, workspace_id="default")
 
         # 2. Save the pure topology mapping
-        save_json_file(config_abs_path, starter_config, workspace_id=ws_id)
+        save_json_config(config_abs_path, starter_config, workspace_id=ws_id)
         # 3. Seed the Tier 2 Workspace Settings safely
-        from insetu.kernel.extension import SettingsManager
+        from akasa.extension import SettingsManager
         settings = SettingsManager('system', ws_id)
         settings.set("instance_title", f"inSetu Workspace: {ws_id}")
 
         # 4. Provision databases and trigger the boot sequence for the new workspace
-        from insetu.kernel.db import apply_declarative_schema, _REGISTERED_SCHEMAS
-        from insetu.kernel.hooks import hooks
+        from akasa.db import apply_declarative_schema, _REGISTERED_SCHEMAS
+        from akasa.hooks import hooks
         for ext_name, schema in _REGISTERED_SCHEMAS.items():
             apply_declarative_schema(ext_name, schema, ws_id)
         hooks.emit('workspace_boot', workspace_id=ws_id)
@@ -362,9 +477,9 @@ def api_delete_workspace(ctx):
         if ws_id == 'default':
             return jsonify({"error": "The root system default workspace framework cannot be deleted."}), 400
         index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
-        from insetu.kernel.utils import load_json_file, save_json_file
+        from akasa.utils import load_json_config, save_json_config
 
-        w_data = load_json_file(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
+        w_data = load_json_config(index_path, {"workspaces": {"default": {"config_path": "config.json"}}})
         if "workspaces" not in w_data:
             w_data["workspaces"] = {"default": {"config_path": "config.json"}}
 
@@ -375,10 +490,10 @@ def api_delete_workspace(ctx):
         local_insetu_dir = Path(utils._cwd).joinpath(".insetu").as_posix()
         ws_dir = Path(local_insetu_dir).joinpath("workspaces", ws_id)
         if os.path.exists(ws_dir.as_posix()):
-            from insetu.kernel.vfs import execute_vfs_delete
+            from akasa.vfs import execute_vfs_delete
             execute_vfs_delete("default", ws_dir.as_posix())
 
-        save_json_file(index_path, w_data, workspace_id="default")
+        save_json_config(index_path, w_data, workspace_id="default")
 
         return jsonify({"status": "success", "workspaces": w_data["workspaces"]})
     except Exception as e:
@@ -387,7 +502,7 @@ def api_delete_workspace(ctx):
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
 @system_bp.route('jobs/<job_id>', methods=['GET'])
 def api_job_status(ctx, job_id):
-    from insetu.kernel.db import get_connection
+    from akasa.db import get_connection
     try:
         conn = get_connection("workers", workspace_id=ctx.workspace_id)
         job = conn.execute("SELECT ext_name, status, status_message, artifact_json, created_at, updated_at FROM immediate_jobs WHERE id=?", (job_id,)).fetchone()
@@ -410,7 +525,7 @@ def api_workspaces(ctx):
     index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
 
     if ctx.req.method == 'GET':
-        data = utils.load_json_file(index_path, {})
+        data = utils.load_json_config(index_path, {})
         if "workspaces" not in data:
             data["workspaces"] = {"default": {"config_path": "config.json"}}
         return jsonify(data)
@@ -420,7 +535,7 @@ def api_workspaces(ctx):
         old_active = sniff_tenant_id()
         if not os.path.exists(index_path):
             return jsonify({"error": "system.json not found."}), 404
-        w_data = utils.load_json_file(index_path, {})
+        w_data = utils.load_json_config(index_path, {})
         if new_active not in w_data.get("workspaces", {}) and new_active != "default":
             return jsonify({"error": "Workspace ID not found."}), 400
 
@@ -435,7 +550,7 @@ def api_system_config_test_bucketing(ctx):
         data = ctx.req.get_json(silent=True) or {}
         repo_cfg = data.get("repo_cfg", {})
 
-        from insetu.kernel.utils import get_workspace_physics
+        from akasa.utils import get_workspace_physics
         cfg_path, ws_root, _ = get_workspace_physics(ctx.workspace_id)
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir:

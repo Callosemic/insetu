@@ -1,10 +1,10 @@
 import os
 import subprocess
 from pathlib import Path
-from insetu.kernel.utils import get_workspace_physics, load_config, build_tree_dict
+from akasa.utils import get_workspace_physics, load_config, build_tree_dict
 from insetu.core.topology.engine_topology import get_valid_workspace_files
-from insetu.kernel.hooks import hooks
-from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from akasa.hooks import hooks
+from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
 
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
@@ -100,7 +100,7 @@ def render_ascii_tree(node, comment_map, managed_dirs, prefix="", current_path="
 def map_repositories(workspace_id=None, silent=True, target_repos=None):
     if not silent: print(f"\n{'-'*50}\n🚀 inSetu: Mapping Repository Topologies\n{'-'*50}")
     cfg = load_config(workspace_id)
-    cfg_path, ws_root, _ = get_workspace_physics(workspace_id)
+    cfg_path, ws_root = get_workspace_physics(workspace_id)
     all_configs = cfg.get("target_repos", [])
     for config in all_configs:
         repo_dir = config.get("repo_dir")
@@ -148,7 +148,7 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         footer = "\n```\n"
 
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
-        from insetu.kernel.vfs import execute_vfs_save
+        from akasa.vfs import execute_vfs_save
 
         # ADR 0018: Ignore Ledger to prevent Cartographer from triggering infinite recompilation loops
         execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})

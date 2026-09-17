@@ -2,12 +2,37 @@ from pathlib import Path
 import os
 import json
 import subprocess
-from insetu.kernel.utils import load_config, get_workspace_physics, slugify, load_json_file, generate_ascii_tree, parse_uri
-from insetu.kernel.hooks import hooks
+from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
+from akasa.hooks import hooks
 import threading
 import io
 import re
 from ruamel.yaml import YAML
+from akasa.uri import AkasaURI
+
+class InSetuURI(AkasaURI):
+    """
+    Host application subclass injecting domain-specific routing aliases.
+    """
+    @property
+    def repo(self) -> str:
+        return self.volume
+    @property
+    def is_diff(self) -> bool:
+        return self.scheme == 'ctx' and self.volume == 'diffs'
+
+    def bucket(self, workspace_id=None):
+        from insetu.core.topology.engine_topology import resolve_file_bucket
+        from akasa.utils import load_config
+
+        cfg = load_config(workspace_id)
+        for repo_cfg in cfg.get("target_repos", []):
+            if repo_cfg.get("repo_dir") == self.repo:
+                sub_buckets = repo_cfg.get("sub_buckets", [])
+                b, module = resolve_file_bucket(self.path, sub_buckets, repo_dir=self.repo)
+                return module if b and module else (b.get("id") if b else "main")
+        return "main"
+
 
 def _get_yaml_engine():
     yaml = YAML(typ='rt')
@@ -52,6 +77,119 @@ def update_frontmatter(content, new_data):
     formatted_yaml = stream.getvalue().strip()
 
     return f"---\n{formatted_yaml}\n---\n\n{body}"
+def resolve_macro_includes(text, current_filepath, pattern, read_callback, depth=0):
+    import re
+    if depth > 5:
+        return text + "\n[!] INCLUSION DEPTH LIMIT EXCEEDED"
+    def replacer(match):
+        include_path = match.group(1).strip()
+        params_str = match.group(2) if len(match.groups()) > 1 and match.group(2) else ""
+
+        if include_path.startswith('./') or include_path.startswith('../'):
+            parts = current_filepath.split('/')[:-1]
+            for p in include_path.split('/'):
+                if p == '.': continue
+                elif p == '..': 
+                    if parts: parts.pop()
+                else: parts.append(p)
+            target_path = '/'.join(parts)
+        else:
+            target_path = include_path.lstrip('/')
+
+        inc_content = read_callback(target_path)
+        if inc_content is not None:
+            if params_str:
+                param_matches = re.finditer(r'([a-zA-Z0-9_]+)\s*:\s*(?:"([^"]*)"|([^;}]*))', params_str)
+                for pm in param_matches:
+                    key = pm.group(1)
+                    val = pm.group(2) if pm.group(2) is not None else pm.group(3).strip()
+                    macro_pattern = r'\{\{\s*macro_' + re.escape(key) + r'\s*\}\}'
+                    inc_content = re.sub(macro_pattern, val, inc_content)
+            return resolve_macro_includes(inc_content, target_path, pattern, read_callback, depth + 1)
+        else:
+            return f"[!] MACRO TARGET NOT FOUND: {include_path}"
+
+    return re.sub(pattern, replacer, text)
+def _get_base_step_and_diffs(lines):
+    """Analyzes a block of code to find its true structural base indentation unit (LCD > 1)."""
+    indents = sorted(list(set(len(line) - len(line.lstrip()) for line in lines if line.strip())))
+    if len(indents) > 1:
+        diffs = [indents[k+1] - indents[k] for k in range(len(indents)-1)]
+        valid_diffs = [d for d in diffs if d > 1]
+
+        if valid_diffs:
+            best_step = 4
+            min_error = float('inf')
+
+            for S in [4, 2, 3, 8]:
+                error = 0
+                has_base_jump = False
+
+                for d in valid_diffs:
+                    k = max(1, int(round(d / S)))
+                    if k == 1:
+                        has_base_jump = True
+                    error += abs(d - (k * S))
+
+                if not has_base_jump:
+                    error += 1000 
+
+                if error < min_error:
+                    min_error = error
+                    best_step = S
+
+            return best_step, diffs
+    return 4, []
+
+def parse_blocks(text):
+    import re
+    files = {}
+    current_file = None
+    state = "OUTSIDE"
+    current_type = "exact"
+    search_lines, replace_lines = [], []
+
+    if "<<<<<<< FILE:" in text:
+        text = "<<<<<<< FILE:" + text.split("<<<<<<< FILE:", 1)[1]
+
+    text = re.sub(
+        r'^[ \t\xa0]*(?:>[ \t\xa0]*)+REPLACE[ \t\xa0]*(?:\n[ \t\xa0]*(?:>[ \t\xa0]*)+$)*',
+        '>>>>>>> REPLACE',
+        text,
+        flags=re.MULTILINE
+    )
+
+    lines = text.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+    for line in lines:
+        if line.startswith("<<<<<<< FILE:"):
+            current_file = line.replace("<<<<<<< FILE:", "").strip()
+            if current_file not in files: files[current_file] = []
+            state = "OUTSIDE"
+        elif line.startswith("<<<<<<< SEARCH"):
+            state = "SEARCH"
+            search_lines = []
+            current_type = "regex" if "REGEX" in line else "exact"
+        elif line.startswith("======="):
+            if state == "SEARCH":
+                state = "REPLACE"
+                replace_lines = []
+            elif state == "OUTSIDE" and current_file:
+                print(f"  [~] Warning: Missing '<<<<<<< SEARCH' tag detected for {current_file}. Auto-healing as a genesis patch.")
+                state = "REPLACE"
+                search_lines = []
+                replace_lines = []
+        elif line.startswith(">>>>>>> REPLACE"):
+            if state == "REPLACE" and current_file:
+                files[current_file].append({
+                    "type": current_type,
+                    "search": "\n".join(search_lines),
+                    "replace": "\n".join(replace_lines)
+                })
+            state = "OUTSIDE"
+        else:
+            if state == "SEARCH": search_lines.append(line)
+            elif state == "REPLACE": replace_lines.append(line)
+    return files
 
 def clean_date_str(val):
     """Safely normalizes varied date inputs into a standard ISO format."""
@@ -103,7 +241,7 @@ _WATCHDOG_THREAD = None
 
 def _watchdog_debouncer_loop():
     import time
-    from insetu.kernel.db import get_connection
+    from akasa.db import get_connection
     while True:
         time.sleep(2.0)
         now = time.time()
@@ -154,9 +292,10 @@ def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=Non
             keys_to_remove = [k for k in _WATCHDOG_PENDING.keys() if k[1] == abs_key]
             for k in keys_to_remove:
                 del _WATCHDOG_PENDING[k]
-def start_filesystem_observer(workspace_ids):
+@hooks.on('start_filesystem_observer')
+def start_filesystem_observer(workspace_ids=None, **kwargs):
     """Initializes a unified Watchdog observer for all active workspaces."""
-    from insetu.kernel.extension import SettingsManager
+    from akasa.extension import SettingsManager
     if not SettingsManager('core_system', 'default').get("enable_watchdog", True):
         return None
 
@@ -164,7 +303,6 @@ def start_filesystem_observer(workspace_ids):
     for ws_id in workspace_ids:
         cfg = load_config(ws_id)
         active_configs.append((ws_id, cfg))
-
     if not active_configs:
         return None
     try:
@@ -172,7 +310,12 @@ def start_filesystem_observer(workspace_ids):
         from watchdog.observers.polling import PollingObserver
         from watchdog.events import FileSystemEventHandler
     except ImportError:
-        raise ImportError("watchdog not installed")
+        print("⚠️  Optional package 'watchdog' not found. External modifications require full sweeps.")
+        return None
+    except Exception as e:
+        print(f"⚠️  Watcher initialization failed: {e}")
+        return None
+
     class FileSystemObserver(FileSystemEventHandler):
         def __init__(self, workspace_id, repo_dir, target_path, ignore_dirs, ignore_patterns, ignore_exceptions=None):
             super().__init__()
@@ -248,9 +391,8 @@ def start_filesystem_observer(workspace_ids):
     except Exception:
         observer = PollingObserver()
     has_watches = False
-
     for ws_id, cfg in active_configs:
-        _, ws_root, _ = get_workspace_physics(ws_id)
+        _, ws_root = get_workspace_physics(ws_id)
         global_ignore = set(cfg.get("ignore_dirs", []))
         global_patterns = cfg.get("ignore_patterns", [])
         for repo_cfg in cfg.get("target_repos", []):
@@ -284,23 +426,10 @@ def start_filesystem_observer(workspace_ids):
         observer.start()
         print("👁️  Native Filesystem Watchers Engaged.")
     return observer
-@hooks.on('vfs_resolve_path')
-def hook_vfs_resolve_path(filepath=None, workspace_id=None, **kwargs):
-    """Provides logical vfs://repo/path boundary resolution to the Kernel VFS."""
-    if filepath:
-        is_artifact = filepath.startswith("ctx://") or filepath.startswith("contexts/") or filepath.startswith("diffs/") or filepath.startswith("workflows/")
-        if is_artifact:
-            from insetu.kernel.hooks import hooks
-            overrides = hooks.emit('vfs_resolve_file', filename=filepath, workspace_id=workspace_id)
-            for res in overrides:
-                if res and isinstance(res, tuple) and len(res) == 2 and os.path.exists(res[0]):
-                    return res[0]
-
-        return resolve_logical_path(filepath, workspace_id)
-    return None
 def load_workflows(workspace_id=None):
-    _, _, wf_path = get_workspace_physics(workspace_id)
-    return load_json_file(wf_path, {"context_batches": []})
+    cfg_path, _ = get_workspace_physics(workspace_id)
+    wf_path = Path(cfg_path).parent.joinpath("workflows.json").as_posix()
+    return load_json_config(wf_path, {"context_batches": []})
 
 def generate_text_chunks(blocks, chunk_limit=400000):
     current_chunk = []
@@ -355,19 +484,20 @@ def extract_manifest_files(manifest_data, target_key=None, domain='auto', exclud
                 if isinstance(f, str):
                     all_files.add(f)
     return sorted(list(all_files))
-def get_domain_artifact_path(workspace_id, domain_name):
-    """Resolves and ensures physical existence of standard .insetu/data/<domain_name> directory."""
+def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
+    """Resolves and ensures physical existence of standard .insetu/ext/<ext_name>/data/<domain_name> directory."""
     from pathlib import Path
     import os
-    from insetu.kernel.utils import get_workspace_physics
+    from akasa.utils import get_workspace_physics
 
+    ext = ext_name or domain_name
     try:
-        cfg_path, _, _ = get_workspace_physics(workspace_id)
-        domain_dir = Path(cfg_path).parent.joinpath("data", domain_name).resolve().as_posix()
+        cfg_path, _ = get_workspace_physics(workspace_id)
+        domain_dir = Path(cfg_path).parent.joinpath("ext", ext, "data", domain_name).resolve().as_posix()
         os.makedirs(domain_dir, exist_ok=True)
         return domain_dir
     except Exception:
-        return f".insetu/data/{domain_name}"
+        return f".insetu/ext/{ext}/data/{domain_name}"
 
 
 def get_safe_repo_id(repo_dir):
@@ -386,11 +516,10 @@ def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_ab
     resolved_dir = ctx.resolve_path(domain_dir)
     if not resolved_dir or not os.path.exists(resolved_dir):
         return
-
     exemptions = exempt_abs_paths or set()
     for ws_rel_path in ctx.vfs.walk(domain_dir, exts=['.txt']):
         f_path = ctx.resolve_path(ws_rel_path)
-        f_basename = ws_rel_path.split('/')[-1]
+        f_basename = InSetuURI(ws_rel_path).basename
 
         if f_path not in exemptions and f_basename not in expected_artifacts_set and f_basename != "manifest.json":
             try:
@@ -411,7 +540,7 @@ def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_
         if entry:
             active_keys.add(filename)
             chunks = entry.get("chunks", [filename])
-            expected_artifacts.update(c.split('/')[-1] for c in chunks)
+            expected_artifacts.update(InSetuURI(c).basename for c in chunks)
 
     # 2. Identify orphaned manifest keys in this domain
     for k, v in list(current_manifest.items()):
@@ -422,7 +551,7 @@ def reconcile_and_vacuum_domain(ctx, domain_uri_prefix, manifest_deltas, domain_
                 manifest_deltas[k] = None
             else:
                 chunks = v.get("chunks", [k]) if isinstance(v, dict) else [k]
-                expected_artifacts.update(c.split('/')[-1] for c in chunks)
+                expected_artifacts.update(InSetuURI(c).basename for c in chunks)
 
     # 3. Commit manifest changes & sync barrier
     if manifest_deltas:
@@ -460,8 +589,8 @@ def get_flattened_buckets(workspace_id=None, target_configs=None):
                     flattened.append(b_copy)
     return flattened
 def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_types=None, include_types=None):
-    from insetu.kernel.hooks import hooks
-    from insetu.kernel.utils import load_config
+    from akasa.hooks import hooks
+    from akasa.utils import load_config
 
     cfg = load_config(workspace_id)
     flags = [exclusion_flags] if isinstance(exclusion_flags, str) else (exclusion_flags or [])
@@ -493,42 +622,56 @@ def get_available_contexts(workspace_id=None, exclusion_flags=None, exclude_type
             expected_contexts.add(filename)
 
     return expected_contexts
+def get_repo_path(repo_dir, workspace_id=None):
+    """SSOT for resolving a repository's physical override or logical path."""
+    import os
+    from akasa.utils import load_config
+    cfg = load_config(workspace_id)
+    for c in cfg.get("target_repos", []):
+        if c.get("repo_dir") == repo_dir and c.get("physical_path"):
+            return os.path.abspath(os.path.expanduser(c.get("physical_path")))
+
+    # Fallback to standard sandbox resolution
+    from akasa.vfs import _resolve_physical_path
+    resolved = _resolve_physical_path(f"vfs://{repo_dir}", workspace_id)
+    if not resolved:
+        from akasa.utils import get_workspace_physics
+        from pathlib import Path
+        _, ws_root = get_workspace_physics(workspace_id)
+        return Path(ws_root).joinpath(repo_dir).as_posix()
+    return resolved
 
 def get_sister_repos(workspace_id=None):
     cfg = load_config(workspace_id)
     return [repo.get("repo_dir") for repo in cfg.get("target_repos", []) if repo.get("repo_dir")]
 def resolve_logical_path(path, workspace_id=None):
     from pathlib import Path
-    import re
+    from insetu.core.utils_core import InSetuURI
 
     if not path:
         return ""
 
     cfg = load_config(workspace_id)
-    _, workspace_root, _ = get_workspace_physics(workspace_id)
+    _, workspace_root = get_workspace_physics(workspace_id)
     ws_root_path = Path(workspace_root).resolve()
 
-    norm_path = str(path).strip().replace('\\', '/')
+    uri = InSetuURI(str(path))
 
-    # Handle absolute paths
-    if Path(norm_path).is_absolute():
-        resolved_abs = Path(norm_path).resolve()
+    # If absolute, bypass normal boundaries but safely attempt stripping
+    if Path(uri.path).is_absolute():
+        resolved_abs = Path(uri.path).resolve()
         if resolved_abs.exists():
             return resolved_abs.as_posix()
         try:
             norm_path = resolved_abs.relative_to(ws_root_path).as_posix()
         except ValueError:
             norm_path = resolved_abs.name
-    # Centralized URI parsing to extract repository boundaries safely BEFORE slash collapsing
-    repo_dir, rel_path = parse_uri(norm_path)
+        uri = InSetuURI(norm_path)
 
-    rel_path_str = str(rel_path).strip().replace('\\', '/')
-    rel_path_str = re.sub(r'\.\.(?=/|$)', '', rel_path_str)
-    rel_path_str = re.sub(r'/+', '/', rel_path_str).strip('/')
     target_repos = cfg.get("target_repos", [])
 
-    # Reconstruct the full logical path to bypass parse_uri's naive first-slash split
-    clean_fallback = f"{repo_dir}/{rel_path_str}".strip('/')
+    # Reconstruct the full logical path
+    clean_fallback = f"{uri.volume}/{uri.path}".strip('/') if uri.volume else uri.path
 
     # Map logical workspace bounds by matching the longest registered repo_dir prefix
     best_repo = None
@@ -554,19 +697,74 @@ def resolve_logical_path(path, workspace_id=None):
 
     # Fallback to standard sandbox resolution
     return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
+@hooks.on('expand_selection')
+def hook_expand_selection(items=None, workspace_id=None, **kwargs):
+    from akasa.vfs import VFSTransaction
+    from akasa.hooks import hooks
+    from insetu.core.utils_core import InSetuURI
 
+    vfs_manifest_res = hooks.emit('request_vfs_manifest', workspace_id=workspace_id)
+    vfs_manifest = next((m for m in vfs_manifest_res if m), {})
+    tracked_files = set()
+    for bucket in vfs_manifest.values():
+        tracked_files.update(bucket.get('files', []))
+    files = []
+    with VFSTransaction(workspace_id) as vfs:
+        for item in items:
+            if isinstance(item, str):
+                uri_obj = InSetuURI(item)
+                if not uri_obj.scheme:
+                    if uri_obj.basename.endswith('_context.txt'): 
+                        uri_obj = InSetuURI(f"ctx://contexts/{uri_obj.path}")
+                    elif uri_obj.basename.endswith('_diffs.txt'): 
+                        uri_obj = InSetuURI(f"ctx://diffs/{uri_obj.path}")
+                    elif uri_obj.path.startswith('prompts/'): 
+                        uri_obj = InSetuURI(f"ctx://{uri_obj.path}")
+                    else: 
+                        uri_obj = InSetuURI(f"vfs://{uri_obj.path}")
 
-def find_path_candidates(query_path, workspace_id=None, allowed_repos=None):
+                if uri_obj.is_dir and uri_obj.scheme == 'vfs':
+                    item = {'folderpath': uri_obj.path}
+                else:
+                    item = {'filepath': f"{uri_obj.scheme}://{uri_obj.volume}/{uri_obj.path}".replace('//', '/').replace(':/', '://')}
+
+            if 'filepath' in item:
+                filepath = item['filepath']
+                uri_obj = InSetuURI(filepath)
+
+                if uri_obj.scheme == 'ctx':
+                    responses = hooks.emit('resolve_payload_chunks', uri=filepath, workspace_id=workspace_id)
+                    chunks = next((r for r in responses if r), [filepath])
+                    files.extend(chunks)
+                else:
+                    files.append(filepath if uri_obj.scheme == 'vfs' else f"vfs://{filepath}")
+            elif 'folderpath' in item:
+                folderpath = item['folderpath']
+                uri_obj = InSetuURI(folderpath)
+                target_walk = uri_obj.path
+
+                for f in vfs.walk(target_walk):
+                    if f in tracked_files:
+                        files.append(f if InSetuURI(f).scheme == 'vfs' else f"vfs://{f}")
+
+    unique_files = []
+    seen = set()
+    for f in files:
+        if f not in seen:
+            seen.add(f)
+            unique_files.append(f)
+    return unique_files
+
+@hooks.on('find_path_candidates')
+def find_path_candidates(query_path=None, workspace_id=None, allowed_repos=None, **kwargs):
     """
     Explicit, opt-in candidate finder for path disambiguation.
     Principal consumer is the Yomama Sync Bridge.
     """
     if not query_path:
         return []
-
     from insetu.core.topology.engine_topology import get_omniscient_workspace_files
-    clean_query = str(query_path).replace('\\', '/').strip('/')
-    clean_query = clean_query.replace('vfs://', '').replace('ctx://', '')
+    clean_query = InSetuURI(str(query_path)).path.replace('\\', '/').strip('/')
     query_basename = Path(clean_query).name.lower()
 
     omniscient = get_omniscient_workspace_files(workspace_id, allowed_repos)

@@ -1,5 +1,5 @@
 from flask import jsonify
-from insetu.kernel.extension import InSetuExtension
+from insetu.core.sdk import InSetuExtension
 
 DB_SCHEMA = {
     "file_preferences": {

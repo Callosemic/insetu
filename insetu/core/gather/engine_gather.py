@@ -8,14 +8,15 @@ import threading
 import uuid
 import concurrent.futures
 from flask import jsonify
-from insetu.kernel.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path
+from akasa.utils import get_workspace_physics, generate_ascii_tree
+from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path
 from insetu.core.topology.engine_topology import resolve_file_bucket
-from insetu.kernel.extension import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
-from insetu.kernel.db import register_schema, get_connection
-from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
-from insetu.kernel.vfs import VFSTransaction, execute_vfs_delete
+from akasa.extension import ExtensionContext
+from insetu.core.sdk import InSetuExtension
+from akasa.hooks import hooks
+from akasa.db import register_schema, get_connection
+from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback, register_ephemeral_artifact
+from akasa.vfs import VFSTransaction, execute_vfs_delete
 
 register_schema('vfs_index', {
     'manifest_ledger': {
@@ -41,31 +42,6 @@ GATHER_SETTINGS_SCHEMA = [
 ]
 gather_bp = InSetuExtension('gather', __name__, core=True, settings_schema=GATHER_SETTINGS_SCHEMA)
 __depends__ = []
-@hooks.on('vfs_resolve_file')
-@hooks.on('vfs_resolve_path', priority=10)
-def resolve_gather_artifacts(filename=None, filepath=None, workspace_id=None, **kwargs):
-    """Universal resolver for fully-qualified ctx:// URIs and domain relative paths across all extensions."""
-    target_name = filename or filepath
-    if not target_name: return None
-
-    clean_name = str(target_name)
-    while clean_name.startswith("ctx://"):
-        clean_name = clean_name[6:]
-
-    parts = clean_name.split('/')
-    if len(parts) < 2: return None
-    domain_dir = parts[0]
-    rel_subpath = "/".join(parts[1:])
-
-    ctx = gather_bp.get_context(workspace_id)
-    dir_key = f"{domain_dir}_dir"
-    resolved_dir = ctx.paths.get(dir_key) or Path(ctx.paths.get("artifacts_base", ".insetu/data")).joinpath(domain_dir).as_posix()
-    cand = Path(resolved_dir).joinpath(rel_subpath).as_posix()
-
-    if target_name.startswith("ctx://") or domain_dir in ("contexts", "diffs", "workflows", "prompts"):
-        return (cand, True) if filename else cand
-
-    return None
 def compile_context_payload(workspace_id, output_dir, base_uri, header_block, text_blocks, files, meta, max_kb=None):
     """Universal compiler for all system contexts (Gather, Git, Flow)."""
     ctx = gather_bp.get_context(workspace_id)
@@ -173,7 +149,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
     """Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation."""
     if not events: return
 
-    from insetu.kernel.db import get_connection
+    from akasa.db import get_connection
     conn = get_connection('workers', workspace_id=workspace_id)
     # The delayed compilation job ID. We use a static ID per workspace to coalesce updates.
     job_id = f"cmp_del_{workspace_id}"
@@ -186,7 +162,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
             old_events = old_args.get('ledger_events', [])
             def _get_fp(item):
                 raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
-                from insetu.kernel.utils import parse_uri
+                from akasa.utils import parse_uri
                 repo, rel = parse_uri(raw_fp)
                 clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
                 if raw_fp.endswith('/') and not clean_fp.endswith('/'):
@@ -207,7 +183,7 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
         "ledger_events": events
     })
 
-    from insetu.kernel.workers import submit_one_shot_job
+    from akasa.workers import submit_one_shot_job
     submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
 def get_ordered_compilation_steps(ctx):
     """Collects registered compilation steps from all extensions and performs a topological sort."""
@@ -339,9 +315,9 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
     for config in target_configs:
         repo_dir = config.get("repo_dir")
         safe_r_dir = get_safe_repo_id(repo_dir)
-        repo_path = ctx.get_repo_path(repo_dir)
+        repo_path = get_repo_path(repo_dir, workspace_id)
 
-        if not os.path.exists(repo_path): 
+        if not os.path.exists(repo_path):  
             debug_log_lines.append(f"\n[REPO SKIP] {repo_dir} (Path not found: {repo_path})")
             continue
         # Pull strictly from the SSOT Topology Ledger, avoiding disk I/O
@@ -381,7 +357,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
         sub_buckets = config.get("sub_buckets", [])
         buckets = {}
         dynamic_files = {}
-        from insetu.kernel.utils import slugify
+        from akasa.utils import slugify
         if sub_buckets:
             buckets = {}
             for b in sub_buckets:
@@ -519,7 +495,7 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
             m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
 
-            from insetu.kernel.utils import parse_uri
+            from akasa.utils import parse_uri
             repo, rel = parse_uri(raw_fp)
             clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
 
@@ -554,12 +530,16 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         if not ledger_events:
             return
 
+        from insetu.core.utils_core import InSetuURI
         affected_repos = set()
         for e in ledger_events:
             fp = e.get('filepath', '') if isinstance(e, dict) else str(e)
-            clean_fp = fp.replace('vfs://', '').replace('ctx://', '').lstrip('/')
-            parts = clean_fp.split('/', 1)
-            if len(parts) > 0: affected_repos.add(parts[0])
+            uri = InSetuURI(fp)
+            if uri.repo:
+                affected_repos.add(uri.repo)
+            else:
+                parts = uri.path.split('/', 1)
+                if len(parts) > 0: affected_repos.add(parts[0])
         # Collect context declarations across the OS
         declarations = []
         for res in ctx.emit('gather_declare_topology', ledger_events=ledger_events):
@@ -642,6 +622,8 @@ def generate_context_file(workspace_id=None, target_repos=None):
     # If target_repos is populated, we only want to save the deltas.
     manifest = {}
     expected_artifacts = set()
+    from insetu.core.utils_core import InSetuURI
+
     # 2. Execute generators in parallel
     def process_declaration(decl):
         gen_cb = decl.get('generator_callback')
@@ -665,7 +647,7 @@ def generate_context_file(workspace_id=None, target_repos=None):
                 manifest[filename] = entry
                 # Track all constituent chunks for the global vacuum
                 chunks = entry.get("chunks", [filename])
-                expected_artifacts.update(c.split('/')[-1] for c in chunks)
+                expected_artifacts.update(InSetuURI(c).basename for c in chunks)
     # 3. Global Vacuum: Purge physical files that aren't explicitly declared
     if target_repos is None:
         from insetu.core.utils_core import vacuum_manifest_artifacts
@@ -673,15 +655,14 @@ def generate_context_file(workspace_id=None, target_repos=None):
     # Re-inject surviving Ephemeral Artifacts into the manifest
     old_manifest = ctx.manifest.get("ctx", {})
     restored_ephemerals = set()
-
     for k, v in old_manifest.items():
         if v.get("meta", {}).get("domain") in ("Quickpacks", "Exported Contexts"):
-            safe_k = k.split('/')[-1]
+            safe_k = InSetuURI(k).basename
             base_path = Path(paths["contexts_dir"]).joinpath(safe_k).as_posix()
             if base_path in active_ephemerals:
                 manifest[k] = v
                 for chunk in ctx.get_manifest_files(target_key=k):
-                    safe_chunk = chunk.split('/')[-1]
+                    safe_chunk = InSetuURI(chunk).basename
                     chunk_path = Path(paths["contexts_dir"]).joinpath(safe_chunk).as_posix()
                     restored_ephemerals.add(chunk_path)
     for f_path in active_ephemerals:
@@ -755,7 +736,7 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
 
     chunks = manifest_entry.get("chunks", [base_uri])
     for chunk in chunks:
-        from insetu.kernel.utils import resolve_system_artifact_path
+        from akasa.utils import resolve_system_artifact_path
         out_path = resolve_system_artifact_path(chunk, ctx.workspace_id)
         register_ephemeral_artifact(out_path, "quick_pack", 86400, workspace_id=ctx.workspace_id)
 
@@ -931,7 +912,7 @@ def api_gather_submit(ctx):
     if "target_repos" in data:
         payload["target_repos"] = data["target_repos"]
 
-    from insetu.kernel.workers import submit_immediate_job
+    from akasa.workers import submit_immediate_job
     submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], json.dumps(payload), workspace_id=ctx.workspace_id)
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
@@ -947,8 +928,15 @@ def _register_gather_step(workspace_id=None, **kwargs):
 def hook_request_paths(workspace_id=None, **kwargs):
     from insetu.core.utils_core import get_domain_artifact_path
     return {
-        "contexts_dir": get_domain_artifact_path(workspace_id, "contexts")
+        "contexts_dir": get_domain_artifact_path(workspace_id, "contexts", "gather")
     }
+
+@hooks.on('workspace_boot')
+def mount_gather_volumes(workspace_id=None, **kwargs):
+    from akasa.vfs import mount_volume, register_driver, DefaultVFSDriver
+    register_driver('ctx', DefaultVFSDriver())
+    ctx = gather_bp.get_context(workspace_id)
+    mount_volume(workspace_id, 'ctx', 'contexts', ctx.paths.get("contexts_dir"))
 _manifest_thread_cache = threading.local()
 @hooks.on('request_manifest')
 def hook_request_manifest(workspace_id=None, **kwargs):

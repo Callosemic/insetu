@@ -4,9 +4,11 @@ import json
 import threading
 from pathlib import Path
 from flask import jsonify
-from insetu.kernel.extension import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
-from insetu.kernel.workers import submit_immediate_job, register_callback
+from akasa.extension import ExtensionContext
+from insetu.core.sdk import InSetuExtension
+from akasa.hooks import hooks
+from akasa.workers import submit_immediate_job, register_callback
+from insetu.core.utils_core import get_repo_path
 
 TOPOLOGY_SCHEMA = {
     "topology_ledger": {
@@ -47,7 +49,7 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
 @topology_bp.worker("scan_topology_task")
 def _background_scan_topology(ctx, ledger_events=None, **kwargs):
     import time
-    from insetu.kernel.db import get_connection
+    from akasa.db import get_connection
     w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
 
     # Barrier Sync: Await async VFS pipeline writes to settle before draining topology
@@ -88,7 +90,7 @@ def _background_scan_topology(ctx, ledger_events=None, **kwargs):
 
     all_events = list(event_dict.values())
 
-    from insetu.kernel.workers import cancel_job
+    from akasa.workers import cancel_job
     cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
 
     return {
@@ -142,7 +144,7 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir: continue
 
-        repo_path = ctx.get_repo_path(repo_dir)
+        repo_path = get_repo_path(repo_dir, workspace_id)
 
         valid_files = get_valid_workspace_files(repo_path, repo_cfg, workspace_id)
         sub_buckets = repo_cfg.get("sub_buckets", [])
@@ -230,7 +232,7 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
         if not filepath:
             continue
 
-        from insetu.kernel.utils import parse_uri
+        from akasa.utils import parse_uri
         is_dir = filepath.endswith('/') or filepath.endswith('\\')
 
         repo, rel_path = parse_uri(filepath)
@@ -275,16 +277,18 @@ def resolve_topology_buffer(workspace_id):
     dirty_repos = set()
     target_repos = ctx.config.get("target_repos", [])
     target_repos_map = {r.get("repo_dir"): r for r in target_repos if r and r.get("repo_dir")}
-    from insetu.kernel.utils import parse_uri
+    from akasa.utils import parse_uri
     import os
 
     final_events = []
     # Safely expand directories without iterating over a mutating list
+    from insetu.core.utils_core import InSetuURI
     for e in events:
         raw_fp = e["filepath"]
         op = e["mutation_type"]
 
-        naive_repo, naive_rel = parse_uri(raw_fp)
+        uri = InSetuURI(raw_fp)
+        naive_repo, naive_rel = uri.repo, uri.path
         clean_fp = f"{naive_repo}/{naive_rel}".strip('/')
 
         repo_dir = "global"
@@ -298,10 +302,9 @@ def resolve_topology_buffer(workspace_id):
                     best_repo_len = len(r_dir)
                     repo_dir = r_dir
                     rel_path = clean_fp[len(r_dir):].lstrip('/')
-
         is_dir = raw_fp.endswith('/')
         if not is_dir and op == "save":
-            repo_base = Path(ctx.get_repo_path(repo_dir)) if repo_dir != "global" else None
+            repo_base = Path(get_repo_path(repo_dir, workspace_id)) if repo_dir != "global" else None
             if repo_base:
                 target_dir = repo_base / rel_path.strip('/')
                 if target_dir.exists() and target_dir.is_dir():
@@ -316,10 +319,12 @@ def resolve_topology_buffer(workspace_id):
                     final_events.append({"filepath": vfs_fp, "mutation_type": "save"})
         else:
             final_events.append({"filepath": raw_fp, "mutation_type": op})
+    from insetu.core.utils_core import InSetuURI
     for e in final_events:
         raw_fp = e["filepath"]
 
-        naive_repo, naive_rel = parse_uri(raw_fp)
+        uri = InSetuURI(raw_fp)
+        naive_repo, naive_rel = uri.repo, uri.path
         clean_fp = f"{naive_repo}/{naive_rel}".strip('/')
 
         repo_dir = "global"
@@ -408,11 +413,32 @@ def resolve_topology_buffer(workspace_id):
     )
 
     return final_events
+@hooks.on('mutate_workspace_config')
+def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
+    """Dynamically remounts VFS volumes whenever the configuration changes."""
+    from akasa.vfs import mount_volume
+    from akasa.utils import get_workspace_physics
+    from pathlib import Path
+
+    _, ws_root = get_workspace_physics(workspace_id)
+    for repo_cfg in cfg.get("target_repos", []):
+        repo_dir = repo_cfg.get("repo_dir")
+        if repo_dir:
+            p_path = repo_cfg.get("physical_path")
+            if p_path:
+                repo_path = Path(p_path).expanduser().resolve().as_posix()
+            else:
+                repo_path = Path(ws_root).joinpath(repo_dir).resolve().as_posix()
+            mount_volume(workspace_id, 'vfs', repo_dir, repo_path)
 
 @hooks.on('workspace_boot')
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
     ctx = topology_bp.get_context(workspace_id)
+
+    # Force a mount evaluation during boot using the current config
+    mount_topology_volumes_dynamically(ctx.config, workspace_id)
+
     try:
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_repo ON topology_ledger(repo)")
         ctx.db.execute("CREATE INDEX IF NOT EXISTS idx_topology_bucket ON topology_ledger(bucket_id)")
@@ -426,7 +452,7 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
     force_topology_scan(workspace_id=ctx.workspace_id)
-    from insetu.kernel.hooks import hooks
+    from akasa.hooks import hooks
     # Phase 2 Trigger: Synchronous emission ensures deterministic, sequential execution of deferred tasks
     hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
 
@@ -458,7 +484,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
     import subprocess
     from pathlib import Path
-    from insetu.kernel.utils import load_config
+    from akasa.utils import load_config
 
     live_cfg = load_config(workspace_id)
 
@@ -483,7 +509,7 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 if check_tree.returncode != 0 or 'true' not in check_tree.stdout.lower():
                     subprocess.run(['git', 'init'], capture_output=True, cwd=repo_path)
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
-                        from insetu.kernel.vfs import execute_vfs_save
+                        from akasa.vfs import execute_vfs_save
                         execute_vfs_save(workspace_id, f"vfs://{config.get('repo_dir')}/.gitkeep", "", data={"ignore_ledger": True})
             except Exception:
                 pass
@@ -576,18 +602,19 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
 def resolve_owning_workspaces(filepath=None, **kwargs):
     """Deterministically maps a physical path back to all owning tenant workspaces."""
     if not filepath: return set()
-    from insetu.kernel.utils import get_all_workspace_ids, get_workspace_physics, load_config, parse_uri
+    from akasa.utils import get_all_workspace_ids, get_workspace_physics, load_config
+    from insetu.core.utils_core import InSetuURI
     from pathlib import Path
 
-    raw_path_str = str(filepath).replace("vfs://", "").replace("ctx://", "").strip()
+    uri = InSetuURI(str(filepath))
+    raw_path_str = uri.path
     is_abs = Path(raw_path_str).is_absolute()
-    naive_repo, naive_rel = parse_uri(filepath)
+    naive_repo, naive_rel = uri.volume, uri.path
     clean_fp = f"{naive_repo}/{naive_rel}".strip('/') if naive_rel else naive_repo
-
     owning_workspaces = set()
     for ws_id in get_all_workspace_ids():
         try:
-            _, ws_root, _ = get_workspace_physics(ws_id)
+            _, ws_root = get_workspace_physics(ws_id)
             abs_ws_root = Path(ws_root).resolve().as_posix()
             cfg = load_config(ws_id)
             target_repos = cfg.get("target_repos", [])

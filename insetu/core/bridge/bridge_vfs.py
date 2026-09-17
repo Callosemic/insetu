@@ -11,10 +11,10 @@ import zlib
 import time
 import uuid
 from pathlib import Path
-from insetu.kernel.utils import get_workspace_physics, parse_blocks
-from insetu.core.utils_core import get_sister_repos
+from akasa.utils import get_workspace_physics
+from insetu.core.utils_core import get_sister_repos, parse_blocks
 from insetu.core.topology.engine_topology import get_omniscient_workspace_files
-from insetu.kernel.vfs import VFSTransaction
+from akasa.vfs import VFSTransaction
 from .bridge_fuzzy import apply_block_in_memory, clean_chevron_meltdown, expand_macros, is_effectively_identical
 def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     from insetu.core.bridge.engine_bridge import bridge_bp
@@ -53,12 +53,14 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     patch_index = 0
     for raw_target_file, blocks in parsed_structure.items():
         if raw_target_file not in active_files or not blocks: continue
+        from insetu.core.utils_core import InSetuURI
+        uri = InSetuURI(raw_target_file)
 
-        # Enforce vfs:// logical boundary mapping directly
-        target_file = raw_target_file.replace("vfs://", "", 1) if raw_target_file.startswith("vfs://") else raw_target_file
+        # Enforce vfs:// logical boundary mapping natively
+        target_file = f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path
         norm_target = target_file
 
-        if norm_target.endswith('insetu/cli.py') or norm_target.endswith('fallback_bridge.py'):
+        if uri.basename in ('cli.py', 'fallback_bridge.py') and 'insetu/' in norm_target:
             telemetry["can_commit"] = False
             patch_tel = {
                 "patch_index": patch_index,
@@ -75,9 +77,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             telemetry["summary"]["failed"] += 1
             telemetry["patches"].append(patch_tel)
             continue
-
         # Execution Lock Containment Check
-        explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
+        explicit_repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else None)
         if explicit_repo in sister_repos and explicit_repo not in allowed_repos:
             telemetry["can_commit"] = False
             patch_tel = {
@@ -129,7 +130,9 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             content = get_file_content(target_file)
             # Step a.0: Genesis Patch Check
             if is_genesis:
-                explicit_repo = norm_target.split('/')[0] if '/' in norm_target else None
+                from insetu.core.utils_core import InSetuURI
+                gen_uri = InSetuURI(norm_target)
+                explicit_repo = gen_uri.repo if gen_uri.repo else (gen_uri.path.partition('/')[0] if '/' in gen_uri.path else None)
                 if explicit_repo in allowed_repos:
                     resolved_path = target_file
                     resolution_type = "genesis"
@@ -381,7 +384,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 telemetry["can_commit"] = False
                 telemetry["summary"]["failed"] += 1
                 telemetry["patches"].append(patch_tel)
-                from insetu.kernel.hooks import hooks
+                from akasa.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
             # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
@@ -454,7 +457,7 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
                     telemetry["patches"].append(patch_tel)
-                    from insetu.kernel.hooks import hooks
+                    from akasa.hooks import hooks
                     hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
                     continue
 
@@ -524,10 +527,12 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 recent_records = db_conn.execute("SELECT is_snapshot FROM bridge_ledger WHERE filepath=? ORDER BY timestamp DESC LIMIT 4", (filepath,)).fetchall()
                 if len(recent_records) == 4 and not any(r['is_snapshot'] for r in recent_records):
                     is_snapshot = True
-
             if is_snapshot:
                 compressed_state = zlib.compress(orig_content.encode('utf-8'))
-            current_repo = filepath.split('/')[0] if '/' in filepath else ""
+            from insetu.core.utils_core import InSetuURI
+            file_uri = InSetuURI(filepath)
+            current_repo = file_uri.repo if file_uri.repo else (file_uri.path.partition('/')[0] if '/' in file_uri.path else "")
+
             patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
             patch_count = len(file_blocks)
             chunks_json = json.dumps([{"search": b["search"], "replace": b["replace"]} for b in file_blocks])
@@ -550,11 +555,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
         telemetry["status"] = "action_required" if telemetry["summary"]["action_required"] > 0 else "failed"
 
     return telemetry
-
 def execute_bridge_sync(workspace_id, data):
     import json
     sister_repos = get_sister_repos(workspace_id)
-    _, ws_root, _ = get_workspace_physics(workspace_id)
+    _, ws_root = get_workspace_physics(workspace_id)
 
     try:
         with VFSTransaction(workspace_id) as vfs:

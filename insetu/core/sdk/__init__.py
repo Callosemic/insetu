@@ -1,2 +1,2 @@
 # inSetu Extension SDK
-from insetu.kernel.extension import InSetuExtension, ExtensionContext
+from akasa.extension import AkasaExtension as InSetuExtension, ExtensionContext

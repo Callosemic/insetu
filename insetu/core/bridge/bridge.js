@@ -178,7 +178,8 @@ export class InSetuExtBridge extends InSetuElement {
         _fileVerificationCache: { type: Object },
         _editCellId: { type: String },
         _editContent: { type: String },
-        _editCellOriginalFile: { type: String }
+        _editCellOriginalFile: { type: String },
+        _autoSwaps: { type: Object }
     };
     static styles = [
         sharedStyles,
@@ -198,6 +199,47 @@ export class InSetuExtBridge extends InSetuElement {
         this._editCellOriginalFile = '';
         this._headerTouchStartX = null;
         this._headerTouchStartY = null;
+        this._autoSwaps = {};
+        this._rejectedAutoSwaps = new Set();
+    }
+
+    _evaluateAutoSwaps() {
+        if (!this.vfs || !this.vfs.getGlobalManifest) return;
+        const cells = BridgeStore.getState().cells || [];
+        if (cells.length === 0) {
+            this._autoSwaps = {};
+            this._rejectedAutoSwaps.clear();
+            return;
+        }
+
+        const mFiles = this.vfs.getGlobalManifest().filter(f => !f.endsWith('.gitkeep'));
+        const files = Array.from(new Set(cells.map(c => c.file)));
+
+        let swapped = false;
+        files.forEach(file => {
+            if (this._fileVerificationCache[file] === false && !this._rejectedAutoSwaps.has(file)) {
+                const cleanFile = file.replace(/\s*\(\d+\)(?=\.[^.\/]+$|$)/, '').trim();
+                const cleanFileLower = cleanFile.toLowerCase();
+                const basename = cleanFile.split('/').pop().toLowerCase();
+
+                let cands = mFiles.filter(f => f.toLowerCase().endsWith(cleanFileLower));
+                if (cands.length === 0) {
+                    cands = mFiles.filter(f => f.toLowerCase().endsWith('/' + basename) || f.toLowerCase() === basename);
+                }
+
+                if (cands.length === 1) {
+                    const newPath = cands[0];
+                    this._autoSwaps = { ...this._autoSwaps, [newPath]: file };
+                    swapped = true;
+                    // Run statelessly on the next tick to avoid render loop collisions
+                    setTimeout(() => {
+                        BridgeStore.getState().updateGroupFile(file, newPath);
+                        window.inSetu.stores.Fs.getState().verifyFiles([newPath], true);
+                    }, 0);
+                }
+            }
+        });
+        if (swapped) this.requestUpdate();
     }
     onWorkspaceLoad(workspaceId) {
         window.inSetu.stores.Fs.setState({ fileVerificationCache: {} });
@@ -213,9 +255,11 @@ export class InSetuExtBridge extends InSetuElement {
             this.viewMode = state.viewMode;
             this.telemetry = state.telemetry;
             window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
+            this._evaluateAutoSwaps();
         });
         this.subscribe(window.inSetu.stores.Fs, (state) => {
             this._fileVerificationCache = state.fileVerificationCache || {};
+            this._evaluateAutoSwaps();
         });
         // Event listeners for Yomama Actions
         this.registerGlobalListener('insetu:bridge:cell-deleted', window, (e) => {
@@ -665,6 +709,21 @@ export class InSetuExtBridge extends InSetuElement {
                                                 }
                                             }}>📁 Remap</button>
                                         </div>
+                                        ${this._autoSwaps[file] ? html`
+                                            <div style="font-size: 0.8rem; color: var(--intent-success); margin-top: 10px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px dashed var(--border);">
+                                                <span>✨ Auto-mapped from: <span style="font-family: monospace; opacity: 0.8;">${this._autoSwaps[file]}</span></span>
+                                                <button class="btn-sm" style="background: transparent; color: var(--text-muted); border: 1px solid var(--border); padding: 2px 8px; margin: 0;" @click=${(e) => {
+                                                    e.stopPropagation();
+                                                    const original = this._autoSwaps[file];
+                                                    this._rejectedAutoSwaps.add(original);
+                                                    const newSwaps = { ...this._autoSwaps };
+                                                    delete newSwaps[file];
+                                                    this._autoSwaps = newSwaps;
+                                                    BridgeStore.getState().updateGroupFile(file, original);
+                                                    window.inSetu.stores.Fs.getState().verifyFiles([original], true);
+                                                }}>Undo</button>
+                                            </div>
+                                        ` : ''}
                                         ${this._fileVerificationCache[file] === false ? (() => {
                                             let cands = [];
                                             if (this.vfs && this.vfs.getGlobalManifest) {

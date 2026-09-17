@@ -1,7 +1,7 @@
 import re
 import difflib
 import base64
-from insetu.kernel.utils import _get_base_step_and_diffs
+from insetu.core.utils_core import _get_base_step_and_diffs
 def clean_chevron_meltdown(text):
     """Phase B: Explicit Chevron Healing Loop. Trims conversational garbage trailing the final patch."""
     import re

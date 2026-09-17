@@ -5,8 +5,8 @@ import datetime
 from pathlib import Path
 from flask import request, jsonify, send_file
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.vfs import execute_vfs_move, execute_vfs_archive, execute_vfs_delete, execute_vfs_save, _resolve_physical_path as resolve_physical_path
-from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, _resolve_physical_path as resolve_physical_path
+from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 
 fs_bp = InSetuExtension(
     'fs', 
@@ -36,7 +36,7 @@ def api_fs_fetch(ctx):
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
-    from insetu.kernel.vfs import VFSTransaction
+    from akasa.vfs import VFSTransaction
     with VFSTransaction(workspace_id) as vfs:
         content = vfs.read(filename)
 
@@ -47,7 +47,7 @@ def api_fs_fetch(ctx):
 @fs_bp.bp.route('/download/<path:filename>')
 def download_file(filename):
     """Universal download gateway for contexts, artifacts, and vault files."""
-    from insetu.kernel.utils import sniff_tenant_id
+    from akasa.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
 
     resolved_path = resolve_physical_path(filename, workspace_id)
@@ -65,7 +65,7 @@ def download_file(filename):
 def _background_fs_search(job_id, workspace_id, query, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Searching workspace files...", workspace_id=workspace_id)
-        from insetu.kernel.hooks import hooks
+        from akasa.hooks import hooks
         results = []
         search_responses = hooks.emit('vfs_search', workspace_id=workspace_id, query=query)
         for res in search_responses:
@@ -111,7 +111,19 @@ def api_fs_archive(ctx):
         filepath = data.get("filepath", "").strip()
         if not filepath:
                 return jsonify({"error": "Filepath required"}), 400
-        res, code = execute_vfs_archive(workspace_id, filepath)
+
+        from akasa.uri import AkasaURI
+        uri = AkasaURI(filepath)
+
+        if not uri.parent.path or uri.parent.path == '.':
+            rel_dest = f"archived/{uri.basename}"
+        else:
+            rel_dest = f"{uri.parent.path}/archived/{uri.basename}"
+
+        res, code = execute_vfs_move(workspace_id, filepath, rel_dest)
+        # Retain payload signature compatibility for the frontend
+        res["new_path"] = rel_dest
+        res["message"] = "File archive queued."
         return jsonify(res), code
     except Exception as e:
         return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
@@ -138,10 +150,10 @@ def api_fs_upload(ctx):
     dest_dir = ctx.req.form.get('dest_dir', '').strip()
     import werkzeug.utils
     import time
-    from insetu.kernel.db import get_connection
-    from insetu.kernel.hooks import hooks
+    from akasa.db import get_connection
+    from akasa.hooks import hooks
     from pathlib import Path
-    from insetu.kernel.utils import resolve_sandbox_path
+    from akasa.utils import resolve_sandbox_path
     
     db_conn = get_connection("workers", workspace_id=workspace_id)
     uploaded_paths = []

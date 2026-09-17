@@ -1,8 +1,8 @@
 import uuid
 from flask import jsonify
-from insetu.kernel.db import get_connection
-from insetu.kernel.workers import submit_immediate_job, update_immediate_job_status, register_callback
-from insetu.kernel.extension import InSetuExtension
+from akasa.db import get_connection
+from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from insetu.core.sdk import InSetuExtension
 
 # Import the extracted math & validation logic
 from .bridge_vfs import execute_bridge_sync
@@ -66,7 +66,7 @@ def bridge_revert(ctx):
                 targets.append(r)
                 seen.add(r['filepath'])
     import uuid, time, hashlib, zlib, json
-    from insetu.kernel.vfs import VFSTransaction
+    from akasa.vfs import VFSTransaction
     from insetu.core.bridge.bridge_fuzzy import apply_block_in_memory
 
     new_tx_id = f"tx_rev_{uuid.uuid4().hex[:8]}"
@@ -112,9 +112,12 @@ def bridge_revert(ctx):
 
             compressed_state = zlib.compress(current_on_disk.encode('utf-8'))
             post_patch_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-
+            from insetu.core.utils_core import InSetuURI
             new_patch_id = f"ptc_{uuid.uuid4().hex[:12]}"
-            repo = filepath.split('/')[0] if '/' in filepath else ""
+
+            uri = InSetuURI(filepath)
+            repo = uri.repo if uri.repo else (uri.path.partition('/')[0] if '/' in uri.path else "")
+
             ctx.db.execute('''
                 INSERT INTO bridge_ledger (patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, compressed_state, timestamp, ttl_expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -164,7 +167,7 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
                 update_immediate_job_status(job_id, 'processing', "Awaiting VFS disk settlement...", workspace_id=workspace_id)
 
                 # VFS BARRIER: Block the completion signal until physical disk writes settle
-                from insetu.kernel.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
+                from akasa.vfs import _VFS_WRITE_QUEUE, _VFS_SHUTDOWN_SIGNAL
                 import time
 
                 # Replace blocking .join() with an abortable polling lock. Add timeout to survive heavy I/O storms.
