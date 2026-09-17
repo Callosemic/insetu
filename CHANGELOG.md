@@ -144,7 +144,7 @@
   load lifecycle
   ([`7cf6b9a`](https://github.com/Callosemic/insetu/commit/7cf6b9ad3fe6a79adb28e9a1526392ed9e904ee9))
 
-- **core**: Harden REST route error boundaries and align workspace CRUD with save_json_file
+- **core**: Harden REST route error boundaries and align workspace CRUD with save_json_config
   ([`e70bcd9`](https://github.com/Callosemic/insetu/commit/e70bcd9642c690426d730061c113c31032ff5aac))
 
 - **update**: Prerelease token

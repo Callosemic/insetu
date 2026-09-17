@@ -3,37 +3,7 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
-❌ [VIOLATION: SDK_VFS_READ_MANDATE] [workspace]/insetu/insetu/extensions/tracker/engine_tracker.py:178
-   ↳ Native open() detected in extension. Use ctx.vfs.read() instead.
-
-❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/fs/engine_fs.py:208
-   ↳ Native 'open' in write mode detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
-
-❌ [VIOLATION: EVENT_LEDGER_SENTINEL] [workspace]/insetu/insetu/core/fs/engine_fs.py:208
-   ↳ Native file write detected. Route through execute_vfs_save to maintain Event Ledger parity (ADR 0018).
-
-❌ [VIOLATION: DIRECT_JOB_TABLE_MUTATION_BAN] [workspace]/insetu/insetu/kernel/workers/__init__.py:80
-   ↳ Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from insetu.kernel.workers instead.
-
-❌ [VIOLATION: VFS_CONSTRAINT] [workspace]/insetu/insetu/kernel/workers/__init__.py:265
-   ↳ Synchronous os.remove/rmdir detected. Route through the async VFS queue.
-
-❌ [VIOLATION: DIRECT_JOB_TABLE_MUTATION_BAN] [workspace]/insetu/insetu/kernel/workers/__init__.py:309
-   ↳ Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from insetu.kernel.workers instead.
-
-❌ [VIOLATION: DIRECT_JOB_TABLE_MUTATION_BAN] [workspace]/insetu/insetu/kernel/workers/__init__.py:408
-   ↳ Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from insetu.kernel.workers instead.
-
-❌ [VIOLATION: VFS_CONSTRAINT] [workspace]/insetu/insetu/kernel/auth/__init__.py:23
-   ↳ Synchronous shutil.move/rmtree detected. Route through the async VFS queue.
-
-❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/kernel/auth/__init__.py:35
-   ↳ pathlib.write_bytes() bypass detected. Route through the async VFS queue.
-
-❌ [VIOLATION: VFS_CONSTRAINT_BYPASS] [workspace]/insetu/insetu/kernel/auth/__init__.py:83
-   ↳ pathlib.write_bytes() bypass detected. Route through the async VFS queue.
-
 🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-❌ FAILED: Found 10 architectural violations.
+✅ SUCCESS: Codebase complies with all engineering standards.

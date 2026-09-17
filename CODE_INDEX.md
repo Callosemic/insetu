@@ -1,4 +1,4 @@
-# inSetu Code Index
+# inSetu Developer OS Code Index
 
 This index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.
 
@@ -57,7 +57,8 @@ insetu/
 │       ├── 0044-ruamel-yaml-frontmatter-parsing-and-uri-event-canonicalization.md # Round-trip YAML frontmatter parsing and canonical vfs:// event normalization.
 │       ├── 0045-two-pass-deterministic-boot-sequence.md # Two-pass deterministic boot sequence bisecting spatial discovery and deferred mutation.
 │       ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
-│       ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # [comment required]
+│       ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # Queued event-driven barrier sentinel for exact VFS write watermark synchronization.
+│       ├── 0048-akasa-kernel-package-extraction-and-insetu-uri-wrapper.md # Extraction of Tier 1 Kernel into standalone 'akasa' package and InSetuURI domain wrapper.
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -194,19 +195,7 @@ insetu/
 │   │       ├── engine_update.py    # Python-semantic-release orchestration.
 │   │       ├── ext_update.js       # Release preview and publish UI.
 │   │       └── vendor.json         # Map of core third-party UI dependencies (Lit, CodeMirror).
-│   ├── kernel/                     # Tier 1 Micro-Kernel Substrate (To be extracted to 'akasa').
-│   │   ├── auth/                   # [comment required]
-│   │   │   └── __init__.py         # Module initialization.
-│   │   ├── db.py                   # [SQLite Connection Pooling]
-│   │   ├── extension.py            # The InSetuExtension and ExtensionContext SDK wrappers.
-│   │   ├── fallback_bridge.py      # Immutable Recovery OS and Zero-JS Lifeboat UI.
-│   │   ├── hooks.py                # The central synchronous and asynchronous Event Bus.
-│   │   ├── sync.py                 # Telemetry aggregation for the UI status heartbeat.
-│   │   ├── types.py                # Central Tier 1 Kernel type definitions and protocol contracts.
-│   │   ├── utils.py                # Domain-agnostic kernel utilities and physics resolution.
-│   │   ├── vfs.py                  # Asynchronous Virtual File System write queue and barriers.
-│   │   └── workers/                # [comment required]
-│   │       └── __init__.py         # Module initialization.
+│   ├── fallback_bridge.py          # Immutable Recovery OS and Zero-JS Lifeboat UI.
 │   ├── static/                     # Web server static assets and frontend bundles.
 │   │   ├── css/                    # Global CSS stylesheets.
 │   │   │   └── style.css           # Global theme variables, utility classes, and layout rules.

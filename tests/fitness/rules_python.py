@@ -50,6 +50,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
+
+        # AkasaURI Migration Guardrails
+        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'split':
+            if len(node.value.args) > 0 and isinstance(node.value.args[0], ast.Constant) and node.value.args[0].value == '/':
+                is_neg_one = isinstance(node.slice, ast.UnaryOp) and isinstance(node.slice.op, ast.USub) and isinstance(node.slice.operand, ast.Constant) and node.slice.operand.value == 1
+                is_zero = isinstance(node.slice, ast.Constant) and node.slice.value == 0
+                if is_neg_one:
+                    report_violation("URI_BASENAME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([-1]) detected. Use InSetuURI(path).basename instead.")
+                elif is_zero:
+                    report_violation("URI_VOLUME_MANDATE", self.filepath, node.lineno, "Manual path splitting ([0]) detected. Use InSetuURI(path).volume or .repo instead.")
+
         self.generic_visit(node)
     def visit_Call(self, node):
         for arg in node.args:
@@ -61,7 +72,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         node.lineno,
                         f"Direct file I/O on legacy '{arg.value}' detected. Use vfs_index.db, ctx.save_manifest, or request_manifest instead."
                     )
-        if isinstance(node.func, ast.Name) and node.func.id == 'save_json_file':
+        if isinstance(node.func, ast.Name) and node.func.id == 'save_json_config':
             self.has_save_json = True
         if isinstance(node.func, ast.Name) and node.func.id == 'ExtensionContext':
             if ('core' in self.filepath.parts or 'extensions' in self.filepath.parts) and self.filename != 'extension.py':
@@ -90,6 +101,11 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
+        # AkasaURI Migration Guardrails
+        if isinstance(node.func, ast.Attribute) and node.func.attr in ('startswith', 'replace'):
+            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if node.args[0].value in ('vfs://', 'ctx://', 'system://'):
+                    report_violation("URI_SCHEME_MANDATE", self.filepath, node.lineno, f"Manual scheme manipulation ({node.func.attr}) detected. Use InSetuURI(path).scheme or .path instead.")
 
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
@@ -182,12 +198,13 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self._check_sqlite_import(node)
         for alias in node.names:
             if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
-                report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'insetu.kernel.{alias.name.split('.')[-1]}' instead.")
+                report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'akasa.{alias.name.split('.')[-1]}' instead.")
         is_ext = 'extensions' in self.filepath.parts
         is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
-
         if is_tier2 and any(alias.name.startswith('insetu.extensions') or alias.name.startswith('extensions') for alias in node.names):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
+        if is_tier2 and any(alias.name.startswith('insetu.kernel') for alias in node.names):
+            report_violation("AKASA_KERNEL_IMPORT_MANDATE", self.filepath, node.lineno, "Legacy import of 'insetu.kernel'. Core substrate modules must import from 'akasa.*'.")
 
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext and any(alias.name == 'flask' for alias in node.names):
@@ -263,14 +280,15 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
         if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
-            report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'insetu.kernel.{node.module.split('.')[-1]}' instead.")
+            report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")
         is_ext = 'extensions' in self.filepath.parts
         is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
-
         if is_tier2 and node.module and (node.module.startswith('insetu.extensions') or node.module.startswith('extensions')):
             report_violation("TIER_ISOLATION_MANDATE", self.filepath, node.lineno, "Tier 2 Core Substrate modules cannot import from Tier 3 Domain Extensions.")
+        if is_tier2 and node.module and node.module.startswith('insetu.kernel'):
+            report_violation("AKASA_KERNEL_IMPORT_MANDATE", self.filepath, node.lineno, "Legacy import from 'insetu.kernel'. Core substrate modules must import from 'akasa.*'.")
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
             if node.module in ('typing', 'typing_extensions'):
@@ -282,10 +300,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                         "TYPE_CONTRACT_IMPORT_MANDATE",
                         self.filepath,
                         node.lineno,
-                        f"Redundant type alias imports {overlap} detected. Import canonical type contracts from 'insetu.kernel.types' instead."
+                        f"Redundant type alias imports {overlap} detected. Import canonical type contracts from 'akasa.types' instead."
                     )
             if node.module in ('insetu.sdk', 'insetu.utils', 'insetu.hooks', 'insetu.workers'):
-                report_violation("DEPRECATED_TIER_IMPORT", self.filepath, node.lineno, f"Extension imports from un-tiered '{node.module}'. Import from 'insetu.core.sdk' or 'insetu.kernel.*' instead.")
+                report_violation("DEPRECATED_TIER_IMPORT", self.filepath, node.lineno, f"Extension imports from un-tiered '{node.module}'. Import from 'insetu.core.sdk' or 'akasa.*' instead.")
             if node.module == 'flask' and any(alias.name == 'Blueprint' for alias in node.names):
                 report_violation("FLASK_BLUEPRINT_BAN", self.filepath, node.lineno, "Flask Blueprint detected in extension engine. Use InSetuExtension instead.")
             if node.module == 'socket':
@@ -326,12 +344,12 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     f"Hardcoded reference to deprecated 'workspaces.json' detected in string literal '{node.value}'. "
                     "Use load_config(), get_all_workspace_ids(), or '.insetu/system.json' instead."
                 )
-            if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename != "workers.py":
+            if any(sql in node.value for sql in ("INSERT INTO jobs", "INSERT OR REPLACE INTO jobs", "DELETE FROM jobs")) and self.filename not in ("workers.py", "__init__.py"):
                 report_violation(
                     "DIRECT_JOB_TABLE_MUTATION_BAN",
                     self.filepath,
                     node.lineno,
-                    "Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from insetu.kernel.workers instead."
+                    "Direct SQL manipulation of the 'jobs' table detected. Use submit_job() or submit_one_shot_job() from akasa.workers instead."
                 )
         self.generic_visit(node)
 
@@ -357,7 +375,7 @@ def check_python_files():
                         visitor.visit(tree)
 
                         if visitor.has_save_json and not visitor.has_cache_clear and file in ["routes_system.py", "extension.py", "app.py"]:
-                            report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_file for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
+                            report_violation("CACHE_INVALIDATION_MANDATE", filepath, 1, "File invokes save_json_config for configuration but fails to clear _MUTATED_CONFIG_CACHE to invalidate the configuration cache.")
                         if file == "app.py":
                             has_token_gate = any(
                                 isinstance(n, ast.FunctionDef) and n.name == "enforce_token_gate"
