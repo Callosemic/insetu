@@ -11,7 +11,7 @@ This coupling caused Tier 1 Kernel components to depend on Tier 2 Developer OS p
 ## Decision
 1. **Utility Bisect:**
    - Split `utils_core.py` into Tier 1 Kernel utilities (`insetu/utils.py`) and Tier 2 Developer OS utilities (`insetu/core/utils_core.py`).
-   - `insetu/utils.py` retains pure framework methods (`get_workspace_physics`, `load_config`, `slugify`, `load_json_file`, `save_json_file`, `generate_idempotency_hash`).
+   - `insetu/utils.py` retains pure framework methods (`get_workspace_physics`, `load_config`, `slugify`, `load_json_config`, `save_json_config`, `generate_idempotency_hash`).
    - `insetu/core/utils_core.py` houses Developer OS physics (`get_valid_workspace_files`, `get_available_contexts`, `build_tree_dict`, `generate_ascii_tree`, `get_omniscient_workspace_files`, `resolve_logical_path`).
 2. **Domain Helper Relocation:**
    - Relocated `getFlattenedBuckets` and selection payload packing (`packSelectionPayload`) out of `app.js` and into `insetu/static/js/core/gather.js`.

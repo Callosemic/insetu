@@ -8,8 +8,8 @@
 
 `inSetu` enforces a strict three-tier module hierarchy to preserve system resilience, prevent cognitive overload, and eliminate logic drift.
 ### Tier 1: Kernel & Micro-Kernel Substrate (Domain-Agnostic)
-The Kernel is a purely generic application substrate. It is strictly forbidden from possessing domain knowledge about the "inSetu" product, Large Language Models, Context Gathering, or code editing. It provides purely agnostic I/O and orchestration (Note: Extraction into the standalone package `akasa` is planned).
-* **`insetu.kernel` (Python Kernel):** Thread-local SQLite connection pooling (`db.py`), asynchronous Virtual File System queue and barrier locks (`vfs.py`), background worker metronome (`workers.py`), priority event bus (`hooks.py`), and the token gatehouse (`auth.py`).
+The Kernel is a purely generic application substrate. It is strictly forbidden from possessing domain knowledge about the "inSetu" product, Large Language Models, Context Gathering, or code editing. It provides purely agnostic I/O and orchestration via the standalone `akasa` kernel package.
+* **`akasa` (Python Kernel Substrate):** Thread-local SQLite connection pooling (`akasa.db`), asynchronous Virtual File System queue and barrier locks (`akasa.vfs`), background worker metronome (`akasa.workers`), priority event bus (`akasa.hooks`), execution runners (`akasa.exec`), and the token gatehouse (`akasa.auth`).
 * **`sutram` & `yenvui` (Frontend Micro-Kernel & Chassis):** Universal Web Component chassis, import map synthesis, Zustand UDF state management, and declarative URL hash routing.
 
 ### Tier 2: Core Substrate Engines (The inSetu OS)

@@ -6,7 +6,7 @@ Accepted
 ## Context
 As the inSetu Developer OS separated into a Three-Tier Architecture (ADR 0029), frontend presentation primitives, shortcut routers, background job pollers, and Zustand store creation logic remained co-located inside core chassis files (`app.js`, `store.js`, `sdk.js`). This hindered presentation decoupling. 
 
-On the backend, `save_json_file()` in `utils.py` used string checks to decide whether to push directly to `_VFS_WRITE_QUEUE` or write directly using native `open()`, violating Event Ledger parity (ADR 0018).
+On the backend, `save_json_config()` in `utils.py` used string checks to decide whether to push directly to `_VFS_WRITE_QUEUE` or write directly using native `open()`, violating Event Ledger parity (ADR 0018).
 
 ## Decision
 1. **Sutram Micro-Kernel Vendorization (`insetu/static/vendor/sutram/`)**:
@@ -16,7 +16,7 @@ On the backend, `save_json_file()` in `utils.py` used string checks to decide wh
    - Extracted `_background_compile`, `/submit` route handling, `/api/<workspace_id>/manifest`, and `/download/<path:filename>` out of `app.py` into `engine_gather.py` and `routes_fs.py`.
    - Removed `engine_gather` imports from `routes_fs.py` to enforce strict Tier 1 Kernel isolation.
 3. **Unified VFS Save Route**:
-   - Updated `save_json_file()` in `utils.py` to process all JSON writes through `VFSTransaction(wid)` with absolute artifact flags.
+   - Updated `save_json_config()` in `utils.py` to process all JSON writes through `VFSTransaction(wid)` with absolute artifact flags.
 
 ## Consequences
 * **Positive:** Complete presentation-layer decoupling and pure UDF state factories.

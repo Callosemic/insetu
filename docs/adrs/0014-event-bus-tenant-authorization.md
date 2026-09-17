@@ -7,7 +7,7 @@ Accepted (2026-07-07)
 In a stateless multi-tenant environment, the global Event Bus (`HookRegistry`) was blindly executing callbacks for all registered extensions, regardless of whether the extension was authorized in the active workspace's configuration payload. This created data leakage and authorized unwanted background sweeps when multiple configurations shared a daemon.
 
 ## Decision
-We implemented a strict `_is_authorized` boundary filter inside `hooks.py`. Before invoking any callback, the Event Bus evaluates the target `workspace_id`, parses the active configuration physics via `utils_core.load_json_file`, and verifies the extension is listed in the `extensions` array. Core modules (`bridge`, `gather`) are structurally whitelisted.
+We implemented a strict `_is_authorized` boundary filter inside `hooks.py`. Before invoking any callback, the Event Bus evaluates the target `workspace_id`, parses the active configuration physics via `utils_core.load_json_config`, and verifies the extension is listed in the `extensions` array. Core modules (`bridge`, `gather`) are structurally whitelisted.
 
 ## Consequences
 * **Positive:** Complete isolation of background lifecycle events per tenant.

@@ -10,7 +10,7 @@ Following ADR 0029, ADR 0030, and ADR 0031, the Three-Tier Architecture separate
 1. **Kernel Package Encapsulation**: Relocate all Tier 1 framework chassis modules into `insetu/kernel/` (`auth.py`, `db.py`, `extension.py`, `fallback_bridge.py`, `hooks.py`, `utils.py`, `vfs.py`, `workers.py`).
 2. **Root Wrapper Deprecation**: Delete all legacy top-level wrapper files and directories (`insetu/sdk/`, `insetu/utils.py`, `insetu/vfs.py`, etc.).
 3. **Frontend Substrate Alignment**: Consolidate core frontend JS modules strictly inside `insetu/static/js/core/` and vendorized `sutram` primitives.
-4. **Linter Enforcement**: Update static analysis rules (`rules_python.py`) to mandate `insetu.kernel.*` and `insetu.core.*` import targets across all modules.
+4. **Linter Enforcement**: Update static analysis rules (`rules_python.py`) to mandate `akasa.*` and `insetu.core.*` import targets across all modules.
 
 ## Consequences
 * **Positive**: Complete physical encapsulation of the Tier 1 Kernel package, preventing circular dependency leaks.
