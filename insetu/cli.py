@@ -4,6 +4,10 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+
+# Enforce host-specific control directory for the Akasa kernel
+os.environ["AKASA_CONTROL_DIR"] = ".insetu"
+
 def handle_service(action, cwd):
     """Manages the background systemd daemon for inSetu."""
     # Inject XDG_RUNTIME_DIR to prevent D-Bus "No medium found" errors over SSH/WSL
@@ -46,7 +50,7 @@ WantedBy=default.target
         subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
         subprocess.run(["systemctl", "--user", "start", service_name], check=True)
 
-        from insetu.kernel.utils import load_config
+        from akasa.utils import load_config
         cfg = load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
 
@@ -66,7 +70,7 @@ WantedBy=default.target
             print("⚠️  No inSetu service found to uninstall.")
 
     elif action == "status":
-        from insetu.kernel.utils import load_config
+        from akasa.utils import load_config
         cfg = load_config()
         port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
         print(f"⚙️  inSetu Service Telemetry:")
@@ -192,7 +196,7 @@ def main():
             print(f"[!] Details:\n{err_details}")
             print("[!] Booting Immutable Recovery OS (Lifeboat FS)...")
             os.environ["INSETU_PANIC_DETAILS"] = err_details
-            from insetu.kernel.fallback_bridge import run_recovery_app
+            from insetu.fallback_bridge import run_recovery_app
             run_recovery_app()
     elif command == "service":
         if len(sys.argv) < 3:

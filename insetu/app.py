@@ -1,6 +1,9 @@
 from pathlib import Path
 import os
 
+# Enforce host-specific control directory for the Akasa kernel
+os.environ["AKASA_CONTROL_DIR"] = ".insetu"
+
 # Fire Drill: Intercept the boot sequence to test the Lifeboat FS
 import os
 if os.environ.get("INSETU_SIMULATE_PANIC") == "1" or os.path.exists(".panic_lock"):
@@ -14,7 +17,7 @@ import datetime
 from contextlib import redirect_stdout
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.middleware.proxy_fix import ProxyFix
-import insetu.kernel.workers # Initializes the metronome listeners
+import akasa.workers # Initializes the metronome listeners
 app = Flask(__name__)
 
 class ForceHTTPSProxyFix(object):
@@ -26,7 +29,7 @@ class ForceHTTPSProxyFix(object):
             environ['wsgi.url_scheme'] = 'https'
         return self.app(environ, start_response)
 app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
-from insetu.kernel.auth import auth_bp, security_bp, BOOT_TOKEN
+from akasa.auth import auth_bp, security_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
 app.register_blueprint(security_bp.bp)
 # Explicitly register system core routes first to prevent dynamic loader misfires
@@ -54,7 +57,7 @@ def enforce_token_gate():
         return jsonify({"error": "401 Unauthorized: Invalid or missing execution credentials."}), 401
 # --- INSETU EXTENSION ARCHITECTURE ROUTINE ---
 def load_workspace_extensions():
-    from insetu.kernel.utils import load_config, _cwd
+    from akasa.utils import load_config, _cwd
     import importlib
     import json
     import os
@@ -185,7 +188,7 @@ def load_workspace_extensions():
     # Purge the config cache. Because the bootloader called load_config() 
     # to discover extensions, the mutate_workspace_config hook fired into a void.
     # Clearing the cache ensures the fully-mounted Extension DAG gets a chance to inject.
-    from insetu.kernel.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
+    from akasa.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
     _MUTATED_CONFIG_CACHE.clear()
     _MUTATED_CONFIG_MTIME.clear()
 
@@ -286,7 +289,7 @@ def resolve_python_vendors(active_exts):
 @app.route('/static/extensions/<ext_name>/<path:filename>')
 def serve_extension_static(ext_name, filename):
     """Serves static assets and vendored dependencies directly from an extension directory."""
-    from insetu.kernel.utils import is_core_module
+    from akasa.utils import is_core_module
     if is_core_module(ext_name):
         ext_dir = Path(app.root_path).joinpath("core", ext_name).resolve()
     else:
@@ -341,8 +344,8 @@ def root_readme():
 def manifest():
     import json
     import os
-    from insetu.kernel.utils import load_config
-    from insetu.kernel.extension import SettingsManager
+    from akasa.utils import load_config
+    from akasa.extension import SettingsManager
 
     # Load the base blueprint manifest map
     base_manifest_path = Path(app.static_folder).joinpath(*['manifest', 'json']).as_posix()
@@ -361,8 +364,8 @@ def manifest():
     pwa_scope = cfg.get("instance_pwa_scope", "default")
     manifest_data["id"] = f"/pwa-{pwa_scope}"
     manifest_data["start_url"] = f"/?node={pwa_scope}"
-    from insetu.kernel.utils import get_workspace_physics
-    cfg_path, _, _ = get_workspace_physics()
+    from akasa.utils import get_workspace_physics
+    cfg_path, _ = get_workspace_physics()
     # Append a cache-busting timestamp query parameter so browsers re-evaluate the custom icons
     ts = int(os.path.getmtime(cfg_path)) if os.path.exists(cfg_path) else 1
     if "icons" in manifest_data:
@@ -381,26 +384,25 @@ def intercept_local_static_assets():
     """
     import os
     from flask import send_file
-    from insetu.kernel.utils import get_workspace_physics
-
+    from akasa.utils import get_workspace_physics
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
         filename = Path(path).name
         # Anchor to the absolute instance directory to survive os.chdir() hijacking
-        cfg_path, _, _ = get_workspace_physics()
+        cfg_path, _ = get_workspace_physics()
         instance_dir = Path(cfg_path).parent.as_posix()
         local_path = Path(instance_dir).joinpath("static", filename).as_posix()
         if os.path.exists(local_path):
             return send_file(local_path, mimetype='image/png')
 @app.route('/favicon.ico')
 def favicon():
-    from insetu.kernel.utils import load_config, get_workspace_physics
+    from akasa.utils import load_config, get_workspace_physics
     import os
     cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
 
     # Anchor to the absolute instance directory to survive os.chdir() hijacking
-    cfg_path, _, _ = get_workspace_physics()
+    cfg_path, _ = get_workspace_physics()
     instance_dir = Path(cfg_path).parent.as_posix()
     local_icon_path = Path(instance_dir).joinpath("static", custom_icon_name).as_posix()
 
@@ -417,7 +419,7 @@ def api_system_panic():
     from flask import jsonify
     
     def crash_and_restart():
-        from insetu.kernel.hooks import hooks
+        from akasa.hooks import hooks
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
@@ -446,8 +448,8 @@ def recovery_ui():
     return html
 @app.route('/')
 def index():
-    from insetu.kernel.utils import load_config
-    from insetu.kernel.extension import SettingsManager
+    from akasa.utils import load_config
+    from akasa.extension import SettingsManager
     cfg = load_config()
     settings = SettingsManager('system', "default")
     instance_title = settings.get("instance_title", "inSetu Developer OS")
@@ -458,7 +460,7 @@ def index():
 # Ignite active workspace feature components JIT at application startup
 load_workspace_extensions()
 import os
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 
 # Fire the system boot hook to ignite the worker pools and VFS queues globally
 # Guardrail: Prevent the Werkzeug master reloader process from executing background threads,
@@ -474,7 +476,7 @@ if is_werkzeug_worker or not is_cli_serve:
         print(f"Warning: system_boot failed: {e}")
 
 def run_app():
-    from insetu.kernel.utils import load_config
+    from akasa.utils import load_config
     import os
 
     cfg = load_config()
