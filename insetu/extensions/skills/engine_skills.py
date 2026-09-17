@@ -6,7 +6,7 @@ import datetime
 from pathlib import Path
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 SKILLS_SCHEMA = {
     "skills_ledger": {
         "id": "TEXT PRIMARY KEY",
@@ -137,7 +137,7 @@ def log_skill_practice(ctx):
         today = datetime.date.today()
         next_review_date = today + datetime.timedelta(days=next_interval)
         from insetu.core.utils_core import update_frontmatter
-        from insetu.kernel.utils import slugify
+        from akasa.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -191,7 +191,7 @@ def update_skill_structure(ctx):
         if not row:
             return jsonify({"error": "Global user skill record not found"}), 404
         from insetu.core.utils_core import update_frontmatter
-        from insetu.kernel.utils import slugify
+        from akasa.utils import slugify
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()
         content = ctx.vfs.read(abs_path) or ""
 
@@ -282,7 +282,7 @@ def create_new_skill(ctx):
     if not name:
         return jsonify({"error": "Name required"}), 400
     try:
-        from insetu.kernel.utils import slugify
+        from akasa.utils import slugify
         from insetu.core.utils_core import update_frontmatter
         filename = f"{slugify(name)}.md"
         abs_path = Path(_get_user_skills_dir(ctx.workspace_id)).joinpath(filename).as_posix()

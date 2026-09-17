@@ -5,9 +5,10 @@ import re
 import json
 from datetime import datetime, timedelta
 from flask import request, jsonify
-from insetu.kernel.utils import sniff_tenant_id
-from insetu.kernel.hooks import hooks
+from akasa.utils import sniff_tenant_id
+from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
+from insetu.core.utils_core import get_repo_path
 TRACKER_SCHEMA = {
     "tracker_tickets": {
         "id": "TEXT PRIMARY KEY",
@@ -143,7 +144,7 @@ def initialize_tracker_schemas(workspace_id=None, **kwargs):
 @hooks.on('topology_boot_complete')
 def schedule_tracker_archiving(workspace_id=None, **kwargs):
     # Phase 2: Schedule background archiving to run silently every 1 hour
-    from insetu.kernel.workers import submit_job
+    from akasa.workers import submit_job
     submit_job(f"trk_arch_{workspace_id}", "tracker", "archive_stale_task", interval_ms=3600000, jitter_ms=300000, workspace_id=workspace_id)
 @hooks.on('vfs_mutated')
 def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
@@ -175,8 +176,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
     try:
         content = ctx.vfs.read(rel_path)
         if content is None and os.path.exists(abs_path):
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            content = ctx.vfs.read(abs_path, is_absolute_artifact=True)
         if content is None:
             return
 
@@ -450,11 +450,9 @@ def create_ticket(ctx, repo, ticket_type, status, title, description, tags="", s
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (ticket_id, repo, ticket_type, status, title, description, json.dumps(tags_list), sub_bucket, now.isoformat(), None, delivery_date, ticket_path, int(tier), parent_id, json.dumps(deps_list), priority.upper(), size.upper()))
     conn.commit()
-
     ctx.vfs.save(ticket_path, content)
 
-    from insetu.kernel.hooks import hooks
-    hooks.emit('vfs_mutated', workspace_id=ctx.workspace_id, mutations=[{"filepath": ticket_path, "operation": "save"}])
+    ctx.emit('vfs_mutated', mutations=[{"filepath": ticket_path, "operation": "save"}])
     return ticket_path
 @tracker_bp.worker("harmonize_vocab_task")
 def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
@@ -496,6 +494,11 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
                 ctx.vfs.save(new_rel_path, new_content)
                 if new_rel_path != old_rel_path:
                     ctx.vfs.delete(old_rel_path)
+
+                ctx.emit('vfs_mutated', mutations=[
+                    {"filepath": old_rel_path, "operation": "delete"},
+                    {"filepath": new_rel_path, "operation": "save"}
+                ])
     finally:
         # Release the UI Mutex lock reliably
         ctx.settings.set("tracker_is_migrating", False)
@@ -544,11 +547,10 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """, (new_status, new_rel_path, ticket_type, datetime.now().isoformat() if new_status == "closed" else None, tier, canonical_current_rel))
     conn.commit()
 
-    from insetu.kernel.hooks import hooks
     mutations = [{"filepath": new_rel_path, "operation": "save"}]
     if canonical_current_rel != new_rel_path:
         mutations.append({"filepath": canonical_current_rel, "operation": "delete"})
-    hooks.emit('vfs_mutated', workspace_id=ctx.workspace_id, mutations=mutations)
+    ctx.emit('vfs_mutated', mutations=mutations)
 
     return new_rel_path
 @tracker_bp.worker("enforce_tickets_task")
@@ -818,16 +820,7 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
                         ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ?", (current_rel_path,))
                         ctx.db.commit()
 
-                        from insetu.kernel.db import get_connection
-                        import time
-                        w_conn = get_connection("workers", workspace_id=workspace_id)
-                        now_ts = time.time()
-                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (current_rel_path, 'delete', now_ts))
-                        w_conn.execute("INSERT OR REPLACE INTO vfs_event_log (filepath, mutation_type, timestamp) VALUES (?, ?, ?)", (intended_rel_path, 'save', now_ts))
-                        w_conn.commit()
-
-                        from insetu.kernel.hooks import hooks
-                        hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                        ctx.emit('vfs_mutated', mutations=[
                             {"filepath": current_rel_path, "operation": "delete"},
                             {"filepath": intended_rel_path, "operation": "save"}
                         ])
@@ -970,8 +963,7 @@ def archive_stale_tickets(workspace_id=None):
                                 new_rel_path = Path(f"{repo}/.tracker/log").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
 
-                                from insetu.kernel.hooks import hooks
-                                hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                                ctx.emit('vfs_mutated', mutations=[
                                     {"filepath": ws_rel_path, "operation": "delete"},
                                     {"filepath": new_rel_path, "operation": "save"}
                                 ])
@@ -1001,8 +993,7 @@ def archive_stale_tickets(workspace_id=None):
                                 new_rel_path = Path(f"{repo}/.tracker/log/archived").joinpath(filename).as_posix()
                                 ctx.vfs.save(new_rel_path, new_content, data={"delete_source": ws_rel_path})
 
-                                from insetu.kernel.hooks import hooks
-                                hooks.emit('vfs_mutated', workspace_id=workspace_id, mutations=[
+                                ctx.emit('vfs_mutated', mutations=[
                                     {"filepath": ws_rel_path, "operation": "delete"},
                                     {"filepath": new_rel_path, "operation": "save"}
                                 ])
@@ -1172,9 +1163,8 @@ def restore_ticket_metadata_from_git(workspace_id=None):
     ctx = tracker_bp.get_context(workspace_id)
     repos = [r.get("repo_dir") for r in ctx.config.get("target_repos", []) if r.get("repo_dir")]
     restored_count = 0
-
     for current_repo in repos:
-        repo_path = ctx.get_repo_path(current_repo)
+        repo_path = get_repo_path(current_repo, workspace_id)
         if not os.path.exists(repo_path): continue
 
         repo_files = get_topology_files_for_repo(workspace_id, current_repo, strip_prefix=False)
@@ -1360,9 +1350,6 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
 @hooks.on('tracker_settings_updated')
 def on_tracker_settings_updated(workspace_id=None, **kwargs):
     """Event Bus hook: Rebuilds context payloads immediately when tracker settings are updated."""
-    import json
-    import uuid
-    import insetu.kernel.workers as workers
-    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    workers.submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
+    ctx = tracker_bp.get_context(workspace_id)
+    job_id = ctx.jobs.submit("compile_contexts", force_full=True)
     return {"job_id": job_id}

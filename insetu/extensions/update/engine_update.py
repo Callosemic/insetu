@@ -6,6 +6,7 @@ import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.git.engine_git import execute_git
+from insetu.core.utils_core import get_repo_path
 # Declarative schema for Semantic Release parameters
 UPDATE_SETTINGS_SCHEMA = [
     {
@@ -71,10 +72,9 @@ update_bp = InSetuExtension(
 __depends__ = ['git']
 __external_depends__ = ['semantic_release', 'build', 'twine']
 __external_binaries__ = ['git']
-
 def _get_valid_repo_path(ctx, repo):
     """Helper to resolve and validate physical repository boundaries."""
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     return repo_path
@@ -282,7 +282,7 @@ def _background_preview_first_release_task(ctx, repo):
     import os
     from pathlib import Path
 
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
 
@@ -323,7 +323,7 @@ def api_update_preview_first_release(ctx):
 @update_bp.worker("publish_task")
 def _background_publish_task(ctx, repo):
     """Phase 2: Distributes the updated package to configured registries."""
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
@@ -379,7 +379,7 @@ def _background_preview_bump_task(ctx, repo, prerelease=False):
     import os
     import re
 
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress("Evaluating dry-run semantic version bump...")
@@ -450,7 +450,7 @@ def _background_preview_publish_task(ctx, repo):
     import subprocess
     import os
     import re
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
 
@@ -509,9 +509,8 @@ def _background_status_task(ctx, repo):
     import subprocess
     import os
     from pathlib import Path
-
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
 
     if not os.path.exists(repo_path):
         return {"message": "Repo not found.", "artifact": {"version": None, "configured": False, "has_pyproject": False, "is_clean": True, "distribution_target": dist_target}}
@@ -619,7 +618,7 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
     import os
     import re
     from pathlib import Path
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress("Updating pyproject.toml...")
@@ -674,7 +673,7 @@ def api_update_toml_config(ctx):
 def _background_manual_build(ctx, repo, build_command):
     import subprocess
     import os
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
 
@@ -725,7 +724,7 @@ def _background_force_version(ctx, repo, new_version):
     import re
     from pathlib import Path
 
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress(f"Forcing version to {new_version}...")
@@ -769,7 +768,7 @@ def _background_scaffold_task(ctx, repo, initial_version):
     import re
     from pathlib import Path
 
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
     ctx.jobs.update_progress(f"Scaffolding semantic-release (v{initial_version})...")
@@ -826,7 +825,7 @@ def _background_create_dummy_toml(ctx, repo, initial_version):
     import subprocess
     from pathlib import Path
 
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
     ctx.jobs.update_progress(f"Creating basic pyproject.toml for {repo} (v{initial_version})...")
@@ -874,7 +873,7 @@ def api_update_eligible_repos(ctx):
     for r in ctx.config.get("target_repos", []):
         repo = r.get("repo_dir")
         if not repo: continue
-        repo_path = ctx.get_repo_path(repo)
+        repo_path = get_repo_path(repo, ctx.workspace_id)
         pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
         eligibility[repo] = os.path.exists(pyproject_file)
     return jsonify({"eligibility": eligibility})

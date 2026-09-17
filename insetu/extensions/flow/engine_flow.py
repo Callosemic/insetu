@@ -4,28 +4,43 @@ import json
 import uuid
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
-from insetu.kernel.utils import slugify
-
+from akasa.hooks import hooks
+from akasa.utils import slugify
 flow_bp = InSetuExtension(
     'flow', 
     __name__,
     title="Workflows",
-    description="Workflow batch automation and UI prompts.",
-    virtual_contexts=[{
+    description="Workflow batch automation and UI prompts."
+)
+__depends__ = ['prompts', 'gather']
+
+@hooks.on('mutate_workspace_config')
+def inject_flow_metadata(cfg, workspace_id=None, **kwargs):
+    if "flow" not in cfg.get("extensions", []): return
+    if "virtual_contexts" not in cfg:
+        cfg["virtual_contexts"] = []
+
+    vc = {
         "title": "Workflow Batches",
         "domain": "Workflows",
         "description": "Compiled workflow batch automation payloads.",
         "out_file": "workflows_context.txt"
-    }]
-)
-__depends__ = ['prompts', 'gather']
+    }
+    if not any(v.get("out_file") == vc["out_file"] for v in cfg["virtual_contexts"]):
+        cfg["virtual_contexts"].append(vc)
+
 @hooks.on('request_paths')
 def hook_flow_request_paths(workspace_id=None, **kwargs):
     from insetu.core.utils_core import get_domain_artifact_path
     return {
-        "workflows_dir": get_domain_artifact_path(workspace_id, "workflows")
+        "workflows_dir": get_domain_artifact_path(workspace_id, "workflows", "flow")
     }
+
+@hooks.on('workspace_boot')
+def mount_flow_volumes(workspace_id=None, **kwargs):
+    from akasa.vfs import mount_volume
+    ctx = flow_bp.get_context(workspace_id)
+    mount_volume(workspace_id, 'ctx', 'workflows', ctx.paths.get("workflows_dir"))
 
 @hooks.on('register_compilation_steps')
 def _register_flow_compilation_step(workspace_id=None, **kwargs):
@@ -64,16 +79,20 @@ def _background_compile_workflows(ctx, **kwargs):
         header_str = f"========== BATCH: {batch.get('title', batch.get('id'))} ==========\n\n"
         text_blocks = []
         resolved_files = []
+        from insetu.core.utils_core import InSetuURI
         # Pre-process includes to auto-heal missing trailing slashes for known physical directories
         healed_includes = []
         for inc in includes:
-            if not inc.startswith('ctx://') and not inc.startswith('vfs://'):
-                if inc.endswith('_context.txt'): inc = f"ctx://contexts/{inc}"
-                elif inc.endswith('_diffs.txt'): inc = f"ctx://diffs/{inc}"
-                elif inc.startswith('prompts/'): inc = f"ctx://{inc}"
-                else: inc = f"vfs://{inc.lstrip('/')}"
-            if inc.startswith('vfs://') and not inc.endswith('/'):
-                cand_path = ctx.resolve_path(inc[6:])
+            uri = InSetuURI(inc)
+            if not uri.scheme:
+                if uri.basename.endswith('_context.txt'): inc = f"ctx://contexts/{uri.path}"
+                elif uri.basename.endswith('_diffs.txt'): inc = f"ctx://diffs/{uri.path}"
+                elif uri.path.startswith('prompts/'): inc = f"ctx://{uri.path}"
+                else: inc = f"vfs://{uri.path}"
+
+            check_uri = InSetuURI(inc)
+            if check_uri.scheme == 'vfs' and not check_uri.is_dir:
+                cand_path = ctx.resolve_path(check_uri.path)
                 if cand_path and os.path.isdir(cand_path):
                     inc += '/'
             healed_includes.append(inc)
@@ -82,8 +101,9 @@ def _background_compile_workflows(ctx, **kwargs):
         # Centralized SSOT Expansion (handles raw strings, ctx:// chunks, and vfs:// folders natively)
         expanded_chunks = ctx.expand_selection(healed_includes)
         import re
+        from insetu.core.utils_core import InSetuURI
         for chunk_identifier in expanded_chunks:
-            safe_chunk_base = chunk_identifier.split('/')[-1]
+            safe_chunk_base = InSetuURI(chunk_identifier).basename
             display_name = chunk_identifier
             try:
                 # Let the Kernel VFS handle artifact detection and path resolution natively
@@ -99,14 +119,14 @@ def _background_compile_workflows(ctx, **kwargs):
             except Exception as e:
                 import traceback
                 text_blocks.append(f"--- {display_name} (ERROR READING FILE: {str(e)})\n[Target URI: {chunk_identifier}]\n[Traceback: {traceback.format_exc()}] ---\n\n")
-        from insetu.kernel.utils import generate_ascii_tree
+        from akasa.utils import generate_ascii_tree
         header_str += generate_ascii_tree(resolved_files) + "\n\n"
-
         batch_repos = set()
         expanded_base_uris = set()
         for chunk in expanded_chunks:
             expanded_base_uris.add(chunk)
-            if chunk.startswith("ctx://"):
+            chunk_uri = InSetuURI(chunk)
+            if chunk_uri.scheme == 'ctx':
                 base_uri_cand = re.sub(r'_part\d+\.txt$', '.txt', chunk)
                 expanded_base_uris.add(base_uri_cand)
                 entry = current_manifest.get(base_uri_cand, {})
@@ -138,12 +158,12 @@ def _background_compile_workflows(ctx, **kwargs):
                 fp = e.get("filepath", "") if isinstance(e, dict) else str(e)
                 r, _ = ctx.parse_uri(fp)
                 if r: active_repos.add(r)
-
             # If the batch includes raw VFS files from repositories that just triggered an event, assume they changed and recompile.
             has_targeted_raw_files = False
             for chunk in expanded_chunks:
-                if chunk.startswith("vfs://"):
-                    repo_cand, _ = ctx.parse_uri(chunk)
+                chunk_uri = InSetuURI(chunk)
+                if chunk_uri.scheme == 'vfs':
+                    repo_cand = chunk_uri.repo
                     if not active_repos or repo_cand in active_repos:
                         has_targeted_raw_files = True
                         break
@@ -187,7 +207,7 @@ def api_flow_batches(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
 
     # Auto-migrate IDs to match titles to prevent legacy recursion
-    from insetu.kernel.utils import slugify
+    from akasa.utils import slugify
     changed = False
     used_ids = set()
     for b in batches:

@@ -3,7 +3,7 @@ import os
 import re
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 prompts_bp = InSetuExtension(
     'prompts', 
     __name__, 
@@ -17,43 +17,21 @@ def hook_prompts_request_paths(workspace_id=None, **kwargs):
     try:
         from pathlib import Path
         import os
-        from insetu.kernel.utils import get_tenant_control_dir
+        from akasa.utils import get_tenant_control_dir
 
         # Guardrail: Never call ctx.paths here, as it triggers an infinite recursion loop
         control_dir = get_tenant_control_dir(workspace_id)
-        prompts_dir = Path(control_dir).joinpath("prompts").as_posix()
+        prompts_dir = Path(control_dir).joinpath("ext", "prompts", "data").as_posix()
         os.makedirs(prompts_dir, exist_ok=True)
         return {"prompts_dir": prompts_dir}
     except Exception:
         return {}
-@hooks.on('vfs_resolve_file')
-@hooks.on('vfs_resolve_path', priority=10)
-def resolve_prompt_artifacts(filename=None, filepath=None, workspace_id=None, **kwargs):
-    """Resolves ctx://prompts URIs, .insetu/prompts/, and prompts/ paths while preserving subdirectories."""
-    target_name = filename or filepath
-    if not target_name: return None
-    from pathlib import Path
-    import os
+
+@hooks.on('workspace_boot')
+def mount_prompts_volumes(workspace_id=None, **kwargs):
+    from akasa.vfs import mount_volume
     ctx = prompts_bp.get_context(workspace_id)
-
-    clean_name = target_name
-    while clean_name.startswith("ctx://"):
-        clean_name = clean_name[6:]
-
-    prompts_dir = ctx.paths.get("prompts_dir", ".insetu/prompts")
-
-    if clean_name.startswith(".insetu/prompts/"):
-        rel_subpath = clean_name[16:]
-    elif clean_name.startswith("prompts/"):
-        rel_subpath = clean_name[8:]
-    else:
-        rel_subpath = clean_name
-
-    cand = Path(prompts_dir).joinpath(rel_subpath).as_posix()
-
-    if clean_name.startswith("prompts/") or clean_name.startswith(".insetu/prompts/") or target_name.startswith("ctx://prompts/"):
-        return (cand, True) if filename else cand
-    return None
+    mount_volume(workspace_id, 'ctx', 'prompts', ctx.paths.get("prompts_dir"))
 @hooks.on('request_available_prompts')
 def provide_available_prompts(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies available OS-managed prompts to the Gather extension's UI dropdowns."""
@@ -62,10 +40,11 @@ def provide_available_prompts(workspace_id=None, **kwargs):
 
     ctx = prompts_bp.get_context(workspace_id)
     prompts = []
+    prompts_dir_abs = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
+    os.makedirs(prompts_dir_abs, exist_ok=True)
 
-    prompts_dir = Path(ctx.paths["control_dir"]).joinpath("prompts").as_posix()
-    os.makedirs(prompts_dir, exist_ok=True)
-    for ws_rel_path in ctx.vfs.walk(prompts_dir):
+    # Walk the sandbox-relative logical path instead of the absolute physical OS path
+    for ws_rel_path in ctx.vfs.walk(".insetu/prompts"):
         prompts.append(ws_rel_path)
 
     # Enforce extension filtering so UI code isn't treated as a prompt.
@@ -83,30 +62,26 @@ def api_prompts_list(ctx):
 @prompts_bp.route('resolve', methods=['GET'])
 def api_prompts_resolve(ctx):
     """Fetches a prompt and recursively resolves {{include: ...}} macros."""
-    from insetu.kernel.utils import resolve_macro_includes
+    from insetu.core.utils_core import resolve_macro_includes
 
     filename = ctx.req.args.get('file', '')
     if not filename:
         return jsonify({"error": "File required"}), 400
+    from insetu.core.utils_core import InSetuURI
 
-    clean_filename = filename
-    while clean_filename.startswith("ctx://"):
-        clean_filename = clean_filename[6:]
+    # If the UI passes a raw relative path, normalize it to the hidden directory.
+    # Otherwise, pass fully qualified URIs directly to the VFS.
+    if not InSetuURI(filename).scheme and not filename.startswith(".insetu/"):
+        filename = f".insetu/{filename}" if filename.startswith("prompts/") else f".insetu/prompts/{filename}"
 
-    if clean_filename.startswith('prompts/'):
-        clean_filename = f".insetu/{clean_filename}"
-
-    content = ctx.vfs.read(clean_filename)
+    content = ctx.vfs.read(filename)
     if content is not None:
         def read_prompt(target_path):
-            clean_target = target_path
-            while clean_target.startswith("ctx://"):
-                clean_target = clean_target[6:]
-            if clean_target.startswith('prompts/'):
-                clean_target = f".insetu/{clean_target}"
-            return ctx.vfs.read(clean_target)
+            if not InSetuURI(target_path).scheme and not target_path.startswith(".insetu/"):
+                target_path = f".insetu/{target_path}" if target_path.startswith("prompts/") else f".insetu/prompts/{target_path}"
+            return ctx.vfs.read(target_path)
         pattern = r'\{\{\s*include_prompt\s*:\s*([^\s{}]+)\s*(?:\{([\s\S]*?)\})?\s*\}\}'
-        resolved_content = resolve_macro_includes(content, clean_filename, pattern, read_prompt)
+        resolved_content = resolve_macro_includes(content, filename, pattern, read_prompt)
         return resolved_content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     return "Prompt not found.", 404

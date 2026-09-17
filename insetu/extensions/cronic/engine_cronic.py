@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 
 CRONIC_SCHEMA = {
     "cronic_jobs": {
@@ -38,16 +38,15 @@ def _sync_system_crontab(ctx):
     """Rebuilds system crontab entries specifically for the active workspace."""
     jobs = ctx.db.get_all("cronic_jobs")
     crontab_lines = []
-
     workspace_tag = f"# managed-by-insetu:cronic:{ctx.workspace_id}:"
 
     # Read existing non-inSetu entries or entries from other workspaces
     try:
-        current_cron = subprocess.check_output(["crontab", "-l"], text=True)
-        for line in current_cron.splitlines():
+        current_cron_res = ctx.exec.run(["crontab", "-l"], check=True)
+        for line in current_cron_res.stdout.splitlines():
             if workspace_tag not in line:
                 crontab_lines.append(line)
-    except subprocess.CalledProcessError:
+    except Exception:
         pass  # Empty or uninitialized crontab
 
     # Re-inject active jobs for this workspace
@@ -70,9 +69,8 @@ def _sync_system_crontab(ctx):
 
         cron_entry = f"{job['schedule']} {cmd} >> {log_file} 2>&1 {workspace_tag}{job['id']}"
         crontab_lines.append(cron_entry)
-
     new_crontab = "\n".join(crontab_lines) + "\n"
-    subprocess.run(["crontab", "-"], input=new_crontab, text=True, check=True)
+    ctx.exec.run(["crontab", "-"], input=new_crontab, check=True)
 @cronic_bp.route('status', methods=['GET'])
 def get_status(ctx):
     return jsonify({"has_crontab": has_crontab()})
@@ -158,11 +156,10 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     log_content += f"\n--- Manual Run Dispatched [{time.ctime()}] ---\n"
     ctx.vfs.save(log_file, log_content, data={"is_absolute_artifact": True, "ignore_ledger": True})
     ctx.sync_vfs_barrier()
-
     ctx.db.update("cronic_jobs", {"last_run": time.time(), "last_status": "dispatched"}, "id", job['id'])
 
     # Fire and forget into the OS background, instantly releasing the inSetu worker thread
-    subprocess.Popen(full_cmd, shell=True, start_new_session=(os.name == 'posix'))
+    ctx.exec.popen(full_cmd, shell=True, start_new_session=(os.name == 'posix'))
 
     return {"message": "Job dispatched to OS background."}
 @cronic_bp.route('run_now', methods=['POST'])
@@ -177,12 +174,11 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
     job = ctx.db.get_by_id("cronic_jobs", cronic_job_id)
     if not job:
         raise ValueError("Cronic job record not found.")
-
     abs_path = ctx.resolve_path(job['filepath'])
 
     # Issue a SIGTERM to any process executing this exact script path
     cmd = f'pkill -f "{abs_path}"'
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    res = ctx.exec.run(cmd, shell=True)
     ctx.db.update("cronic_jobs", {"last_status": "terminated"}, "id", job['id'])
 
     log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
@@ -230,21 +226,21 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
         return
 
     try:
-        from insetu.kernel.utils import is_extension_enabled
+        from akasa.utils import is_extension_enabled
         if not is_extension_enabled("cronic", workspace_id):
             return
 
         ctx = cronic_bp.get_context(workspace_id)
 
         # 1. Schedule the background log sweeper (Runs once every 24 hours)
-        from insetu.kernel.workers import submit_job
+        from akasa.workers import submit_job
         job_id = f"cronic_sweep_{workspace_id}"
         submit_job(job_id, "cronic", "sweep_logs_task", interval_ms=86400000, jitter_ms=3600000, workspace_id=workspace_id)
-
         # 2. Heal state drift: read system crontab and sync DB
         try:
-            current_cron = subprocess.check_output(["crontab", "-l"], text=True)
-        except subprocess.CalledProcessError:
+            res = ctx.exec.run(["crontab", "-l"], check=True)
+            current_cron = res.stdout
+        except Exception:
             current_cron = ""
 
         workspace_tag = f"# managed-by-insetu:cronic:{workspace_id}:"

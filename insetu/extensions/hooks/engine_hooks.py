@@ -6,7 +6,7 @@ import datetime
 from pathlib import Path
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 from insetu.core.topology.engine_topology import resolve_file_bucket
 
 HOOKS_SCHEMA = {
@@ -43,18 +43,15 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     
     if expanded_cmd.startswith('~'):
         expanded_cmd = os.path.expanduser(expanded_cmd)
-    
     # Enforce non-interactive environment
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     print(f"🚀 [HOOKS WORKER] Executing command: {expanded_cmd} (cwd: {exec_cwd})")
     try:
-        res = subprocess.run(
+        res = ctx.exec.run(
             expanded_cmd, 
             shell=True, 
             cwd=exec_cwd, 
-            capture_output=True, 
-            text=True, 
             env=env,
             timeout=300
         )
@@ -120,7 +117,7 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
 
         if should_trigger:
             import time
-            import insetu.kernel.db as kernel_db
+            import akasa.db as kernel_db
             try:
                 w_conn = kernel_db.get_connection('workers', workspace_id=workspace_id)
                 # Deduplication / Debounce: Prevent the same rule from firing multiple times within 3 seconds      
@@ -229,7 +226,7 @@ def delete_rule(ctx):
     return jsonify({"status": "success"})
 @hooks_bp.route('logs', methods=['GET'])
 def get_logs(ctx):
-    import insetu.kernel.db as kernel_db
+    import akasa.db as kernel_db
     import json
     # Use the central workers ledger, not the extension's local DB
     conn = kernel_db.get_connection('workers', workspace_id=ctx.workspace_id)

@@ -31,10 +31,10 @@ def add_favorite(ctx):
     # Support both legacy paths and the new explicit folderpath/filepath paradigm
     folderpath = data.get('folderpath', '').strip()
     filepath = data.get('filepath', '').strip()
-
+    from insetu.core.utils_core import InSetuURI
     path = folderpath if folderpath else (filepath or data.get('path', '').strip())
     fav_type = 'folder' if folderpath else data.get('type', 'file').strip()
-    name = data.get('name', '').strip() or path.split('/')[-1]
+    name = data.get('name', '').strip() or InSetuURI(path).basename
 
     if not path:
         return jsonify({"error": "Filepath or folderpath is required"}), 400

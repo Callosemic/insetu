@@ -1,7 +1,7 @@
 import time
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 
 __depends__ = []
 
@@ -213,7 +213,7 @@ def sweep_telemetry_worker(ctx, **kwargs):
 @hooks.on('topology_boot_complete')
 def init_dev_workers(workspace_id=None, **kwargs):
     try:
-        from insetu.kernel.workers import submit_job
+        from akasa.workers import submit_job
         submit_job("dev_telemetry_sweeper", "dev", "sweep_telemetry", interval_ms=60000, workspace_id=workspace_id)
     except Exception:
         pass

@@ -5,24 +5,48 @@ import uuid
 import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.utils import get_workspace_physics
-from insetu.kernel.hooks import hooks
+from akasa.utils import get_workspace_physics
+from akasa.hooks import hooks
+from insetu.core.utils_core import get_repo_path
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
     import os
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     return env
-
-def execute_git(repo_path, args, check=True, **kwargs):
-    """Universal Git command wrapper with headless SSH injection."""
-    import subprocess
+def execute_git(*args_tuple, **kwargs):
+    """Universal Git command wrapper supporting both logical volumes and physical paths."""
+    import inspect
     env = get_headless_git_env()
-    if 'capture_output' not in kwargs: kwargs['capture_output'] = True
-    if 'text' not in kwargs: kwargs['text'] = True
 
+    # Handle overloaded signatures: (ctx, repo, args) vs (repo_path, args)
+    if hasattr(args_tuple[0], 'exec'):
+        ctx, target, args = args_tuple[0], args_tuple[1], args_tuple[2]
+    else:
+        target, args = args_tuple[0], args_tuple[1]
+        ctx = None
+        # Attempt to dynamically resolve ctx from caller to prevent refactoring 60+ calls
+        frame = inspect.currentframe().f_back
+        while frame:
+            if 'ctx' in frame.f_locals:
+                ctx = frame.f_locals['ctx']
+                break
+            frame = frame.f_back
+
+    check = kwargs.pop('check', True)
     cmd = ['git', '--no-optional-locks'] + args
-    return subprocess.run(cmd, cwd=repo_path, check=check, env=env, **kwargs)
+
+    if ctx:
+        if isinstance(target, str) and (target.startswith('/') or target[1:3] == ':\\'):
+            return ctx.exec.run(cmd, cwd=target, check=check, env=env, **kwargs)
+        else:
+            return ctx.exec.run(cmd, volume=target, check=check, env=env, **kwargs)
+    else:
+        # Fallback for purely decoupled physical executions
+        import subprocess
+        kwargs.setdefault('capture_output', True)
+        kwargs.setdefault('text', True)
+        return subprocess.run(cmd, cwd=target, check=check, env=env, **kwargs)
 GIT_SETTINGS_SCHEMA = [
     {
         "id": "pull_strategy",
@@ -45,8 +69,14 @@ __depends__ = ['gather']
 def hook_git_request_paths(workspace_id=None, **kwargs):
     from insetu.core.utils_core import get_domain_artifact_path
     return {
-        "diffs_dir": get_domain_artifact_path(workspace_id, "diffs")
+        "diffs_dir": get_domain_artifact_path(workspace_id, "diffs", "git")
     }
+
+@hooks.on('workspace_boot')
+def mount_git_volumes(workspace_id=None, **kwargs):
+    from akasa.vfs import mount_volume
+    ctx = git_bp.get_context(workspace_id)
+    mount_volume(workspace_id, 'ctx', 'diffs', ctx.paths.get("diffs_dir"))
 @hooks.on('register_compilation_steps')
 def _register_git_compilation_step(workspace_id=None, **kwargs):
     return [{
@@ -95,9 +125,8 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
         if target_repos and config.get("repo_dir") not in target_repos: return None
         if config.get("exclude_from_diffs"): return None
         if config.get("archive_type", "repo") == "media-vault": return None
-
         safe_r_dir = get_safe_repo_id(config.get("repo_dir"))
-        repo_path = Path(ctx.get_repo_path(config.get("repo_dir")))
+        repo_path = Path(get_repo_path(config.get("repo_dir"), ctx.workspace_id))
 
         if not repo_path.exists(): return None
         try:
@@ -291,12 +320,12 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         local_diff_manifest.append({"filename": out_filename, "repo": config['repo_dir']})
                         local_manifest_deltas[out_filename] = working_manifest[out_filename]
                         continue
-
                     local_modified_diffs.add(out_filename)
                     b_meta = bucket_meta.get(out_filename, {})
+                    from insetu.core.utils_core import InSetuURI
                     meta = {
                         "type": "diff",
-                        "title": b_meta.get("title", out_filename.split('/')[-1].replace('_diffs.txt', '').replace('_', ' ').title()),
+                        "title": b_meta.get("title", InSetuURI(out_filename).basename.replace('_diffs.txt', '').replace('_', ' ').title()),
                         "domain": b_meta.get("domain", "Git Diffs"),
                         "desc": "Just-In-Time generated diff payload.",
                         "repo": config['repo_dir']
@@ -340,17 +369,16 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     return diff_manifest, manifest_deltas, truly_modified_diffs
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx):
-    from insetu.kernel.utils import get_workspace_physics
+    from akasa.utils import get_workspace_physics
     from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
 
     top_ctx = topology_bp.get_context(ctx.workspace_id)
-
     for c in cfg.get("target_repos", []):
         repo = c.get("repo_dir")
-        repo_path = ctx.get_repo_path(repo)
+        repo_path = get_repo_path(repo, ctx.workspace_id)
         if not os.path.exists(repo_path): continue
 
         try:
@@ -407,7 +435,7 @@ def api_git_sweep_status(ctx):
 def _background_sweep_push(ctx, selections, message):
     import os
     import subprocess
-    from insetu.kernel.utils import get_workspace_physics
+    from akasa.utils import get_workspace_physics
     output_log = ""
 
     try:
@@ -415,7 +443,7 @@ def _background_sweep_push(ctx, selections, message):
             if not files: continue
             ctx.jobs.update_progress(f"Pushing {repo}...")
 
-            repo_path = ctx.get_repo_path(repo)
+            repo_path = get_repo_path(repo, ctx.workspace_id)
             if not os.path.exists(repo_path): continue
             # Guarantee topology is perfectly mapped before staging
             from insetu.core.cartographer.cartographer import map_repositories
@@ -469,11 +497,10 @@ def api_git_changelogs(ctx):
 def _background_git_push(ctx, repo, message, diff_file):
     import os
     import subprocess
-    from insetu.kernel.utils import get_workspace_physics
-
+    from akasa.utils import get_workspace_physics
     ctx.jobs.update_progress(f"Preparing to push {repo}...")
     cfg = ctx.config
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path): 
         raise ValueError("Repo not found")
     files_to_stage = set()
@@ -481,8 +508,9 @@ def _background_git_push(ctx, repo, message, diff_file):
     from insetu.core.utils_core import get_safe_repo_id
     repo_cfg = next((c for c in cfg.get("target_repos", []) if c.get("repo_dir") == repo), None)
     sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
+    from insetu.core.utils_core import InSetuURI
     safe_r_dir = get_safe_repo_id(repo)
-    target_diff_name = diff_file.split('/')[-1] if diff_file else None
+    target_diff_name = InSetuURI(diff_file).basename if diff_file else None
     # SSOT Enforcement: Query the Git tree directly rather than parsing diff artifacts
     status_res = execute_git(repo_path, ['status', '--porcelain', '-uall'], check=False)
     git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
@@ -515,7 +543,7 @@ def _background_git_push(ctx, repo, message, diff_file):
                     b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
 
                 # Only stage the file if it maps to the exact bucket the user clicked
-                if b_id.split('/')[-1] == target_diff_name:
+                if InSetuURI(b_id).basename == target_diff_name:
                     files_to_stage.add(rel_to_repo)
             else:
                 # Fallback to sweeping the whole repo if no specific diff bucket was targeted
@@ -588,9 +616,10 @@ def provide_available_diffs(workspace_id=None, **kwargs):
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
     base_contexts = get_available_contexts(workspace_id, exclusion_flags=["exclude_from_diffs", "exclude_from_context"], include_types=["gather"])
     expected_diffs = set()
+    from insetu.core.utils_core import InSetuURI
     # 2. Map SOTU contexts to diff payloads seamlessly
     for context_path in base_contexts:
-        filename = context_path.split('/')[-1]
+        filename = InSetuURI(context_path).basename
         expected_diffs.add(f"ctx://diffs/{filename.replace('_context.txt', '_diffs.txt')}")
     # 3. Include ad-hoc diffs currently tracked in the manifest
     manifest = ctx.manifest.get("ctx", {})
@@ -608,7 +637,7 @@ def api_git_status(ctx):
         repo_dir = c.get("repo_dir")
         if not repo_dir: continue
 
-        repo_path = Path(ctx.get_repo_path(repo_dir))
+        repo_path = Path(get_repo_path(repo_dir, ctx.workspace_id))
         if not repo_path.exists(): continue
         try:
             check_git = execute_git(repo_path, ['rev-parse', '--is-inside-work-tree'], check=False)
@@ -664,9 +693,8 @@ def api_git_status(ctx):
 def _background_git_init(ctx, repo, branch):
     import subprocess
     import os
-
     ctx.jobs.update_progress(f"Initializing Git repository for {repo}...")
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
 
     try:
         execute_git(repo_path, ['init', '-b', branch])
@@ -687,9 +715,8 @@ def api_git_init(ctx):
 def _background_git_fetch_preview(ctx, repo):
     import subprocess
     import os
-
     ctx.jobs.update_progress(f"Fetching remote for {repo}...")
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     try:
         # Pre-flight check: intercept active rebase indicators
         from pathlib import Path
@@ -756,9 +783,8 @@ def api_git_fetch_preview(ctx):
 def _background_git_pull(ctx, repo, strategy=None):
     import subprocess
     import os
-
     ctx.jobs.update_progress(f"Pulling {repo}...")
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
 
     # Query the repository-scoped setting from the strict 3-tier cascade
     configured_strategy = ctx.settings.get("pull_strategy", "rebase", repo=repo)
@@ -818,9 +844,8 @@ def api_git_pull(ctx):
 def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
     import subprocess
     import os
-
     ctx.jobs.update_progress(f"Adding remote origin for {repo}...")
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
     try:
         # Ensure HEAD exists by creating an empty initial commit if the repo is completely empty
         head_check = execute_git(repo_path, ['rev-parse', 'HEAD'], check=False)
@@ -875,7 +900,7 @@ def _background_git_checkout(ctx, repo, branch, create_new):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Checking out {branch} in {repo}...")
-    repo_path = ctx.get_repo_path(repo)
+    repo_path = get_repo_path(repo, ctx.workspace_id)
 
     args = ['checkout', '-b', branch] if create_new else ['checkout', branch]
     try:

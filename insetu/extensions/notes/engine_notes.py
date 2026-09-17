@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 
 NOTES_SCHEMA = {
     "notes_ledger": {
@@ -100,7 +100,7 @@ def api_notes_list(ctx):
 def api_notes_new(ctx):
     """Generates a new note file with managed YAML frontmatter."""
     data = ctx.req.json or {}
-    from insetu.kernel.utils import slugify
+    from akasa.utils import slugify
     from insetu.core.utils_core import update_frontmatter
     
     note_id = f"note-{uuid.uuid4().hex[:8]}"

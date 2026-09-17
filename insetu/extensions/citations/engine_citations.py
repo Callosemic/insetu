@@ -5,7 +5,7 @@ import urllib.request
 import urllib.parse
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 CITATIONS_SCHEMA = {
     "citations": {
         "id": "TEXT PRIMARY KEY",
@@ -15,12 +15,7 @@ CITATIONS_SCHEMA = {
         "attachments": "TEXT DEFAULT '[]'"
     }
 }
-citations_bp = InSetuExtension('citations', __name__, title="Reference Library", description="Academic citation and bibliography records manager.", schema=CITATIONS_SCHEMA, virtual_contexts=[{
-    "title": "Global Reference Library",
-    "domain": "Reference Library",
-    "description": "Academic citations and bibliography records.",
-    "out_file": "ctx://contexts/citations_context.txt"
-}])
+citations_bp = InSetuExtension('citations', __name__, title="Reference Library", description="Academic citation and bibliography records manager.", schema=CITATIONS_SCHEMA)
 __depends__ = []
 @hooks.on('mutate_workspace_config')
 def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
@@ -28,6 +23,15 @@ def inject_citation_metadata(cfg, workspace_id=None, **kwargs):
     if "citations" not in cfg.get("extensions", []): return
     if "virtual_contexts" not in cfg:
         cfg["virtual_contexts"] = []
+
+    vc = {
+        "title": "Global Reference Library",
+        "domain": "Reference Library",
+        "description": "Academic citations and bibliography records.",
+        "out_file": "ctx://contexts/citations_context.txt"
+    }
+    if not any(v.get("out_file") == vc["out_file"] for v in cfg["virtual_contexts"]):
+        cfg["virtual_contexts"].append(vc)
 
     try:
         ctx = citations_bp.get_context(workspace_id)
@@ -206,7 +210,8 @@ def _background_citation_search(ctx, query, source, field, category, page):
                     with urllib.request.urlopen(cat_req) as cr:
                         cat_data = json.loads(cr.read().decode())
                         if cat_data.get('results'):
-                            topic_id = cat_data['results'][0]['id'].split('/')[-1]
+                            from insetu.core.utils_core import InSetuURI
+                            topic_id = InSetuURI(cat_data['results'][0]['id']).basename
                             filters.append(f"topics.id:{topic_id}")
                 except Exception:
                     pass
@@ -222,9 +227,10 @@ def _background_citation_search(ctx, query, source, field, category, page):
             req = urllib.request.Request(url, headers={'User-Agent': 'mailto:insetu-dev@localhost'})
             with urllib.request.urlopen(req) as response:
                 data = json.loads(response.read().decode())
+            from insetu.core.utils_core import InSetuURI
             for work in data.get('results', []):
                 csl_items.append({
-                    "id": work.get('id', '').split('/')[-1],
+                    "id": InSetuURI(work.get('id', '')).basename,
                     "title": work.get('title', 'Untitled'),
                     "type": work.get('type', 'article'),
                     "author": [{"family": a.get('author', {}).get('display_name', '')} for a in work.get('authorships', [])],

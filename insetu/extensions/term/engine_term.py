@@ -4,8 +4,8 @@ import threading
 import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
-from insetu.kernel.utils import get_all_workspace_ids
+from akasa.hooks import hooks
+from akasa.utils import get_all_workspace_ids
 try:
     from flask_sock import Sock
     HAS_SOCK = True
@@ -65,7 +65,7 @@ if HAS_SOCK:
             except:
                 pass
 def _run_term_stream(ws, workspace_id):
-    from insetu.kernel.utils import is_extension_enabled
+    from akasa.utils import is_extension_enabled
     if not is_extension_enabled('term', workspace_id):
         ws.close()
         return

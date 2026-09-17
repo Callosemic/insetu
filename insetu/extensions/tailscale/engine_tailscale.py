@@ -2,7 +2,7 @@ import os
 import subprocess
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
-from insetu.kernel.hooks import hooks
+from akasa.hooks import hooks
 
 __depends__ = []
 def _execute_serve_bind(workspace_id="default"):

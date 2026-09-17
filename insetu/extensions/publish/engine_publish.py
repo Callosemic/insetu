@@ -6,8 +6,8 @@ import subprocess
 import shutil
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.kernel.workers import register_ephemeral_artifact
-from insetu.kernel.hooks import hooks
+from akasa.workers import register_ephemeral_artifact
+from akasa.hooks import hooks
 
 publish_bp = InSetuExtension(
     'publish',
@@ -65,10 +65,11 @@ def compile_document_payload(workspace_id, filepath, target_format):
     ctx = publish_bp.get_context(workspace_id)
 
     responses = ctx.emit('resolve_payload_chunks', uri=filepath)
+    from insetu.core.utils_core import InSetuURI
     chunks = next((r for r in responses if r), [filepath])
     content = ""
     for c in chunks:
-        is_sys = c.startswith("ctx://")
+        is_sys = InSetuURI(c).scheme == 'ctx'
         c_text = ctx.vfs.read(c, is_absolute_artifact=is_sys)
         if c_text:
             content += c_text + "\n\n"
@@ -97,7 +98,6 @@ def compile_document_payload(workspace_id, filepath, target_format):
 
         for filename, file_content in temp_files.items():
             Path(temp_dir).joinpath(filename).write_text(file_content, encoding='utf-8')
-
         out_filename = f"compiled_output.{target_format}"
         out_path = Path(temp_dir).joinpath(out_filename).as_posix()
 
@@ -105,7 +105,7 @@ def compile_document_payload(workspace_id, filepath, target_format):
         cmd.extend(compiler_flags)
 
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = ctx.exec.run(cmd, cwd=temp_dir)
         except FileNotFoundError:
             raise RuntimeError("Pandoc is not installed or not in PATH.")
 

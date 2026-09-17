@@ -8,8 +8,8 @@ import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
-from insetu.kernel.workers import submit_job, register_callback
-from insetu.kernel.hooks import hooks
+from akasa.workers import submit_job, register_callback
+from akasa.hooks import hooks
 RESEARCH_SCHEMA = {
     "research_jobs": {
         "id": "TEXT PRIMARY KEY",
@@ -186,9 +186,9 @@ class GooglePlaywrightProvider(SearchProvider):
             except Exception as e:
                 # Drop an audit log of the raw SERP DOM to debug layout changes or CAPTCHAs
                 try:
-                    from insetu.kernel.utils import get_workspace_physics
+                    from akasa.utils import get_workspace_physics
                     import time, os
-                    cfg_path, _, _ = get_workspace_physics()
+                    cfg_path, _ = get_workspace_physics()
                     log_dir = Path(cfg_path).parent / "data" / "logs" / "research_dumps"
                     os.makedirs(log_dir.as_posix(), exist_ok=True)
                     dump_path = log_dir / f"google_serp_fail_{int(time.time())}.html"
@@ -268,12 +268,12 @@ def get_provider(provider_name):
 # --- ASYNCHRONOUS EVENT LOOP (METRONOME DISPATCHER) ---
 def gather_next_page(job_id, workspace_id=None):
   """Metronome callback to fetch a single SERP page, preventing rate limits."""
-  import insetu.kernel.db as kernel_db
+  import akasa.db as kernel_db
   ctx = research_bp.get_context(workspace_id)
   conn = ctx.db
   job = conn.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
   if not job or job['status'] != 'gathering':
-    from insetu.kernel.workers import cancel_job
+    from akasa.workers import cancel_job
     cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
     return
 
@@ -290,7 +290,7 @@ def gather_next_page(job_id, workspace_id=None):
       if not exists:
         prior_scrape = conn.execute("SELECT id FROM research_inbox WHERE url=? AND scraped_at IS NOT NULL", (link['url'],)).fetchone()
         prior_cit = None
-        from insetu.kernel.utils import is_extension_enabled
+        from akasa.utils import is_extension_enabled
         if is_extension_enabled("citations", workspace_id=workspace_id):
           try:
             from insetu.extensions.citations.engine_citations import citations_bp
@@ -315,7 +315,7 @@ def gather_next_page(job_id, workspace_id=None):
     current_total = conn.execute("SELECT total_links FROM research_jobs WHERE id=?", (job_id,)).fetchone()['total_links']
     if new_links_count == 0 or current_total >= max_results:
       conn.execute("UPDATE research_jobs SET status='paused' WHERE id=?", (job_id,))
-      from insetu.kernel.workers import cancel_job
+      from akasa.workers import cancel_job
       cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
     else:
       meta['start_index'] = start_index + 10
@@ -327,17 +327,17 @@ def gather_next_page(job_id, workspace_id=None):
       meta['error'] = str(e)
       conn.execute("UPDATE research_jobs SET status='failed', meta_json=? WHERE id=?", (json.dumps(meta), job_id))
       conn.commit()
-      from insetu.kernel.workers import cancel_job
+      from akasa.workers import cancel_job
       cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
 def scrape_next_link(job_id, workspace_id=None):
     """Executes a single link scrape inside the centralized ThreadPool."""
-    import insetu.kernel.db as kernel_db
+    import akasa.db as kernel_db
     ctx = research_bp.get_context(workspace_id)
     conn = ctx.db
     job_status = conn.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
     if not job_status or job_status['status'] in ('paused', 'cancelled', 'completed', 'failed'):
         # Terminate the job in the metronome ledger
-        from insetu.kernel.workers import cancel_job
+        from akasa.workers import cancel_job
         cancel_job(f"research_{job_id}", workspace_id=workspace_id)
         return
     row = conn.execute("SELECT id, url FROM research_inbox WHERE job_id=? AND status='pending' AND scraped_at IS NULL LIMIT 1", (job_id,)).fetchone()
@@ -346,7 +346,7 @@ def scrape_next_link(job_id, workspace_id=None):
         final_status = 'reviewed' if pending_unreviewed == 0 else 'completed'
         conn.execute("UPDATE research_jobs SET status=? WHERE id=?", (final_status, job_id,))
         conn.commit()
-        from insetu.kernel.workers import cancel_job
+        from akasa.workers import cancel_job
         cancel_job(f"research_{job_id}", workspace_id=workspace_id)
         print(f"✅ [Research] Job {job_id} finished scraping (Status: {final_status}).")
         return
@@ -468,7 +468,7 @@ def job_action(ctx, job_id):
         conn.execute("DELETE FROM research_inbox WHERE job_id=?", (job_id,))
         conn.commit()
 
-        from insetu.kernel.workers import cancel_job
+        from akasa.workers import cancel_job
         cancel_job(f"research_{job_id}", workspace_id=workspace_id)
         cancel_job(f"research_gather_{job_id}", workspace_id=workspace_id)
 
@@ -513,7 +513,7 @@ def list_inbox(ctx):
     return jsonify({"items": items})
 @research_bp.worker("export_context_task")
 def _background_export_context(ctx, research_job_id):
-    from insetu.kernel.workers import register_ephemeral_artifact
+    from akasa.workers import register_ephemeral_artifact
     from pathlib import Path
 
     ctx.jobs.update_progress("Compiling research context...")
