@@ -63,6 +63,12 @@ export class InSetuExtDevDash extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         this.fetchMetrics();
     }
+    onViewActivated() {
+        this.fetchMetrics();
+    }
+    onForceRefresh() {
+        this.fetchMetrics();
+    }
     async fetchMetrics() {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('dev')) return;
         try {
@@ -238,6 +244,25 @@ export class InSetuExtDevLogs extends InSetuElement {
             console.error("Failed to copy logs:", err);
         }
     }
+    _getDownloadLogsAction() {
+        return this.api.bindJobAction('logs/download', {}, {
+            onProgress: (msg) => {
+                if (window.inSetu?.ui?.setGlobalStatus) {
+                    window.inSetu.ui.setGlobalStatus(`⏳ ${msg || 'Exporting logs...'}`, null);
+                }
+            },
+            onComplete: async (statusData) => {
+                const targetFile = statusData.artifact?.file;
+                if (targetFile) {
+                    const fetchUrl = `/download/${encodeURIComponent(targetFile)}`;
+                    await window.inSetu.vfs.fetchAndDownloadState(targetFile, fetchUrl);
+                } else {
+                    alert("✅ Logs generated, but no download payload was returned.");
+                }
+            },
+            onError: (err) => alert(`❌ Export failed:\n\n${err.message}`)
+        });
+    }
 
     render() {
         return html`
@@ -251,6 +276,12 @@ export class InSetuExtDevLogs extends InSetuElement {
                     <button @click=${this.copyLogs} title="Copy to Clipboard" style="background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s;" onmouseover="this.style.background='var(--input-bg)'" onmouseout="this.style.background='transparent'">
                         📋 Copy
                     </button>
+                    <sutram-async-btn
+                        label="⬇️ Export Boot Logs"
+                        intent="primary"
+                        style="margin: 0;"
+                        .onClick=${this._getDownloadLogsAction()}>
+                    </sutram-async-btn>
                 </div>
             </div>
             <pre style="border: 1px solid var(--border); background: var(--input-bg); border-radius: 4px; padding: 15px; color: var(--text-muted); opacity: ${this.loading ? 0.6 : 1};">${this.backendLogs || 'No logs available.'}</pre>
@@ -304,11 +335,14 @@ export class InSetuExtDevSql extends InSetuElement {
         this.result = null;
         this.loading = false;
     }
-
     connectedCallback() {
         super.connectedCallback();
         this._fetchDatabases();
     }
+
+    onWorkspaceLoad(workspaceId) { this._fetchDatabases(); }
+    onViewActivated() { this._fetchDatabases(); }
+    onForceRefresh() { this._fetchDatabases(); }
 
     async _fetchDatabases() {
         try {

@@ -154,9 +154,8 @@ def declare_notes_topology(target_repos=None, ledger_events=None, workspace_id=N
             if ".insetu/notes/" in e.get('filepath', ''):
                 return gen_cb()
         return None
-
     return [{
-        "filename": "notes_context.txt",
+        "filename": "ctx://contexts/notes_context.txt",
         "meta": {
             "type": "note",
             "title": "Notes Library",

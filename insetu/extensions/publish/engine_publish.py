@@ -100,12 +100,11 @@ def compile_document_payload(workspace_id, filepath, target_format):
             Path(temp_dir).joinpath(filename).write_text(file_content, encoding='utf-8')
         out_filename = f"compiled_output.{target_format}"
         out_path = Path(temp_dir).joinpath(out_filename).as_posix()
-
         cmd = ['pandoc', in_path, '-o', out_path]
         cmd.extend(compiler_flags)
 
         try:
-            res = ctx.exec.run(cmd, cwd=temp_dir)
+            res = ctx.exec.run(cmd, cwd=str(temp_dir))
         except FileNotFoundError:
             raise RuntimeError("Pandoc is not installed or not in PATH.")
 

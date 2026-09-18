@@ -155,6 +155,10 @@ export class InSetuExtFavorites extends InSetuElement {
         FavoritesStore.getState().fetchFavorites();
     }
 
+    onViewActivated() {
+        FavoritesStore.getState().fetchFavorites();
+    }
+
     onForceRefresh() {
         FavoritesStore.getState().fetchFavorites();
     }

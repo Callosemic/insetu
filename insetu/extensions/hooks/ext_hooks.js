@@ -102,6 +102,11 @@ export class InSetuExtHooks extends InSetuElement {
         HooksStore.getState().fetchLogs();
     }
 
+    onViewActivated() {
+        HooksStore.getState().fetchRules();
+        HooksStore.getState().fetchLogs();
+    }
+
     onForceRefresh() {
         HooksStore.getState().fetchRules();
         HooksStore.getState().fetchLogs();
@@ -400,13 +405,13 @@ window.ExtensionRegistry.registerExtension('hooks', {
     ],
     layoutSlots: [
         {
-            slot: "primary-navigation",
+            slot: "slots:primary-navigation",
             id: "ctrl",
             label: "Ctrl",
             order: 6
         },
         {
-            slot: "sub-navigation",
+            slot: "slots:sub-navigation",
             targetParent: "ctrl",
             id: "hooks",
             label: "Hooks",
@@ -414,7 +419,7 @@ window.ExtensionRegistry.registerExtension('hooks', {
             component: "insetu-ext-hooks"
         },
         {
-            slot: "sub-navigation-actions",
+            slot: "slots:sub-navigation-actions",
             targetParent: "ctrl",
             targetSub: "hooks",
             component: "insetu-ext-hooks-actions",

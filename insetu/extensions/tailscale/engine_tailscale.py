@@ -104,14 +104,15 @@ def _background_bind_serve(ctx, **kwargs):
 @hooks.on('topology_boot_complete')
 def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
     """Tenant Boot Hook: Evaluates auto-bind preference off-thread when the workspace mounts."""
-    if not workspace_id:
+    # Tailscale serve is a host daemon setting for port 5005; bind once on default workspace
+    if not workspace_id or workspace_id != 'default':
         return
 
     try:
         ctx = tailscale_bp.get_context(workspace_id)
         if ctx.settings.get("auto_bind", True):
-            # Dispatch to worker queue to keep workspace boot non-blocking
-            ctx.jobs.submit("bind_serve_task")
+            # Dispatch to worker queue with job coalescing to prevent thundering herds
+            ctx.jobs.submit("bind_serve_task", coalesce=True)
     except Exception as e:
         print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{workspace_id}]: {e}")
 

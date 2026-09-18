@@ -119,6 +119,9 @@ export class InSetuExtResearch extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         this.fetchState();
     }
+    onViewActivated() {
+        this.fetchState();
+    }
     onForceRefresh() {
         ResearchStore.setState({ isTabActive: true });
         this.fetchState();
@@ -541,7 +544,6 @@ window.ExtensionRegistry.registerExtension('research', {
         }
     ]
 });
-
 // --- HEADLESS EXTENSION STATE SYNCHRONIZATION ---
 // Executes independently of the UI component to ensure the inbox is pre-hydrated.
 async function syncResearchState() {
@@ -563,4 +565,3 @@ async function syncResearchState() {
         console.warn("Headless research sync failed:", e);
     }
 }
-syncResearchState();

@@ -177,7 +177,6 @@ def execute_sql_query(ctx):
             "database": clean_db_name,
             "error": str(e)
         }), 400
-
 @dev_bp.route('logs', methods=['GET'])
 def get_backend_logs(ctx):
     import subprocess
@@ -196,6 +195,52 @@ def get_backend_logs(ctx):
             })
     except Exception as e:
         return jsonify({"status": "error", "logs": f"Failed to fetch logs: {str(e)}"})
+@dev_bp.worker("download_boot_logs_task")
+def download_boot_logs_worker(ctx, **kwargs):
+    import subprocess
+    from pathlib import Path
+    from akasa.workers import register_ephemeral_artifact
+
+    ctx.jobs.update_progress("Extracting current invocation systemd logs...")
+    try:
+        # 1. Retrieve the unique InvocationID for the current service run
+        inv_res = subprocess.run(  # IO_BLOCK_BAN bypass
+            ["systemctl", "--user", "show", "-p", "InvocationID", "--value", "insetu.service"],
+            capture_output=True, text=True, timeout=5
+        )
+        inv_id = inv_res.stdout.strip()
+
+        # 2. Filter journalctl strictly by InvocationID if available
+        if inv_id and inv_id != "00000000000000000000000000000000":
+            cmd = ["journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={inv_id}", "--no-pager"]
+        else:
+            cmd = ["journalctl", "--user", "-u", "insetu.service", "-n", "5000", "--no-pager"]
+
+        res = subprocess.run(  # IO_BLOCK_BAN bypass
+            cmd, capture_output=True, text=True, timeout=15
+        )
+        log_content = res.stdout.strip() if (res.returncode == 0 and res.stdout.strip()) else "No systemd logs found for current invocation of 'insetu.service'."
+    except Exception as e:
+        log_content = f"Failed to extract invocation logs: {str(e)}"
+
+    out_file = f"ctx://contexts/insetu_boot_log_{int(time.time())}.txt"
+    ctx.vfs.save(out_file, log_content, data={"ignore_ledger": True})
+
+    from akasa.utils import resolve_system_artifact_path
+    abs_out_path = resolve_system_artifact_path(out_file, ctx.workspace_id)
+    register_ephemeral_artifact(abs_out_path, "dev_logs", 3600, workspace_id=ctx.workspace_id)
+
+    return {
+        "message": "Invocation logs exported successfully.",
+        "artifact": {
+            "file": out_file,
+            "url": f"/download/{out_file}"
+        }
+    }
+@dev_bp.route('logs/download', methods=['POST'])
+def api_download_logs(ctx):
+    job_id = ctx.jobs.submit("download_boot_logs_task")
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 # 4. Background Garbage Collection
 @dev_bp.worker("sweep_telemetry")

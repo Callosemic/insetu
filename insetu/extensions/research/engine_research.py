@@ -7,7 +7,6 @@ import urllib.parse
 import json
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
-from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
 from akasa.workers import submit_job, register_callback
 from akasa.hooks import hooks
 RESEARCH_SCHEMA = {
@@ -352,13 +351,13 @@ def scrape_next_link(job_id, workspace_id=None):
         return
     inbox_id = row['id']
     target_url = row['url']
-
     print(f"🔍 [Research] Scraping: {target_url}")
     try:
       job_data = conn.execute("SELECT meta_json FROM research_jobs WHERE id=?", (job_id,)).fetchone()
       meta = json.loads(job_data['meta_json']) if job_data and job_data['meta_json'] else {}
       parser_type = meta.get('parser', 'jina')
 
+      from insetu.extensions.ingest.engine_ingest import extract_markdown_from_url
       extracted = extract_markdown_from_url(target_url, method=parser_type)
       now_str = datetime.now().isoformat(timespec='seconds')
       conn.execute("UPDATE research_inbox SET raw_markdown=?, title=?, scraped_at=? WHERE id=?", (extracted["clean_markdown"], extracted["title"], now_str, inbox_id))

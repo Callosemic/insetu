@@ -224,8 +224,8 @@ def _background_post_reply(ctx, ticket_id=None, body=None):
                 if clean_c and clean_c not in seen:
                     t_text += f"{clean_c}\n\n---\n\n"
                     seen.add(clean_c)
-
-        ctx.vfs.save(f".insetu/freshdesk/{ticket_id}.md", t_text)
+        ticket_archive_path = Path(ctx.paths["artifacts_base"]).joinpath("freshdesk", f"{ticket_id}.md").as_posix()
+        ctx.vfs.save(ticket_archive_path, t_text, data={"is_absolute_artifact": True})
     except Exception as backup_err:
         print(f"⚠️ Freshdesk local archival failed: {backup_err}")
 

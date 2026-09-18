@@ -587,6 +587,14 @@ export class InSetuExtGitCtrl extends InSetuElement {
         GitStore.getState().fetchStatus();
         this._loadSettings();
     }
+    onViewActivated() {
+        GitStore.getState().fetchStatus();
+        this._loadSettings();
+    }
+    onForceRefresh() {
+        GitStore.getState().fetchStatus();
+        this._loadSettings();
+    }
     async _loadSettings() {
         try {
             const res = await this.api.get('settings');

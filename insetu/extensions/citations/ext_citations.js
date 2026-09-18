@@ -114,6 +114,9 @@ export class InSetuExtCitations extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         this.loadMainLibrary();
     }
+    onViewActivated() {
+        this.loadMainLibrary();
+    }
     onForceRefresh() {
         CitationStore.setState({
             reposExpanded: false,

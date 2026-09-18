@@ -468,6 +468,13 @@ export class InSetuExtUpdate extends InSetuElement {
         }
         UpdateStore.getState().fetchEligibleRepos();
     }
+    onViewActivated() {
+        if (this.targetRepo) {
+            UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+        }
+        UpdateStore.getState().fetchEligibleRepos();
+        UpdateStore.getState().checkDependencies();
+    }
     onForceRefresh() {
         if (this.targetRepo) {
             UpdateStore.getState().fetchRepoStatus(this.targetRepo);

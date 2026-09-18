@@ -451,6 +451,10 @@ constructor() {
         KanbanStore.getState().fetchTasks();
         KanbanStore.getState().fetchSettings();
     }
+    onViewActivated() {
+        KanbanStore.getState().fetchTasks();
+        KanbanStore.getState().fetchSettings();
+    }
     onForceRefresh() {
         KanbanStore.getState().fetchTasks();
         KanbanStore.getState().fetchSettings();

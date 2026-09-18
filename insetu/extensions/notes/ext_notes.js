@@ -378,6 +378,9 @@ export class InSetuExtNotes extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         NotesStore.getState().fetchNotes();
     }
+    onViewActivated() {
+        NotesStore.getState().fetchNotes();
+    }
     onForceRefresh() {
         NotesStore.getState().fetchNotes();
     }

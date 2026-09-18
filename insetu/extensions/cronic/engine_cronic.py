@@ -55,19 +55,18 @@ def _sync_system_crontab(ctx):
         if not job.get('enabled'):
             continue
 
-        abs_path = ctx.resolve_path(job['filepath'])
+        abs_path = str(ctx.resolve_path(job['filepath']))
         ext = os.path.splitext(abs_path)[1].lower()
-
         if ext == '.py':
-            cmd = f"{python_bin} {abs_path}"
+            cmd = f'"{python_bin}" "{abs_path}"'
         elif ext == '.sh':
-            cmd = f"bash {abs_path}"
+            cmd = f'bash "{abs_path}"'
         else:
-            cmd = abs_path
-        log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
+            cmd = f'"{abs_path}"'
+        log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job['id']}.log").as_posix()
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
-        cron_entry = f"{job['schedule']} {cmd} >> {log_file} 2>&1 {workspace_tag}{job['id']}"
+        cron_entry = f"{job['schedule']} {cmd} >> \"{log_file}\" 2>&1 {workspace_tag}{job['id']}"
         crontab_lines.append(cron_entry)
     new_crontab = "\n".join(crontab_lines) + "\n"
     ctx.exec.run(["crontab", "-"], input=new_crontab, check=True)
@@ -124,8 +123,7 @@ def get_logs(ctx):
     job_id = ctx.req.args.get("job_id")
     if not job_id:
         return jsonify({"logs": "No job ID supplied."}), 400
-
-    log_file = ctx.resolve_path(f".insetu/data/cronic_{job_id}.log")
+    log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job_id}.log").as_posix()
     content = ctx.vfs.read(log_file, is_absolute_artifact=True)
     if content is not None:
         lines = content.splitlines(keepends=True)
@@ -137,20 +135,22 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     job = ctx.db.get_by_id("cronic_jobs", cronic_job_id)
     if not job:
         raise ValueError("Cronic job record not found.")
-
-    abs_path = ctx.resolve_path(job['filepath'])
+    resolved = ctx.resolve_path(job['filepath'])
+    if not resolved:
+        raise ValueError(f"File path for job '{cronic_job_id}' could not be resolved.")
+    abs_path = str(resolved)
     ext = os.path.splitext(abs_path)[1].lower()
 
-    log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
+    log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job['id']}.log").as_posix()
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-
+    import shlex
     if ext == '.py':
-        cmd = f'"{sys.executable}" "{abs_path}"'
+        cmd = f'{shlex.quote(sys.executable)} {shlex.quote(abs_path)}'
     else:
-        cmd = f'bash "{abs_path}"'
+        cmd = f'bash {shlex.quote(abs_path)}'
 
     # Route output streams directly to the log file at the OS level
-    full_cmd = f"{cmd} >> \"{log_file}\" 2>&1"
+    full_cmd = f"{cmd} >> {shlex.quote(log_file)} 2>&1"
 
     log_content = ctx.vfs.read(log_file, is_absolute_artifact=True) or ""
     log_content += f"\n--- Manual Run Dispatched [{time.ctime()}] ---\n"
@@ -167,21 +167,24 @@ def run_now(ctx):
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"))
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @cronic_bp.worker("kill_task")
 def _kill_task_worker(ctx, job_id=None, **kwargs):
     cronic_job_id = kwargs.get("cronic_job_id")
     job = ctx.db.get_by_id("cronic_jobs", cronic_job_id)
     if not job:
         raise ValueError("Cronic job record not found.")
-    abs_path = ctx.resolve_path(job['filepath'])
+    resolved = ctx.resolve_path(job['filepath'])
+    if not resolved:
+        raise ValueError(f"File path for job '{cronic_job_id}' could not be resolved.")
+    abs_path = str(resolved)
 
     # Issue a SIGTERM to any process executing this exact script path
-    cmd = f'pkill -f "{abs_path}"'
+    import re
+    safe_pattern = re.escape(str(abs_path))
+    cmd = f'pkill -f "{safe_pattern}"'
     res = ctx.exec.run(cmd, shell=True)
     ctx.db.update("cronic_jobs", {"last_status": "terminated"}, "id", job['id'])
-
-    log_file = ctx.resolve_path(f".insetu/data/cronic_{job['id']}.log")
+    log_file = Path(ctx.paths["artifacts_base"]).joinpath(f"cronic_{job['id']}.log").as_posix()
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
 
     log_content = ctx.vfs.read(log_file, is_absolute_artifact=True) or ""
@@ -200,12 +203,11 @@ def kill_job(ctx):
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"))
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @cronic_bp.worker("sweep_logs_task")
 def _sweep_logs_worker(ctx, **kwargs):
     """Garbage collect logs older than 30 days."""
-    log_dir = ctx.resolve_path(".insetu/data/")
-    if not os.path.exists(log_dir):
+    log_dir = ctx.paths.get("artifacts_base")
+    if not log_dir or not os.path.exists(log_dir):
         return "No logs to sweep."
 
     cutoff = time.time() - (30 * 86400)
@@ -236,7 +238,8 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
         from akasa.workers import submit_job
         job_id = f"cronic_sweep_{workspace_id}"
         submit_job(job_id, "cronic", "sweep_logs_task", interval_ms=86400000, jitter_ms=3600000, workspace_id=workspace_id)
-        # 2. Heal state drift: read system crontab and sync DB
+
+        # 2. Heal state drift & reconstruct missing jobs from system crontab
         try:
             res = ctx.exec.run(["crontab", "-l"], check=True)
             current_cron = res.stdout
@@ -244,22 +247,52 @@ def cronic_workspace_boot(workspace_id=None, **kwargs):
             current_cron = ""
 
         workspace_tag = f"# managed-by-insetu:cronic:{workspace_id}:"
-        active_job_ids = set()
+        active_cron_jobs = {}
+
+        import re
+        ws_root = ctx.paths["workspace_root"]
 
         for line in current_cron.splitlines():
             if workspace_tag in line:
                 parts = line.split(workspace_tag)
                 if len(parts) > 1:
-                    active_job_ids.add(parts[1].strip())
+                    c_job_id = parts[1].strip()
+                    cron_expr_and_cmd = parts[0].strip()
 
-        jobs = ctx.db.get_all("cronic_jobs")
+                    match = re.match(r'^((?:[^\s]+\s+){5})(.*?)(?:\s*>>.*)?$', cron_expr_and_cmd)
+                    if match:
+                        schedule = match.group(1).strip()
+                        cmd = match.group(2).strip()
+
+                        fp_match = re.search(r'"([^"]+)"(?:\s*>>)?$', cmd) or re.search(r'([^\s]+)$', cmd)
+                        abs_fp = fp_match.group(1) if fp_match else ""
+
+                        rel_fp = os.path.relpath(abs_fp, ws_root) if abs_fp.startswith(ws_root) else abs_fp
+                        active_cron_jobs[c_job_id] = (schedule, rel_fp)
+
+        existing_jobs = {j['id']: j for j in ctx.db.get_all("cronic_jobs")}
+
+        reconstructed = 0
+        for c_job_id, (sched, rel_fp) in active_cron_jobs.items():
+            if c_job_id not in existing_jobs:
+                ctx.db.insert_or_replace("cronic_jobs", {
+                    "id": c_job_id,
+                    "filepath": rel_fp,
+                    "schedule": sched,
+                    "enabled": 1,
+                    "last_status": "reconstructed"
+                })
+                reconstructed += 1
+            elif existing_jobs[c_job_id]['enabled'] == 0:
+                ctx.db.update("cronic_jobs", {"enabled": 1}, "id", c_job_id)
+
         drift_healed = 0
-        for job in jobs:
-            if job['enabled'] == 1 and job['id'] not in active_job_ids:
-                ctx.db.update("cronic_jobs", {"enabled": 0}, "id", job['id'])
+        for j_id, job in existing_jobs.items():
+            if job['enabled'] == 1 and j_id not in active_cron_jobs:
+                ctx.db.update("cronic_jobs", {"enabled": 0}, "id", j_id)
                 drift_healed += 1
 
-        if drift_healed > 0:
-            print(f"⏰ [Cronic] Healed {drift_healed} orphaned jobs detected from crontab drift.")
+        if reconstructed > 0 or drift_healed > 0:
+            print(f"⏰ [Cronic] Sync complete: Reconstructed {reconstructed} missing jobs and healed {drift_healed} orphaned jobs.")
     except Exception as e:
         print(f"⚠️ [Cronic] Boot hook failed: {e}")

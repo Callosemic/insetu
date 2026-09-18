@@ -132,7 +132,8 @@ def _background_bump_task(ctx, repo, prerelease=False):
     env["PSR_COMMIT_PARSER"] = parser_style
     dist_target = ctx.settings.get("distribution_target", "python_pypi", repo=repo)
 
-    pyproject_content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    abs_pyproject = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    pyproject_content = ctx.vfs.read(abs_pyproject, is_absolute_artifact=True) or ""
     import re
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
@@ -254,9 +255,9 @@ def _background_first_release_task(ctx, repo):
         log_lines.append(_execute_twine_upload(ctx, repo, repo_path, os.environ.copy()))
     else:
         log_lines.append(f"=== BUILD & UPLOAD [SKIPPED] ===\nDistribution target is set to '{dist_target}'.")
-
     ctx.jobs.update_progress("Tagging initial release in Git...")
-    content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    abs_pyproject = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    content = ctx.vfs.read(abs_pyproject, is_absolute_artifact=True) or ""
     import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
@@ -291,7 +292,8 @@ def _background_preview_first_release_task(ctx, repo):
     if status_check.stdout.strip():
         raise RuntimeError("Working tree is not clean. Please commit or stash your changes before previewing an initial release.")
 
-    content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    abs_pyproject = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    content = ctx.vfs.read(abs_pyproject, is_absolute_artifact=True) or ""
     import re
     v_match = re.search(r'^version\s*=\s*[\'"]([^\'"]+)[\'"]', content, re.MULTILINE)
     version_str = v_match.group(1) if v_match else "0.1.0"
@@ -392,7 +394,8 @@ def _background_preview_bump_task(ctx, repo, prerelease=False):
     if parser_style == "angular": parser_style = "conventional"
     env["PSR_COMMIT_PARSER"] = parser_style
 
-    pyproject_content = ctx.vfs.read(f"{repo}/pyproject.toml") or ""
+    abs_pyproject = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    pyproject_content = ctx.vfs.read(abs_pyproject, is_absolute_artifact=True) or ""
     pr_match = re.search(r'^prerelease_token\s*=\s*[\'"]([^\'"]*)[\'"]', pyproject_content, re.MULTILINE)
     prerelease_token = pr_match.group(1) if pr_match else "rc"
 
@@ -522,10 +525,7 @@ def _background_status_task(ctx, repo):
             is_clean = False
     except Exception:
         pass
-
-    # Bypass logical VFS boundaries to guarantee physical file resolution for the CLI
     pyproject_path = Path(repo_path).joinpath("pyproject.toml").as_posix()
-
     content = ctx.vfs.read(pyproject_path, is_absolute_artifact=True)
     has_pyproject = content is not None
     if content is None:
@@ -622,8 +622,8 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress("Updating pyproject.toml...")
-    pyproject_file = f"{repo}/pyproject.toml"
-    content = ctx.vfs.read(pyproject_file)
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    content = ctx.vfs.read(pyproject_file, is_absolute_artifact=True)
     if content is None:
         raise ValueError("pyproject.toml not found.")
 
@@ -646,8 +646,7 @@ def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=No
             new_content = re.sub(r'^vcs_release\s*=\s*(true|false)', f'vcs_release = {vcs_str}', new_content, flags=re.MULTILINE | re.IGNORECASE)
         else:
             new_content = re.sub(r'(\[tool\.semantic_release\])', r'\1\nvcs_release = ' + vcs_str, new_content)
-
-    ctx.vfs.save(pyproject_file, new_content)
+    ctx.vfs.save(pyproject_file, new_content, data={"is_absolute_artifact": True})
     ctx.sync_vfs_barrier()
 
     from insetu.extensions.git.engine_git import execute_git
@@ -728,16 +727,15 @@ def _background_force_version(ctx, repo, new_version):
     if not os.path.exists(repo_path):
         raise ValueError(f"Target repository path not found: {repo}")
     ctx.jobs.update_progress(f"Forcing version to {new_version}...")
-    pyproject_file = f"{repo}/pyproject.toml"
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
 
-    content = ctx.vfs.read(pyproject_file)
+    content = ctx.vfs.read(pyproject_file, is_absolute_artifact=True)
     if content is None:
         raise ValueError("pyproject.toml not found.")
 
     new_content = re.sub(r'^version\s*=\s*[\'"][^\'"]+[\'"]', f'version = "{new_version}"', content, flags=re.MULTILINE)
-
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging
-    ctx.vfs.save(pyproject_file, new_content)
+    ctx.vfs.save(pyproject_file, new_content, data={"is_absolute_artifact": True})
     ctx.sync_vfs_barrier()
     ctx.jobs.update_progress("Committing and tagging new version...")
 
@@ -772,8 +770,8 @@ def _background_scaffold_task(ctx, repo, initial_version):
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
     ctx.jobs.update_progress(f"Scaffolding semantic-release (v{initial_version})...")
-    pyproject_file = f"{repo}/pyproject.toml"
-    content = ctx.vfs.read(pyproject_file)
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
+    content = ctx.vfs.read(pyproject_file, is_absolute_artifact=True)
     if content is None:
         content = ""
 
@@ -804,9 +802,8 @@ exclude_commit_patterns = [
 ]
 '''
     content += psr_config
-
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging
-    ctx.vfs.save(pyproject_file, content)
+    ctx.vfs.save(pyproject_file, content, data={"is_absolute_artifact": True})
     ctx.sync_vfs_barrier()
     ctx.jobs.update_progress("Committing and tagging initial version...")
 
@@ -829,7 +826,7 @@ def _background_create_dummy_toml(ctx, repo, initial_version):
     if not os.path.exists(repo_path):
         raise ValueError("Target repository path not found.")
     ctx.jobs.update_progress(f"Creating basic pyproject.toml for {repo} (v{initial_version})...")
-    pyproject_file = f"{repo}/pyproject.toml"
+    pyproject_file = Path(repo_path).joinpath("pyproject.toml").as_posix()
     content = f'''[project]
 name = "{repo}"
 version = "{initial_version}"
@@ -845,7 +842,7 @@ prerelease_token = "rc"
 {'allow_zero_version = true\nmajor_on_zero = false' if initial_version.startswith('0.') else ''}
 '''
     # Enforce Event Ledger Parity via VFS and apply barrier for synchronous Git staging
-    ctx.vfs.save(pyproject_file, content)
+    ctx.vfs.save(pyproject_file, content, data={"is_absolute_artifact": True})
     ctx.sync_vfs_barrier()
     ctx.jobs.update_progress("Committing and tagging basic pyproject.toml...")
     execute_git(repo_path, ['add', 'pyproject.toml'])

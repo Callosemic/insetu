@@ -35,7 +35,7 @@ def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None
     """Executes a hook rule's command off-thread to protect Flask event loop responsiveness."""
     ctx.jobs.update_progress(f"Running hook [{rule_name}]: {command}")
 
-    ws_root = ctx.paths['workspace_root']
+    ws_root = str(ctx.paths['workspace_root'])
 
     # Resolve execution context
     expanded_cmd = command.strip()

@@ -92,8 +92,17 @@ export class InSetuExtCronic extends InSetuElement {
             }
         }, 10000);
     }
-
     onWorkspaceLoad(workspaceId) {
+        CronicStore.getState().fetchStatus();
+        CronicStore.getState().fetchJobs();
+    }
+
+    onViewActivated() {
+        CronicStore.getState().fetchStatus();
+        CronicStore.getState().fetchJobs();
+    }
+
+    onForceRefresh() {
         CronicStore.getState().fetchStatus();
         CronicStore.getState().fetchJobs();
     }

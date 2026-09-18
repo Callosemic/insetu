@@ -32,21 +32,21 @@ def execute_git(*args_tuple, **kwargs):
                 ctx = frame.f_locals['ctx']
                 break
             frame = frame.f_back
-
     check = kwargs.pop('check', True)
     cmd = ['git', '--no-optional-locks'] + args
 
+    target_str = str(target)
     if ctx:
-        if isinstance(target, str) and (target.startswith('/') or target[1:3] == ':\\'):
-            return ctx.exec.run(cmd, cwd=target, check=check, env=env, **kwargs)
+        if target_str.startswith('/') or target_str[1:3] == ':\\' or Path(target_str).is_absolute():
+            return ctx.exec.run(cmd, cwd=target_str, check=check, env=env, **kwargs)
         else:
-            return ctx.exec.run(cmd, volume=target, check=check, env=env, **kwargs)
+            return ctx.exec.run(cmd, volume=target_str, check=check, env=env, **kwargs)
     else:
         # Fallback for purely decoupled physical executions
         import subprocess
         kwargs.setdefault('capture_output', True)
         kwargs.setdefault('text', True)
-        return subprocess.run(cmd, cwd=target, check=check, env=env, **kwargs)
+        return subprocess.run(cmd, cwd=target_str, check=check, env=env, **kwargs)
 GIT_SETTINGS_SCHEMA = [
     {
         "id": "pull_strategy",

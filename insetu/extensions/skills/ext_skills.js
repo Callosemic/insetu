@@ -177,6 +177,9 @@ export class InSetuExtSkills extends InSetuElement {
     onWorkspaceLoad(workspaceId) {
         this._reloadAll();
     }
+    onViewActivated() {
+        this._reloadAll();
+    }
     onForceRefresh() {
         SkillsStore.getState().fetchPlaylist(true);
         SkillsStore.getState().fetchAllSkills();
