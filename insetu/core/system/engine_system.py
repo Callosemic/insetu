@@ -10,6 +10,7 @@ import akasa.utils as utils
 from akasa.hooks import hooks
 from akasa.sync import get_system_deltas
 from insetu.core.sdk import InSetuExtension
+import insetu.core.system.legacy  # Mount one-off migration hooks
 
 SYSTEM_SETTINGS_SCHEMA = [
     {
@@ -61,7 +62,6 @@ SYSTEM_SETTINGS_SCHEMA = [
         "description": "Maximum IndexedDB storage quota for VFS cache warming."
     }
 ]
-
 system_bp = InSetuExtension(
     'system', __name__,
     title="Core OS",
@@ -69,39 +69,6 @@ system_bp = InSetuExtension(
     core=True,
     settings_schema=SYSTEM_SETTINGS_SCHEMA
 )
-@hooks.on('system_boot', priority=5)
-def migrate_physical_sandboxes(**kwargs):
-    """Phase 3 Data Sovereignty: Safely migrate legacy directories into explicit extension sandboxes."""
-    import os, shutil
-    from pathlib import Path
-    from akasa.utils import _cwd
-
-    base_dir = Path(_cwd).joinpath(".insetu")
-
-    # Migrate prompts
-    legacy_prompts = base_dir.joinpath("prompts")
-    new_prompts = base_dir.joinpath("ext", "prompts", "data")
-    if legacy_prompts.exists() and legacy_prompts.is_dir():
-        os.makedirs(new_prompts.parent, exist_ok=True)
-        if not new_prompts.exists():
-            shutil.move(legacy_prompts.as_posix(), new_prompts.as_posix())
-
-    # Migrate core data domains (contexts, diffs, workflows)
-    legacy_data = base_dir.joinpath("data")
-    if legacy_data.exists() and legacy_data.is_dir():
-        for domain, ext_name in [("contexts", "gather"), ("diffs", "git"), ("workflows", "flow")]:
-            legacy_domain = legacy_data.joinpath(domain)
-            new_domain = base_dir.joinpath("ext", ext_name, "data", domain)
-            if legacy_domain.exists() and legacy_domain.is_dir() and not new_domain.exists():
-                os.makedirs(new_domain.parent, exist_ok=True)
-                shutil.move(legacy_domain.as_posix(), new_domain.as_posix())
-
-        # Cleanup if empty
-        try:
-            if not os.listdir(legacy_data.as_posix()):
-                os.rmdir(legacy_data.as_posix())
-        except Exception:
-            pass
 @hooks.on('register_core_modules')
 def provide_core_modules(**kwargs):
     import os
@@ -177,20 +144,6 @@ def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs)
 def provide_vfs_ignores(workspace_id=None, **kwargs):
     """Host application declaration of directories the VFS should never traverse natively."""
     return ['.git', 'node_modules', '__pycache__', 'venv']
-
-@hooks.on('evaluate_blocking_task')
-def evaluate_blocking_task(task_name=None, **kwargs):
-    """Host declaration of tasks that should lock the UI into a 'compiling' state."""
-    if not task_name: 
-        return False
-    return task_name.startswith('compile_') or task_name in (
-        'pack_selection_task', 
-        'execute_delayed_compile', 
-        'boot_scan_task', 
-        'resolve_topology_task', 
-        'scan_topology_task'
-    )
-
 @system_bp.route('deltas', methods=['GET'])
 def api_system_deltas(ctx):
     since = float(ctx.req.args.get('since', 0.0))
@@ -223,7 +176,7 @@ def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=
 def get_system_config(workspace_id):
     data = load_config(workspace_id)
     script_dir = Path(__file__).resolve().parent.as_posix()
-    from akasa.utils import CORE_MODULES
+    from akasa.utils import _CORE_MODULES as CORE_MODULES
     available_ids = set()
     available = []
     extensions_dir = Path(script_dir).parent.joinpath("extensions").as_posix()
@@ -319,10 +272,9 @@ def save_system_config(workspace_id, payload):
     merged_cfg = sanitize_workspace_config(merged_cfg)
     save_json_config(cfg_path, merged_cfg, workspace_id)
 
-    # Invalidate the mutated config cache so backend physics immediately see changes
-    from akasa.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
-    _MUTATED_CONFIG_CACHE.clear()
-    _MUTATED_CONFIG_MTIME.clear()
+    # Emits a globally decoupled config invalidation event
+    from akasa.hooks import hooks
+    hooks.emit('config_mutated', workspace_id=workspace_id)
 @system_bp.route('reboot', methods=['POST'])
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""

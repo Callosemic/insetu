@@ -21,6 +21,8 @@ export const AppStore = createExtensionStore('App', {
     activeWorkspace: window.inSetu.utils.getActiveWorkspace(),
     authToken: sessionStorage.getItem('insetu_boot_token') || '',
     manifest: { vfs: {}, ctx: {} },
+    dirtyRepos: new Set(),
+    dirtyBuckets: new Set(),
     instanceEmoji: '⚙️',
     isConfigOpen: false,
     isWorkspaceEditorOpen: false,

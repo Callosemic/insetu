@@ -2,6 +2,7 @@ import time
 import uuid
 import json
 import threading
+import queue
 from pathlib import Path
 from flask import jsonify
 from akasa.extension import ExtensionContext
@@ -25,9 +26,6 @@ TOPOLOGY_SCHEMA = {
         "timestamp": "REAL"
     }
 }
-_vfs_manifest_cache = {}
-_vfs_manifest_cache_lock = threading.Lock()
-
 topology_bp = InSetuExtension(
     'topology',  
     __name__,  
@@ -131,9 +129,7 @@ def api_topology_vfs_repo(ctx):
 @hooks.on('force_topology_scan', priority=10)
 def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     """Synchronously forces a full physical disk walk to rebuild the Topology Ledger."""
-    with _vfs_manifest_cache_lock:
-        if workspace_id in _vfs_manifest_cache:
-            del _vfs_manifest_cache[workspace_id]
+    hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
 
@@ -160,30 +156,26 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
             )
     conn.commit()
     return True
-@hooks.on('request_vfs_manifest')
-def hook_request_vfs_manifest(workspace_id=None, **kwargs):
-    """Returns the vfs manifest derived directly from the topology ledger."""
-    now = time.time()
-    with _vfs_manifest_cache_lock:
-        cache = _vfs_manifest_cache.get(workspace_id)
-        if cache and now - cache['ts'] < 2.0:
-            return cache['manifest']
+from akasa.utils import thread_safe_cache
 
+@hooks.on('vfs_manifest_mutated')
+def _invalidate_topology_manifest(workspace_id=None, **kwargs):
+    hook_request_vfs_manifest.invalidate(workspace_id=workspace_id)
+@hooks.on('request_vfs_manifest')
+@thread_safe_cache(ttl=2.0, key_maker=lambda workspace_id=None, **kwargs: str(workspace_id))
+def hook_request_vfs_manifest(workspace_id=None, **kwargs):
+    """Returns the vfs manifest derived directly from the topology ledger via raw tuple queries."""
     try:
         ctx = topology_bp.get_context(workspace_id)
-        rows = ctx.db.get_all("topology_ledger")
+        cursor = ctx.db.execute("SELECT repo, bucket_id, filepath FROM topology_ledger")
 
         manifest = {}
-        for r in rows:
-            repo = r['repo']
-            bucket_id = r['bucket_id']
+        for repo, bucket_id, filepath in cursor.fetchall():
             manifest_key = f"{repo}::{bucket_id}"
             if manifest_key not in manifest:
                 manifest[manifest_key] = {"files": [], "meta": {"type": "vfs_bucket", "repo": repo, "bucket_id": bucket_id}}
-            manifest[manifest_key]["files"].append(r['filepath'])
+            manifest[manifest_key]["files"].append(filepath)
 
-        with _vfs_manifest_cache_lock:
-            _vfs_manifest_cache[workspace_id] = {'ts': time.time(), 'manifest': manifest}
         return manifest
     except Exception:
         return {}
@@ -211,20 +203,75 @@ def get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True):
         else:
             result.append(fp)
     return result
+_TOPOLOGY_RAM_QUEUE = queue.Queue()
+_TOPOLOGY_SLEW_THREAD = None
+
+def _topology_slew_limiter_loop():
+    from akasa.db import get_connection
+    from akasa.utils import fold_vfs_events
+    from akasa.workers import submit_immediate_job
+    try:
+        from akasa.events import sse_bus
+    except ImportError:
+        sse_bus = None
+
+    while True:
+        try:
+            # Block until at least one event arrives
+            first_item = _TOPOLOGY_RAM_QUEUE.get()
+            pending = [first_item]
+
+            # Micro-slew: wait 500ms to absorb I/O storms
+            time.sleep(0.5)
+            while not _TOPOLOGY_RAM_QUEUE.empty():
+                pending.append(_TOPOLOGY_RAM_QUEUE.get_nowait())
+
+            # Group by workspace
+            ws_groups = {}
+            for ws_id, ev in pending:
+                if ws_id not in ws_groups:
+                    ws_groups[ws_id] = []
+                ws_groups[ws_id].append(ev)
+            for ws_id, events in ws_groups.items():
+                folded = fold_vfs_events(events)
+                if not folded:
+                    continue
+
+                # Bulk commit to SQLite
+                try:
+                    conn = get_connection("topology", workspace_id=ws_id)
+                    now = time.time()
+                    conn.executemany(
+                        "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
+                        [(ev.get('filepath'), ev.get('operation', 'save'), now) for ev in folded]
+                    )
+                    conn.commit()
+                except Exception as e:
+                    print(f"⚠️ [Topology Slew] Bulk DB insert failed for {ws_id}: {e}")
+                # Trigger macro-resolution worker FIRST (as a silent background task)
+                job_id = f"tpl_res_{ws_id}"
+                submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=ws_id, coalesce=True, job_category="system_background")
+
+                # Guardrail: Delay the SSE broadcast by 250ms to ensure the worker has finished updating 
+                # the SQLite ledger. Otherwise, the UI fetches a stale manifest and flashes the cards.
+                if sse_bus:
+                    threading.Timer(0.25, lambda w=ws_id, f=folded: sse_bus.emit_sse('vfs_mutated', {"mutations": f, "workspace_id": w})).start()
+        except Exception as e:
+            print(f"⚠️ [Topology Slew] Worker loop error: {e}")
 
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
     """
     Stage 1 Slew Limiter: Catches high-velocity disk/watchdog mutations 
-    and buffers them to absorb the I/O storm.
+    and buffers them in RAM to absorb the I/O storm before hitting SQLite.
     """
-    print(f"🌍 [TOPOLOGY TELEMETRY] vfs_mutated caught {len(mutations) if mutations else 0} mutations: {[m.get('filepath') for m in (mutations or [])]}")
+    global _TOPOLOGY_SLEW_THREAD
+    if _TOPOLOGY_SLEW_THREAD is None or not _TOPOLOGY_SLEW_THREAD.is_alive():
+        _TOPOLOGY_SLEW_THREAD = threading.Thread(target=_topology_slew_limiter_loop, daemon=True)
+        _TOPOLOGY_SLEW_THREAD.start()
+
     if not mutations: return
 
-    ctx = topology_bp.get_context(workspace_id)
-    conn = ctx.db
-    now = time.time()
-    buffered_count = 0
     for m in mutations:
         if m.get("ignore_ledger"):
             continue
@@ -242,26 +289,10 @@ def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
             norm_path += '/'
 
         op = m.get("operation", "save")
-        conn.execute(
-            "INSERT INTO topology_event_buffer (filepath, mutation_type, timestamp) VALUES (?, ?, ?)",
-            (norm_path, op, now)
-        )
-        buffered_count += 1
-    if buffered_count == 0:
-        print(f"🌍 [TOPOLOGY TELEMETRY] 0 mutations buffered (filtered out as artifacts).")
-        return
-    conn.commit()
-
-    # Dispatch the resolution worker. The `coalesce=True` flag ensures that if a storm 
-    # of mutations arrives within the debounce window, they attach to the existing job.
-    job_id = f"tpl_res_{workspace_id}"
-    print(f"🌍 [TOPOLOGY TELEMETRY] Submitting resolve_topology_task (job_id={job_id}).")
-    submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=workspace_id, coalesce=True)
+        _TOPOLOGY_RAM_QUEUE.put_nowait((workspace_id, {"filepath": norm_path, "operation": op}))
 def resolve_topology_buffer(workspace_id):
     """Processes any pending events in topology_event_buffer, updates topology_ledger, and emits topology_resolved."""
-    with _vfs_manifest_cache_lock:
-        if workspace_id in _vfs_manifest_cache:
-            del _vfs_manifest_cache[workspace_id]
+    hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
     events = conn.execute("SELECT id, filepath, mutation_type FROM topology_event_buffer ORDER BY timestamp ASC").fetchall()
@@ -430,7 +461,6 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
             else:
                 repo_path = Path(ws_root).joinpath(repo_dir).resolve().as_posix()
             mount_volume(workspace_id, 'vfs', repo_dir, repo_path)
-
 @hooks.on('workspace_boot')
 def init_topology_on_boot(workspace_id=None, **kwargs):
     """Topology owns the boot sequence. Maps the drive immediately."""
@@ -447,7 +477,7 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
         pass
 
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id)
+    submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id, job_category="ui_blocking")
 @topology_bp.worker("boot_scan_task")
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
@@ -598,8 +628,7 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
                         return b, None
     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
     return catch_all, None
-@hooks.on('resolve_owning_workspaces')
-def resolve_owning_workspaces(filepath=None, **kwargs):
+def resolve_owning_workspaces(filepath=None):
     """Deterministically maps a physical path back to all owning tenant workspaces."""
     if not filepath: return set()
     from akasa.utils import get_all_workspace_ids, get_workspace_physics, load_config
@@ -639,3 +668,6 @@ def resolve_owning_workspaces(filepath=None, **kwargs):
             continue
 
     return owning_workspaces
+
+# Dependency Injection: Register the Tier 2 router with the Tier 1 kernel
+hooks.set_workspace_router(resolve_owning_workspaces)

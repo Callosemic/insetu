@@ -413,12 +413,6 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${this._syncState === 'pending' && !isGatherLoading ? html`
-                    <div style="background: var(--intent-warning); color: #000; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); font-size: 0.85rem; flex-shrink: 0;">
-                        <div><strong>⚠️ Contexts Stale:</strong> Pending changes are waiting for the compilation slew limiter.</div>
-                        <button class="btn-sm" style="background: #000; color: var(--intent-warning); margin: 0; border: 1px solid #000; font-weight: bold; padding: 4px 10px;" @click=${() => this.loadContext(false)}>Compile Now</button>
-                    </div>
-                ` : ''}
                 ${isGatherLoading ? html`
                     <div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;">
                         <sutram-spinner text=${displayLoadingMsg}></sutram-spinner>
@@ -490,7 +484,7 @@ export class InSetuExtGather extends InSetuElement {
                                                 .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
                                                 .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
                                                 icon="📦"
-                                                intentColor="var(--intent-highlight)"
+                                                intentColor=${AppStore.getState().dirtyBuckets.has(f.filename) || (f.repoDir && AppStore.getState().dirtyRepos.has(f.repoDir)) ? "var(--intent-warning)" : "var(--intent-highlight)"}
                                                 entityType="file:context"
                                                 .entityData=${{ 
                                                     filepath: f.filename, 

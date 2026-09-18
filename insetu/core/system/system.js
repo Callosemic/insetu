@@ -201,12 +201,23 @@ async function bootExtensions() {
 }
 // --- DECENTRALIZED MANIFEST SYNC & KERNEL HEARTBEAT ---
 let lastManifestSyncTs = 0;
+let lastPolledTs = 0;
 let localVfsSignatures = {};
 let localCtxSignatures = {};
 let warmedVfsSignatures = {};
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
     if (window.inSetu?.stores?.App?.getState()?.isReconciling) return; // Wait for outbox drain
+
+    const nowMs = Date.now();
+    const isSseConnected = window.inSetu?.sse?.isConnected;
+
+    // Adaptive Backoff: If SSE is healthy, poll at 30s intervals. If disconnected, poll at 3s intervals.
+    const requiredIntervalMs = isSseConnected ? 30000 : 3000;
+    if (nowMs - lastPolledTs < requiredIntervalMs) {
+        return;
+    }
+    lastPolledTs = nowMs;
     try {
         const deltaRes = await window.inSetu.api.workspace.get(`system/deltas?since=${lastManifestSyncTs}`, { 
             signal: AbortSignal.timeout(4000) 
@@ -425,6 +436,7 @@ async function checkManifestVersion() {
         console.warn("Heartbeat delta check failed:", e);
     }
 }
+// Keep tick running at 3s so degraded mode reacts immediately when SSE drops
 window.ExtensionRegistry.registerTick('manifest_sync', 3000, checkManifestVersion);
 window.ExtensionRegistry.registerTick('core_refresh', 1000, updateRefreshText);
 // Delegate execution to the Tier 1 agnostic metronome
@@ -1298,7 +1310,6 @@ async function fullRefresh() {
             });
             canReachServer = ping.ok;
         } catch(e) {}
-
         if (canReachServer) {
             if ('caches' in window) {
                 try {
@@ -1310,8 +1321,8 @@ async function fullRefresh() {
             // fetch the correct tenant configuration on boot via the interceptor.
             window.location.reload(true);
         } else {
-            if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
-                window.inSetu.ui.setGlobalStatus("⚠️ Offline: Cache preserved. Performing soft refresh.", 3000);
+            if (window.inSetu?.stores?.Toast) {
+                window.inSetu.stores.Toast.getState().addToast("Offline Mode: Full refresh aborted to preserve cache. Performing soft refresh instead.", "warning");
             }
             await performSoftRefresh();
             if (btn) btn.innerText = "🔄 Full UI Refresh";

@@ -1,6 +1,7 @@
 // insetu/static/js/api.js
 // ADR 0016: Explicit API Client SDK & Network Gateway
 import { SutramDB, OfflineHttpProvider, NetworkHysteresisManager, OutboxReconciler } from '../../vendor/sutram/js/offline.js';
+import { AppStore } from '/static/extensions/system/store.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 
@@ -177,7 +178,66 @@ window.inSetu.api.workspace.delete = function(path, options = {}) {
 window.inSetu.api.system.delete = function(path, options = {}) {
     return window.inSetu.api.workspace.delete(`system/${path.replace(/^\/+/, '')}`, options);
 };
-// Phase E: Network Hysteresis & Outbox Reconciliation Loop
+// Phase E: Network Hysteresis, Outbox Reconciliation & SSE Pipeline
+class SSEPipeline {
+    constructor() {
+        this.source = null;
+        this.reconnectTimer = null;
+        this.isConnected = false;
+    }
+    connect() {
+        if (this.source) return;
+        const token = window.inSetu.stores?.App?.getState()?.authToken || sessionStorage.getItem('insetu_boot_token');
+        this.source = new EventSource(`/api/system/stream?token=${token}`);
+
+        this.source.onopen = () => {
+            this.isConnected = true;
+        };
+        this.source.addEventListener('vfs_mutated', (e) => {
+            const data = JSON.parse(e.data);
+            window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
+        });
+        this.source.addEventListener('topology_resolved', (e) => {
+            const data = JSON.parse(e.data);
+            const state = AppStore.getState();
+            const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
+            const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
+            AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+        });
+        this.source.addEventListener('job_progress', (e) => {
+            const data = JSON.parse(e.data);
+
+            // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
+            if (data.job_category === 'ui_blocking') {
+                window.inSetu.events.emitHook('insetu:compile-progress', data);
+
+                if ((data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
+                    window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
+                }
+            }
+
+            // Apply definitive SSOT state directly from the kernel
+            if (data.active_modules !== undefined && data.pending_modules !== undefined) {
+                if (window.inSetu.stores?.App) {
+                    window.inSetu.stores.App.setState({
+                        activeModules: data.active_modules,
+                        pendingModules: data.pending_modules
+                    });
+                }
+            }
+        });
+
+        this.source.onerror = () => {
+            this.isConnected = false;
+            this.source.close();
+            this.source = null;
+            this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+        };
+    }
+}
+window.inSetu.sse = new SSEPipeline();
+window.inSetu.sse.connect();
+
 const networkManager = new NetworkHysteresisManager('/?t={t}', 3);
 let lastCacheCheck = 0;
 

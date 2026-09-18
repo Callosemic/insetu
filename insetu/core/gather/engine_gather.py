@@ -220,7 +220,7 @@ def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, l
                 "on_complete_hook": "compilation_sequence_complete"
             }
         })
-        submit_immediate_job(chain_job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id)
+        submit_immediate_job(chain_job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id, job_category="ui_blocking")
 
 register_callback("gather", "execute_delayed_compile", _execute_delayed_compile)
 
@@ -241,14 +241,13 @@ def init_gather_workers(workspace_id=None, **kwargs):
                     "on_complete_hook": "compilation_sequence_complete"
                 }
             })
-            submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id)
+            submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id, job_category="ui_blocking")
     except Exception as e:
         print(f"Warning: Boot scan failed: {e}")
-
 @hooks.on('gather_settings_updated')
 def on_gather_settings_updated(workspace_id=None, **kwargs):
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id)
+    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id, job_category="ui_blocking")
     return {"job_id": job_id}
 @hooks.on('vfs_search')
 def hook_vfs_search(workspace_id=None, query=None, **kwargs):
@@ -776,14 +775,13 @@ def api_clear_quickpacks(ctx):
     conn.commit()
 
     return jsonify({"status": "success", "message": f"Cleared {len(keys_to_delete)} quickpacks."})
-
 @gather_bp.route('pack_selection', methods=['POST'])
 def api_gather_pack_selection(ctx):
     data = ctx.req.json or {}
     items = data.get('items', [])
     if not items:
         return jsonify({"error": "Items list required."}), 400
-    job_id = ctx.jobs.submit("pack_selection_task", items=items)
+    job_id = ctx.jobs.submit("pack_selection_task", job_category="ui_blocking", items=items)
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @gather_bp.worker("compile_contexts")
 def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=None, job_id=None, **kwargs):
@@ -880,9 +878,14 @@ def api_gather_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
     w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+
     # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
+    # Guardrail: Ignore ghost jobs older than 5 minutes to prevent infinite frontend polling loops.
+    import time
+    cutoff = time.time() - 300.0
     existing_job = w_conn.execute(
-        "SELECT id FROM immediate_jobs WHERE callback_name IN ('compile_contexts', 'compile_diffs_task', 'compile_workflows_task') AND status IN ('pending', 'processing')"
+        "SELECT id FROM immediate_jobs WHERE callback_name IN ('compile_contexts', 'compile_diffs_task', 'compile_workflows_task') AND status IN ('pending', 'processing') AND updated_at > ?", 
+        (cutoff,)
     ).fetchone()
     if existing_job:
         return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to active compilation."}), 202
@@ -907,13 +910,12 @@ def api_gather_submit(ctx):
         "steps": ordered_steps[1:],
         "on_complete_hook": "compilation_sequence_complete"
     }
-
     payload = {"force_full": force_full, "_chain": _chain}
     if "target_repos" in data:
         payload["target_repos"] = data["target_repos"]
 
     from akasa.workers import submit_immediate_job
-    submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], json.dumps(payload), workspace_id=ctx.workspace_id)
+    submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], json.dumps(payload), workspace_id=ctx.workspace_id, job_category="ui_blocking")
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks.on('register_compilation_steps')
@@ -937,31 +939,26 @@ def mount_gather_volumes(workspace_id=None, **kwargs):
     register_driver('ctx', DefaultVFSDriver())
     ctx = gather_bp.get_context(workspace_id)
     mount_volume(workspace_id, 'ctx', 'contexts', ctx.paths.get("contexts_dir"))
-_manifest_thread_cache = threading.local()
+from akasa.utils import thread_safe_cache
+
+@hooks.on('manifest_mutated')
+def _invalidate_gather_manifest(workspace_id=None, **kwargs):
+    hook_request_manifest.invalidate(workspace_id=workspace_id)
 @hooks.on('request_manifest')
+@thread_safe_cache(ttl=2.0, key_maker=lambda workspace_id=None, **kwargs: str(workspace_id))
 def hook_request_manifest(workspace_id=None, **kwargs):
-    import time
-    now = time.time()
-    if not hasattr(_manifest_thread_cache, 'data'):
-        _manifest_thread_cache.data = {}
-
-    cache = _manifest_thread_cache.data.get(workspace_id)
-    if cache and now - cache['ts'] < 2.0:
-        return cache['manifest']
-
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
-        rows = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger").fetchall()
+        cursor = conn.execute("SELECT filepath, entry_json, timestamp FROM manifest_ledger")
         manifest = {}
-        for r in rows:
-            if r['entry_json']:
-                entry = json.loads(r['entry_json'])
+        for filepath, entry_json, timestamp in cursor.fetchall():
+            if entry_json:
+                entry = json.loads(entry_json)
                 if isinstance(entry, dict):
                     if 'meta' not in entry: entry['meta'] = {}
-                    entry['meta']['timestamp'] = r['timestamp']
-                manifest[r['filepath']] = entry
+                    entry['meta']['timestamp'] = timestamp
+                manifest[filepath] = entry
 
-        _manifest_thread_cache.data[workspace_id] = {'ts': time.time(), 'manifest': manifest}
         return manifest
     except Exception: pass
     return {}
@@ -989,8 +986,7 @@ def hook_resolve_payload_chunks(uri=None, workspace_id=None, manifest=None, **kw
         return [uri]
 @hooks.on('save_manifest')
 def hook_save_manifest(manifest_data=None, is_full_compile=False, workspace_id=None, **kwargs):
-    if hasattr(_manifest_thread_cache, 'data') and workspace_id in _manifest_thread_cache.data:
-        del _manifest_thread_cache.data[workspace_id]
+    hooks.emit('manifest_mutated', workspace_id=workspace_id)
     try:
         conn = get_connection("vfs_index", workspace_id=workspace_id)
         now_ts = time.time()

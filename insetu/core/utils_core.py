@@ -292,10 +292,15 @@ def _track_intent_vfs_writes(workspace_id=None, filepath=None, resolved_path=Non
             keys_to_remove = [k for k in _WATCHDOG_PENDING.keys() if k[1] == abs_key]
             for k in keys_to_remove:
                 del _WATCHDOG_PENDING[k]
-@hooks.on('start_filesystem_observer')
-def start_filesystem_observer(workspace_ids=None, **kwargs):
+_WATCHDOG_OBSERVER = None
+
+@hooks.on('system_boot')
+def start_filesystem_observer(**kwargs):
     """Initializes a unified Watchdog observer for all active workspaces."""
+    global _WATCHDOG_OBSERVER
     from akasa.extension import SettingsManager
+    from akasa.utils import get_all_workspace_ids
+    workspace_ids = get_all_workspace_ids()
     if not SettingsManager('core_system', 'default').get("enable_watchdog", True):
         return None
 
@@ -421,11 +426,21 @@ def start_filesystem_observer(workspace_ids=None, **kwargs):
                 )
                 observer.schedule(handler, target_path, recursive=True)
                 has_watches = True
-
     if has_watches:
         observer.start()
+        _WATCHDOG_OBSERVER = observer
         print("👁️  Native Filesystem Watchers Engaged.")
-    return observer
+
+@hooks.on('system_shutdown')
+def stop_filesystem_observer(**kwargs):
+    global _WATCHDOG_OBSERVER
+    if _WATCHDOG_OBSERVER:
+        try:
+            _WATCHDOG_OBSERVER.stop()
+            _WATCHDOG_OBSERVER.join(timeout=2.0)
+        except Exception: pass
+        _WATCHDOG_OBSERVER = None
+
 def load_workflows(workspace_id=None):
     cfg_path, _ = get_workspace_physics(workspace_id)
     wf_path = Path(cfg_path).parent.joinpath("workflows.json").as_posix()

@@ -111,8 +111,29 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
         forceEdit: forceAllowEdit
     }});
 }
+export async function ensureFreshContext(filePath) {
+    const appState = AppStore.getState();
+    const dirtyRepos = appState.dirtyRepos || new Set();
+    const dirtyBuckets = appState.dirtyBuckets || new Set();
+
+    const repo = filePath.startsWith('vfs://') ? window.inSetu.utils.parseURI(filePath).repo : (filePath.includes('::') ? filePath.split('::')[0] : null);
+    const isDirty = dirtyBuckets.has(filePath) || (repo && dirtyRepos.has(repo));
+
+    if (isDirty) {
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh context...", null);
+        }
+        const targetRepos = repo ? [repo] : null;
+        await window.inSetu.stores.Gather.getState().executeCompile(null, false, null, targetRepos);
+        dirtyBuckets.delete(filePath);
+        if (repo) dirtyRepos.delete(repo);
+        AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
+    }
+}
+
 export async function fetchAndCopy(filePath, explicitUrl = null) {
     try {
+        await ensureFreshContext(filePath);
         let res;
         const activeWs = window.inSetu.utils.getActiveWorkspace();
         if (explicitUrl) {
@@ -210,6 +231,7 @@ export async function downloadFile(fetchUrl, fallbackFilename, fetchOptions = {}
     await sutramDownloadFile(fetchUrl, fallbackFilename, fetchOptions);
 }
 export async function viewAndCopy(filename) {
+    await ensureFreshContext(filename);
     const chunks = getChunks(filename);
     // If the requested filename is explicitly a known chunk, respect it. Otherwise default to the first chunk of the payload.
     const targetFile = (chunks && chunks.length > 0 && !chunks.includes(filename)) ? chunks[0] : filename;
