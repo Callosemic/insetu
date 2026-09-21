@@ -28,9 +28,8 @@ def resolve_publish_artifacts(filename=None, workspace_id=None, **kwargs):
     if os.path.exists(cand):
         return cand, True
     return None
-
 @publish_bp.worker("compile_task")
-def _background_compile(ctx, filepath, target_format, job_id=None):
+def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
     ctx.jobs.update_progress(f"Compiling document to {target_format.upper()}...")
     mem_file, download_name = compile_document_payload(ctx.workspace_id, filepath, target_format)
 
@@ -53,11 +52,10 @@ def _background_compile(ctx, filepath, target_format, job_id=None):
 def api_publish_compile_document(ctx):
     data = ctx.req.json or {}
     filepath = data.get('filepath')
-
     if not filepath:
         return jsonify({"error": "Filepath required"}), 400
 
-    job_id = ctx.jobs.submit("compile_task", filepath=filepath, target_format=data.get('format', 'pdf'))
+    job_id = ctx.jobs.submit("compile_task", filepath=filepath, target_format=data.get('format', 'pdf'), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 def compile_document_payload(workspace_id, filepath, target_format):

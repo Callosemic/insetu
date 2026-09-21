@@ -6,9 +6,8 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
 __depends__ = []
-
 @ingest_bp.worker("ingest_task")
-def _background_ingest(ctx, url, method):
+def _background_ingest(ctx, url, method, **kwargs):
     ctx.jobs.update_progress('Fetching and converting URL content...')
     extracted = extract_markdown_from_url(url, method)
     safe_title = extracted["title"].replace('"', "'")
@@ -137,5 +136,5 @@ def api_ingest_url(ctx):
     target_url = data.get("url", "").strip()
     if not target_url: return jsonify({"error": "URL is required"}), 400
 
-    job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method", "jina"))
+    job_id = ctx.jobs.submit("ingest_task", url=target_url, method=data.get("method", "jina"), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

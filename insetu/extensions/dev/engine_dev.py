@@ -239,7 +239,7 @@ def download_boot_logs_worker(ctx, **kwargs):
     }
 @dev_bp.route('logs/download', methods=['POST'])
 def api_download_logs(ctx):
-    job_id = ctx.jobs.submit("download_boot_logs_task")
+    job_id = ctx.jobs.submit("download_boot_logs_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 # 4. Background Garbage Collection

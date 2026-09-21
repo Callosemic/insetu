@@ -10,7 +10,6 @@ export const GitStore = createExtensionStore('Git', {
     activeSweepJobId: null,
     activePushJobId: null,
     activeDiffJobId: null,
-    diffJobMessage: null,
     diffJobError: null,
     dirtyDiffRepos: new Set(),
     fetchStatus: window.inSetu.utils.coalescedAsync(async () => {
@@ -47,13 +46,10 @@ export async function generateDiffs(force = false) {
     gitStoreObj.setState({ activeDiffJobId: 'starting', diffJobError: null });
     if (window.inSetu?.stores?.Gather) {
         try {
-            await window.inSetu.stores.Gather.getState().executeCompile((msg) => {
-                gitStoreObj.setState({ diffJobMessage: msg });
-            }, false, 'git_diffs', targetRepos);
+            await window.inSetu.stores.Gather.getState().executeCompile(null, false, 'git_diffs', targetRepos);
             gitStoreObj.setState({  
                 activeDiffJobId: null, 
                 dirtyDiffRepos: new Set(),
-                diffJobMessage: null,
                 diffJobError: null
             });
             window.inSetu.events.emit('insetu:git:diffs-refreshed');
@@ -66,7 +62,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
     static get extensionName() { return 'git'; }
     static properties = {
         activeDiffJobId: { type: String },
-        diffJobMessage: { type: String },
         diffJobError: { type: String },
         searchQuery: { type: String },
         categoryOrder: { type: Array },
@@ -92,7 +87,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
     constructor() {
         super();
         this.activeDiffJobId = null;
-        this.diffJobMessage = null;
         this.diffJobError = null;
         this.searchQuery = '';
         this.categoryOrder = [];
@@ -112,7 +106,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         super.connectedCallback();
         this.subscribe(GitStore, (state) => {
             this.activeDiffJobId = state.activeDiffJobId;
-            this.diffJobMessage = state.diffJobMessage;
             this.diffJobError = state.diffJobError;
             this.activePushJobId = state.activePushJobId;
             this.requestUpdate();
@@ -131,7 +124,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
         const gitState = GitStore.getState();
         const appState = AppStore.getState();
         this.activeDiffJobId = gitState.activeDiffJobId;
-        this.diffJobMessage = gitState.diffJobMessage;
         this.diffJobError = gitState.diffJobError;
         this.activePushJobId = gitState.activePushJobId;
         this.categoryOrder = appState.categoryOrder || [];
@@ -149,9 +141,9 @@ export class InSetuExtGitDiffs extends InSetuElement {
             const { dirtyDiffRepos } = GitStore.getState();
             const newDirty = new Set(dirtyDiffRepos);
             const reposChanged = payload.mutations.some(m => {
-                if (!m.filepath) return false;
-                const { repo } = window.inSetu.utils.parseURI(m.filepath);
-                if (repo) {
+                if (!m.filepath || m.ignore_ledger) return false;
+                const { scheme, repo } = window.inSetu.utils.parseURI(m.filepath);
+                if (repo && (!scheme || scheme === 'vfs')) {
                     newDirty.add(repo);
                     return true;
                 }
@@ -173,11 +165,21 @@ export class InSetuExtGitDiffs extends InSetuElement {
         });
         this.registerGlobalListener('insetu:compile-progress', window, (e) => {
             const pollData = e.detail;
+            if (pollData.status === 'terminated') {
+                GitStore.setState({ activeDiffJobId: null });
+                return;
+            }
             const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
-            GitStore.setState({
-                activeDiffJobId: (currentExt === 'git' || currentExt === 'git_diffs') ? pollData.id : null,
-                diffJobMessage: (currentExt === 'git' || currentExt === 'git_diffs') ? pollData.message : null
-            });
+            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
+
+            const isMyTurn = currentExt === 'git' || currentExt === 'git_diffs';
+            const hasRun = history.some(step => step.ext_name === 'git' || step.ext_name === 'git_diffs');
+            const isWaiting = !isMyTurn && !hasRun;
+            if (isMyTurn || isWaiting) {
+                GitStore.setState({ activeDiffJobId: pollData.id || 'waiting' });
+            } else {
+                GitStore.setState({ activeDiffJobId: null });
+            }
         });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
             if (e.detail.ext_name === 'git') {
@@ -268,6 +270,7 @@ disconnectedCallback() {
                 },
                 onError: (err) => {
                     this.sweepLoading = false;
+                    this.requestUpdate();
                 }
             });
         } catch (err) {
@@ -302,7 +305,6 @@ disconnectedCallback() {
             onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
         });
     }
-
     _getRepoSweepAction(repo) {
         return this.api.bindJobAction('sweep/push', () => {
             const files = this.selectedSweepFiles[repo] || [];
@@ -313,11 +315,18 @@ disconnectedCallback() {
         }, {
             onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(msg || "Sweeping repo..."); },
             onComplete: async (statusData) => {
+                // Optimistically purge swept files from memory so the card heals immediately
+                delete this.sweepFiles[repo];
+                delete this.selectedSweepFiles[repo];
+                this.requestUpdate();
+
                 const { dirtyDiffRepos } = GitStore.getState();
                 const newDirty = new Set(dirtyDiffRepos);
-                newDirty.add("ALL");
+                newDirty.add(repo);
                 GitStore.setState({ dirtyDiffRepos: newDirty });
+
                 alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
+                this._fetchSweepStatusSilent();
                 this.compileSystem().then(() => this.dispatch('insetu:git:generate-diffs', { force: true }));
             },
             onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
@@ -381,7 +390,6 @@ disconnectedCallback() {
         const isGitActive = this.activeDiffJobId || (!this.isPipelineActive && (this.activeModules || []).includes('git'));
         const isGitPending = !this.isPipelineActive && (this.pendingModules || []).includes('git');
         const isGitLoading = isGitActive || isGitPending;
-        const loadingMsg = this.diffJobMessage || (isGitActive ? "Analyzing Git trees across sister repositories... please wait." : "Waiting for prerequisite contexts to compile...");
 
         return html`
             <sutram-toolbar
@@ -399,9 +407,8 @@ disconnectedCallback() {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-            ${isGitLoading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${loadingMsg}></sutram-spinner></div>` : ''}
             ${this.diffJobError ? html`<div style="color: var(--intent-danger); padding: 10px 20px;">Error analyzing diffs: ${this.diffJobError}</div>` : ''}
-            <div style="display: flex; flex-direction: column; opacity: ${isGitLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isGitLoading ? 'none' : 'auto'};">
+            <div style="display: flex; flex-direction: column;">
                 ${sortedCats.map(catName => html`
                     <sutram-collapsible 
                         titleText=${catName} 
@@ -409,28 +416,37 @@ disconnectedCallback() {
                         ?open=${true}
                         ?flush=${true}
                         style="--title-weight: bold; --title-size: 1.05rem; color: var(--text); background: transparent; border-left: none; border-right: none; border-radius: 0; box-shadow: none;">
-
                         <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
                             ${categories[catName].map(f => {
                                 const descText = f.branch ? `🌿 Branch: ${f.branch}` : f.description;
                                 const repoStr = f.repoDir ? `[${f.repoDir}] ` : '';
                                 // Extract sizes if previously stuffed into detailText
                                 const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
+                                const isDirty = (() => {
+                                    if (AppStore.getState().dirtyBuckets.has(f.filename)) return true;
+                                    if (!f.repoDir) return false;
+                                    const base = f.filename.split('/').pop().replace('_diffs.txt', '');
+                                    const bucketId = base.startsWith(f.repoDir + '_') ? (base.substring(f.repoDir.length + 1) || 'main') : (base === f.repoDir ? 'main' : base);
+                                    return AppStore.getState().dirtyBuckets.has(`${f.repoDir}::${bucketId}`);
+                                })();
+                                const isLocked = isGitLoading && isDirty;
                                 return html`
                                 <insetu-card
+                                    style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
                                     .filename=${f.filename}
                                     .titleText=${f.displayName}
                                     .descriptionText=${descText}
                                     .detailPrefix=${repoStr}
                                     .detailText=${f.filename}
                                     .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
-                                    icon="📦"
-                                    intentColor="var(--intent-highlight)"
+                                    icon=${isLocked ? "⏳" : (isDirty ? "⚠️" : "📦")}
+                                    intentColor=${isDirty ? "var(--intent-warning)" : "var(--intent-highlight)"}
                                     entityType="file:diff"
                                     .entityData=${{ 
                                         filepath: f.filename, 
                                         repoDir: f.repoDir, 
                                         isFS: f.isFS,
+                                        outdated: isDirty,
                                         chunks: AppStore.getState().manifest?.ctx?.[f.filename]?.chunks || [f.filename]
                                     }}
                                     @card-clicked=${() => { if(this.vfs && this.vfs.viewAndCopy) this.vfs.viewAndCopy(f.filename); }}>
@@ -452,17 +468,23 @@ disconnectedCallback() {
                         <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
                             <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
+                                const isLocked = this.sweepLoading || GitStore.getState().dirtyDiffRepos.has(repo);
                                 const branch = GitStore.getState().reposStatus[repo]?.current;
                                 const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                                 return html`
                                 <insetu-card
+                                    style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
                                     .filename=${repo}
                                     .titleText=${repo}
                                     .descriptionText=${descText}
-                                    icon="📦"
+                                    icon=${isLocked ? "⏳" : "📦"}
                                     intentColor="var(--intent-neutral)"
                                     entityType="repo"
-                                    .entityData=${{ repoDir: repo }}
+                                    .entityData=${{ 
+                                        repoDir: repo, 
+                                        has_untracked_files: files.length > 0,
+                                        outdated: this.sweepLoading || GitStore.getState().dirtyDiffRepos.has(repo)
+                                    }}
                                     @card-clicked=${() => {
                                         const newSet = new Set(this.sweepExpandedRepos);
                                         newSet.has(repo) ? newSet.delete(repo) : newSet.add(repo);

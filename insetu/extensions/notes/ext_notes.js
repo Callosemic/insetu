@@ -39,11 +39,10 @@ export const NotesStore = createExtensionStore('Notes', {
     saveNewNote: async () => {
         const { title, repo, bucket, tags } = NotesStore.getState().noteForm;
         if (!title) return alert("Title is required.");
-
         const noteId = `note-${Math.random().toString(36).substr(2, 8)}`;
         const slug = window.inSetu.utils.slugify(title);
         const filename = `${slug}-${noteId}.md`;
-        const filepath = `.insetu/notes/${filename}`;
+        const filepath = `ctx://notes/${filename}`;
 
         const tagsArr = tags ? tags.split(',').map(t => t.trim()).filter(t=>t) : [];
         const now = new Date().toISOString().split('.')[0];
@@ -341,11 +340,10 @@ export class InSetuExtNotes extends InSetuElement {
     }
     connectedCallback() {
         super.connectedCallback();
-
         this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
             const payload = e.detail;
             if (!payload || !payload.mutations) return;
-            const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.includes('.insetu/notes/'));
+            const touchedNote = payload.mutations.some(m => m.filepath && m.filepath.startsWith('ctx://notes/'));
             if (touchedNote) NotesStore.getState().fetchNotes();
         });
 
@@ -363,16 +361,15 @@ export class InSetuExtNotes extends InSetuElement {
         NotesStore.getState().fetchNotes();
         this.registerGlobalListener('insetu:notes:new', window, () => NotesStore.setState({ newNoteModalOpen: true }));
         this.registerGlobalListener('sutram-sync-complete', window, () => NotesStore.getState().fetchNotes());
-
         // Expose the isolated notes directory to the global VFS manifest and file explorers
         this.registerGlobalListener('insetu:global-manifest-files', window, (e) => {
             const rawNotes = NotesStore.getState().notes || [];
-            if (rawNotes.length === 0) e.inSetuResponses.push(['.insetu/notes/.gitkeep']);
+            if (rawNotes.length === 0) e.inSetuResponses.push(['ctx://notes/.gitkeep']);
             else e.inSetuResponses.push(rawNotes.map(n => n.filepath));
         });
 
         this.registerGlobalListener('insetu:global-manifest-whitelist', window, (e) => {
-            e.inSetuResponses.push(['.insetu/notes/']);
+            e.inSetuResponses.push(['ctx://notes/']);
         });
     }
     onWorkspaceLoad(workspaceId) {
@@ -522,7 +519,7 @@ window.ExtensionRegistry.registerExtension('notes', {
     ],
     customEditors: [
         {
-            match: (filepath) => filepath && filepath.includes('.insetu/notes/'),
+            match: (filepath) => filepath && filepath.startsWith('ctx://notes/'),
             onOpen: (filepath) => {
                 NotesStore.setState({ editNoteFilepath: filepath });
             }

@@ -168,8 +168,18 @@ export class InSetuExtFlow extends InSetuElement {
         });
         this.registerGlobalListener('insetu:compile-progress', window, (e) => {
             const pollData = e.detail;
+            if (pollData.status === 'terminated') {
+                FlowStore.setState({ loading: false });
+                return;
+            }
             const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
-            FlowStore.setState({ loading: currentExt === 'flow' || currentExt === 'flw' });
+            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
+
+            const isMyTurn = currentExt === 'flow' || currentExt === 'flw';
+            const hasRun = history.some(step => step.ext_name === 'flow' || step.ext_name === 'flw');
+            const isWaiting = !isMyTurn && !hasRun;
+
+            FlowStore.setState({ loading: isMyTurn || isWaiting });
         });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
             if (e.detail.ext_name === 'flow') {
@@ -364,7 +374,6 @@ export class InSetuExtFlow extends InSetuElement {
         const isFlowActive = this.loading || (!this.isPipelineActive && (this.activeModules || []).includes('flow'));
         const isFlowPending = !this.isPipelineActive && (this.pendingModules || []).includes('flow');
         const isFlowLoading = isFlowActive || isFlowPending;
-        const loadingMsg = isFlowActive ? "Processing workflows..." : "Waiting for prerequisite contexts to compile...";
 
         const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
             const appState = appStore?.getState ? appStore.getState() : {};
@@ -439,8 +448,7 @@ export class InSetuExtFlow extends InSetuElement {
                     </div>
                 </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${isFlowLoading ? html`<div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;"><sutram-spinner text=${loadingMsg}></sutram-spinner></div>` : ''}
-                <div style="display: flex; flex-direction: column; opacity: ${isFlowLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isFlowLoading ? 'none' : 'auto'};">
+                <div style="display: flex; flex-direction: column;">
                         ${this.batches.length === 0 ? html`<div style="padding: 20px;"><insetu-empty-state text="No workflow batches defined."></insetu-empty-state></div>` : ''}
                         ${this.batches.length > 0 && filteredBatches.length === 0 ? html`<div style="padding: 20px;"><sutram-empty-state text="All workflows hidden by current filters."></sutram-empty-state></div>` : ''}
                         ${(() => {
@@ -474,20 +482,37 @@ export class InSetuExtFlow extends InSetuElement {
                                             const meta = manifestObj.meta || {};
                                             const sizeStr = this.utils.formatArtifactSize(meta);
                                             const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
+                                            const isDirty = (b._repos || []).some(r => AppStore.getState().dirtyRepos.has(r)) || AppStore.getState().dirtyBuckets.has(filename);
+                                            const isLocked = isFlowLoading && isDirty;
+                                            const statusIcon = isLocked ? '⏳' : (isDirty ? '⚠️' : '📦');
                                             return html`
                                                 <insetu-card
+                                                        style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
                                                         .filename=${b.id}
-                                                        .titleText=${`📦 ${b.title || b.id}`}
+                                                        .titleText=${`${statusIcon} ${b.title || b.id}`}
                                                         .descriptionText=${`${(b.includes || []).length} files mapped. ${b.include_prompt ? 'Includes Prompt.' : ''} ${b.response_path ? 'Expects Response.' : ''}`}
                                                         .detailPrefix=${repoStr}
                                                         .detailText=${filename}
                                                         .detailSuffix=${sizeStr ? ` | ${sizeStr}` : ''}
                                                         icon=""
-                                                        intentColor="var(--intent-primary)"
+                                                        intentColor=${isDirty ? "var(--intent-warning)" : "var(--intent-primary)"}
                                                         .entityType=${'file:workflow_batch'}
                                                         .entityData=${{  
                                                             ...b, 
-                                                            filepath: filename, 
+                                                            filepath: filename,
+                                                            outdated: (() => {
+                                                                if (AppStore.getState().dirtyBuckets.has(filename)) return true;
+                                                                return (b.includes || []).some(inc => {
+                                                                    if (AppStore.getState().dirtyBuckets.has(inc)) return true;
+                                                                    const uri = window.inSetu.utils.parseURI(inc);
+                                                                    if (uri.scheme === 'ctx' && uri.volume === 'contexts') {
+                                                                        const base = uri.basename.replace('_context.txt', '');
+                                                                        const bucketId = base.startsWith(uri.repo + '_') ? (base.substring(uri.repo.length + 1) || 'main') : (base === uri.repo ? 'main' : base);
+                                                                        return AppStore.getState().dirtyBuckets.has(`${uri.repo}::${bucketId}`);
+                                                                    }
+                                                                    return false;
+                                                                });
+                                                            })(),
                                                             suppress: ['file-edit'], 
                                                             chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}

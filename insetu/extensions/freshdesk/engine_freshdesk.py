@@ -82,7 +82,7 @@ def _fd_request(ctx, endpoint, method='GET', payload=None):
         err_msg = e.read().decode('utf-8')
         raise ValueError(f"Freshdesk API Error: {err_msg}")
 @freshdesk_bp.worker("fetch_tickets_task")
-def _background_fetch_tickets(ctx, filters=None):
+def _background_fetch_tickets(ctx, filters=None, **kwargs):
     import time, json
     if filters is None: filters = {}
     page = filters.get("page", 1)
@@ -173,12 +173,12 @@ def _background_fetch_tickets(ctx, filters=None):
 
     return {"message": "Tickets fetched.", "artifact": {"tickets": filtered_tickets, "my_agent_id": my_id, "ledger": merged, "contiguous_count": contiguous_count}}
 @freshdesk_bp.worker("fetch_conversations_task")
-def _background_fetch_conversations(ctx, ticket_id=None):
+def _background_fetch_conversations(ctx, ticket_id=None, **kwargs):
     ctx.jobs.update_progress('Fetching conversations...')
     data = _fd_request(ctx, f"tickets/{ticket_id}/conversations")
     return {"message": "Conversations fetched.", "artifact": {"conversations": data}}
 @freshdesk_bp.worker("take_ticket_task")
-def _background_take_ticket(ctx, ticket_id=None):
+def _background_take_ticket(ctx, ticket_id=None, **kwargs):
     ctx.jobs.update_progress('Assigning ticket...')
     me_data = _fd_request(ctx, "agents/me")
     my_id = me_data.get('id')
@@ -189,7 +189,7 @@ def _background_take_ticket(ctx, ticket_id=None):
 
     return {"message": f"Ticket assigned to {my_name}.", "artifact": {"ticket": updated_ticket}}
 @freshdesk_bp.worker("post_reply_task")
-def _background_post_reply(ctx, ticket_id=None, body=None):
+def _background_post_reply(ctx, ticket_id=None, body=None, **kwargs):
     import re
     ctx.jobs.update_progress('Sending reply...')
     if not body:
@@ -231,31 +231,30 @@ def _background_post_reply(ctx, ticket_id=None, body=None):
 
     return {"message": "Reply sent.", "artifact": {}}
 @freshdesk_bp.worker("resolve_ticket_task")
-def _background_resolve_ticket(ctx, ticket_id=None):
+def _background_resolve_ticket(ctx, ticket_id=None, **kwargs):
     ctx.jobs.update_progress('Marking ticket as resolved...')
     updated_ticket = _fd_request(ctx, f"tickets/{ticket_id}", method='PUT', payload={"status": 4})
     return {"message": "Ticket resolved.", "artifact": {"ticket": updated_ticket}}
-
 @freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'])
 def resolve_freshdesk_ticket(ctx, ticket_id):
-    job_id = ctx.jobs.submit("resolve_ticket_task", ticket_id=ticket_id)
+    job_id = ctx.jobs.submit("resolve_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @freshdesk_bp.route('tickets/<int:ticket_id>/reply', methods=['POST'])
 def post_freshdesk_reply(ctx, ticket_id):
     data = ctx.req.json or {}
     body = data.get("body", "")
-    job_id = ctx.jobs.submit("post_reply_task", ticket_id=ticket_id, body=body)
+    job_id = ctx.jobs.submit("post_reply_task", ticket_id=ticket_id, body=body, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'])
 def take_freshdesk_ticket(ctx, ticket_id):
-    job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id)
+    job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'])
 def get_freshdesk_conversations(ctx, ticket_id):
-    job_id = ctx.jobs.submit("fetch_conversations_task", ticket_id=ticket_id)
+    job_id = ctx.jobs.submit("fetch_conversations_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @freshdesk_bp.route('tickets/ignored', methods=['GET'])
 def get_ignored_tickets(ctx):
@@ -275,5 +274,5 @@ def get_freshdesk_tickets(ctx):
     Secure proxy endpoint using the asynchronous jobs ledger to prevent event loop starvation.
     """
     data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("fetch_tickets_task", coalesce=True, filters=data)
+    job_id = ctx.jobs.submit("fetch_tickets_task", coalesce=True, filters=data, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

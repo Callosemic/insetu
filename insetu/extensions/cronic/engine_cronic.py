@@ -165,7 +165,7 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
 @cronic_bp.route('run_now', methods=['POST'])
 def run_now(ctx):
     data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"))
+    job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @cronic_bp.worker("kill_task")
 def _kill_task_worker(ctx, job_id=None, **kwargs):
@@ -197,11 +197,10 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
         return {"message": "Termination signal sent to running processes."}
     else:
         return {"message": "No active processes found for this job."}
-
 @cronic_bp.route('kill', methods=['POST'])
 def kill_job(ctx):
     data = ctx.req.json or {}
-    job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"))
+    job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @cronic_bp.worker("sweep_logs_task")
 def _sweep_logs_worker(ctx, **kwargs):

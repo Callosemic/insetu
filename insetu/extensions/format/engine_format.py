@@ -11,9 +11,8 @@ format_bp = InSetuExtension(
     description="Source code beautification and formatting."
 )
 __depends__ = []
-
 @format_bp.worker("format_code_task")
-def _background_format_code(ctx, filepath=None):
+def _background_format_code(ctx, filepath=None, **kwargs):
     ctx.jobs.update_progress("Formatting source code...")
     if not filepath:
         raise ValueError("Filepath is required for code formatting.")
@@ -59,11 +58,10 @@ def _background_format_code(ctx, filepath=None):
 def api_format_code(ctx):
     data = ctx.req.json or {}
     filepath = data.get('filepath')
-
     if not filepath:
         return jsonify({"error": "Filepath required"}), 400
 
-    job_id = ctx.jobs.submit("format_code_task", filepath=filepath)
+    job_id = ctx.jobs.submit("format_code_task", filepath=filepath, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 def run_formatter():

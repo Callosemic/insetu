@@ -156,7 +156,7 @@ def attach_citation(ctx, csl_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 @citations_bp.worker("search_task")
-def _background_citation_search(ctx, query, source, field, category, page):
+def _background_citation_search(ctx, query, source, field, category, page, **kwargs):
     try:
         ctx.jobs.update_progress("Querying global academic catalogs...")
         import urllib.parse, urllib.request, json
@@ -254,10 +254,9 @@ def search_global_citations(ctx):
         page = int(data.get('page', 1))
     except ValueError:
         page = 1
-
     if not query and not category:
         return jsonify({"citations": []})
-    job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page)
+    job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @citations_bp.route('import', methods=['POST'])

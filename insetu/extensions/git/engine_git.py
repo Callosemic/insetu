@@ -368,7 +368,7 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     )
     return diff_manifest, manifest_deltas, truly_modified_diffs
 @git_bp.worker("sweep_status_task")
-def _background_sweep_status(ctx):
+def _background_sweep_status(ctx, **kwargs):
     from akasa.utils import get_workspace_physics
     from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
@@ -425,14 +425,13 @@ def _background_sweep_status(ctx):
 def pre_warm_git_sweep(workspace_id=None, **kwargs):
     """Pre-warms the Git sweepable state silently in the background after the topology settles."""
     ctx = git_bp.get_context(workspace_id)
-    ctx.jobs.submit_one_shot("sweep_status_task", 5000)
-
+    ctx.jobs.submit_one_shot("sweep_status_task", 5000, job_category="system_background")
 @git_bp.route('sweep/status', methods=['POST'])
 def api_git_sweep_status(ctx):
-    job_id = ctx.jobs.submit("sweep_status_task", coalesce=True)
+    job_id = ctx.jobs.submit("sweep_status_task", coalesce=True, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_push_task")
-def _background_sweep_push(ctx, selections, message):
+def _background_sweep_push(ctx, selections, message, **kwargs):
     import os
     import subprocess
     from akasa.utils import get_workspace_physics
@@ -468,14 +467,14 @@ def _background_sweep_push(ctx, selections, message):
     except subprocess.CalledProcessError as e:
         err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
         raise RuntimeError(f"{repo} Error: {err}")
-
 @git_bp.route('sweep/push', methods=['POST'])
 def api_git_sweep_push(ctx):
     data = ctx.req.json
     job_id = ctx.jobs.submit(
         "sweep_push_task", 
         selections=data.get('selections', {}), 
-        message=data.get('message', 'chore: workspace sweep')
+        message=data.get('message', 'chore: workspace sweep'),
+        job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.route('changelogs', methods=['GET'])
@@ -494,7 +493,7 @@ def api_git_changelogs(ctx):
 
     return jsonify({"repo": repo, "changelogs": changelogs})
 @git_bp.worker("push_task")
-def _background_git_push(ctx, repo, message, diff_file):
+def _background_git_push(ctx, repo, message, diff_file, **kwargs):
     import os
     import subprocess
     from akasa.utils import get_workspace_physics
@@ -596,14 +595,14 @@ def api_git_push(ctx):
     data = ctx.req.json
     repo = data.get('repo')
     message = data.get('message')
-
     if not repo or not message: return jsonify({"error": "Repo and message required"}), 400
 
     job_id = ctx.jobs.submit(
         "push_task", 
         repo=repo, 
         message=message, 
-        diff_file=data.get('diff_file')
+        diff_file=data.get('diff_file'),
+        job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks.on('request_available_diffs')
@@ -690,7 +689,7 @@ def api_git_status(ctx):
             repos_status[repo_dir] = {"is_git": False}
     return jsonify({"status": "success", "repos": repos_status})
 @git_bp.worker("init_task")
-def _background_git_init(ctx, repo, branch):
+def _background_git_init(ctx, repo, branch, **kwargs):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Initializing Git repository for {repo}...")
@@ -709,10 +708,10 @@ def api_git_init(ctx):
     branch = ctx.req.json.get('branch', 'main')
     if not repo: return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("init_task", repo=repo, branch=branch)
+    job_id = ctx.jobs.submit("init_task", repo=repo, branch=branch, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("fetch_preview_task")
-def _background_git_fetch_preview(ctx, repo):
+def _background_git_fetch_preview(ctx, repo, **kwargs):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Fetching remote for {repo}...")
@@ -777,10 +776,10 @@ def _background_git_fetch_preview(ctx, repo):
 def api_git_fetch_preview(ctx):
     repo = ctx.req.json.get('repo')
     if not repo: return jsonify({"error": "Repo required"}), 400
-    job_id = ctx.jobs.submit("fetch_preview_task", repo=repo)
+    job_id = ctx.jobs.submit("fetch_preview_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("pull_task")
-def _background_git_pull(ctx, repo, strategy=None):
+def _background_git_pull(ctx, repo, strategy=None, **kwargs):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Pulling {repo}...")
@@ -838,10 +837,10 @@ def api_git_pull(ctx):
     repo = data.get('repo')
     strategy = data.get('strategy')
     if not repo: return jsonify({"error": "Repo required"}), 400
-    job_id = ctx.jobs.submit("pull_task", repo=repo, strategy=strategy)
+    job_id = ctx.jobs.submit("pull_task", repo=repo, strategy=strategy, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("add_remote_task")
-def _background_git_add_remote(ctx, repo, remote_url, resolution=None):
+def _background_git_add_remote(ctx, repo, remote_url, resolution=None, **kwargs):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Adding remote origin for {repo}...")
@@ -892,11 +891,10 @@ def api_git_remote_add(ctx):
     resolution = ctx.req.json.get('resolution')
     if not repo or not url: return jsonify({"error": "Repo and URL required"}), 400
 
-    job_id = ctx.jobs.submit("add_remote_task", repo=repo, remote_url=url, resolution=resolution)
+    job_id = ctx.jobs.submit("add_remote_task", repo=repo, remote_url=url, resolution=resolution, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
 @git_bp.worker("checkout_task")
-def _background_git_checkout(ctx, repo, branch, create_new):
+def _background_git_checkout(ctx, repo, branch, create_new, **kwargs):
     import subprocess
     import os
     ctx.jobs.update_progress(f"Checking out {branch} in {repo}...")
@@ -918,5 +916,5 @@ def api_git_checkout(ctx):
     create_new = ctx.req.json.get('create_new', False)
     if not repo or not branch: return jsonify({"error": "Repo and branch required"}), 400
 
-    job_id = ctx.jobs.submit("checkout_task", repo=repo, branch=branch, create_new=create_new)
+    job_id = ctx.jobs.submit("checkout_task", repo=repo, branch=branch, create_new=create_new, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

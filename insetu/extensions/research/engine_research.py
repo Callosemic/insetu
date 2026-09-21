@@ -511,7 +511,7 @@ def list_inbox(ctx):
     items = [dict(row) for row in cursor.fetchall()]
     return jsonify({"items": items})
 @research_bp.worker("export_context_task")
-def _background_export_context(ctx, research_job_id):
+def _background_export_context(ctx, research_job_id, **kwargs):
     from akasa.workers import register_ephemeral_artifact
     from pathlib import Path
 
@@ -548,10 +548,9 @@ def _background_export_context(ctx, research_job_id):
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
     return {"message": "Context packed.", "artifact": {"files": artifacts}}
-
 @research_bp.route('<job_id>/export_context', methods=['POST'])
 def export_context(ctx, job_id):
-    jid = ctx.jobs.submit("export_context_task", research_job_id=job_id)
+    jid = ctx.jobs.submit("export_context_task", research_job_id=job_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": jid}), 202
 @research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'])
 def inbox_disposition(ctx, inbox_id):

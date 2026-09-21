@@ -28,10 +28,8 @@ hooks_bp = InSetuExtension(
     schema=HOOKS_SCHEMA
 )
 __depends__ = ['gather']
-
-
 @hooks_bp.worker("execute_rule_task")
-def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None):
+def _background_execute_rule(ctx, rule_id, rule_name, command, workspace_id=None, **kwargs):
     """Executes a hook rule's command off-thread to protect Flask event loop responsiveness."""
     ctx.jobs.update_progress(f"Running hook [{rule_name}]: {command}")
 
@@ -140,13 +138,13 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
             except Exception as db_err:
                 print(f"⚠️ [Hooks] Warning: Deduplication query failed: {db_err}")
                 pass
-
             print(f"🔎 [HOOKS TELEMETRY] Submitting Rule '{rule['name']}' to worker queue.")
             ctx.jobs.submit(
                 "execute_rule_task", 
                 rule_id=rule['id'], 
                 rule_name=rule['name'], 
-                command=rule['command']
+                command=rule['command'],
+                job_category="system_background"
             )
 
 
@@ -204,12 +202,12 @@ def execute_rule_manual(ctx):
     rule = ctx.db.execute("SELECT name, command FROM hooks_rules WHERE id = ?", (rule_id,)).fetchone()
     if not rule:
         return jsonify({"error": "Rule not found."}), 404
-
     job_id = ctx.jobs.submit(
         "execute_rule_task", 
         rule_id=rule_id, 
         rule_name=rule['name'], 
-        command=rule['command']
+        command=rule['command'],
+        job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 

@@ -110,7 +110,7 @@ def _clean_semantic_release_logs(log_text):
     clean_log = re.sub(r'\b[a-zA-Z_]+\.py:\d+\b', '', clean_log)
     return re.sub(r'\n{3,}', '\n\n', clean_log).strip()
 @update_bp.worker("bump_task")
-def _background_bump_task(ctx, repo, prerelease=False):
+def _background_bump_task(ctx, repo, prerelease=False, **kwargs):
     """Phase 1: Validates tree integrity, calculates versions, and updates the changelog."""
     import shutil
     from pathlib import Path
@@ -172,11 +172,10 @@ def _background_bump_task(ctx, repo, prerelease=False):
 
         err_msg = res.stderr.strip() if res.stderr else res.stdout.strip()
         raise RuntimeError(f"Semantic Release Engine Failed:\n{err_msg}")
-
     # Evaluate Phase 2 Automation
     if ctx.settings.get("auto_publish", False, repo=repo):
         ctx.jobs.update_progress("Auto-publish enabled. Routing to distribution pipeline...")
-        ctx.jobs.submit("publish_task", repo=repo)
+        ctx.jobs.submit("publish_task", repo=repo, job_category="system_background")
         output += "\n\nAuto-publish workflow triggered."
     return {"message": "Version bumped successfully.", "artifact": {"output": output}}
 def _execute_twine_upload(ctx, repo, repo_path, base_env):
@@ -237,7 +236,7 @@ def _build_and_validate_distribution(ctx, repo_path):
 
     return log_lines
 @update_bp.worker("first_release_task")
-def _background_first_release_task(ctx, repo):
+def _background_first_release_task(ctx, repo, **kwargs):
     """Initial Release: Builds distribution, validates wheel contents, uploads to PyPI, and tags baseline version."""
     import zipfile
     import tarfile
@@ -279,7 +278,7 @@ def _background_first_release_task(ctx, repo):
     full_output = "\n\n".join(log_lines)
     return {"message": f"Successfully {msg_suffix}!", "artifact": {"version": version_str, "output": full_output}}
 @update_bp.worker("preview_first_release_task")
-def _background_preview_first_release_task(ctx, repo):
+def _background_preview_first_release_task(ctx, repo, **kwargs):
     import os
     from pathlib import Path
 
@@ -320,10 +319,10 @@ def api_update_preview_first_release(ctx):
     if not repo:
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("preview_first_release_task", repo=repo)
+    job_id = ctx.jobs.submit("preview_first_release_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("publish_task")
-def _background_publish_task(ctx, repo):
+def _background_publish_task(ctx, repo, **kwargs):
     """Phase 2: Distributes the updated package to configured registries."""
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path):
@@ -376,7 +375,7 @@ def _background_publish_task(ctx, repo):
         err_msg = e.stderr.strip() if e.stderr else e.stdout.strip()
         raise RuntimeError(f"Semantic Release Publish Failed:\n{err_msg}")
 @update_bp.worker("preview_bump_task")
-def _background_preview_bump_task(ctx, repo, prerelease=False):
+def _background_preview_bump_task(ctx, repo, prerelease=False, **kwargs):
     import subprocess
     import os
     import re
@@ -435,7 +434,7 @@ def api_update_preview_bump(ctx):
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("preview_bump_task", repo=repo, prerelease=prerelease)
+    job_id = ctx.jobs.submit("preview_bump_task", repo=repo, prerelease=prerelease, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('bump', methods=['POST'])
@@ -446,10 +445,10 @@ def api_update_bump(ctx):
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("bump_task", repo=repo, prerelease=prerelease)
+    job_id = ctx.jobs.submit("bump_task", repo=repo, prerelease=prerelease, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("preview_publish_task")
-def _background_preview_publish_task(ctx, repo):
+def _background_preview_publish_task(ctx, repo, **kwargs):
     import subprocess
     import os
     import re
@@ -487,7 +486,7 @@ def api_update_preview_publish(ctx):
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("preview_publish_task", repo=repo)
+    job_id = ctx.jobs.submit("preview_publish_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.route('first_release', methods=['POST'])
 def api_update_first_release(ctx):
@@ -495,7 +494,7 @@ def api_update_first_release(ctx):
     if not repo:
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("first_release_task", repo=repo)
+    job_id = ctx.jobs.submit("first_release_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('publish', methods=['POST'])
@@ -504,10 +503,10 @@ def api_update_publish(ctx):
     if not repo: 
         return jsonify({"error": "Repository target is required."}), 400
 
-    job_id = ctx.jobs.submit("publish_task", repo=repo)
+    job_id = ctx.jobs.submit("publish_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("status_task")
-def _background_status_task(ctx, repo):
+def _background_status_task(ctx, repo, **kwargs):
     """Runs the semantic-release CLI off-thread to retrieve the current version."""
     import subprocess
     import os
@@ -614,7 +613,7 @@ def _background_status_task(ctx, repo):
         "last_publish_time": ctx.store.get(f"update_{repo}.json", "last_publish_time", 0.0)
     }}
 @update_bp.worker("update_toml_config_task")
-def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None):
+def _background_update_toml_config(ctx, repo, build_command=None, vcs_release=None, prerelease_token=None, **kwargs):
     import os
     import re
     from pathlib import Path
@@ -666,10 +665,10 @@ def api_update_toml_config(ctx):
     if not repo:
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release, prerelease_token=prerelease_token)
+    job_id = ctx.jobs.submit("update_toml_config_task", repo=repo, build_command=build_command, vcs_release=vcs_release, prerelease_token=prerelease_token, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("manual_build_task")
-def _background_manual_build(ctx, repo, build_command):
+def _background_manual_build(ctx, repo, build_command, **kwargs):
     import subprocess
     import os
     repo_path = get_repo_path(repo, ctx.workspace_id)
@@ -705,7 +704,7 @@ def api_update_manual_build(ctx):
     if not repo:
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("manual_build_task", repo=repo, build_command=build_command)
+    job_id = ctx.jobs.submit("manual_build_task", repo=repo, build_command=build_command, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('status', methods=['POST'])
@@ -714,10 +713,10 @@ def api_update_status(ctx):
     if not repo: 
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("status_task", repo=repo)
+    job_id = ctx.jobs.submit("status_task", repo=repo, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("force_version_task")
-def _background_force_version(ctx, repo, new_version):
+def _background_force_version(ctx, repo, new_version, **kwargs):
     import subprocess
     import os
     import re
@@ -757,10 +756,10 @@ def api_update_force_version(ctx):
     if not repo or not version: 
         return jsonify({"error": "Repo and version required"}), 400
 
-    job_id = ctx.jobs.submit("force_version_task", repo=repo, new_version=version)
+    job_id = ctx.jobs.submit("force_version_task", repo=repo, new_version=version, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @update_bp.worker("scaffold_task")
-def _background_scaffold_task(ctx, repo, initial_version):
+def _background_scaffold_task(ctx, repo, initial_version, **kwargs):
     import os
     import subprocess
     import re
@@ -817,7 +816,7 @@ exclude_commit_patterns = [
 
         return {"message": f"Successfully initialized at v{initial_version}. Ready for distribution."}
 @update_bp.worker("create_dummy_toml_task")
-def _background_create_dummy_toml(ctx, repo, initial_version):
+def _background_create_dummy_toml(ctx, repo, initial_version, **kwargs):
     import os
     import subprocess
     from pathlib import Path
@@ -859,7 +858,7 @@ def api_update_create_dummy_toml(ctx):
     repo = ctx.req.json.get('repo')
     initial_version = ctx.req.json.get('initial_version', '0.1.0')
     if not repo: return jsonify({"error": "Repo required"}), 400
-    job_id = ctx.jobs.submit("create_dummy_toml_task", repo=repo, initial_version=initial_version)
+    job_id = ctx.jobs.submit("create_dummy_toml_task", repo=repo, initial_version=initial_version, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 @update_bp.route('eligible_repos', methods=['GET'])
@@ -883,5 +882,5 @@ def api_update_scaffold(ctx):
     if not repo: 
         return jsonify({"error": "Repo required"}), 400
 
-    job_id = ctx.jobs.submit("scaffold_task", repo=repo, initial_version=initial_version)
+    job_id = ctx.jobs.submit("scaffold_task", repo=repo, initial_version=initial_version, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

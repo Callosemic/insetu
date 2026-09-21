@@ -158,14 +158,13 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
 
         repo_dir, clean_rel = ctx.parse_uri(filepath)
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
-
         if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
             if op in ("save", "added", "modified", "create", "created"):
                 abs_path = ctx.resolve_path(canonical_rel_path)
                 if os.path.exists(abs_path):
                     _parse_and_upsert_ticket(abs_path, canonical_rel_path, workspace_id)
                     # Offload single-file AST enforcement to prevent synchronous write-blocking
-                    ctx.jobs.submit("enforce_tickets_task", specific_file=canonical_rel_path)
+                    ctx.jobs.submit("enforce_tickets_task", specific_file=canonical_rel_path, job_category="system_background")
             elif op in ("delete", "deleted", "remove", "removed"):
                 ctx.db.execute("DELETE FROM tracker_tickets WHERE filepath = ? OR filepath = ?", (canonical_rel_path, filepath))
                 ctx.db.commit()
@@ -562,15 +561,14 @@ def _background_enforce_tickets(ctx, specific_file=None, **kwargs):
 def _background_sync_cache(ctx, **kwargs):
     ctx.jobs.update_progress("Hydrating tracker cache...")
     _sync_disk_to_db(ctx.workspace_id)
-    ctx.jobs.submit("enforce_tickets_task")
+    ctx.jobs.submit("enforce_tickets_task", job_category="system_background")
     return "Cache hydrated."
-
 @hooks.on('topology_boot_complete')
 @hooks.on('force_topology_scan')
 def manual_tracker_housekeeping(workspace_id=None, **kwargs):
     """Hydrates Tracker safely after Topology maps the workspace, or on manual refresh."""
     ctx = tracker_bp.get_context(workspace_id)
-    ctx.jobs.submit("sync_cache_task")
+    ctx.jobs.submit("sync_cache_task", job_category="system_background")
 def enforce_declarative_tickets(workspace_id=None, specific_file=None):
     """
     SSOT Enforcer: Sweeps all .tracker directories (or a specific file). 
@@ -919,11 +917,10 @@ def api_tracker_spawn_template(ctx):
     target_repo = data.get('target_repo')
     template_id = data.get('template_id')
     variables = data.get('variables', {})
-
     if not target_repo or not template_id:
         return jsonify({"error": "Target repo and template_id required."}), 400
 
-    job_id = ctx.jobs.submit("spawn_template_task", target_repo=target_repo, template_id=template_id, variables=variables)
+    job_id = ctx.jobs.submit("spawn_template_task", target_repo=target_repo, template_id=template_id, variables=variables, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 
 def archive_stale_tickets(workspace_id=None):
@@ -1026,11 +1023,10 @@ def save_vocab_settings(ctx):
 
     # Emit settings update hook so ecosystem components (like RAG compiler) can react
     ctx.emit('tracker_settings_updated')
-
     renames = data.get('renames', [])
     if renames:
         ctx.settings.set('tracker_is_migrating', True)
-        job_id = ctx.jobs.submit("harmonize_vocab_task", renames=renames)
+        job_id = ctx.jobs.submit("harmonize_vocab_task", renames=renames, job_category="ui_blocking")
         return jsonify({"status": "accepted", "job_id": job_id}), 202
 
     return jsonify({"status": "ok", "migrating": False})
@@ -1102,7 +1098,7 @@ def api_tracker_files(ctx):
         # True CQRS Mandate: Perform an initial seed walk only if the cache index is completely blank.
         count_check = conn.execute("SELECT count(*) FROM tracker_tickets").fetchone()[0]
         if count_check == 0:
-            ctx.jobs.submit("sync_cache_task")
+            ctx.jobs.submit("sync_cache_task", job_category="system_background")
             return jsonify({"tasks": [], "hydrating": True})
 
         include_archived = ctx.settings.get("include_archived_in_log", False)
@@ -1151,10 +1147,9 @@ def _background_restore_metadata(ctx, **kwargs):
     ctx.jobs.update_progress("Scanning Git history for wiped ticket metadata...")
     restored_count = restore_ticket_metadata_from_git(workspace_id=ctx.workspace_id)
     return f"Restored metadata for {restored_count} tickets from Git history."
-
 @tracker_bp.route('restore_metadata', methods=['POST'])
 def api_tracker_restore_metadata(ctx):
-    job_id = ctx.jobs.submit("restore_metadata_task")
+    job_id = ctx.jobs.submit("restore_metadata_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 def restore_ticket_metadata_from_git(workspace_id=None):
     from insetu.core.topology.engine_topology import get_topology_files_for_repo
@@ -1351,5 +1346,5 @@ def provide_changelog_suggestions(repo, workspace_id=None, **kwargs):
 def on_tracker_settings_updated(workspace_id=None, **kwargs):
     """Event Bus hook: Rebuilds context payloads immediately when tracker settings are updated."""
     ctx = tracker_bp.get_context(workspace_id)
-    job_id = ctx.jobs.submit("compile_contexts", force_full=True)
+    job_id = ctx.jobs.submit("compile_contexts", force_full=True, job_category="system_background")
     return {"job_id": job_id}

@@ -27,8 +27,56 @@ notes_bp = InSetuExtension(
     description="Workspace-level markdown notes managed via YAML frontmatter.", 
     schema=NOTES_SCHEMA
 )
-
 __depends__ = []
+
+@hooks.on('request_paths')
+def hook_notes_request_paths(workspace_id=None, **kwargs):
+    from insetu.core.utils_core import get_domain_artifact_path
+    return {
+        "notes_dir": get_domain_artifact_path(workspace_id, "notes", "notes")
+    }
+@hooks.on('workspace_boot')
+def mount_notes_volumes(workspace_id=None, **kwargs):
+    from akasa.vfs import mount_volume
+    import os, shutil
+    from pathlib import Path
+
+    ctx = notes_bp.get_context(workspace_id)
+    notes_dir = ctx.paths.get("notes_dir")
+
+    # 1. Auto-Migrate Physical Legacy Files
+    legacy_dir = Path(ctx.paths.get("workspace_root", "")).joinpath(".insetu", "notes")
+    if legacy_dir.exists() and legacy_dir.is_dir():
+        os.makedirs(notes_dir, exist_ok=True)
+        for item in os.listdir(legacy_dir.as_posix()):
+            if item.endswith(".md"):
+                src = legacy_dir.joinpath(item).as_posix()
+                dst = Path(notes_dir).joinpath(item).as_posix()
+                if not os.path.exists(dst):
+                    shutil.move(src, dst)
+                else:
+                    os.remove(src)
+        try:
+            os.rmdir(legacy_dir.as_posix())
+        except Exception:
+            pass
+
+    mount_volume(workspace_id, 'ctx', 'notes', notes_dir)
+
+    # 2. Update Database Records & Re-Index
+    try:
+        ctx.db.execute("UPDATE notes_ledger SET filepath = 'ctx://notes/' || substr(filepath, 15) WHERE filepath LIKE '.insetu/notes/%'")
+        ctx.db.commit()
+    except Exception:
+        pass
+
+    try:
+        for rel_path in ctx.vfs.walk("ctx://notes", exts=['.md']):
+            abs_path = ctx.resolve_path(rel_path)
+            _parse_and_upsert_note(abs_path, rel_path, workspace_id)
+    except Exception:
+        pass
+
 def _parse_and_upsert_note(abs_path, rel_path, workspace_id):
     """Parses frontmatter and upserts the note into the SQLite ledger."""
     ctx = notes_bp.get_context(workspace_id)
@@ -69,8 +117,7 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
     ctx = notes_bp.get_context(workspace_id)
     for m in mutations:
         filepath = m.get("filepath", "")
-        ctx.parse_uri(filepath)
-        if ".insetu/notes/" in filepath and filepath.endswith(".md"):
+        if filepath.startswith("ctx://notes/") and filepath.endswith(".md"):
             if m.get("operation") == "save":
                 abs_path = ctx.resolve_path(filepath)
                 if os.path.exists(abs_path):
@@ -82,11 +129,9 @@ def api_notes_list(ctx):
     """CQRS read-path: Fetches notes from DB, executing a disk-walk only if the DB is blank."""
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
     if count_check == 0:
-        notes_dir = Path(ctx.paths["control_dir"]).joinpath("notes").as_posix()
-        if os.path.exists(notes_dir):
-            for rel_path in ctx.vfs.walk(".insetu/notes", exts=['.md']):
-                abs_path = ctx.resolve_path(rel_path)
-                _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id)
+        for rel_path in ctx.vfs.walk("ctx://notes", exts=['.md']):
+            abs_path = ctx.resolve_path(rel_path)
+            _parse_and_upsert_note(abs_path, rel_path, ctx.workspace_id)
     
     rows = ctx.db.get_all("notes_ledger", order_by="updated_at DESC")
     notes = []
@@ -102,11 +147,10 @@ def api_notes_new(ctx):
     data = ctx.req.json or {}
     from akasa.utils import slugify
     from insetu.core.utils_core import update_frontmatter
-    
     note_id = f"note-{uuid.uuid4().hex[:8]}"
     title = data.get("title", "Untitled Note")
     filename = f"{slugify(title)}-{note_id}.md"
-    filepath = f".insetu/notes/{filename}"
+    filepath = f"ctx://notes/{filename}"
     yaml_data = {
         "id": note_id,
         "title": title.replace('"', "'"),
@@ -147,11 +191,10 @@ def declare_notes_topology(target_repos=None, ledger_events=None, workspace_id=N
                 files.append(n['filepath'])
 
         return {"header": header_str, "blocks": text_blocks, "files": files}
-
     def rec_cb(events):
         # Differential RAG triggers if any event touches the notes domain
         for e in events:
-            if ".insetu/notes/" in e.get('filepath', ''):
+            if e.get('filepath', '').startswith("ctx://notes/"):
                 return gen_cb()
         return None
     return [{
