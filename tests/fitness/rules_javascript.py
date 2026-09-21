@@ -59,6 +59,8 @@ def check_javascript_files():
     registry_debounce_pattern = re.compile(r'(?:window\.)?ExtensionRegistry\.utils\.debounce')
     banned_ui_zones_pattern = re.compile(r'\buiHooks\s*:|[\'"]zone:[a-zA-Z0-9_-]+[\'"]')
     banned_has_actions_pattern = re.compile(r'\bhas-actions\b')
+    unscoped_offline_storage_pattern = re.compile(r"localStorage\.(?:set|get)Item\(['\"]insetu_offline_(?:config|topology|workspaces)['\"]")
+    domain_store_config_mirror_pattern = re.compile(r'(?:targetConfigs|allRepos)\s*:\s*AppStore\.getState\(\)\.(?:targetConfigs|allRepos)')
 
     # Initialize Tree-sitter for Hybrid Parsing
     ts_available = False
@@ -262,9 +264,14 @@ def check_javascript_files():
                 report_violation("ZUSTAND_REFERENCE_MUTATION", filepath, line_num, "Symmetric state assignment detected (e.g. {manifest: manifest}). Ensure complex objects are explicitly cloned using the spread operator before passing to setState.")
             if is_extension and banned_ui_zones_pattern.search(line):
                 report_violation("BANNED_UI_ZONES", filepath, line_num, "The 'uiHooks' object and 'zone:*' string hooks are permanently deprecated (ADR 0041). Use declarative customEditors, expanded layoutSlots, native InSetuElement lifecycles, or the Typed Event Bus.")
-
             if banned_has_actions_pattern.search(line):
                 report_violation("BANNED_HAS_ACTIONS_ATTRIBUTE", filepath, line_num, "The 'has-actions' attribute is deprecated. <insetu-card> and <sutram-card> now automatically query the ExtensionRegistry to mount the action tray.")
+
+            if unscoped_offline_storage_pattern.search(line):
+                report_violation("UNSCOPED_PERSISTENT_STORAGE", filepath, line_num, "Un-scoped persistent storage call detected on offline state. Consume window.inSetu.utils.getScopedStorage/setScopedStorage instead.")
+
+            if domain_store_config_mirror_pattern.search(line):
+                report_violation("DOMAIN_STORE_TOPOLOGY_MIRROR_BAN", filepath, line_num, "Domain store mirrors AppStore topology properties (targetConfigs/allRepos). Read topology reactively from AppStore or this.ecosystem instead.")
 
             if is_extension and subtab_leak_pattern.search(line):
                 report_violation("SHARED_STORAGE_SUBTAB_LEAK", filepath, line_num, "Hardcoded subtab 'localStorage' state tracking discovered. Validate active layouts statelessly using DOM tree boundary context metrics instead (e.g., this.closest('.sub-tab-content')?.classList.contains('active')).")

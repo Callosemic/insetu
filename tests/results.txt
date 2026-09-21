@@ -3,7 +3,19 @@
 ============================================================
 
 🔍 Sweeping Python Backend (AST Analysis)...
+❌ [VIOLATION: EXPLICIT_JOB_CATEGORY_MANDATE] [workspace]/insetu/insetu/extensions/update/engine_update.py:179
+   ↳ Call to 'submit()' must explicitly specify a 'job_category' parameter.
+
+❌ [VIOLATION: EXPLICIT_JOB_CATEGORY_MANDATE] [workspace]/insetu/insetu/extensions/tracker/engine_tracker.py:564
+   ↳ Call to 'submit()' must explicitly specify a 'job_category' parameter.
+
+❌ [VIOLATION: EXPLICIT_JOB_CATEGORY_MANDATE] [workspace]/insetu/insetu/extensions/tracker/engine_tracker.py:1349
+   ↳ Call to 'submit()' must explicitly specify a 'job_category' parameter.
+
+❌ [VIOLATION: EXTENSION_CONTEXT_ACCESSOR_MANDATE] [workspace]/insetu/insetu/core/utils_core.py:753
+   ↳ Direct ExtensionContext(...) instantiation detected in core/extension module. Use bp.get_context(workspace_id) instead.
+
 🔍 Sweeping JavaScript Frontend (Hybrid AST + Regex Analysis)...
 🔍 Sweeping CSS Stylesheets (Regex Analysis)...
 ============================================================
-✅ SUCCESS: Codebase complies with all engineering standards.
+❌ FAILED: Found 4 architectural violations.

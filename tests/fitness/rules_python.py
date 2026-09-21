@@ -46,7 +46,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
 
         self.generic_visit(node)
     def visit_Subscript(self, node):
-        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py'):
             if isinstance(node.value, ast.Name) and node.value.id == 'item':
                 if isinstance(node.slice, ast.Constant) and node.slice.value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -86,6 +86,31 @@ class BackendFitnessVisitor(ast.NodeVisitor):
             if isinstance(node.func.value, ast.Name) and node.func.value.id == '_MUTATED_CONFIG_CACHE':
                 self.has_cache_clear = True
 
+        func_name = None
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            func_name = node.func.attr
+
+        is_jobs_submit = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("submit", "submit_job", "submit_one_shot_job")
+            and (
+                (isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "jobs")
+                or (isinstance(node.func.value, ast.Name) and node.func.value.id == "jobs")
+            )
+        )
+
+        if func_name == "submit_immediate_job" or is_jobs_submit:
+            has_category = any(kw.arg == "job_category" for kw in node.keywords if kw.arg)
+            if not has_category:
+                report_violation(
+                    "EXPLICIT_JOB_CATEGORY_MANDATE",
+                    self.filepath,
+                    node.lineno,
+                    f"Call to '{func_name}()' must explicitly specify a 'job_category' parameter."
+                )
+
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         if is_ext:
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'os' and node.func.attr == 'walk':
@@ -97,7 +122,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                     report_violation("BANNED_EMPTY_ROUTE", self.filepath, node.lineno, f"Empty or root route selection ('{node.args[0].value}') detected in extension engine. Use an explicit endpoint name instead to prevent reverse proxy redirect traps.")
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'hooks' and node.func.attr == 'emit':
                 report_violation("BACKEND_EXTENSION_EVENT_EMIT_MANDATE", self.filepath, node.lineno, "Global hooks.emit() call detected in extension module. Use ctx.emit() instead.")
-        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py'):
+        if self.filename not in ('extension.py', 'engine_hooks.py', 'engine_gather.py', 'utils_core.py'):
             if isinstance(node.func, ast.Attribute) and getattr(node.func.value, 'id', '') == 'item' and node.func.attr == 'get':
                 if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value in ('filepath', 'folderpath'):
                     report_violation("SELECTION_EXPANSION_MANDATE", self.filepath, node.lineno, "Manual selection parsing detected. You must use ctx.expand_selection(items) instead to prevent polymorphic chunking bugs.")
@@ -197,7 +222,7 @@ class BackendFitnessVisitor(ast.NodeVisitor):
     def visit_Import(self, node):
         self._check_sqlite_import(node)
         for alias in node.names:
-            if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
+            if alias.name in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
                 report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{alias.name}'. Import from 'akasa.{alias.name.split('.')[-1]}' instead.")
         is_ext = 'extensions' in self.filepath.parts
         is_tier2 = not is_ext and self.filename not in ('cli.py', 'app.py')
@@ -267,19 +292,20 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if is_ext:
             if 'system_boot' in hook_events:
                 report_violation("SYSTEM_BOOT_EXTENSION_BAN", self.filepath, node.lineno, "Extensions are banned from subscribing to 'system_boot'. Subscribe to tenant-scoped 'workspace_boot' instead.")
-
             is_worker = any(
                 isinstance(dec, ast.Call) and getattr(dec.func, 'attr', '') == 'worker'
                 for dec in node.decorator_list
             )
             if is_worker:
+                if node.args.kwarg is None:
+                    report_violation("WORKER_KWARGS_SIGNATURE_MANDATE", self.filepath, node.lineno, f"Worker function '{node.name}' decorated with @*.worker must accept '**kwargs' in its signature.")
                 for child in ast.walk(node):
                     if isinstance(child, ast.Yield):
                         report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
         self.generic_visit(node)
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)
-        if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth', 'insetu.fallback_bridge'):
+        if node.module in ('insetu.utils', 'insetu.vfs', 'insetu.db', 'insetu.hooks', 'insetu.workers', 'insetu.auth'):
             report_violation("DEPRECATED_ROOT_IMPORT", self.filepath, node.lineno, f"Importing from deprecated top-level '{node.module}'. Import from 'akasa.{node.module.split('.')[-1]}' instead.")
         if node.module == 'os.path' and any(alias.name == 'join' for alias in node.names):
             report_violation("PATHLIB_MANDATE_BYPASS", self.filepath, node.lineno, "from os.path import join detected. Migrate to pathlib.Path.")

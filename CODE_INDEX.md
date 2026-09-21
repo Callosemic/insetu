@@ -59,6 +59,7 @@ insetu/
 │       ├── 0046-unified-watchdog-debouncer-and-manifest-caching.md # Unified Watchdog debouncer, pre-I/O intent capture, and thread-local manifest caching.
 │       ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # Queued event-driven barrier sentinel for exact VFS write watermark synchronization.
 │       ├── 0048-akasa-kernel-package-extraction-and-insetu-uri-wrapper.md # Extraction of Tier 1 Kernel into standalone 'akasa' package and InSetuURI domain wrapper.
+│       ├── 0049-sse-telemetry-pipeline-ram-slew-limiter-and-on-demand-context-compilation.md # Real-time SSE telemetry pipeline, Stage 1 RAM queue slew limiting, and on-demand context compilation.
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -83,12 +84,12 @@ insetu/
 │   │   ├── cartographer/           # Autonomous topology mapping and CODE_INDEX generation.
 │   │   │   ├── __init__.py         # Module initialization.
 │   │   │   └── cartographer.py     # [VFS Topology Mapper]
-│   │   ├── config/                 # [comment required]
+│   │   ├── config/                 # Repository and bucket topology configuration UI.
 │   │   │   └── config.js           # UI for managing repository topologies and tracked buckets.
 │   │   ├── editor/                 # Global CodeMirror editor settings.
 │   │   │   └── engine_editor.py    # Editor preferences and markdown link configurations.
-│   │   ├── fs/                     # [comment required]
-│   │   │   ├── engine_fs.py        # [comment required]
+│   │   ├── fs/                     # Virtual File System REST gateway and editing modals.
+│   │   │   ├── engine_fs.py        # VFS file operations, upload, and OCC conflict REST gateway.
 │   │   │   └── fs.js               # [Virtual File System Modals & UI]
 │   │   ├── gather/                 # RAG Context compiler and manifest synchronizer.
 │   │   │   ├── __init__.py         # Module initialization.
@@ -100,7 +101,7 @@ insetu/
 │   │   │   └── offline_ui.js       # Client offline status indicator and outbox telemetry UI.
 │   │   ├── sdk/                    # Developer SDK namespace.
 │   │   │   └── __init__.py         # Module initialization.
-│   │   ├── system/                 # [comment required]
+│   │   ├── system/                 # System lifecycle, settings, and recovery controllers.
 │   │   │   ├── api.js              # Centralized API fetch wrapper and token injector.
 │   │   │   ├── components/         # Reusable Lit Web Components for the OS.
 │   │   │   │   ├── ui_editor.js    # CodeMirror 6 markdown and frontmatter editor wrappers.
@@ -108,11 +109,12 @@ insetu/
 │   │   │   │   ├── ui_filter_pills.js # Repository and tag filtering arrays.
 │   │   │   │   ├── ui_primitives.js # Base primitives like job trackers and loading spinners.
 │   │   │   │   └── ui_system_settings.js # The 3-Tier Configuration Editor and OS Settings Hub.
-│   │   │   ├── engine_system.py    # [comment required]
+│   │   │   ├── engine_system.py    # System topology, deltas, and lifecycle REST endpoints.
+│   │   │   ├── legacy.py           # Self-healing database recovery and legacy sandbox migration.
 │   │   │   ├── sdk.js              # The InSetuElement base class and Zustand store factory.
 │   │   │   ├── shared_styles.js    # Proxy export pointing to the Sutram micro-kernel.
 │   │   │   ├── store.js            # [Zustand Unified Data Flow (UDF) Store]
-│   │   │   ├── system.js           # [comment required]
+│   │   │   ├── system.js           # System settings UI, SSE pipeline listeners, and recovery triggers.
 │   │   │   └── types.js            # Root JSDoc type definitions entry point.
 │   │   ├── topology/               # Central SSOT for logical workspace topologies.
 │   │   │   ├── __init__.py         # Module initialization.
