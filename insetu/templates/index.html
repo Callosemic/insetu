@@ -14,7 +14,7 @@
                     <h2 style="color: #ef4444;">⚠️ Fatal UI Crash Detected</h2>
                     <p>A JavaScript error prevented the OS from booting.</p>
                     <code style="display: block; background: #1e293b; padding: 15px; margin: 20px auto; max-width: 600px; text-align: left; color: #fca5a5;">${e.message}</code>
-                    <button onclick="fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.reload(), 3000);" style="background: #ef4444; color: white; padding: 12px 24px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px;">
+                    <button onclick="if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.href='/recovery', 3000);" style="background: #ef4444; color: white; padding: 12px 24px; border: none; font-weight: bold; cursor: pointer; border-radius: 4px;">
                         🆘 Force Kernel Panic (Boot Lifeboat)
                     </button>
                 </div>
@@ -84,8 +84,8 @@
             If the system halts, engage manual override:
         </div>
         <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
-            <a href="#" onclick="event.preventDefault(); localStorage.clear(); sessionStorage.clear(); window.location.reload();" class="retro-btn">[ Hard Reset ]</a>
-            <a href="#" onclick="event.preventDefault(); fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='<div class=\'retro-text\' style=\'color:#ef4444; width: 100%; text-align: center;\'>INITIATING KERNEL PANIC...</div>'; setTimeout(()=>window.location.reload(), 3000);" class="retro-btn danger">[ Boot Lifeboat ]</a>
+            <a href="#" onclick="event.preventDefault(); if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; localStorage.clear(); sessionStorage.clear(); window.location.reload();" class="retro-btn">[ Hard Reset ]</a>
+            <a href="#" onclick="event.preventDefault(); if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; fetch('/api/system/panic', {method: 'POST'}); this.parentElement.innerHTML='<div class=\'retro-text\' style=\'color:#ef4444; width: 100%; text-align: center;\'>INITIATING KERNEL PANIC...</div>'; setTimeout(()=>window.location.href='/recovery', 3000);" class="retro-btn danger">[ Boot Lifeboat ]</a>
         </div>
     </div>
     <sutram-app-shell>

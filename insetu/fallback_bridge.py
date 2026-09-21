@@ -164,6 +164,18 @@ HTML_TEMPLATE = """
             if (!confirm("Attempt to reboot into the primary Developer OS?")) return;
             sessionStorage.clear();
             localStorage.removeItem('insetu_boot_token');
+            if ('caches' in window) {
+                try {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map(k => caches.delete(k)));
+                } catch(e) {}
+            }
+            if ('serviceWorker' in navigator) {
+                try {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    for (let reg of regs) await reg.unregister();
+                } catch(e) {}
+            }
             document.body.innerHTML = "<h2 style='color: #10b981; text-align: center; margin-top: 20%;'>Rebooting Engine...<br><span style='font-size: 0.8rem; color: #888;'>Waiting for OS to come back online...</span></h2>";
             try {
                 await fetch('/api/system/reboot', { method: 'POST' });
@@ -251,6 +263,11 @@ HTML_TEMPLATE = """
 """
 
 @app.route('/')
+def index_redirect():
+    from flask import redirect
+    return redirect('/recovery')
+
+@app.route('/recovery')
 def index():
     details = os.environ.get("INSETU_PANIC_DETAILS", "")
     return render_template_string(HTML_TEMPLATE, panic_details=details)

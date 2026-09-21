@@ -32,6 +32,16 @@ app.wsgi_app = ForceHTTPSProxyFix(app.wsgi_app)
 from akasa.auth import auth_bp, security_bp, BOOT_TOKEN
 app.register_blueprint(auth_bp)
 app.register_blueprint(security_bp.bp)
+
+from akasa.hooks import hooks
+from akasa.utils import register_core_module
+
+# Dependency Injection: Register host OS physics with the Kernel
+hooks.register_trusted_namespace('insetu.core.')
+hooks.register_extension_namespace('insetu.extensions.')
+for core_mod in ['bridge', 'gather', 'cartographer', 'config', 'editor', 'fs', 'system', 'workers', 'auth', 'security', 'topology', 'offline']:
+    register_core_module(core_mod)
+
 # Explicitly register system core routes first to prevent dynamic loader misfires
 try:
     from insetu.core.system.engine_system import system_bp
@@ -148,19 +158,21 @@ def load_workspace_extensions():
         if ext in visiting:
             print(f"⚠️ Circular dependency detected involving [{ext}]. Bypassing.")
             return
-
         visiting.add(ext)
         mod = modules.get(ext)
+        missing_dep = False
         if mod and hasattr(mod, "__depends__"):
             for dep in mod.__depends__:
                 if dep in modules:
                     visit(dep)
                 else:
-                    print(f"⚠️ Extension [{ext}] requires missing dependency [{dep}].")
+                    print(f"⚠️ Extension [{ext}] requires missing dependency [{dep}]. Bypassing.")
+                    missing_dep = True
 
         visiting.remove(ext)
-        visited.add(ext)
-        sorted_exts.append(ext)
+        if not missing_dep:
+            visited.add(ext)
+            sorted_exts.append(ext)
 
     for ext in list(modules.keys()):
         if ext not in visited:
@@ -185,12 +197,9 @@ def load_workspace_extensions():
             print(f"🔌 Module Mounted Successfully: [{ext}]")
         except Exception as e:
             print(f"⚠️  Unexpected Mount Failure [{ext}]: {type(e).__name__} - {str(e)}")
-    # Purge the config cache. Because the bootloader called load_config() 
-    # to discover extensions, the mutate_workspace_config hook fired into a void.
-    # Clearing the cache ensures the fully-mounted Extension DAG gets a chance to inject.
-    from akasa.utils import _MUTATED_CONFIG_CACHE, _MUTATED_CONFIG_MTIME
-    _MUTATED_CONFIG_CACHE.clear()
-    _MUTATED_CONFIG_MTIME.clear()
+    # Purge the config cache via decoupled event so the fully-mounted Extension DAG gets a chance to inject
+    from akasa.hooks import hooks
+    hooks.emit('config_mutated')
 
 import operator
 import re
@@ -410,6 +419,33 @@ def favicon():
         mimetype = 'image/png' if local_icon_path.lower().endswith('.png') else 'image/vnd.microsoft.icon'
         return send_file(local_icon_path, mimetype=mimetype)
     return send_file(Path(app.static_folder).joinpath('favicon.ico').as_posix(), mimetype='image/vnd.microsoft.icon')
+@app.route('/api/system/stream', methods=['GET'])
+def api_system_stream():
+    """Push-driven Server-Sent Events (SSE) stream for zero-latency UI updates."""
+    from akasa.events import sse_bus
+    import queue
+    from flask import Response
+
+    def event_stream():
+        q = sse_bus.subscribe()
+        try:
+            yield "event: connected\ndata: {\"status\": \"ok\"}\n\n"
+            while True:
+                try:
+                    # 5s timeout yields a heartbeat ping to keep the Tailscale tunnel warm
+                    msg = q.get(timeout=5.0)
+                    yield msg
+                except queue.Empty:
+                    yield ": heartbeat\n\n"
+        finally:
+            sse_bus.unsubscribe(q)
+
+    return Response(event_stream(), content_type='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+    })
+
 @app.route('/api/system/panic', methods=['POST'])
 def api_system_panic():
     """Hard reboot of the OS process, setting the simulated panic flag."""
@@ -417,9 +453,9 @@ def api_system_panic():
     import threading
     import time
     from flask import jsonify
-    
     def crash_and_restart():
         from akasa.hooks import hooks
+
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
@@ -439,7 +475,7 @@ def recovery_ui():
     <body style="font-family: monospace; background: #0f172a; color: #f8fafc; text-align: center; padding-top: 100px;">
         <h2 style="color: #ef4444;">🆘 Manual Recovery Console</h2>
         <p>Use this page to manually trigger a kernel panic and boot into the Lifeboat FS.</p>
-        <button onclick="fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.reload(), 3000);" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
+        <button onclick="if('caches' in window){caches.keys().then(k=>k.forEach(c=>caches.delete(c)))}; if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(r=>r.forEach(x=>x.unregister()))}; fetch('/api/system/panic', {method: 'POST'}); this.innerText='Crashing...'; setTimeout(()=>window.location.href='/recovery', 3000);" style="background: #ef4444; color: white; border: none; padding: 15px 30px; font-weight: bold; font-size: 1.2rem; cursor: pointer; border-radius: 4px; margin-top: 20px;">
             Boot Immutable Recovery OS
         </button>
     </body>

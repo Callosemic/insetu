@@ -168,9 +168,130 @@ def scaffold_profiles(cwd):
 
     if is_new_hub:
         print(f"[*] Initialized local inSetu environment at {base_dir}")
+
+def check_daemon_alive(port):
+    """Pings localhost to check if an inSetu daemon is already running."""
+    url = f"http://127.0.0.1:{port}/auth/bootstrap"
+    req = urllib.request.Request(
+        url, 
+        headers={"Content-Type": "application/json"}, 
+        data=b"{}"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=0.8) as res:
+            return res.status in (200, 401)
+    except Exception:
+        return False
+
+def launch_gui(cwd):
+    """Launches pywebview desktop shell, attaching to an active daemon or starting an embedded server."""
+    try:
+        import webview
+    except ImportError:
+        print("❌ Desktop GUI requires pywebview. Install with: pip install pywebview (or pip install insetu[gui])")
+        sys.exit(1)
+
+    from akasa.utils import load_config
+    from insetu.app import run_app
+
+    scaffold_profiles(cwd)
+    cfg = load_config()
+    port = int(os.environ.get("INSETU_PORT", cfg.get("port", 5005)))
+
+    if check_daemon_alive(port):
+        print(f"🔗 Attaching GUI to active inSetu daemon on http://127.0.0.1:{port}...")
+    else:
+        print(f"🚀 No active daemon detected. Booting embedded server on port {port}...")
+        server_thread = threading.Thread(target=run_app, daemon=True)
+        server_thread.start()
+
+    title = cfg.get("instance_title", "inSetu Developer OS")
+    webview.create_window(
+        title=title,
+        url=f"http://127.0.0.1:{port}",
+        width=1280,
+        height=800,
+        resizable=True
+    )
+    webview.start()
+
+def create_desktop_shortcut(cwd):
+    """Generates a native OS application shortcut for inSetu GUI."""
+    insetu_bin = shutil.which("insetu") or os.path.abspath(sys.argv[0])
+    icon_path = Path(__file__).resolve().parent / "static" / "icon-192.png"
+
+    if sys.platform == "linux" or sys.platform.startswith("freebsd"):
+        apps_dir = Path.home() / ".local" / "share" / "applications"
+        apps_dir.mkdir(parents=True, exist_ok=True)
+        desktop_file = apps_dir / "insetu.desktop"
+
+        content = f"""[Desktop Entry]
+Type=Application
+Name=inSetu Developer OS
+Comment=inSetu Developer OS Desktop Shell
+Exec={insetu_bin} gui
+Icon={icon_path}
+Terminal=false
+Categories=Development;IDE;
+Path={cwd}
+"""
+        desktop_file.write_text(content)
+        desktop_file.chmod(0o755)
+        print(f"✅ Linux desktop shortcut generated: {desktop_file}")
+
+    elif sys.platform == "darwin":
+        apps_dir = Path.home() / "Applications"
+        app_bundle = apps_dir / "inSetu Developer OS.app"
+        contents_dir = app_bundle / "Contents"
+        macos_dir = contents_dir / "MacOS"
+        macos_dir.mkdir(parents=True, exist_ok=True)
+
+        launcher_script = macos_dir / "inSetu"
+        launcher_script.write_text(f"""#!/bin/bash
+cd "{cwd}"
+exec "{insetu_bin}" gui
+""")
+        launcher_script.chmod(0o755)
+
+        plist_file = contents_dir / "Info.plist"
+        plist_file.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>inSetu</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.insetu.developer-os</string>
+    <key>CFBundleName</key>
+    <string>inSetu Developer OS</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>2.0.0</string>
+</dict>
+</plist>
+""")
+        print(f"✅ macOS App bundle generated: {app_bundle}")
+
+    elif sys.platform == "win32":
+        start_menu = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        start_menu.mkdir(parents=True, exist_ok=True)
+        shortcut_path = start_menu / "inSetu Developer OS.lnk"
+
+        ps_script = f"""
+$WshShell = New-Object -comObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
+$Shortcut.TargetPath = "{insetu_bin}"
+$Shortcut.Arguments = "gui"
+$Shortcut.WorkingDirectory = "{cwd}"
+$Shortcut.Save()
+"""
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=True)
+        print(f"✅ Windows Start Menu shortcut generated: {shortcut_path}")
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: insetu [serve | service | create-extension]")
+        print("Usage: insetu [serve | gui | service | shortcut | create-extension]")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -181,6 +302,13 @@ def main():
             print("Usage: insetu create-extension <extension_name>")
             sys.exit(1)
         scaffold_extension(sys.argv[2])
+
+    elif command == "gui":
+        launch_gui(cwd)
+
+    elif command == "shortcut":
+        scaffold_profiles(cwd)
+        create_desktop_shortcut(cwd)
         
     elif command == "serve":
         scaffold_profiles(cwd)
