@@ -19,8 +19,8 @@ Furthermore, processing high-velocity file mutations via a single un-segmented m
    - Re-structure the root system manifest into a partitioned JSON payload: `{"vfs": {...}, "ctx": {...}}`.
    - The `"vfs"` domain represents physical file structure derived from `topology_ledger` via `request_vfs_manifest`.
    - The `"ctx"` domain represents compiled RAG contexts and virtual artifacts derived from `manifest_ledger` via `request_manifest`.
-4. **Yomama Sync Bridge Anchor Failure Diffing**:
-   - In `bridge_vfs.py`, when a search anchor fails to match an existing file, generate a unified diff using `difflib.ndiff`, base64-encode it as `syntax_error`, and return status `needs_confirmation` with `resolution_type = "anchor_failed"`.
+4. **Yomama Sync Bridge Anchor Failure Diffing & Auto-Healing**:
+   - In `bridge_vfs.py`, when a search anchor fails to match an existing file, generate a unified diff using `difflib.ndiff` (base64-encoded as `syntax_error`), compute the actual target file anchor lines (base64-encoded as `actual_anchor`), and return status `needs_confirmation` with `resolution_type = "anchor_failed"` and `heal_anchor` available action for automated UI anchor repair.
 
 ## Consequences
 * **Positive**: Complete separation between physical VFS file visibility and RAG context compilation.

@@ -11,23 +11,25 @@ Extensions must remain perfectly decoupled to survive dynamic tenant hot-swaps a
 *   **Cross-Extension Data Access (ADR 0002)**
     *   ❌ **Noncompliant:** Directly querying another extension's SQLite database or forcing state into another extension's Zustand store (e.g., `window.inSetu.stores.Gather.setState(...)`).
     *   ✅ **Gold Standard:** Consuming centralized SSOT helpers (e.g., `get_topology_files_for_repo()`) or broadcasting payloads over the Typed Event Bus (`window.inSetu.events.emit`) so the target extension can update its own state independently.
-
 *   **State Typing (UDF Strictness)**
     *   ❌ **Noncompliant:** "Stringly-typed" relational state, such as keeping arrays or tags as comma-separated strings (`"todo, bug"`) in the Zustand store to save serialization effort.
     *   ✅ **Gold Standard:** Using native arrays or `Set` objects in memory for $O(1)$ mutations, only converting them to strings/JSON at the exact moment of physical I/O boundary generation.
+
+*   **Tenant-Scoped Storage & Topology Isolation**
+    *   ❌ **Noncompliant:** Direct un-scoped `localStorage` reads/writes for tenant state (e.g. `localStorage.setItem('insetu_offline_config', ...)`), or mirroring `AppStore` topology properties (`targetConfigs`, `allRepos`) in domain stores.
+    *   ✅ **Gold Standard:** Consuming `this.utils.getScopedStorage()` / `setScopedStorage()` for workspace-scoped client persistence and reading workspace topology reactively via `this.ecosystem` or `AppStore`.
 
 *   **Floating Global Listeners (ADR 0025)**
     *   ❌ **Noncompliant:** Placing `window.addEventListener` at the bottom of the module scope. This evades garbage collection and creates exponential memory leaks during workspace swaps.
     *   ✅ **Gold Standard:** Binding listeners strictly inside `connectedCallback()` using `this.registerGlobalListener()`, which the `InSetuElement` SDK automatically destroys on unmount.
 
 ---
-
 ## 2. Backend OS Substrate & I/O Hygiene
 The backend must never block the ASGI event loop or bypass the topology ledgers.
 
 *   **Async Worker Execution (ADR 0005, 0034)**
-    *   ❌ **Noncompliant:** Executing heavy SQLite queries or disk sweeps synchronously on the main thread, or spinning up rogue `threading.Thread(target=..., daemon=True)` loops that evade the OS Metronome.
-    *   ✅ **Gold Standard:** Returning a `202 Accepted` immediately with a `job_id`, deferring all execution to a formal `@ext_bp.worker` routed through `ctx.jobs.submit()`.
+    *   ❌ **Noncompliant:** Executing heavy SQLite queries or disk sweeps synchronously on the main thread, spinning up rogue `threading.Thread(target=..., daemon=True)` loops that evade the OS Metronome, worker functions decorated with `@*.worker` missing `**kwargs`, or `ctx.jobs.submit()` calls missing `job_category`.
+    *   ✅ **Gold Standard:** Returning a `202 Accepted` immediately with a `job_id`, deferring all execution to a formal `@ext_bp.worker` accepting `**kwargs` and routed through `ctx.jobs.submit(..., job_category=...)`.
 *   **Virtual File System Transactions (ADR 0004, 0018)**
     *   ❌ **Noncompliant:** Using native `open('file.md', 'w')`, `os.remove()`, or passing leaky abstraction flags like `ctx.vfs.save(..., data={"action": "delete"})` to remove files.
     *   ✅ **Gold Standard:** Exclusively using `ctx.vfs.save()` and the formalized `ctx.vfs.delete()` methods, ensuring mutations are correctly staged in the atomic write queue and broadcast to the Event Ledger.

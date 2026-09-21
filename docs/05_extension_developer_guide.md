@@ -73,7 +73,7 @@ Progress must be reported explicitly through the `ctx.jobs.update_progress()` in
 
 ```python
 @my_ext_bp.worker("sync_task")
-def background_sync(ctx, force_all=False):
+def background_sync(ctx, force_all=False, **kwargs):
 ctx.jobs.update_progress("Initializing remote synchronization loop...")
 # Execute off-thread operations safely using context boundaries
 return {"status": "completed", "message": "Synchronization complete."}

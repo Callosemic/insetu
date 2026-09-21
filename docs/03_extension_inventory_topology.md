@@ -112,7 +112,7 @@ These are fully built and compliant extensions currently operating within the sy
     * Polymorphic Cards: Registers actions (`hook-toggle`, `hook-execute`, `hook-edit`, `hook-delete`) for `hook_rule` entities.
 ### L. Developer Dashboard (`engine_dev.py`)
 * **Status:** Active Extension (SDK V2).
-* **Role:** Telemetry tracking for file thrashing and Yomama Sync Bridge errors.
+* **Role:** Telemetry tracking for file thrashing, Yomama Sync Bridge errors, and invocation boot log exports.
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** `{ARTIFACTS_BASE}/dev.db` (`file_telemetry` and `bridge_errors` tables).
 * **Injection Surfaces:**
@@ -120,12 +120,12 @@ These are fully built and compliant extensions currently operating within the sy
     * UI Hooks: Primary Navigation Tab injection (`dev` -> `dash`).
 ### M. Notes Library (`engine_notes.py` & `ext_notes.js`)
 * **Status:** Active Extension (SDK V2).
-* **Role:** Workspace-level markdown notes management with frontmatter indexing.
+* **Role:** Workspace-level markdown notes management with frontmatter indexing (`ctx://contexts/notes_context.txt`).
 * **Dependencies (`__depends__`):** `None`
-* **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by `.insetu/notes/` markdown assets.
+* **Data Containment:** `{ARTIFACTS_BASE}/notes.db` (`notes_ledger` table) backed by `ctx://notes/` markdown assets[span_2](start_span)[span_2](end_span).
 * **Injection Surfaces:**
-    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`.
-    * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `zone:file-edit-override` for `.insetu/notes/` pathing.
+    * Core Hooks: `@hooks.on('vfs_mutated')` and `@hooks.on('compile_contexts')`[span_3](start_span)[span_3](end_span).
+    * UI Hooks: Sub-navigation Tab injection (`edit` -> `notes`), `customEditors` matcher for `ctx://notes/` pathing.
 ### N. Tailscale Network Manager (`engine_tailscale.py` & `ext_tailscale.js`)
 * **Status:** Active Extension (SDK V2 / Declarative).
 * **Role:** Automated HTTPS port binding over Tailscale Serve on workspace boot.
