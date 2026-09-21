@@ -194,7 +194,7 @@ constructor() {
                             intentColor="var(--intent-primary)"
                             icon=${this._pendingMutations.has(filepath) ? '🌩️' : '📄'}
                             .entityType=${this.entityType || 'file'}
-                            .entityData=${{ filepath, isFS: true }}>
+                            .entityData=${{ filepath, isFS: true, is_dirty: this._pendingMutations.has(filepath) }}>
                         </insetu-card>
                     `;
                 })}

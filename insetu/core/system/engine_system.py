@@ -69,26 +69,6 @@ system_bp = InSetuExtension(
     core=True,
     settings_schema=SYSTEM_SETTINGS_SCHEMA
 )
-@hooks.on('register_core_modules')
-def provide_core_modules(**kwargs):
-    import os
-    from pathlib import Path
-
-    # Inject headless structural modules specific to inSetu
-    modules = {'core_text_blobs'}
-
-    core_dir = Path(__file__).resolve().parent.parent
-    if core_dir.exists():
-        for item in os.listdir(core_dir):
-            if core_dir.joinpath(item).is_dir() and not item.startswith('__'):
-                modules.add(item)
-
-    kernel_dir = core_dir.parent.joinpath("kernel")
-    if kernel_dir.exists():
-        for item in os.listdir(kernel_dir):
-            if kernel_dir.joinpath(item).is_dir() and not item.startswith('__'):
-                modules.add(item)
-    return list(modules)
 @hooks.on('system_settings_updated')
 def core_system_settings_updated(workspace_id=None, **kwargs):
     # Core OS settings (ports, titles, watchdogs) mandate an environment refresh
@@ -179,7 +159,7 @@ def get_system_config(workspace_id):
     from akasa.utils import _CORE_MODULES as CORE_MODULES
     available_ids = set()
     available = []
-    extensions_dir = Path(script_dir).parent.joinpath("extensions").as_posix()
+    extensions_dir = Path(script_dir).parent.parent.joinpath("extensions").as_posix()
     if os.path.exists(extensions_dir):
             for item in os.listdir(extensions_dir):
                     item_path = Path(extensions_dir).joinpath(item).as_posix()

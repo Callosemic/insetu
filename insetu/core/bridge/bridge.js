@@ -242,10 +242,14 @@ export class InSetuExtBridge extends InSetuElement {
         if (swapped) this.requestUpdate();
     }
     onWorkspaceLoad(workspaceId) {
+        BridgeStore.setState({ cells: [], activeBridgeJobId: null, telemetry: null, consoleOutput: 'Ready...' });
         window.inSetu.stores.Fs.setState({ fileVerificationCache: {} });
-        if (this.cells && this.cells.length > 0) {
-            window.inSetu.stores.Fs.getState().verifyFiles(this.cells.map(c => c.file));
-        }
+        BridgeStore.getState().fetchHistory();
+        this.requestUpdate();
+    }
+    onViewActivated() {
+        BridgeStore.getState().fetchHistory();
+        this.requestUpdate();
     }
     connectedCallback() {
         super.connectedCallback();
@@ -375,9 +379,16 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
     }
-    _deselectSpecificPatch(file, patchIdx) {
+    _deselectSpecificPatch(file, patchIdx, resolvedFile = null) {
         const cells = BridgeStore.getState().cells || [];
-        const fileCells = cells.filter(c => c.file === file);
+        const fileCells = cells.filter(c => 
+            c.active && (
+            c.file === file || 
+            (resolvedFile && c.file === resolvedFile) ||
+            c.file.endsWith(file) || 
+            file.endsWith(c.file)
+            )
+        );
         const targetCell = fileCells[patchIdx];
         if (targetCell) {
             const updatedCells = cells.map(c => 
@@ -388,11 +399,15 @@ export class InSetuExtBridge extends InSetuElement {
         }
     }
 
-    _deselectAllFilePatches(file) {
+    _deselectAllFilePatches(file, resolvedFile = null) {
         const cells = BridgeStore.getState().cells || [];
-        const updatedCells = cells.map(c => 
-            c.file === file ? { ...c, active: false } : c
-        );
+        const updatedCells = cells.map(c => {
+            const matches = c.file === file || 
+                            (resolvedFile && c.file === resolvedFile) ||
+                            c.file.endsWith(file) || 
+                            file.endsWith(c.file);
+            return matches ? { ...c, active: false } : c;
+        });
         BridgeStore.setState({ cells: updatedCells });
         this.requestUpdate();
     }
@@ -452,9 +467,9 @@ export class InSetuExtBridge extends InSetuElement {
             await action(e);
         };
     }
-
     _handleConsoleClick(e) {
-        const btn = e.target.closest('button[data-action]');
+        const path = e.composedPath ? e.composedPath() : [e.target];
+        const btn = path.find(el => el && el.dataset && el.dataset.action);
         if (!btn) return;
 
         const action = btn.dataset.action;
@@ -462,8 +477,8 @@ export class InSetuExtBridge extends InSetuElement {
             const oldPath = btn.dataset.old;
             const newPath = btn.dataset.new;
             const cells = BridgeStore.getState().cells;
-            const target = cells.find(c => c.file === oldPath);
-            if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(oldPath, newPath);
+            const target = cells.find(c => c.file === oldPath || c.file.endsWith(oldPath));
+            if (target && oldPath !== newPath) BridgeStore.getState().updateGroupFile(target.file, newPath);
 
             this._confirmedCandidates = this._confirmedCandidates || {};
             this._confirmedCandidates[oldPath] = newPath;
@@ -489,12 +504,14 @@ export class InSetuExtBridge extends InSetuElement {
             this._getSyncAction(isDryRun, true)();
         } else if (action === 'deselect-this-patch') {
             const oldPath = btn.dataset.old;
+            const resolvedPath = btn.dataset.resolved;
             const patchIdx = parseInt(btn.dataset.patchIdx, 10);
-            this._deselectSpecificPatch(oldPath, patchIdx);
+            this._deselectSpecificPatch(oldPath, patchIdx, resolvedPath);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deselect-all-file-patches' || action === 'deselect-patch') {
             const oldPath = btn.dataset.old;
-            this._deselectAllFilePatches(oldPath);
+            const resolvedPath = btn.dataset.resolved;
+            this._deselectAllFilePatches(oldPath, resolvedPath);
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
         } else if (action === 'deep-search') {
             this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich, { allow_deep_search: true })();
@@ -591,8 +608,8 @@ export class InSetuExtBridge extends InSetuElement {
                                                     ` : ''}
                                                     ${p.available_actions?.includes('deselect_patch') ? html`
                                                         <div style="display: flex; align-items: center; gap: 6px;">
-                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-patch-idx="${origFileIdx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
-                                                            <button data-action="deselect-all-file-patches" data-old="${p.original_file}" class="btn-sm" style="background: var(--intent-neutral);">Deselect All File Patches</button>
+                                                            <button data-action="deselect-this-patch" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" data-patch-idx="${origFileIdx}" class="btn-sm" style="background: var(--intent-neutral);">Deselect Patch</button>
+                                                            <button data-action="deselect-all-file-patches" data-old="${p.original_file}" data-resolved="${p.resolved_file || ''}" class="btn-sm" style="background: var(--intent-neutral);">Deselect All File Patches</button>
                                                         </div>
                                                     ` : ''}
                                                 </div>

@@ -1,4 +1,11 @@
 from pathlib import Path
+from akasa.hooks import hooks
+
+@hooks.on('vfs_resolve_path')
+def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
+    if not filename:
+        return None
+    return resolve_logical_path(filename, workspace_id=workspace_id)
 import os
 import json
 import subprocess
@@ -513,12 +520,10 @@ def get_domain_artifact_path(workspace_id, domain_name, ext_name=None):
         return domain_dir
     except Exception:
         return f".insetu/ext/{ext}/data/{domain_name}"
-
-
 def get_safe_repo_id(repo_dir):
     if not repo_dir: return ""
     safe_dir = f"dot_{repo_dir[1:]}" if repo_dir.startswith('.') else repo_dir
-    return safe_dir.replace('-', '_')
+    return safe_dir.replace('-', '_').lower()
 def vacuum_manifest_artifacts(ctx, domain_dir, expected_artifacts_set, exempt_abs_paths=None):
     """
     Centralized garbage collector for compiled context artifacts.
@@ -726,41 +731,52 @@ def hook_expand_selection(items=None, workspace_id=None, **kwargs):
     files = []
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
+            raw_path = None
+            is_folder = False
+
             if isinstance(item, str):
-                uri_obj = InSetuURI(item)
-                if not uri_obj.scheme:
-                    if uri_obj.basename.endswith('_context.txt'): 
-                        uri_obj = InSetuURI(f"ctx://contexts/{uri_obj.path}")
-                    elif uri_obj.basename.endswith('_diffs.txt'): 
-                        uri_obj = InSetuURI(f"ctx://diffs/{uri_obj.path}")
-                    elif uri_obj.path.startswith('prompts/'): 
-                        uri_obj = InSetuURI(f"ctx://{uri_obj.path}")
-                    else: 
-                        uri_obj = InSetuURI(f"vfs://{uri_obj.path}")
-
-                if uri_obj.is_dir and uri_obj.scheme == 'vfs':
-                    item = {'folderpath': uri_obj.path}
-                else:
-                    item = {'filepath': f"{uri_obj.scheme}://{uri_obj.volume}/{uri_obj.path}".replace('//', '/').replace(':/', '://')}
-
-            if 'filepath' in item:
-                filepath = item['filepath']
-                uri_obj = InSetuURI(filepath)
-
-                if uri_obj.scheme == 'ctx':
-                    responses = hooks.emit('resolve_payload_chunks', uri=filepath, workspace_id=workspace_id)
-                    chunks = next((r for r in responses if r), [filepath])
-                    files.extend(chunks)
-                else:
-                    files.append(filepath if uri_obj.scheme == 'vfs' else f"vfs://{filepath}")
+                raw_path = item
+            elif 'filepath' in item:
+                raw_path = item['filepath']
             elif 'folderpath' in item:
-                folderpath = item['folderpath']
-                uri_obj = InSetuURI(folderpath)
+                raw_path = item['folderpath']
+                is_folder = True
+
+            if not raw_path:
+                continue
+
+            uri_obj = InSetuURI(raw_path)
+
+            if not uri_obj.scheme:
+                if uri_obj.basename.endswith('_context.txt'): 
+                    uri_obj = InSetuURI(f"ctx://contexts/{uri_obj.path}")
+                elif uri_obj.basename.endswith('_diffs.txt'): 
+                    uri_obj = InSetuURI(f"ctx://diffs/{uri_obj.path}")
+                elif 'prompts/' in uri_obj.path or uri_obj.path.startswith('.insetu/prompts/'): 
+                    clean_prompt = uri_obj.path.replace('.insetu/prompts/', '').replace('prompts/', '')
+                    uri_obj = InSetuURI(f"ctx://prompts/{clean_prompt}")
+                else: 
+                    uri_obj = InSetuURI(f"vfs://{uri_obj.path}")
+
+            resolved_uri_str = f"{uri_obj.scheme}://{uri_obj.volume}/{uri_obj.path}".replace('//', '/').replace(':/', '://')
+            if is_folder or (uri_obj.is_dir and uri_obj.scheme == 'vfs'):
                 target_walk = uri_obj.path
+                # Fix for vfs.walk expecting volume boundaries
+                if uri_obj.scheme == 'vfs' and uri_obj.volume:
+                    target_walk = resolved_uri_str
 
                 for f in vfs.walk(target_walk):
-                    if f in tracked_files:
+                    f_uri = InSetuURI(f)
+                    clean_f = f"{f_uri.volume}/{f_uri.path}".strip('/') if f_uri.volume else f_uri.path
+                    if clean_f in tracked_files:
                         files.append(f if InSetuURI(f).scheme == 'vfs' else f"vfs://{f}")
+            else:
+                if uri_obj.scheme == 'ctx':
+                    responses = hooks.emit('resolve_payload_chunks', uri=resolved_uri_str, workspace_id=workspace_id)
+                    chunks = next((r for r in responses if r), [resolved_uri_str])
+                    files.extend(chunks)
+                else:
+                    files.append(resolved_uri_str if uri_obj.scheme == 'vfs' else f"vfs://{resolved_uri_str}")
 
     unique_files = []
     seen = set()

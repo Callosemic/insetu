@@ -48,8 +48,20 @@ const offlineProvider = new OfflineHttpProvider({
         }
     }
 });
-
 window.inSetu.api = {
+    _abortControllers: new Map(),
+    getWorkspaceSignal: function(workspaceId) {
+        if (!this._abortControllers.has(workspaceId)) {
+            this._abortControllers.set(workspaceId, new AbortController());
+        }
+        return this._abortControllers.get(workspaceId).signal;
+    },
+    abortWorkspace: function(workspaceId) {
+        if (this._abortControllers.has(workspaceId)) {
+            this._abortControllers.get(workspaceId).abort();
+            this._abortControllers.delete(workspaceId);
+        }
+    },
     _getHeaders: function(isWorkspaceScoped = false) {
         const headers = new Headers();
         let bootToken = '';
@@ -81,6 +93,12 @@ window.inSetu.api = {
     },
     request: async function(url, options = {}, scopeId = 'default') {
         const method = options.method ? options.method.toUpperCase() : 'GET';
+
+        // Automated Context Cancellation Injection
+        if (!options.signal && this.getWorkspaceSignal) {
+            options.signal = this.getWorkspaceSignal(scopeId);
+        }
+
         // 1. Auth Injection
         const headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers || {});
         const baseHeaders = this._getHeaders(scopeId !== 'default');
@@ -195,24 +213,46 @@ class SSEPipeline {
         };
         this.source.addEventListener('vfs_mutated', (e) => {
             const data = JSON.parse(e.data);
+            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
             window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations: data.mutations });
         });
         this.source.addEventListener('topology_resolved', (e) => {
             const data = JSON.parse(e.data);
+            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
             const state = AppStore.getState();
-            const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
-            const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
-            AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+            if (data.clear_all) {
+                AppStore.setState({ dirtyRepos: new Set(), dirtyBuckets: new Set() });
+            } else if ((data.dirty_repos && data.dirty_repos.length > 0) || (data.dirty_buckets && data.dirty_buckets.length > 0)) {
+                const newRepos = new Set([...state.dirtyRepos, ...(data.dirty_repos || [])]);
+                const newBuckets = new Set([...state.dirtyBuckets, ...(data.dirty_buckets || [])]);
+                AppStore.setState({ dirtyRepos: newRepos, dirtyBuckets: newBuckets });
+            }
         });
         this.source.addEventListener('job_progress', (e) => {
             const data = JSON.parse(e.data);
+            if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
 
             // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
             if (data.job_category === 'ui_blocking') {
                 window.inSetu.events.emitHook('insetu:compile-progress', data);
-
+                if (data.status === 'processing' || data.status === 'pending') {
+                    const msg = data.message || "Compiling...";
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                    }
+                }
                 if ((data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
+                    if (data.status === 'completed' && data.ext_name === 'gather') {
+                        const artifact = data.artifact || {};
+                        window.inSetu.events.emitHook('insetu:gather-compile-completed', artifact);
+                    }
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
+                        window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');
+                    }
+                    if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
+                        window.inSetu.ui.setSyncStatus(data.status === 'completed' ? 'synced' : 'pending');
+                    }
                 }
             }
 
@@ -226,11 +266,11 @@ class SSEPipeline {
                 }
             }
         });
-
         this.source.onerror = () => {
             this.isConnected = false;
             this.source.close();
             this.source = null;
+            if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
             this.reconnectTimer = setTimeout(() => this.connect(), 5000);
         };
     }
@@ -314,12 +354,12 @@ setInterval(async () => {
                 window.inSetu.stores.App.setState({ isReconciling: false });
                 const remaining = await SutramDB.getOutboxCount(window.inSetu.utils.getActiveWorkspace());
                 window.inSetu.stores.App.setState({ outboxCount: remaining });
-
                 if (remaining === 0) {
                     window.inSetu?.offlineLog?.('Outbox fully reconciled.', 'success');
                     if (window.inSetu.ui?.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ System Synced', 3000);
                     // Clear the ephemeral tracking sets once the queue is fully drained
                     window.inSetu.stores.App.setState({ pendingMutations: new Set(), deletedMutations: new Set() });
+                    window.dispatchEvent(new CustomEvent('sutram-sync-complete'));
                 }
             }
         });

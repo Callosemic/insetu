@@ -16,6 +16,10 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
     }
     compilePromiseWs = activeWs;
     compilePromise = (async () => {
+        // Snapshot the dirty state at the exact moment compilation begins
+        const snapshotRepos = Array.from(AppStore.getState().dirtyRepos || []);
+        const snapshotBuckets = Array.from(AppStore.getState().dirtyBuckets || []);
+
         AppStore.setState({ isPipelineActive: true });
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
         try {
@@ -101,12 +105,35 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
                     AppStore.setState({ manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} } });
                 }
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
+
+                // Clear dirty trackers upon successful context generation
+                AppStore.setState(s => {
+                    const newDirtyRepos = new Set(s.dirtyRepos);
+                    const newDirtyBuckets = new Set(s.dirtyBuckets);
+                    if (targetRepos && targetRepos.length > 0) {
+                        targetRepos.forEach(r => newDirtyRepos.delete(r));
+                        Array.from(newDirtyBuckets).forEach(b => {
+                            if (targetRepos.some(r => b.startsWith(r + '::') || b === r)) {
+                                newDirtyBuckets.delete(b);
+                            }
+                        });
+                    } else {
+                        // Only delete the targets that were dirty when we started, preserving mid-flight edits
+                        snapshotRepos.forEach(r => newDirtyRepos.delete(r));
+                        snapshotBuckets.forEach(b => newDirtyBuckets.delete(b));
+                    }
+
+                    return { dirtyRepos: newDirtyRepos, dirtyBuckets: newDirtyBuckets };
+                });
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
             }
             window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
             return result;
         } catch (error) {
+            if (error.name === 'AbortError') {
+                return { status: 'aborted', message: 'Workspace switched.', files: [] };
+            }
             if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending');
             throw error;
         } finally {
@@ -119,11 +146,8 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
 };
 export const GatherStore = createExtensionStore('Gather', {
     loading: false,
-    loadingMessage: "Compiling ecosystem contexts... please wait.",
     executeCompile,
     searchQuery: '',
-    allRepos: AppStore.getState().allRepos || [],
-    targetConfigs: AppStore.getState().targetConfigs || [],
     quickPacks: [],
     activeQuickPack: null,
     gatherOptions: { contexts: [], diffs: [], prompts: [], artifactsDir: "", profileDir: "" },
@@ -225,7 +249,6 @@ customElements.define('insetu-ext-gather-actions', InSetuExtGatherActions);
 export class InSetuExtGather extends InSetuElement {
     static properties = {
         loading: { type: Boolean },
-        loadingMessage: { type: String },
         manifestFiles: { type: Array },
         searchQuery: { type: String },
         pinnedRepos: { type: Object },
@@ -248,7 +271,6 @@ export class InSetuExtGather extends InSetuElement {
     constructor() {
         super();
         this.loading = false;
-        this.loadingMessage = "Compiling ecosystem contexts... please wait.";
         this.manifestFiles = [];
         this.searchQuery = '';
         this.categoryOrder = [];
@@ -257,14 +279,19 @@ export class InSetuExtGather extends InSetuElement {
         this._syncState = 'synced';
     }
     onWorkspaceLoad(workspaceId) {
-        // Rely purely on the core OS background heartbeat to hydrate the manifest.
-        // Do not force a compilation pipeline trigger just because the view mounted.
+        const ctxManifest = AppStore.getState().manifest?.ctx || {};
+        this.manifestFiles = Object.keys(ctxManifest);
+        this.requestUpdate();
+    }
+    onViewActivated() {
+        const ctxManifest = AppStore.getState().manifest?.ctx || {};
+        this.manifestFiles = Object.keys(ctxManifest);
+        this.requestUpdate();
     }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(GatherStore, state => {
             this.loading = state.loading;
-            this.loadingMessage = state.loadingMessage;
             this.searchQuery = state.searchQuery;
             this.requestUpdate();
         });
@@ -284,6 +311,33 @@ export class InSetuExtGather extends InSetuElement {
             this._syncState = e.detail.state;
             this.requestUpdate();
         });
+        this.registerGlobalListener('insetu:gather-compile-completed', window, async (e) => {
+            const artifact = e.detail || {};
+            const touched = artifact.touched_buckets;
+            const isFull = artifact.is_full_sweep;
+
+            try {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
+                if (mRes.ok) {
+                    const rawManifest = await mRes.json();
+                    AppStore.setState(s => {
+                        const newBuckets = new Set(s.dirtyBuckets);
+                        if (isFull || !touched) {
+                            newBuckets.clear();
+                        } else if (Array.isArray(touched)) {
+                            touched.forEach(b => newBuckets.delete(b));
+                        }
+                        return {
+                            manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} },
+                            dirtyBuckets: newBuckets
+                        };
+                    });
+                }
+            } catch (err) {
+                console.warn("[Gather] Failed to refresh manifest post-compile:", err);
+            }
+        });
         this.registerGlobalListener('insetu:compile-progress', window, (e) => {
             const pollData = e.detail;
             if (pollData.status === 'terminated') {
@@ -297,26 +351,14 @@ export class InSetuExtGather extends InSetuElement {
 
             const isMyTurn = currentExt === 'gather';
             const isWaiting = !isMyTurn && !hasRun;
-
-            GatherStore.setState(state => {
-                let nextMsg = state.loadingMessage;
-                if (isMyTurn) {
-                    nextMsg = pollData.status === 'completed' ? state.loadingMessage : (pollData.message || "Compiling ecosystem contexts...");
-                } else if (isWaiting) {
-                    nextMsg = "Waiting for prerequisite contexts to compile...";
-                }
-
-                return { 
-                    loading: isMyTurn || isWaiting,
-                    loadingMessage: nextMsg
-                };
+            GatherStore.setState({ 
+                loading: isMyTurn || isWaiting 
             });
         });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
         const gState = GatherStore.getState();
         this.loading = gState.loading;
-        this.loadingMessage = gState.loadingMessage;
         this.searchQuery = gState.searchQuery;
     }
     disconnectedCallback() {
@@ -326,7 +368,7 @@ export class InSetuExtGather extends InSetuElement {
         this.loadContext(false);
     }
     async loadContext(forceFull = false) {
-        GatherStore.setState({ loading: true, loadingMessage: "Compiling ecosystem contexts... please wait." });
+        GatherStore.setState({ loading: true });
         try {
             const result = await GatherStore.getState().executeCompile(null, forceFull);
             if (result && result.status === 'error') {
@@ -362,13 +404,10 @@ export class InSetuExtGather extends InSetuElement {
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
         const isHeartbeatActive = !this.isPipelineActive && (this.activeModules || []).includes('gather');
-        const isHeartbeatPending = !this.isPipelineActive && (this.pendingModules || []).includes('gather');
 
-        const isGatherLoading = this.loading || isHeartbeatActive || isHeartbeatPending;
-        const displayLoadingMsg = this.loading ? this.loadingMessage : (isHeartbeatActive ? "Compiling ecosystem contexts..." : "Waiting for prerequisite contexts to compile...");
-
+        const isGatherLoading = this.loading || isHeartbeatActive;
         if (isGatherLoading) {
-            const { targetConfigs } = GatherStore.getState();
+            const targetConfigs = this.ecosystem.targetConfigs || AppStore.getState().targetConfigs || [];
             if (targetConfigs) {
                 targetConfigs.forEach(cfg => {
                     if (cfg.exclude_from_context) return;
@@ -413,12 +452,7 @@ export class InSetuExtGather extends InSetuElement {
                 </insetu-repo-filter>
             </sutram-toolbar>
             <div style="flex: 1; overflow-y: auto; padding: 0;">
-                ${isGatherLoading ? html`
-                    <div style="padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--input-bg); flex-shrink: 0;">
-                        <sutram-spinner text=${displayLoadingMsg}></sutram-spinner>
-                    </div>
-                ` : ''}
-                <div style="display: flex; flex-direction: column; opacity: ${isGatherLoading ? '0.6' : '1'}; transition: opacity 0.2s ease; pointer-events: ${isGatherLoading ? 'none' : 'auto'};">
+                <div style="display: flex; flex-direction: column;">
                     ${(() => {
                         const groups = {};
                         filteredFiles.forEach(f => {
@@ -475,22 +509,33 @@ export class InSetuExtGather extends InSetuElement {
                                         }}></sutram-async-btn>
                                     ` : ''}
                                     <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
-                                        ${groups[cat].map(f => html`
+                                        ${groups[cat].map(f => {
+                                            const isDirty = (() => {
+                                                if (AppStore.getState().dirtyBuckets.has(f.filename)) return true;
+                                                if (!f.repoDir) return false;
+                                                const base = f.filename.split('/').pop().replace('_context.txt', '');
+                                                const bucketId = base.startsWith(f.repoDir + '_') ? (base.substring(f.repoDir.length + 1) || 'main') : (base === f.repoDir ? 'main' : base);
+                                                return AppStore.getState().dirtyBuckets.has(`${f.repoDir}::${bucketId}`);
+                                            })();
+                                            const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
+                                            return html`
                                             <insetu-card
+                                                style="opacity: ${isLocked ? '0.6' : '1'}; pointer-events: ${isLocked ? 'none' : 'auto'}; transition: opacity 0.2s ease;"
                                                 .filename=${f.filename}
                                                 .titleText=${f.finalTitle || (f.filename.includes('/') ? f.filename.split('/').pop() : f.filename)}
                                                 .descriptionText=${f.finalDesc || ''}
                                                 .detailPrefix=${f.repoDir ? `[${f.repoDir}] ` : ''}
                                                 .detailText=${f.filename.includes('/') ? f.filename.split('/').pop() : f.filename}
                                                 .detailSuffix=${f.sizeStr ? ` | ${f.sizeStr}` : ''}
-                                                icon="📦"
-                                                intentColor=${AppStore.getState().dirtyBuckets.has(f.filename) || (f.repoDir && AppStore.getState().dirtyRepos.has(f.repoDir)) ? "var(--intent-warning)" : "var(--intent-highlight)"}
+                                                icon=${isLocked ? "⏳" : (isDirty ? "⚠️" : "📦")}
+                                                intentColor=${isDirty ? "var(--intent-warning)" : "var(--intent-highlight)"}
                                                 entityType="file:context"
                                                 .entityData=${{ 
                                                     filepath: f.filename, 
                                                     repoDir: f.repoDir, 
                                                     isFS: false, 
-                                                    isSkeleton: f.isSkeleton,  
+                                                    isSkeleton: f.isSkeleton,
+                                                    needs_recompile: isDirty,
                                                     suppress: ['file-copy', 'file-browse', 'file-edit'],
                                                     chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, f.filename) : [f.filename]
                                                 }}
@@ -507,7 +552,7 @@ export class InSetuExtGather extends InSetuElement {
                                                     <span slot="actions" style="font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-right: 10px;">Pending Compilation...</span>
                                                 ` : ''}
                                             </insetu-card>
-                                        `)}
+                                        `;})}
                                     </div>
                                 </sutram-collapsible>
                             `;

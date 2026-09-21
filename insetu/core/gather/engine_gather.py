@@ -203,45 +203,34 @@ def get_ordered_compilation_steps(ctx):
 
     for s in steps: visit(s['id'])
     return ordered_steps
-
-
 def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, ledger_events=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
-    chain_job_id = f"cmp_{uuid.uuid4().hex[:8]}"
 
     ordered_steps = get_ordered_compilation_steps(ctx)
     if ordered_steps:
-        first_step = ordered_steps[0]
-        args_json = json.dumps({
-            "force_full": force_full, 
-            "ledger_events": ledger_events,
-            "_chain": {
-                "steps": ordered_steps[1:],
-                "on_complete_hook": "compilation_sequence_complete"
-            }
-        })
-        submit_immediate_job(chain_job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=workspace_id, job_category="ui_blocking")
+        ctx.jobs.submit_chain(
+            ordered_steps, 
+            on_complete_hook="compilation_sequence_complete", 
+            job_category="ui_blocking", 
+            force_full=force_full, 
+            ledger_events=ledger_events
+        )
 
 register_callback("gather", "execute_delayed_compile", _execute_delayed_compile)
-
 @hooks.on('topology_boot_complete', priority=90)
 def init_gather_workers(workspace_id=None, **kwargs):
     ws_id = workspace_id
     # Boot-Time Mandate: Always perform a full compile safely after Topology settles
     try:
-        job_id = f"cmp_{uuid.uuid4().hex[:8]}"
         ctx = gather_bp.get_context(ws_id)
         ordered_steps = get_ordered_compilation_steps(ctx)
         if ordered_steps:
-            first_step = ordered_steps[0]
-            args_json = json.dumps({
-                "force_full": "compile_only",
-                "_chain": {
-                    "steps": ordered_steps[1:],
-                    "on_complete_hook": "compilation_sequence_complete"
-                }
-            })
-            submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], args_json, workspace_id=ws_id, job_category="ui_blocking")
+            ctx.jobs.submit_chain(
+                ordered_steps, 
+                on_complete_hook="compilation_sequence_complete", 
+                job_category="ui_blocking", 
+                force_full="compile_only"
+            )
     except Exception as e:
         print(f"Warning: Boot scan failed: {e}")
 @hooks.on('gather_settings_updated')
@@ -398,7 +387,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     "exclude_from_context": config.get("exclude_from_context", False)
                 }
             }
-        def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path, current_repo_dir):
+        def make_callbacks(b_id, data, b_title, b_domain, b_desc, out_filename, physical_repo_path, current_repo_dir, current_sub_buckets):
             def _gen():
                 if not data["files"]:
                     return {"header": "", "blocks": [], "files": []}
@@ -420,11 +409,18 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                     fp_lower = e['filepath'].lower()
                     if fp_lower.startswith(vfs_prefix):
                         rel = e['filepath'][len(vfs_prefix):]
-                        if sub_buckets:
-                            tb, tm = resolve_file_bucket(rel, sub_buckets, repo_dir=current_repo_dir)
+                        if current_sub_buckets:
+                            tb, tm = resolve_file_bucket(rel, current_sub_buckets, repo_dir=current_repo_dir)
                             if tb and tm and tm == b_id: is_dirty = True; break
                             elif tb and tb.get('id') == b_id: is_dirty = True; break
                             elif not tb and b_id == "main": is_dirty = True; break
+
+                            # Directory containment healer: If a parent directory is deleted/moved, mark child buckets dirty
+                            if rel.endswith('/'):
+                                for p in data["cfg"].get("match_prefixes", []):
+                                    if p.lower().startswith(rel.lower()): is_dirty = True; break
+                                prefix = data["cfg"].get("dynamic_split_prefix")
+                                if prefix and prefix.lower().startswith(rel.lower()): is_dirty = True; break
                         else:
                             is_dirty = True; break
                 if is_dirty:
@@ -437,7 +433,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             b_title = data["cfg"].get("title", b_id.replace('_', ' ').title())
             b_domain = data["cfg"].get("domain", config.get("domain", "Workspaces"))
             b_desc = data["cfg"].get("description", f"Context payload for {b_title}.")
-            gen_cb, rec_cb = make_callbacks(b_id, data, b_title, b_domain, b_desc, safe_out, repo_path, repo_dir)
+            gen_cb, rec_cb = make_callbacks(b_id, data, b_title, b_domain, b_desc, safe_out, repo_path, repo_dir, sub_buckets)
             declarations.append({
                 "filename": safe_out,
                 "meta": {"title": b_title, "domain": b_domain, "desc": b_desc, "type": "gather", "repo": repo_dir},
@@ -451,7 +447,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             title = meta.get("title", module.replace('_', ' ').title())
             domain = meta.get("domain", c.get("domain", "Dynamic Modules"))
             desc = meta.get("description", c.get("description", f"Dynamically mapped logic and templates for {title}."))
-            gen_cb, rec_cb = make_callbacks(module, data, title, domain, desc, out_name, repo_path, repo_dir)
+            gen_cb, rec_cb = make_callbacks(module, data, title, domain, desc, out_name, repo_path, repo_dir, sub_buckets)
             declarations.append({
                 "filename": out_name,
                 "meta": {"title": title, "domain": domain, "desc": desc, "type": "gather", "repo": repo_dir},
@@ -701,11 +697,16 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     if not items:
         raise ValueError("No items provided.")
     files = ctx.expand_selection(items)
+    from insetu.core.utils_core import InSetuURI
+    clean_tree_files = []
+    for f in files:
+        f_uri = InSetuURI(f)
+        clean_tree_files.append(f"{f_uri.volume}/{f_uri.path}".strip('/') if f_uri.volume else f_uri.path)
 
     header_str = "============================================================\n"
     header_str += "INSETU AD-HOC CONTEXT PAYLOAD (Selection)\n"
     header_str += "============================================================\n\n"
-    header_str += generate_ascii_tree(files) + "\n\n"
+    header_str += generate_ascii_tree(clean_tree_files) + "\n\n"
     text_blocks = []
     with VFSTransaction(ctx.workspace_id) as vfs:
         for filepath in files:
@@ -856,10 +857,13 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         if not manifest_keys:
             # Fallback to logical VFS sweep instead of raw disk I/O
             manifest_keys = list(ctx.vfs.walk("ctx://contexts", exts=['.txt']))
-
         return {
             "message": "Base contexts generated successfully.",
-            "artifact": {"files": sorted(manifest_keys)},
+            "artifact": {
+                "files": sorted(manifest_keys),
+                "touched_buckets": touched_buckets,
+                "is_full_sweep": needs_full_compile
+            },
             "next_kwargs": {"touched_buckets": touched_buckets if not needs_full_compile else None}
         }
     except Exception as e:
@@ -899,23 +903,19 @@ def api_gather_submit(ctx):
             ordered_steps = ordered_steps[start_idx:]
         except StopIteration:
             pass
-
     if not ordered_steps:
         return jsonify({"error": "No compilation steps registered."}), 400
 
-    first_step = ordered_steps[0]
-    job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-
-    _chain = {
-        "steps": ordered_steps[1:],
-        "on_complete_hook": "compilation_sequence_complete"
-    }
-    payload = {"force_full": force_full, "_chain": _chain}
+    payload = {"force_full": force_full}
     if "target_repos" in data:
         payload["target_repos"] = data["target_repos"]
 
-    from akasa.workers import submit_immediate_job
-    submit_immediate_job(job_id, first_step["ext_name"], first_step["worker_name"], json.dumps(payload), workspace_id=ctx.workspace_id, job_category="ui_blocking")
+    job_id = ctx.jobs.submit_chain(
+        ordered_steps, 
+        on_complete_hook="compilation_sequence_complete", 
+        job_category="ui_blocking", 
+        **payload
+    )
 
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks.on('register_compilation_steps')

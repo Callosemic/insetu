@@ -1600,15 +1600,16 @@ export function switchLinkTab(tab) {
     const { searchQuery } = FsStore.getState().modals.linkInsert;
     if (tab === 'filename' && searchQuery) executeLinkSearch(searchQuery);
 }
+const _debouncedLinkSearch = window.ExtensionRegistry.utils.debounce((val) => {
+    executeLinkSearch(val);
+}, 300);
 
 export function onLinkSearchInput(val) {
     FsStore.getState().setModal('linkInsert', { searchQuery: val });
     const { activeTab } = FsStore.getState().modals.linkInsert;
     if (activeTab !== 'filename') return;
 
-    window.ExtensionRegistry.utils.debounce('linkSearch', () => {
-        executeLinkSearch(val);
-    }, 300);
+    _debouncedLinkSearch(val);
 }
 export async function executeDeepLinkSearch(overrideQuery = null) {
     const query = (overrideQuery || FsStore.getState().modals.linkInsert.searchQuery).toLowerCase().trim();

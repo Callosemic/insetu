@@ -84,9 +84,8 @@ def api_fs_search(ctx):
         data = ctx.req.get_json(silent=True) or {}
         query = data.get('q', '').lower()
         if not query: return jsonify({"results": []})
-
         job_id = f"sch_{uuid.uuid4().hex[:8]}"
-        submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id)
+        submit_immediate_job(job_id, "fs", "search_task", json.dumps({"query": query}), workspace_id=workspace_id, job_category="system_background")
         return jsonify({"status": "accepted", "job_id": job_id}), 202
     except Exception as e:
         return jsonify({"error": f"Search dispatch failed: {str(e)}"}), 500

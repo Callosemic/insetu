@@ -369,19 +369,25 @@ def resolve_topology_buffer(workspace_id):
                     best_repo_len = len(r_dir)
                     repo_dir = r_dir
                     rel_path = clean_fp[len(r_dir):].lstrip('/')
-
         clean_filepath = f"{repo_dir}/{rel_path}" if repo_dir != "global" else rel_path
         vfs_fp = f"vfs://{clean_filepath}"
 
         e["filepath"] = vfs_fp
         filepath = clean_filepath
         op = e["mutation_type"]
-        dirty_repos.add(repo_dir)
         if op in ("delete", "deleted", "remove", "removed"):
+            dirty_repos.add(repo_dir)
+
+            # Query the ledger before deletion to perfectly identify all affected structural buckets
             if raw_fp.endswith('/'):
+                affected = conn.execute("SELECT bucket_id FROM topology_ledger WHERE filepath = ? OR filepath LIKE ?", (filepath, filepath + "/%")).fetchall()
                 conn.execute("DELETE FROM topology_ledger WHERE filepath = ? OR filepath LIKE ?", (filepath, filepath + "/%"))
             else:
+                affected = conn.execute("SELECT bucket_id FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchall()
                 conn.execute("DELETE FROM topology_ledger WHERE filepath = ?", (filepath,))
+
+            for row in affected:
+                dirty_buckets.add(f"{repo_dir}::{row['bucket_id']}")
         else:
             repo_cfg = target_repos_map.get(repo_dir)
 
@@ -399,26 +405,21 @@ def resolve_topology_buffer(workspace_id):
                     ignore_patterns = repo_cfg.get("repo_ignore_patterns") if repo_cfg.get("repo_ignore_patterns") is not None else (live_cfg.get("ignore_patterns") or [])
                     filename = Path(filepath).name.lower()
                     if filename in ignore_files:
-                        print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_files): {filepath}")
                         is_ignored = True
                     elif any(pattern in rel_to_repo for pattern in ignore_patterns):
-                        print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_patterns): {filepath}")
                         is_ignored = True
                     elif set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs):
-                        print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (ignore_dirs): {filepath}")
                         is_ignored = True
                     else:
                         if filename not in (".gitkeep", ".keep"):
                             ext = Path(filepath).suffix.lower()
                             allowed_exts = set(repo_cfg.get("exts") if repo_cfg.get("exts") is not None else (live_cfg.get("include_extensions") or []))
                             if ext not in allowed_exts and filename not in allowed_exts:
-                                print(f"🌍 [TOPOLOGY TELEMETRY] 🚫 IGNORED (exts): {filepath} | ext '{ext}' not in {allowed_exts}")
                                 is_ignored = True
 
             if is_ignored:
                 continue
 
-            print(f"🌍 [TOPOLOGY TELEMETRY] ✅ ADDED TO LEDGER: {filepath}")
             sub_buckets = repo_cfg.get("sub_buckets", []) if repo_cfg else []
             b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=repo_dir)
             if b and module:
@@ -428,11 +429,29 @@ def resolve_topology_buffer(workspace_id):
             else:
                 bucket_id = "main"
 
+            # Physical Delta Gate: Compare physical disk mtime against existing ledger timestamp
+            repo_base = Path(get_repo_path(repo_dir, workspace_id)) if repo_dir != "global" else None
+            phys_mtime = None
+            if repo_base:
+                phys_file = repo_base / rel_to_repo
+                if phys_file.exists() and phys_file.is_file():
+                    try: phys_mtime = phys_file.stat().st_mtime
+                    except Exception: pass
+
+            existing = conn.execute("SELECT timestamp FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchone()
+            is_genuinely_modified = True
+            if existing and phys_mtime is not None:
+                if phys_mtime <= existing["timestamp"]:
+                    is_genuinely_modified = False
+
             conn.execute(
                 "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
                 (filepath, repo_dir, bucket_id, time.time())
             )
-            dirty_buckets.add(f"{repo_dir}::{bucket_id}")
+
+            if is_genuinely_modified:
+                dirty_repos.add(repo_dir)
+                dirty_buckets.add(f"{repo_dir}::{bucket_id}")
     conn.commit()
 
     hooks.emit(
@@ -483,7 +502,8 @@ def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
     force_topology_scan(workspace_id=ctx.workspace_id)
     from akasa.hooks import hooks
-    # Phase 2 Trigger: Synchronous emission ensures deterministic, sequential execution of deferred tasks
+    # Flush dirty tracking to ensure clean boot UI state
+    hooks.emit('topology_resolved', workspace_id=ctx.workspace_id, dirty_repos=[], dirty_buckets=[], events=[], clear_all=True)
     hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
 
 @topology_bp.worker("resolve_topology_task")

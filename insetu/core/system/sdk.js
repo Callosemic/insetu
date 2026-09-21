@@ -205,6 +205,18 @@ export class InSetuElement extends SutramElement {
                 }
             }
         });
+        // Wire up workspace soft-refresh lifecycle method
+        this.registerGlobalListener('insetu:soft-refresh', window, (e) => {
+            const ws = e.detail || window.inSetu?.utils?.getActiveWorkspace() || 'default';
+            this.workspaceId = ws;
+            if (typeof this.onWorkspaceLoad === 'function') {
+                this.onWorkspaceLoad(ws);
+            }
+            if (typeof this.onViewActivated === 'function') {
+                this.onViewActivated();
+            }
+            this.requestUpdate();
+        });
         // Wire up the lazy-load visibility lifecycle method
         this.registerGlobalListener('insetu:tab-changed', window, (e) => {
             if (typeof this.onViewActivated === 'function') {
@@ -447,6 +459,31 @@ window.inSetu.utils.clone = (obj) => {
         console.warn("[SDK] structuredClone failed (likely due to functions or DOM nodes in object). Falling back to JSON parse.", e);
         return JSON.parse(JSON.stringify(obj));
     }
+};
+
+/**
+* Tenant-Scoped Storage Abstraction (SSOT)
+* Guarantees storage keys are automatically isolated by active workspace.
+*/
+window.inSetu.utils.getScopedStorage = (key, defaultVal = null, workspaceId = null) => {
+    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
+    const val = localStorage.getItem(`insetu_${ws}_${key}`);
+    if (val === null) {
+        // Failsafe fallback for legacy un-scoped keys
+        const legacyVal = localStorage.getItem(`insetu_${key}`);
+        return legacyVal !== null ? legacyVal : defaultVal;
+    }
+    return val;
+};
+
+window.inSetu.utils.setScopedStorage = (key, value, workspaceId = null) => {
+    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
+    localStorage.setItem(`insetu_${ws}_${key}`, typeof value === 'string' ? value : JSON.stringify(value));
+};
+
+window.inSetu.utils.removeScopedStorage = (key, workspaceId = null) => {
+    const ws = workspaceId || window.inSetu.utils.getActiveWorkspace() || 'default';
+    localStorage.removeItem(`insetu_${ws}_${key}`);
 };
 
 // Preserve clipboard API bindings

@@ -117,236 +117,225 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
             search_str = expand_macros(b["search"])
             replace_str = expand_macros(b["replace"])
             is_genesis = not search_str.strip()
-            # Step a.1: No-Op & Idempotency Filter
-            if is_effectively_identical(search_str.split('\n'), replace_str.split('\n')):
-                patch_tel["status"] = "auto_skipped"
-                patch_tel["error_message"] = "No-Op: The SEARCH and REPLACE blocks are perfectly identical."
-                telemetry["summary"]["auto_skipped"] += 1
-                telemetry["patches"].append(patch_tel)
-                continue
-
-            resolved_path = None
-            resolution_type = None
             content = get_file_content(target_file)
-            # Step a.0: Genesis Patch Check
-            if is_genesis:
+
+            # --- Chain of Responsibility Pipeline ---
+            class ResolutionContext:
+                def __init__(self):
+                    self.resolved_path = None
+                    self.resolution_type = None
+                    self.handled = False
+
+            pctx = ResolutionContext()
+
+            def resolve_noop():
+                if is_effectively_identical(search_str.split('\n'), replace_str.split('\n')):
+                    patch_tel.update({"status": "auto_skipped", "error_message": "No-Op: The SEARCH and REPLACE blocks are perfectly identical."})
+                    telemetry["summary"]["auto_skipped"] += 1
+                    pctx.handled = True
+
+            def resolve_genesis():
+                nonlocal omniscient_cache
+                if not is_genesis: return
                 from insetu.core.utils_core import InSetuURI
                 gen_uri = InSetuURI(norm_target)
                 explicit_repo = gen_uri.repo if gen_uri.repo else (gen_uri.path.partition('/')[0] if '/' in gen_uri.path else None)
                 if explicit_repo in allowed_repos:
-                    resolved_path = target_file
-                    resolution_type = "genesis"
-                else:
-                    if omniscient_cache is None:
-                        omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+                    pctx.resolved_path = target_file
+                    pctx.resolution_type = "genesis"
+                    pctx.handled = True
+                    return
 
-                    target_path_obj = Path(norm_target)
-                    target_dirname = target_path_obj.parent.as_posix()
-                    if target_dirname == '.': target_dirname = ''
-                    target_basename = target_path_obj.name
+                if omniscient_cache is None:
+                    omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
 
-                    cand_list = []
-                    if target_dirname:
-                        known_dirs = set()
-                        for _, cand_rel in omniscient_cache:
-                            cand_parent = Path(cand_rel).parent.as_posix()
-                            known_dirs.add(cand_parent if cand_parent != '.' else '')
-                        target_dir_suffix = target_dirname if target_dirname.startswith('/') else '/' + target_dirname
+                target_path_obj = Path(norm_target)
+                target_dirname = target_path_obj.parent.as_posix()
+                if target_dirname == '.': target_dirname = ''
+                target_basename = target_path_obj.name
 
-                        for kd in known_dirs:
-                            if kd == target_dirname or kd.endswith(target_dir_suffix):
-                                cand_list.append({"filepath": f"{kd}/{target_basename}", "score": 0.9, "match_type": "genesis_guess"})
+                cand_list = []
+                if target_dirname:
+                    known_dirs = set()
+                    for _, cand_rel in omniscient_cache:
+                        cand_parent = Path(cand_rel).parent.as_posix()
+                        known_dirs.add(cand_parent if cand_parent != '.' else '')
+                    target_dir_suffix = target_dirname if target_dirname.startswith('/') else '/' + target_dirname
+                    for kd in known_dirs:
+                        if kd == target_dirname or kd.endswith(target_dir_suffix):
+                            cand_list.append({"filepath": f"{kd}/{target_basename}", "score": 0.9, "match_type": "genesis_guess"})
 
-                    if not cand_list and len(allowed_repos) == 1:
-                        cand_path = f"{allowed_repos[0]}/{norm_target}"
-                        cand_list.append({"filepath": cand_path, "score": 1.0, "match_type": "genesis_pinned"})
+                if not cand_list and len(allowed_repos) == 1:
+                    cand_list.append({"filepath": f"{allowed_repos[0]}/{norm_target}", "score": 1.0, "match_type": "genesis_pinned"})
 
-                    if cand_list:
-                        confirmed = data.get("confirmed_candidates", {}).get(target_file)
-                        if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                            resolved_path = confirmed
-                            resolution_type = "confirmed_candidate"
-                        else:
-                            patch_tel["status"] = "needs_confirmation"
-                            patch_tel["resolution_type"] = "genesis_guess"
-                            patch_tel["candidates"] = cand_list
-                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                            telemetry["can_commit"] = False
-                            telemetry["summary"]["action_required"] += 1
-                            telemetry["patches"].append(patch_tel)
-                            continue
+                if cand_list:
+                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                        pctx.resolved_path = confirmed
+                        pctx.resolution_type = "confirmed_candidate"
+                        pctx.handled = True
                     else:
-                        patch_tel["status"] = "failed"
-                        patch_tel["error_message"] = "Genesis patch missing valid repository anchor, and path fragment could not be uniquely matched."
-                        telemetry["summary"]["failed"] += 1
+                        patch_tel.update({"status": "needs_confirmation", "resolution_type": "genesis_guess", "candidates": cand_list})
+                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
                         telemetry["can_commit"] = False
-                        telemetry["patches"].append(patch_tel)
-                        continue
+                        telemetry["summary"]["action_required"] += 1
+                        pctx.handled = True
+                else:
+                    patch_tel.update({"status": "failed", "error_message": "Genesis patch missing valid repository anchor, and path fragment could not be uniquely matched."})
+                    telemetry["summary"]["failed"] += 1
+                    telemetry["can_commit"] = False
+                    pctx.handled = True
+                    return
 
-                if get_file_content(resolved_path) is not None:
-                    if target_file in data.get("confirmed_candidates", {}):
-                        pass # Overwrite explicitly authorized
-                    else:
-                        patch_tel["status"] = "needs_confirmation"
+                if get_file_content(pctx.resolved_path) is not None:
+                    if target_file not in data.get("confirmed_candidates", {}):
+                        patch_tel.update({
+                            "status": "needs_confirmation", "error_message": f"File '{pctx.resolved_path}' already exists on disk. Confirm to overwrite.",
+                            "candidates": [{"filepath": pctx.resolved_path, "score": 1.0, "match_type": "overwrite"}]
+                        })
                         patch_tel["flags"].append("confirm-to-overwrite")
-                        patch_tel["error_message"] = f"File '{resolved_path}' already exists on disk. Confirm to overwrite."
-                        patch_tel["candidates"] = [{"filepath": resolved_path, "score": 1.0, "match_type": "overwrite"}]
                         patch_tel["available_actions"].append("confirm_candidate")
                         telemetry["can_commit"] = False
-            # Step b: Direct Path Match
-            elif content is not None:
-                ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
-                if ok_search and s_status == "idempotent":
-                    patch_tel["resolved_file"] = target_file
-                    patch_tel["status"] = "auto_skipped"
-                    patch_tel["flags"].append("already_applied")
-                    patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
-                    telemetry["summary"]["auto_skipped"] += 1
-                    telemetry["patches"].append(patch_tel)
-                    continue
-                elif ok_search:
-                    resolved_path = target_file
-                    resolution_type = "direct_match"
-            # Step c: Single Pinned Repo Shortcut
-            if not resolved_path and len(allowed_repos) == 1:
-                cand = f"{allowed_repos[0]}/{norm_target}"
-                cand_content = get_file_content(cand)
-                if cand_content is not None:
-                    ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
-                    if ok_search and s_status == "idempotent":
-                        patch_tel["resolved_file"] = cand
-                        patch_tel["status"] = "auto_skipped"
-                        patch_tel["flags"].append("already_applied")
-                        patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state."
-                        telemetry["summary"]["auto_skipped"] += 1
-                        telemetry["patches"].append(patch_tel)
-                        continue
-                    elif ok_search:
-                        resolved_path = cand
-                        resolution_type = "pinned_shortcut"
-            # Step d & e: Multi-Match Path Scoring
-            if not resolved_path and not is_genesis:
+
+            def resolve_direct_match():
+                if content is not None:
+                    ok_search, _, s_status = apply_block_in_memory(content, b, silent=True)
+                    if ok_search:
+                        if s_status == "idempotent":
+                            patch_tel.update({"resolved_file": target_file, "status": "auto_skipped", "error_message": "Already Applied: The target file natively matches the desired state."})
+                            patch_tel["flags"].append("already_applied")
+                            telemetry["summary"]["auto_skipped"] += 1
+                        else:
+                            pctx.resolved_path = target_file
+                            pctx.resolution_type = "direct_match"
+                        pctx.handled = True
+
+            def resolve_pinned_shortcut():
+                if len(allowed_repos) == 1:
+                    cand = f"{allowed_repos[0]}/{norm_target}"
+                    cand_content = get_file_content(cand)
+                    if cand_content is not None:
+                        ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
+                        if ok_search:
+                            if s_status == "idempotent":
+                                patch_tel.update({"resolved_file": cand, "status": "auto_skipped", "error_message": "Already Applied: The target file natively matches the desired state."})
+                                patch_tel["flags"].append("already_applied")
+                                telemetry["summary"]["auto_skipped"] += 1
+                            else:
+                                pctx.resolved_path = cand
+                                pctx.resolution_type = "pinned_shortcut"
+                            pctx.handled = True
+
+            def resolve_fuzzy_path():
                 raw_candidates = ctx.find_path_candidates(target_file, allowed_repos=allowed_repos)
                 candidates = [c["filepath"] for c in raw_candidates if c["score"] >= 0.8]
-
                 best_search_cand = None
                 best_replace_cand = None
                 cand_list = []
+
                 for cand in candidates:
                     cand_content = get_file_content(cand)
                     if cand_content is None: continue
                     ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
-                    if ok_search and s_status == "idempotent":
-                        best_replace_cand = cand
-                        cand_list.append({"filepath": cand, "score": 1.0, "match_type": "replace_block"})
-                    elif ok_search:
-                        best_search_cand = cand
-                        cand_list.append({"filepath": cand, "score": 1.0, "match_type": "search_block"})
+                    if ok_search:
+                        if s_status == "idempotent":
+                            best_replace_cand = cand
+                            cand_list.append({"filepath": cand, "score": 1.0, "match_type": "replace_block"})
+                        else:
+                            best_search_cand = cand
+                            cand_list.append({"filepath": cand, "score": 1.0, "match_type": "search_block"})
 
                 if len(cand_list) == 1:
-                    resolved_path = cand_list[0]["filepath"]
-                    resolution_type = "scored_path_auto"
-
+                    pctx.resolved_path = cand_list[0]["filepath"]
+                    pctx.resolution_type = "scored_path_auto"
                     if cand_list[0]["match_type"] == "replace_block":
-                        patch_tel["resolved_file"] = resolved_path
-                        patch_tel["status"] = "auto_skipped"
+                        patch_tel.update({"resolved_file": pctx.resolved_path, "status": "auto_skipped", "error_message": "Already Applied: The target file natively matches the desired state (Fuzzy Resolved)."})
                         patch_tel["flags"].append("already_applied")
-                        patch_tel["error_message"] = "Already Applied: The target file natively matches the desired state (Fuzzy Resolved)."
                         telemetry["summary"]["auto_skipped"] += 1
-                        telemetry["patches"].append(patch_tel)
-                        continue
-                elif best_search_cand:
+                    pctx.handled = True
+                elif best_search_cand or best_replace_cand:
                     confirmed = data.get("confirmed_candidates", {}).get(target_file)
                     if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                        resolved_path = confirmed
-                        resolution_type = "confirmed_candidate"
+                        pctx.resolved_path = confirmed
+                        pctx.resolution_type = "confirmed_candidate"
+                        pctx.handled = True
                     else:
-                        patch_tel["status"] = "needs_confirmation"
-                        patch_tel["resolution_type"] = "scored_path"
-                        patch_tel["candidates"] = cand_list
+                        patch_tel.update({"status": "needs_confirmation", "resolution_type": "scored_path", "candidates": cand_list})
+                        if best_replace_cand: patch_tel["flags"].append("already_applied")
                         patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
                         telemetry["can_commit"] = False
                         telemetry["summary"]["action_required"] += 1
-                        telemetry["patches"].append(patch_tel)
-                        continue
-                elif best_replace_cand:
-                    confirmed = data.get("confirmed_candidates", {}).get(target_file)
-                    if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                        resolved_path = confirmed
-                        resolution_type = "confirmed_candidate"
-                    else:
-                        patch_tel["status"] = "needs_confirmation"
-                        patch_tel["resolution_type"] = "scored_path"
-                        patch_tel["flags"].append("already_applied")
-                        patch_tel["candidates"] = cand_list
-                        patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                        telemetry["can_commit"] = False
-                        telemetry["summary"]["action_required"] += 1
-                        telemetry["patches"].append(patch_tel)
-                        continue
-            # Step e.5: Anchor Failure Diff Generation
-            if not resolved_path and not is_genesis and content is not None:
-                import difflib
-                search_lines = expand_macros(b["search"]).replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-                file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-                matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
-                match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
-                start_idx = max(0, match.a - match.b)
-                end_idx = min(len(file_lines), start_idx + len(search_lines))
-                actual_lines = file_lines[start_idx:end_idx]
-                diff = list(difflib.ndiff(actual_lines, search_lines))
-                diff_str = "\n".join(diff)
-                err_b64 = base64.b64encode(diff_str.encode('utf-8')).decode('utf-8')
+                        pctx.handled = True
 
-                patch_tel["status"] = "needs_confirmation"
-                patch_tel["resolution_type"] = "anchor_failed"
-                patch_tel["error_message"] = "Search anchor failed to match existing file exactly."
-                patch_tel["syntax_error"] = err_b64
-                patch_tel["available_actions"].extend(["deselect_patch", "offer_deep_search"])
-                telemetry["can_commit"] = False
-                telemetry["summary"]["action_required"] += 1
-                telemetry["patches"].append(patch_tel)
-                continue
-
-            # Step f: User-Authorized Deep Search
-            if not resolved_path and not is_genesis:
-                allow_deep_search = data.get("allow_deep_search", False)
-                if not allow_deep_search:
-                    patch_tel["status"] = "offer_deep_search"
+            def resolve_deep_search():
+                nonlocal omniscient_cache
+                if not data.get("allow_deep_search"):
+                    patch_tel.update({"status": "offer_deep_search"})
                     patch_tel["available_actions"].extend(["offer_deep_search", "deselect_patch"])
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
-                    telemetry["patches"].append(patch_tel)
-                    continue
-                else:
-                    # Execute the Deep Search Algorithm
-                    s_lines = [l for l in search_str.split('\n') if len(l.strip()) > 5 and not l.strip().startswith(('import ', 'from ', '{', '}', 'return'))]
-                    if s_lines:
-                        longest_line = max(s_lines, key=len).strip()
-                        if omniscient_cache is None:
-                            omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+                    pctx.handled = True
+                    return
 
-                        cand_list = []
-                        for cand_basename, cand_rel in omniscient_cache:
-                            cand_content = get_file_content(cand_rel)
-                            if cand_content and longest_line in cand_content:
-                                ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
-                                if ok_search and s_status != "idempotent":
-                                    cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
-                        if cand_list:
-                            confirmed = data.get("confirmed_candidates", {}).get(target_file)
-                            if confirmed and any(c["filepath"] == confirmed for c in cand_list):
-                                resolved_path = confirmed
-                                resolution_type = "confirmed_candidate"
-                            else:
-                                patch_tel["status"] = "needs_confirmation"
-                                patch_tel["resolution_type"] = "deep_search"
-                                patch_tel["candidates"] = cand_list
-                                patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
-                                telemetry["can_commit"] = False
-                                telemetry["summary"]["action_required"] += 1
-                                telemetry["patches"].append(patch_tel)
-                                continue
+                s_lines = [l for l in search_str.split('\n') if len(l.strip()) > 5 and not l.strip().startswith(('import ', 'from ', '{', '}', 'return'))]
+                if s_lines:
+                    longest_line = max(s_lines, key=len).strip()
+                    if omniscient_cache is None:
+                        omniscient_cache = get_omniscient_workspace_files(workspace_id, allowed_repos)
+
+                    cand_list = []
+                    for cand_basename, cand_rel in omniscient_cache:
+                        cand_content = get_file_content(cand_rel)
+                        if cand_content and longest_line in cand_content:
+                            ok_search, _, s_status = apply_block_in_memory(cand_content, b, silent=True)
+                            if ok_search and s_status != "idempotent":
+                                cand_list.append({"filepath": cand_rel, "score": 1.0, "match_type": "deep_search"})
+                    if cand_list:
+                        confirmed = data.get("confirmed_candidates", {}).get(target_file)
+                        if confirmed and any(c["filepath"] == confirmed for c in cand_list):
+                            pctx.resolved_path = confirmed
+                            pctx.resolution_type = "confirmed_candidate"
+                            pctx.handled = True
+                        else:
+                            patch_tel.update({"status": "needs_confirmation", "resolution_type": "deep_search", "candidates": cand_list})
+                            patch_tel["available_actions"].extend(["confirm_candidate", "deselect_patch"])
+                            telemetry["can_commit"] = False
+                            telemetry["summary"]["action_required"] += 1
+                            pctx.handled = True
+
+            def resolve_anchor_failure():
+                if content is not None:
+                    import difflib
+                    search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                    file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                    matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
+                    match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
+                    start_idx = max(0, match.a - match.b)
+                    end_idx = min(len(file_lines), start_idx + len(search_lines))
+                    diff = list(difflib.ndiff(file_lines[start_idx:end_idx], search_lines))
+                    err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
+
+                    patch_tel.update({
+                        "status": "needs_confirmation", "resolution_type": "anchor_failed", 
+                        "error_message": "Search anchor failed to match existing file exactly.", "syntax_error": err_b64
+                    })
+                    patch_tel["available_actions"].extend(["deselect_patch", "offer_deep_search"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    pctx.handled = True
+
+            # Execute the Chain of Responsibility
+            for resolver in [resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_deep_search, resolve_anchor_failure]:
+                resolver()
+                if pctx.handled:
+                    break
+
+            if patch_tel["status"] in ("auto_skipped", "needs_confirmation"):
+                telemetry["patches"].append(patch_tel)
+                continue
+
+            resolved_path = pctx.resolved_path
+            resolution_type = pctx.resolution_type
 
             if not resolved_path:
                 patch_tel["status"] = "failed"

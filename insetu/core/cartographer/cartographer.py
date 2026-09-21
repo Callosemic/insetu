@@ -11,7 +11,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
 @hooks.on('compilation_sequence_complete')
 def hook_cartographer_compile_complete(workspace_id=None, **kwargs):
     cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(cart_job_id, "cartographer", "map_task", "{}", workspace_id=workspace_id)
+    import json
+    target_repos = kwargs.get('target_repos')
+    args_json = json.dumps({"target_repos": target_repos}) if target_repos else "{}"
+    submit_immediate_job(cart_job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id, job_category="system_background")
 
 def _background_map(job_id, workspace_id, target_repos=None, **kwargs):
     try:
