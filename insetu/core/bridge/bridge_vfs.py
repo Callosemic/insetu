@@ -266,6 +266,30 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                         telemetry["can_commit"] = False
                         telemetry["summary"]["action_required"] += 1
                         pctx.handled = True
+            def resolve_anchor_failure():
+                if content is not None and not data.get("allow_deep_search"):
+                    import difflib
+                    search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                    file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
+                    matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
+                    match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
+                    start_idx = max(0, match.a - match.b)
+                    end_idx = min(len(file_lines), start_idx + len(search_lines))
+
+                    actual_lines = file_lines[start_idx:end_idx]
+                    diff = list(difflib.ndiff(actual_lines, search_lines))
+                    err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
+                    anchor_b64 = base64.b64encode(("\n".join(actual_lines)).encode('utf-8')).decode('utf-8')
+
+                    patch_tel.update({
+                        "status": "needs_confirmation", "resolution_type": "anchor_failed", 
+                        "error_message": "Search anchor failed to match existing file exactly.", 
+                        "syntax_error": err_b64, "actual_anchor": anchor_b64
+                    })
+                    patch_tel["available_actions"].extend(["heal_anchor", "deselect_patch", "offer_deep_search"])
+                    telemetry["can_commit"] = False
+                    telemetry["summary"]["action_required"] += 1
+                    pctx.handled = True
 
             def resolve_deep_search():
                 nonlocal omniscient_cache
@@ -303,29 +327,8 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                             telemetry["summary"]["action_required"] += 1
                             pctx.handled = True
 
-            def resolve_anchor_failure():
-                if content is not None:
-                    import difflib
-                    search_lines = search_str.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-                    file_lines = content.replace('\r\n', '\n').replace('\xa0', ' ').split('\n')
-                    matcher = difflib.SequenceMatcher(None, file_lines, search_lines)
-                    match = matcher.find_longest_match(0, len(file_lines), 0, len(search_lines))
-                    start_idx = max(0, match.a - match.b)
-                    end_idx = min(len(file_lines), start_idx + len(search_lines))
-                    diff = list(difflib.ndiff(file_lines[start_idx:end_idx], search_lines))
-                    err_b64 = base64.b64encode(("\n".join(diff)).encode('utf-8')).decode('utf-8')
-
-                    patch_tel.update({
-                        "status": "needs_confirmation", "resolution_type": "anchor_failed", 
-                        "error_message": "Search anchor failed to match existing file exactly.", "syntax_error": err_b64
-                    })
-                    patch_tel["available_actions"].extend(["deselect_patch", "offer_deep_search"])
-                    telemetry["can_commit"] = False
-                    telemetry["summary"]["action_required"] += 1
-                    pctx.handled = True
-
             # Execute the Chain of Responsibility
-            for resolver in [resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_deep_search, resolve_anchor_failure]:
+            for resolver in [resolve_noop, resolve_genesis, resolve_direct_match, resolve_pinned_shortcut, resolve_fuzzy_path, resolve_anchor_failure, resolve_deep_search]:
                 resolver()
                 if pctx.handled:
                     break

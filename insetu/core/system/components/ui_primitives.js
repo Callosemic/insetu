@@ -156,9 +156,8 @@ export class InSetuBlobViewer extends InSetuElement {
                 ?flush=${true}
                 titleText=${this.blobState.title || "Text Viewer"}
                 @sutram-modal-closed=${() => window.inSetu.stores.App.setState({ blobViewer: { ...this.blobState, open: false } })}>
-
                 <div slot="body" style="display: flex; flex-direction: column; flex: 1; height: 100%;">
-                    <textarea readonly style="flex: 1; width: 100%; height: 100%; padding: 15px; box-sizing: border-box; background: var(--bg); color: var(--text); border: none; font-family: monospace; font-size: 0.85rem; resize: none;" .value=${this.blobState.content}></textarea>
+                    <textarea readonly wrap="off" style="flex: 1; width: 100%; height: 100%; padding: 15px; box-sizing: border-box; background: var(--bg); color: var(--text); border: none; font-family: monospace; font-size: 0.85rem; resize: none; white-space: pre; overflow-x: auto;" .value=${this.blobState.content}></textarea>
                 </div>
                 <div slot="footer" style="width: 100%; display: flex; justify-content: flex-end;">
                     <sutram-entity-actions 

@@ -502,6 +502,21 @@ export class InSetuExtBridge extends InSetuElement {
         } else if (action === 'force-sync' || action === 'ignore-syntax') {
             const isDryRun = btn.dataset.dryrun === 'true';
             this._getSyncAction(isDryRun, true)();
+        } else if (action === 'heal-anchor') {
+            const oldPath = btn.dataset.old;
+            const patchIdx = parseInt(btn.dataset.patchIdx, 10);
+            const actualAnchor = new TextDecoder().decode(Uint8Array.from(atob(btn.dataset.anchor), c => c.charCodeAt(0)));
+
+            const cells = BridgeStore.getState().cells || [];
+            const fileCells = cells.filter(c => c.file === oldPath || c.file.endsWith(oldPath) || oldPath.endsWith(c.file));
+            const targetCell = fileCells[patchIdx];
+
+            if (targetCell) {
+                const blockRegex = /^(<<<<<<< SEARCH)[ \t]*\r?\n([\s\S]*?)^(=======)/m;
+                const newContent = targetCell.content.replace(blockRegex, "$1\n" + actualAnchor + "\n$3");
+                BridgeStore.getState().updateCellContent(targetCell.id, newContent);
+                this._getSyncAction(this._lastDryRun || false, this._globalBypassSandwich)();
+            }
         } else if (action === 'deselect-this-patch') {
             const oldPath = btn.dataset.old;
             const resolvedPath = btn.dataset.resolved;
@@ -602,6 +617,9 @@ export class InSetuExtBridge extends InSetuElement {
                                                 <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: center;">
                                                     ${p.available_actions?.includes('offer_deep_search') ? html`
                                                         <button data-action="deep-search" class="btn-sm" style="background: var(--intent-highlight);">🔍 Run Deep Search</button>
+                                                    ` : ''}
+                                                    ${p.available_actions?.includes('heal_anchor') ? html`
+                                                        <button data-action="heal-anchor" data-old="${p.original_file}" data-patch-idx="${origFileIdx}" data-anchor="${p.actual_anchor}" class="btn-sm" style="background: var(--intent-success);">🩹 Auto-Heal Anchor</button>
                                                     ` : ''}
                                                     ${p.available_actions?.includes('ignore_syntax_error') ? html`
                                                         <button data-action="ignore-syntax" class="btn-sm" style="background: var(--intent-danger);">⚠️ Ignore Syntax & Commit</button>
