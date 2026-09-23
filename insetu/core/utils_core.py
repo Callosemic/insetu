@@ -384,7 +384,7 @@ def start_filesystem_observer(**kwargs):
                 return
 
             filename = Path(src_path).name
-            if filename.startswith('.') or filename.endswith('~') or filename == 'CODE_INDEX.md': return
+            if filename.startswith('.') or filename.endswith('~') or filename.upper() == 'CODE_INDEX.MD' or filename == 'manifest.json': return
 
             op = op_override or ('delete' if event.event_type == 'deleted' else 'save')
             try:

@@ -35,12 +35,12 @@ topology_bp = InSetuExtension(
     core=True
 )
 __depends__ = []
-
 @hooks.on('register_compilation_steps')
 def _register_topology_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "topology_scan",
-        "depends_on": [],
+        "anchor": "source",
+        "order": 10,
         "ext_name": "topology",
         "worker_name": "scan_topology_task"
     }]

@@ -241,12 +241,12 @@ class SSEPipeline {
                         window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                     }
                 }
+                if (data.status === 'completed' && data.ext_name === 'gather') {
+                    const artifact = data.artifact || {};
+                    window.inSetu.events.emitHook('insetu:gather-compile-completed', artifact);
+                }
                 if ((data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
-                    if (data.status === 'completed' && data.ext_name === 'gather') {
-                        const artifact = data.artifact || {};
-                        window.inSetu.events.emitHook('insetu:gather-compile-completed', artifact);
-                    }
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');
                     }

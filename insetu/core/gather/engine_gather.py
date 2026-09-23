@@ -185,24 +185,11 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
 
     from akasa.workers import submit_one_shot_job
     submit_one_shot_job(job_id, "gather", "execute_delayed_compile", 12000, args_json, workspace_id=workspace_id)
+from akasa.workers import resolve_dag_chain
+
 def get_ordered_compilation_steps(ctx):
-    """Collects registered compilation steps from all extensions and performs a topological sort."""
-    steps = []
-    for res in ctx.emit('register_compilation_steps'):
-        if res: steps.extend(res)
-
-    ordered_steps = []
-    visited = set()
-    def visit(step_id):
-        if step_id in visited: return
-        step = next((s for s in steps if s['id'] == step_id), None)
-        if step:
-            for dep in step.get('depends_on', []): visit(dep)
-            visited.add(step_id)
-            ordered_steps.append(step)
-
-    for s in steps: visit(s['id'])
-    return ordered_steps
+    """Delegates compilation sequence resolution to Akasa's generic DAG orchestrator."""
+    return resolve_dag_chain(ctx, 'register_compilation_steps')
 def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, ledger_events=None, **kwargs):
     ctx = gather_bp.get_context(workspace_id)
 
@@ -962,6 +949,8 @@ def api_gather_submit(ctx):
 def _register_gather_step(workspace_id=None, **kwargs):
     return [{
         "id": "gather_base",
+        "anchor": "body",
+        "order": 20,
         "depends_on": ["topology_scan"],
         "ext_name": "gather",
         "worker_name": "compile_contexts"

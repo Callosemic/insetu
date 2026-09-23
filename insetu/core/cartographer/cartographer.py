@@ -6,15 +6,16 @@ from insetu.core.topology.engine_topology import get_valid_workspace_files
 from akasa.hooks import hooks
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 import uuid
-
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
-@hooks.on('compilation_sequence_complete')
-def hook_cartographer_compile_complete(workspace_id=None, **kwargs):
-    cart_job_id = f"crt_{uuid.uuid4().hex[:8]}"
-    import json
-    target_repos = kwargs.get('target_repos')
-    args_json = json.dumps({"target_repos": target_repos}) if target_repos else "{}"
-    submit_immediate_job(cart_job_id, "cartographer", "map_task", args_json, workspace_id=workspace_id, job_category="system_background")
+@hooks.on('register_compilation_steps')
+def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
+    return [{
+        "id": "cartographer_map",
+        "anchor": "sink",
+        "order": 90,
+        "ext_name": "cartographer",
+        "worker_name": "map_task"
+    }]
 
 def _background_map(job_id, workspace_id, target_repos=None, **kwargs):
     try:

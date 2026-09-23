@@ -311,8 +311,7 @@ export class InSetuExtGather extends InSetuElement {
             this._syncState = e.detail.state;
             this.requestUpdate();
         });
-        this.registerGlobalListener('insetu:gather-compile-completed', window, async (e) => {
-            const artifact = e.detail || {};
+        const handleGatherCompleted = async (artifact = {}) => {
             const touched = artifact.touched_buckets;
             const isFull = artifact.is_full_sweep;
 
@@ -336,6 +335,12 @@ export class InSetuExtGather extends InSetuElement {
                 }
             } catch (err) {
                 console.warn("[Gather] Failed to refresh manifest post-compile:", err);
+            }
+        };
+        this.registerGlobalListener('insetu:gather-compile-completed', window, (e) => handleGatherCompleted(e.detail || {}));
+        this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
+            if (e.detail && e.detail.ext_name === 'gather') {
+                handleGatherCompleted(e.detail.artifact || {});
             }
         });
         this.registerGlobalListener('insetu:compile-progress', window, (e) => {
