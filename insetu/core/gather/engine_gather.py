@@ -332,11 +332,10 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
                         return make_vault_gen(files, current_repo_dir)()
                     return None
                 return _recall
-
             if final_list:
                 declarations.append({
                     "filename": vault_name,
-                    "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets."), "type": "gather", "repo": repo_dir},
+                    "meta": {"title": r_title, "domain": config.get("domain", "Media Vault"), "desc": config.get("description", "Media vault assets."), "type": "gather", "repo": repo_dir, "bucket_id": "main"},
                     "generator_callback": make_vault_gen(final_list, repo_dir),
                     "recall_callback": make_vault_recall(final_list, repo_dir)
                 })
@@ -436,7 +435,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             gen_cb, rec_cb = make_callbacks(b_id, data, b_title, b_domain, b_desc, safe_out, repo_path, repo_dir, sub_buckets)
             declarations.append({
                 "filename": safe_out,
-                "meta": {"title": b_title, "domain": b_domain, "desc": b_desc, "type": "gather", "repo": repo_dir},
+                "meta": {"title": b_title, "domain": b_domain, "desc": b_desc, "type": "gather", "repo": repo_dir, "bucket_id": b_id},
                 "generator_callback": gen_cb,
                 "recall_callback": rec_cb
             })
@@ -450,7 +449,7 @@ def provide_base_workspaces(target_repos=None, ledger_events=None, workspace_id=
             gen_cb, rec_cb = make_callbacks(module, data, title, domain, desc, out_name, repo_path, repo_dir, sub_buckets)
             declarations.append({
                 "filename": out_name,
-                "meta": {"title": title, "domain": domain, "desc": desc, "type": "gather", "repo": repo_dir},
+                "meta": {"title": title, "domain": domain, "desc": desc, "type": "gather", "repo": repo_dir, "bucket_id": module},
                 "generator_callback": gen_cb,
                 "recall_callback": rec_cb
             })
@@ -753,7 +752,13 @@ def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
             "files": chunks
         }
     }
-@gather_bp.route('clear_quickpacks', methods=['POST'])
+from typing import TypedDict, List, Dict, Any, Literal
+
+class ClearQuickpacksResponse(TypedDict):
+    status: str
+    message: str
+
+@gather_bp.route('clear_quickpacks', methods=['POST'], response_schema=ClearQuickpacksResponse, docstring="[sync] Purges all temporary quickpack context exports and clears the ephemeral artifact ledger.")
 def api_clear_quickpacks(ctx):
     manifest_data = ctx.manifest.get("ctx", {})
     keys_to_delete = [k for k in manifest_data.keys() if 'quickpack_' in k or 'selection_' in k]
@@ -776,7 +781,12 @@ def api_clear_quickpacks(ctx):
     conn.commit()
 
     return jsonify({"status": "success", "message": f"Cleared {len(keys_to_delete)} quickpacks."})
-@gather_bp.route('pack_selection', methods=['POST'])
+from typing import TypedDict, List, Dict, Any
+
+class PackSelectionPayload(TypedDict):
+    items: List[Dict[str, str]]
+
+@gather_bp.route('pack_selection', methods=['POST'], request_schema=PackSelectionPayload, docstring="Compiles a specific list of files into a downloadable Quickpack context. 'items' should be a list of dicts with a 'filepath' key.")
 def api_gather_pack_selection(ctx):
     data = ctx.req.json or {}
     items = data.get('items', [])
@@ -812,7 +822,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             ctx.emit('pre_compile', is_full_sweep=needs_full_compile, forced_repos=forced_repos)
         except Exception as e:
             print(f"Warning: Pre-compile hooks failed: {str(e)}")
-        touched_buckets = []
+        touched_files = []
         if not needs_full_compile and not forced_repos:
             try:
                 if ledger_events:
@@ -820,11 +830,11 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                     changed_files = [e["filepath"] for e in ledger_events]
                     ctx.jobs.update_progress(f"Surgically evaluating {len(changed_files)} mutated file(s)...")
                     res = _surgically_update_manifest(workspace_id=ctx.workspace_id, files=changed_files, filepath=None, ledger_events=ledger_events)
-                    if res: touched_buckets.extend(res)
+                    if res: touched_files.extend(res)
                 else:
                     ctx.jobs.update_progress("No pending changes. Syncing extensions...")
                     res = _surgically_update_manifest(workspace_id=ctx.workspace_id, files=[], filepath=None)
-                    if res: touched_buckets.extend(res)
+                    if res: touched_files.extend(res)
             except Exception as e:
                 import traceback
                 print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
@@ -839,7 +849,7 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
             res = generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
-            if res: touched_buckets.extend(res)
+            if res: touched_files.extend(res)
 
         # Allow simple extensions (Citations, Notes) to synchronously integrate their contexts
         ctx.jobs.update_progress("Integrating static ecosystems...")
@@ -851,7 +861,24 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
         if delta_manifest:
             ctx.save_manifest(delta_manifest, is_full_compile=False)
-            touched_buckets.extend(list(delta_manifest.keys()))
+            touched_files.extend(list(delta_manifest.keys()))
+
+        # Map compiled output URIs back to their abstract architectural bucket IDs
+        logical_buckets = set()
+        final_manifest = ctx.manifest.get("ctx", {})
+        for filepath in touched_files:
+            entry = final_manifest.get(filepath) or delta_manifest.get(filepath)
+            if entry and isinstance(entry, dict):
+                meta = entry.get("meta", {})
+                repo = meta.get("repo")
+                b_id = meta.get("bucket_id")
+                if repo and b_id:
+                    logical_buckets.add(f"{repo}::{b_id}")
+                elif repo:
+                    logical_buckets.add(f"{repo}::main")
+
+        logical_buckets_list = list(logical_buckets)
+
         # Retrieve the final unified keys directly from the SSOT database
         manifest_keys = [r['filepath'] for r in get_connection("vfs_index", workspace_id=ctx.workspace_id).execute("SELECT filepath FROM manifest_ledger").fetchall()]
         if not manifest_keys:
@@ -861,10 +888,10 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             "message": "Base contexts generated successfully.",
             "artifact": {
                 "files": sorted(manifest_keys),
-                "touched_buckets": touched_buckets,
+                "touched_buckets": logical_buckets_list,
                 "is_full_sweep": needs_full_compile
             },
-            "next_kwargs": {"touched_buckets": touched_buckets if not needs_full_compile else None}
+            "next_kwargs": {"touched_buckets": logical_buckets_list if not needs_full_compile else None}
         }
     except Exception as e:
         import traceback
@@ -873,11 +900,24 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
     finally:
         if acquired:
             ws_lock.release()
+class RepoTemplateResponse(TypedDict):
+    repo_dir: str
+    title: str
+    domain: str
+    description: str
+    exts: List[str]
+    apply_ignore: bool
+    sub_buckets: List[Any]
 
-@gather_bp.route('repos/template', methods=['GET'])
+@gather_bp.route('repos/template', methods=['GET'], response_schema=RepoTemplateResponse, docstring="Returns the default configuration dictionary template required when appending a new target repository.")
 def api_repo_template(ctx):
     return jsonify(get_default_repo_template(""))
-@gather_bp.route('submit', methods=['POST'])
+class GatherSubmitPayload(TypedDict, total=False):
+    force_full: bool
+    target_repos: List[str]
+    start_step: str
+
+@gather_bp.route('submit', methods=['POST'], request_schema=GatherSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps.")
 def api_gather_submit(ctx):
     data = ctx.req.get_json(force=True, silent=True) or {}
     force_full = data.get("force_full", False)
@@ -1051,7 +1091,15 @@ def hook_gather_manifest_signatures(workspace_id=None, since_ts=0.0, **kwargs):
     for r in rows:
         ctx_sigs[r['filepath']] = r['timestamp'] if r['entry_json'] else None
     return {"ctx": ctx_sigs}
-@gather_bp.route('manifest/entry', methods=['GET'])
+class ManifestEntryQuery(TypedDict):
+    path: str
+
+class ManifestEntryResponse(TypedDict, total=False):
+    path: str
+    entry: Dict[str, Any]
+    status: str
+
+@gather_bp.route('manifest/entry', methods=['GET'], request_schema=ManifestEntryQuery, response_schema=ManifestEntryResponse, docstring="Fetches a single context manifest entry by context URI.")
 def api_gather_manifest_entry(ctx):
     """Surgically fetches a single manifest entry by context path."""
     path = ctx.req.args.get('path', '').strip()

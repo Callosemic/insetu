@@ -9,7 +9,42 @@ def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
 import os
 import json
 import subprocess
+import sys
+import shutil
 from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
+def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, text=True, **kwargs):
+    """
+    Universal binary execution wrapper resolving system PATH, venv directories,
+    and module CLI fallbacks across systemd, desktop, and isolated environments.
+    """
+    cmd_args = [cmd] if isinstance(cmd, str) else list(cmd)
+    if not cmd_args:
+        raise ValueError("Command list cannot be empty.")
+
+    bin_name = cmd_args[0]
+    resolved_bin = shutil.which(bin_name)
+
+    if not resolved_bin:
+        py_dir = Path(sys.executable).parent
+        ext = '.exe' if os.name == 'nt' else ''
+        candidate = py_dir / f"{bin_name}{ext}"
+        if candidate.exists():
+            resolved_bin = candidate.as_posix()
+
+    if resolved_bin:
+        full_cmd = [resolved_bin] + cmd_args[1:]
+    else:
+        module_name = bin_name.replace('-', '_')
+        full_cmd = [sys.executable, '-m', f"{module_name}.cli"] + cmd_args[1:]
+    return subprocess.run(
+        full_cmd,
+        cwd=cwd,
+        env=env,
+        check=check,
+        capture_output=capture_output,
+        text=text,
+        **kwargs
+    )
 from akasa.hooks import hooks
 import threading
 import io
@@ -829,9 +864,10 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
     }
 def sanitize_workspace_config(cfg):
     cfg.pop("_settings_schemas", None)
+    raw_targets = cfg.get("target_repos") if "target_repos" in cfg else cfg.pop("targets", [])
     valid_repos = []
     seen_dirs = set()
-    for repo in (cfg.get("target_repos") or []):
+    for repo in (raw_targets or []):
         if not repo or not repo.get("repo_dir") or not repo.get("repo_dir").strip():
             continue
 

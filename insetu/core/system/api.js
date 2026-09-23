@@ -276,7 +276,6 @@ class SSEPipeline {
     }
 }
 window.inSetu.sse = new SSEPipeline();
-window.inSetu.sse.connect();
 
 const networkManager = new NetworkHysteresisManager('/?t={t}', 3);
 let lastCacheCheck = 0;

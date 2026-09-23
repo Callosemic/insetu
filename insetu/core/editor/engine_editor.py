@@ -42,8 +42,7 @@ def get_preference(ctx):
         "writing_mode": bool(row.get('writing_mode')),
         "doc_type": row.get('doc_type')
     })
-
-@editor_bp.route('preference', methods=['POST'])
+@editor_bp.route('preference', methods=['POST'], docstring="[sync] Updates the editor writing mode and document type for a specific file.")
 def set_preference(ctx):
     data = ctx.req.json or {}
     filepath = data.get("filepath", "").strip()

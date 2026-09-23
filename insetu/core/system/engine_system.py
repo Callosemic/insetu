@@ -4,6 +4,7 @@ import sys
 import json
 import threading
 import time
+from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify
 from akasa.utils import load_config, save_json_config, load_json_config, get_workspace_physics, sniff_tenant_id
 import akasa.utils as utils
@@ -124,7 +125,263 @@ def host_identity_handshake(request=None, client_ip=None, config=None, **kwargs)
 def provide_vfs_ignores(workspace_id=None, **kwargs):
     """Host application declaration of directories the VFS should never traverse natively."""
     return ['.git', 'node_modules', '__pycache__', 'venv']
-@system_bp.route('deltas', methods=['GET'])
+@system_bp.bp.route('/api/system/openapi.json', methods=['GET'])
+def api_system_openapi():
+    """Phase 3 Tool Calling: Generates a real-time OpenAPI 3.0 specification from mounted SDK routes."""
+    from flask import current_app
+    from akasa.utils import typeddict_to_openapi
+    import re
+
+    paths = {}
+    # 1. Manually inject the bootstrap route since it lives outside the standard extension SDK
+    paths["/auth/bootstrap"] = {
+        "post": {
+            "summary": "Authenticate and retrieve runtime token",
+            "description": "Exchanges a Tailscale identity or static config token for an active execution token.",
+            "security": [],
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"token": {"type": "string", "description": "Optional static auth token from config.json"}}
+                        }
+                    }
+                }
+            },
+            "responses": {
+                "200": {
+                    "description": "Returns the active token.",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "status": {"type": "string"},
+                                    "token": {"type": "string", "description": "The X-InSetu-Token to use in subsequent requests."}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    paths["/download/{filename}"] = {
+        "get": {
+            "summary": "Universal Artifact Download Gateway",
+            "description": "Downloads contexts, artifacts, and vault files from the physical workspace.",
+            "parameters": [
+                {
+                    "name": "filename",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"}
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "Returns the raw binary or text file.",
+                    "content": {
+                        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+                    }
+                }
+            }
+        }
+    }
+
+    paths["/api/system/stream"] = {
+        "get": {
+            "summary": "Server-Sent Events (SSE) Telemetry",
+            "description": "Zero-latency UI updates for job progress and VFS mutations.",
+            "parameters": [
+                {"name": "token", "in": "query", "required": True, "schema": {"type": "string"}}
+            ],
+            "responses": {
+                "200": {
+                    "description": "Returns a text/event-stream.",
+                    "content": {"text/event-stream": {"schema": {"type": "string"}}}
+                }
+            }
+        }
+    }
+
+    paths["/api/system/panic"] = {
+        "post": {
+            "summary": "Simulate Kernel Panic",
+            "description": "Hard reboot of the OS process, setting the simulated panic flag.",
+            "responses": {
+                "200": {
+                    "description": "Initiating kernel panic.",
+                    "content": {"application/json": {"schema": {"type": "object", "properties": {"status": {"type": "string"}, "message": {"type": "string"}}}}}
+                }
+            }
+        }
+    }
+
+    # 2. Iterate through all registered Blueprints looking for our Akasa SDK 'route_schemas'
+    for bp_name, bp in current_app.blueprints.items():
+        if not hasattr(bp, 'route_schemas'):
+            continue
+        for url_rule, method_schemas in bp.route_schemas.items():
+            path_item = {}
+
+            # Extract path parameters from Werkzeug rule string (e.g. /api/<workspace_id>/...)
+            path_vars = re.findall(r'<([^>:]+:)?([^>]+)>', url_rule)
+            openapi_url = re.sub(r'<([^>:]+:)?([^>]+)>', r'{\2}', url_rule)
+
+            for method, meta in method_schemas.items():
+                method_lower = method.lower()
+                if method_lower == "options": continue
+                raw_doc = meta.get("docstring") or f"Endpoint for {bp_name}"
+                is_async_mutation = "[sync]" not in raw_doc
+                clean_doc = raw_doc.replace("[sync]", "").strip()
+
+                op_data = {
+                    "summary": f"{bp_name} {url_rule.split('/')[-1].replace('<', '').replace('>', '').replace(':', '_')}",
+                    "description": clean_doc,
+                    "responses": {}
+                }
+
+                # Hydrate 200 OK Response
+                if meta.get("response_schema"):
+                    op_data["responses"]["200"] = {
+                        "description": "Successful operation.",
+                        "content": {
+                            "application/json": {
+                                "schema": typeddict_to_openapi(meta["response_schema"])
+                            }
+                        }
+                    }
+                elif method_lower == "get" and url_rule.split('/')[-1] in ["fetch", "resolve"]:
+                    # Prevent JSON parse crashes for raw text endpoints
+                    op_data["responses"]["200"] = {
+                        "description": "Returns raw text/markdown content.",
+                        "content": {
+                            "text/plain": {"schema": {"type": "string"}}
+                        }
+                    }
+                else:
+                    op_data["responses"]["200"] = {
+                        "description": "Successful operation.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": True,
+                                    "properties": {
+                                        "status": {"type": "string"},
+                                        "message": {"type": "string"},
+                                        "error": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                # Only attach 202 Background Job schemas to POST/PUT/DELETE mutations if not explicitly disabled
+                if method_lower in ["post", "put", "delete"] and is_async_mutation:
+                    op_data["responses"]["202"] = {
+                        "description": "Asynchronous job accepted. You MUST poll /api/{workspace_id}/system/jobs/{job_id} until the 'status' is 'completed' or 'failed'.",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {"type": "string"},
+                                        "job_id": {"type": "string"}
+                                    },
+                                    "required": ["status", "job_id"]
+                                }
+                            }
+                        }
+                    }
+
+                parameters = []
+                # Inject Path Parameters automatically
+                for _, var_name in path_vars:
+                    parameters.append({
+                        "name": var_name,
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"}
+                    })
+                # Hydrate Request Schema if bound
+                if meta.get("request_schema"):
+                    schema_dict = typeddict_to_openapi(meta["request_schema"])
+                    if method_lower == "get":
+                        for prop_name, prop_details in schema_dict.get("properties", {}).items():
+                            parameters.append({
+                                "name": prop_name,
+                                "in": "query",
+                                "required": prop_name in schema_dict.get("required", []),
+                                "schema": prop_details
+                            })
+                    else:
+                        content_type = "application/json"
+                        def has_binary(schema):
+                            if schema.get("format") == "binary": return True
+                            for prop in schema.get("properties", {}).values():
+                                if prop.get("format") == "binary": return True
+                                if prop.get("type") == "array" and prop.get("items", {}).get("format") == "binary": return True
+                            return False
+
+                        if has_binary(schema_dict):
+                            content_type = "multipart/form-data"
+
+                        op_data["requestBody"] = {
+                            "content": {
+                                content_type: {
+                                    "schema": schema_dict
+                                }
+                            }
+                        }
+
+                if parameters:
+                    op_data["parameters"] = parameters
+
+                path_item[method_lower] = op_data
+
+            paths[openapi_url] = path_item
+    spec = {
+        "openapi": "3.0.0",
+        "info": {
+            "title": "inSetu Developer OS API",
+            "version": "1.0.0",
+            "description": "Automated LLM Tool Calling Specification"
+        },
+        "paths": paths,
+        "components": {
+            "securitySchemes": {
+                "InSetuToken": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-InSetu-Token",
+                    "description": "Execution credential required for API access."
+                }
+            }
+        },
+        "security": [
+            {
+                "InSetuToken": []
+            }
+        ]
+    }
+
+    return jsonify(spec)
+class DeltasQueryPayload(TypedDict):
+    since: float
+
+class SystemDeltasResponse(TypedDict):
+    timestamp: float
+    backend_boot_ts: float
+    is_compiling: bool
+    active_modules: List[str]
+    pending_modules: List[str]
+    mutations: List[Dict[str, Any]]
+    signatures: Dict[str, Any]
+
+@system_bp.route('deltas', methods=['GET'], request_schema=DeltasQueryPayload, response_schema=SystemDeltasResponse, docstring="Returns real-time file mutation logs, active/pending background compilation modules, and domain signatures modified since the 'since' timestamp.")
 def api_system_deltas(ctx):
     since = float(ctx.req.args.get('since', 0.0))
     return jsonify(get_system_deltas(ctx.workspace_id, since_ts=since))
@@ -255,7 +512,7 @@ def save_system_config(workspace_id, payload):
     # Emits a globally decoupled config invalidation event
     from akasa.hooks import hooks
     hooks.emit('config_mutated', workspace_id=workspace_id)
-@system_bp.route('reboot', methods=['POST'])
+@system_bp.route('reboot', methods=['POST'], docstring="[sync] Clean in-place process replacement to restart the OS daemon.")
 def api_system_reboot(ctx):
     """Clean in-place process replacement to restart the OS daemon."""
     import os, sys, threading, time
@@ -269,7 +526,11 @@ def api_system_reboot(ctx):
 
     threading.Thread(target=restart, daemon=True).start()
     return jsonify({"status": "success", "message": "Rebooting inSetu OS..."})
-@system_bp.route('config', methods=['GET', 'POST'])
+class SystemConfigPayload(TypedDict, total=False):
+    extensions: List[str]
+    target_repos: List[Dict[str, Any]]
+
+@system_bp.route('config', methods=['GET', 'POST'], request_schema={"POST": SystemConfigPayload}, docstring="[sync] Retrieves or updates the global workspace configuration.")
 def api_system_config(ctx):
     try:
         if ctx.req.method == 'GET':
@@ -294,17 +555,28 @@ def api_system_config(ctx):
         import traceback
         print(f"Config Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('topology', methods=['GET'])
+class TopologyResponse(TypedDict):
+    repos: List[str]
+    port: int
+    term_port: int
+    target_repos: List[Dict[str, Any]]
+    virtual_contexts: List[Dict[str, Any]]
+    category_order: List[str]
+    tab_order: List[str]
+    hidden_outputs: List[str]
+    config_missing: bool
+
+@system_bp.route('topology', methods=['GET'], response_schema=TopologyResponse, docstring="Retrieves current workspace bounds, registered repository paths, UI category ordering, and active ports.")
 def api_system_topology(ctx):
     try:
         from insetu.core.utils_core import get_sister_repos
         import os
         from pathlib import Path
         cfg = load_config(ctx.workspace_id)
-        targets = cfg.get("target_repos", []) or []
+        target_repos = cfg.get("target_repos", [])
         cfg_path, ws_root = get_workspace_physics(ctx.workspace_id)
 
-        for c in targets:
+        for c in target_repos:
             if not c: continue
             r_dir = c.get("repo_dir", "")
             for b in (c.get("sub_buckets") or []):
@@ -321,7 +593,7 @@ def api_system_topology(ctx):
             "repos": get_sister_repos(ctx.workspace_id),
             "port": int(os.environ.get("INSETU_PORT", cfg.get("port", 5005))),
             "term_port": cfg.get("term_port", 8181),
-            "targets": targets,
+            "target_repos": target_repos or [],
             "virtual_contexts": cfg.get("virtual_contexts", []),
             "category_order": cfg.get("category_order", []),
             "tab_order": cfg.get("tab_order", ["context", "edit", "tasks", "ctrl", "library"]),
@@ -332,7 +604,11 @@ def api_system_topology(ctx):
         import traceback
         print(f"Topology Route Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('manifest', methods=['GET'])
+class ManifestResponse(TypedDict):
+    vfs: Dict[str, Any]
+    ctx: Dict[str, Any]
+
+@system_bp.route('manifest', methods=['GET'], response_schema=ManifestResponse, docstring="Returns the twin single-source-of-truth manifests: 'vfs' (physical file bucket mapping) and 'ctx' (compiled context tree mapping).")
 def api_system_manifest(ctx):
     headers = {
         'Content-Type': 'application/json',
@@ -342,7 +618,10 @@ def api_system_manifest(ctx):
     vfs_manifest = next((m for m in hooks.emit('request_vfs_manifest', workspace_id=ctx.workspace_id) if m), {})
 
     return jsonify({"vfs": vfs_manifest, "ctx": ctx_manifest}), 200, headers
-@system_bp.route('workspaces/create', methods=['POST'])
+class WorkspaceCreatePayload(TypedDict):
+    id: str
+    workspace_root: str
+@system_bp.route('workspaces/create', methods=['POST'], request_schema=WorkspaceCreatePayload, docstring="[sync] Provisions and mounts an isolated workspace.")
 def api_create_workspace(ctx):
     try:
         data = ctx.req.json or {}
@@ -401,7 +680,9 @@ def api_create_workspace(ctx):
         import traceback
         print(f"Workspace Create Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('workspaces/delete', methods=['POST'])
+class WorkspaceDeletePayload(TypedDict):
+    id: str
+@system_bp.route('workspaces/delete', methods=['POST'], request_schema=WorkspaceDeletePayload, docstring="[sync] Permanently deletes a workspace and its tracking metadata.")
 def api_delete_workspace(ctx):
     try:
         data = ctx.req.json or {}
@@ -432,7 +713,14 @@ def api_delete_workspace(ctx):
         import traceback
         print(f"Workspace Delete Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
-@system_bp.route('jobs/<job_id>', methods=['GET'])
+class JobStatusResponse(TypedDict):
+    id: str
+    ext_name: str
+    status: str
+    message: str
+    artifact: Dict[str, Any]
+
+@system_bp.route('jobs/<job_id>', methods=['GET'], response_schema=JobStatusResponse, docstring="Polls the status of an asynchronous background job using the job_id returned by a 202 Accepted response. Status will be 'pending', 'processing', 'completed', or 'failed'.")
 def api_job_status(ctx, job_id):
     from akasa.db import get_connection
     try:
@@ -452,7 +740,13 @@ def api_job_status(ctx, job_id):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@system_bp.route('workspaces', methods=['GET', 'POST'])
+class WorkspacesResponse(TypedDict):
+    workspaces: Dict[str, Dict[str, str]]
+
+class WorkspacesSwitchPayload(TypedDict):
+    active_workspace: str
+
+@system_bp.route('workspaces', methods=['GET', 'POST'], request_schema={"POST": WorkspacesSwitchPayload}, response_schema=WorkspacesResponse, docstring="[sync] GET lists all mounted tenant workspaces. POST validates and switches session context to a target 'active_workspace'.")
 def api_workspaces(ctx):
     index_path = Path(utils._cwd).joinpath(".insetu", "system.json").as_posix()
 
@@ -476,7 +770,7 @@ def api_workspaces(ctx):
 
         # Stateless UDF: Session state managed by client
     return jsonify({"status": "success", "message": f"Validated workspace {new_active}"})
-@system_bp.route('config/test_bucketing', methods=['POST'])
+@system_bp.route('config/test_bucketing', methods=['POST'], docstring="[sync] Dry-runs sub-bucket regex and folder matching for a repository.")
 def api_system_config_test_bucketing(ctx):
     try:
         data = ctx.req.get_json(silent=True) or {}
@@ -513,8 +807,11 @@ def api_system_config_test_bucketing(ctx):
         import traceback
         print(f"Bucketing Test Error: {traceback.format_exc()}")
         return jsonify({"error": f"Server Error: {str(e)}"}), 500
+class ListLocalResponse(TypedDict):
+    current: str
+    dirs: List[str]
 
-@system_bp.route('fs/list_local', methods=['GET'])
+@system_bp.route('fs/list_local', methods=['GET'], response_schema=ListLocalResponse, docstring="[sync] Stateless directory explorer that reads absolute host paths for workspace mounts.")
 def api_list_local_host_dirs(ctx):
     """Stateless directory explorer that reads absolute host paths for workspace mounts."""
     target = ctx.req.args.get('path', '').strip()

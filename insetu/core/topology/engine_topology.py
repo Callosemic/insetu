@@ -132,10 +132,18 @@ def force_topology_scan(workspace_id=None, target_repos=None, **kwargs):
     hooks.emit('vfs_manifest_mutated', workspace_id=workspace_id)
     ctx = topology_bp.get_context(workspace_id)
     conn = ctx.db
-
     target_configs = ctx.config.get("target_repos", [])
+    active_repo_dirs = [c.get("repo_dir") for c in target_configs if c.get("repo_dir")]
+
     if target_repos:
         target_configs = [c for c in target_configs if c.get("repo_dir") in target_repos]
+    else:
+        if active_repo_dirs:
+            placeholders = ",".join(["?"] * len(active_repo_dirs))
+            conn.execute(f"DELETE FROM topology_ledger WHERE repo NOT IN ({placeholders})", tuple(active_repo_dirs))
+        else:
+            conn.execute("DELETE FROM topology_ledger")
+
     for repo_cfg in target_configs:
         repo_dir = repo_cfg.get("repo_dir")
         if not repo_dir: continue
@@ -437,19 +445,20 @@ def resolve_topology_buffer(workspace_id):
                 if phys_file.exists() and phys_file.is_file():
                     try: phys_mtime = phys_file.stat().st_mtime
                     except Exception: pass
-
             existing = conn.execute("SELECT timestamp FROM topology_ledger WHERE filepath = ?", (filepath,)).fetchone()
             is_genuinely_modified = True
-            if existing and phys_mtime is not None:
+
+            if phys_mtime is None:
+                is_genuinely_modified = False
+            elif existing:
                 if phys_mtime <= existing["timestamp"]:
                     is_genuinely_modified = False
 
-            conn.execute(
-                "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
-                (filepath, repo_dir, bucket_id, time.time())
-            )
-
             if is_genuinely_modified:
+                conn.execute(
+                    "INSERT OR REPLACE INTO topology_ledger (filepath, repo, bucket_id, timestamp) VALUES (?, ?, ?, ?)",
+                    (filepath, repo_dir, bucket_id, time.time())
+                )
                 dirty_repos.add(repo_dir)
                 dirty_buckets.add(f"{repo_dir}::{bucket_id}")
     conn.commit()
@@ -529,12 +538,11 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
         return {"message": "No topology events to resolve."}
 
     return {"message": f"Topology settled. Resolved {total_resolved} events."}
-
 def get_valid_workspace_files(repo_path, config, workspace_id=None):
     import os
-    import subprocess
     from pathlib import Path
     from akasa.utils import load_config
+    from insetu.core.utils_core import execute_binary
 
     live_cfg = load_config(workspace_id)
 
@@ -550,21 +558,20 @@ def get_valid_workspace_files(repo_path, config, workspace_id=None):
                 try: fb_files.add(p.relative_to(repo_path).as_posix())
                 except ValueError: pass
         return fb_files
-
     if archive_type == "repo":
         if os.path.exists(repo_path):
             try:
-                check_tree = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], 
+                check_tree = execute_binary(['git', 'rev-parse', '--is-inside-work-tree'], 
                                             capture_output=True, text=True, cwd=repo_path)
                 if check_tree.returncode != 0 or 'true' not in check_tree.stdout.lower():
-                    subprocess.run(['git', 'init'], capture_output=True, cwd=repo_path)
+                    execute_binary(['git', 'init'], capture_output=True, cwd=repo_path)
                     if not os.listdir(repo_path) or (len(os.listdir(repo_path)) == 1 and '.git' in os.listdir(repo_path)):
                         from akasa.vfs import execute_vfs_save
                         execute_vfs_save(workspace_id, f"vfs://{config.get('repo_dir')}/.gitkeep", "", data={"ignore_ledger": True})
             except Exception:
                 pass
         try:
-            result = subprocess.run(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], 
+            result = execute_binary(['git', 'ls-files', '--cached', '--others', '--exclude-standard'], 
                                     capture_output=True, text=True, check=True, cwd=repo_path)
             git_files = set(result.stdout.splitlines())
         except Exception:
@@ -648,32 +655,50 @@ def resolve_file_bucket(filepath, sub_buckets, repo_dir=""):
                         return b, None
     catch_all = next((b for b in sub_buckets if b.get("is_catch_all")), None)
     return catch_all, None
-def resolve_owning_workspaces(filepath=None):
-    """Deterministically maps a physical path back to all owning tenant workspaces."""
-    if not filepath: return set()
+def resolve_owning_workspaces(event_name, **kwargs):
+    """Domain-aware spatial router for OS lifecycle events."""
+    if event_name != 'vfs_mutated': return set()
+
+    mutations = kwargs.get('mutations', [])
+    origin_workspace_id = kwargs.get('workspace_id')
+    owning_workspaces = set()
+
     from akasa.utils import get_all_workspace_ids, get_workspace_physics, load_config
-    from insetu.core.utils_core import InSetuURI
+    from akasa.vfs import _resolve_physical_path
     from pathlib import Path
 
-    uri = InSetuURI(str(filepath))
-    raw_path_str = uri.path
-    is_abs = Path(raw_path_str).is_absolute()
-    naive_repo, naive_rel = uri.volume, uri.path
-    clean_fp = f"{naive_repo}/{naive_rel}".strip('/') if naive_rel else naive_repo
-    owning_workspaces = set()
-    for ws_id in get_all_workspace_ids():
-        try:
-            _, ws_root = get_workspace_physics(ws_id)
-            abs_ws_root = Path(ws_root).resolve().as_posix()
-            cfg = load_config(ws_id)
-            target_repos = cfg.get("target_repos", [])
-            repo_dirs = {r.get("repo_dir") for r in target_repos if r.get("repo_dir")}
+    all_ws_ids = get_all_workspace_ids()
 
-            if is_abs:
-                abs_target = Path(raw_path_str).resolve().as_posix()
+    for m in mutations:
+        filepath = m.get('filepath')
+        if not filepath: continue
+
+        # 1. Elevate the logical alias into an absolute physical identity
+        abs_target = None
+        if Path(filepath).is_absolute():
+            abs_target = Path(filepath).resolve().as_posix()
+        elif origin_workspace_id:
+            resolved = _resolve_physical_path(filepath, origin_workspace_id)
+            if resolved:
+                abs_target = Path(resolved).resolve().as_posix()
+
+        # If we cannot establish physical identity, default to origin to prevent cross-tenant leaks
+        if not abs_target:
+            if origin_workspace_id: owning_workspaces.add(origin_workspace_id)
+            continue
+
+        # 2. Map Physical Identity to All Workspaces
+        for ws_id in all_ws_ids:
+            try:
+                _, ws_root = get_workspace_physics(ws_id)
+                abs_ws_root = Path(ws_root).resolve().as_posix()
+                cfg = load_config(ws_id)
+                target_repos = cfg.get("target_repos", [])
+
                 if abs_target.startswith(abs_ws_root + '/') or abs_target == abs_ws_root:
                     owning_workspaces.add(ws_id)
                     continue
+
                 for repo in target_repos:
                     p_path = repo.get("physical_path")
                     if p_path:
@@ -681,11 +706,8 @@ def resolve_owning_workspaces(filepath=None):
                         if abs_target.startswith(abs_p + '/') or abs_target == abs_p:
                             owning_workspaces.add(ws_id)
                             break
-            else:
-                if naive_repo in repo_dirs or clean_fp in repo_dirs:
-                    owning_workspaces.add(ws_id)
-        except Exception:
-            continue
+            except Exception:
+                continue
 
     return owning_workspaces
 

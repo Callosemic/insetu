@@ -45,12 +45,12 @@ def extract_existing_comments(index_path, repo_path=None):
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
             live_comments = parse_text_for_comments(f.read())
-
     git_comments = {}
     if repo_path:
         try:
+            from insetu.core.utils_core import execute_binary
             rel_index = os.path.relpath(index_path, repo_path)
-            res = subprocess.run(['git', 'show', f'HEAD:{rel_index}'], capture_output=True, text=True, cwd=repo_path)
+            res = execute_binary(['git', 'show', f'HEAD:{rel_index}'], capture_output=True, text=True, cwd=repo_path)
             if res.returncode == 0:
                 git_comments = parse_text_for_comments(res.stdout)
         except Exception:

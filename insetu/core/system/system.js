@@ -589,13 +589,18 @@ export async function executeBootSequence() {
     console.log("[BOOT] Starting sequence...");
     if (window.ExtensionRegistry) window.ExtensionRegistry.isBooting = true;
     updateBootProgress("Security Handshake...");
-
     const authenticated = await executeSecurityHandshake();
     console.log("[BOOT] Security Handshake completed:", authenticated);
     if (!authenticated) {
         document.body.innerHTML = `<div style="font-family:monospace; color:var(--intent-danger); text-align:center; padding-top:20dvh;"><h2>❌ Access Denied</h2><p>Invalid framework credentials configuration.</p></div>`;
         return;
     }
+
+    // Connect SSE telemetry now that we have a valid auth token
+    if (window.inSetu.sse) {
+        window.inSetu.sse.connect();
+    }
+
     if (AppStore.getState().isOffline) {
         updateBootProgress("Offline Mode — Hydrating Cached Shell...");
         if (window.inSetu && window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {

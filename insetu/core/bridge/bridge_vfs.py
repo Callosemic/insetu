@@ -411,18 +411,18 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                                     err_str = "Tree-sitter detected a syntax error in the modified AST."
                             else:
                                 raise ImportError("Language not mapped for Tree-sitter.")
-
                         except ImportError:
                             # Graceful Fallback if Tree-sitter C-extensions are missing
                             if ext == '.py':
                                 ast.parse(new_content)
                             elif ext in ['.js', '.ts', '.mjs']:
+                                from insetu.core.utils_core import execute_binary
                                 try:
-                                    res = subprocess.run(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
+                                    res = execute_binary(['node', '--input-type=module', '-c'], input=new_content, capture_output=True, text=True, encoding='utf-8', timeout=5.0)
                                     if res.returncode != 0:
                                         syntax_error = True
                                         err_str = res.stderr.strip()
-                                except FileNotFoundError:
+                                except Exception:
                                     pass
                 except SyntaxError as e:
                     syntax_error = True

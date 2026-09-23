@@ -33,16 +33,40 @@ bridge_bp = InSetuExtension(
     schema=BRIDGE_SCHEMA,
     core=True
 )
+from typing import TypedDict, List
+class BridgeLedgerRecord(TypedDict):
+    patch_id: str
+    transaction_id: str
+    repo: str
+    filepath: str
+    search_block: str
+    replace_block: str
+    post_patch_hash: str
+    is_snapshot: int
+    timestamp: float
+    ttl_expires_at: float
+    patch_count: int
+    chunks_json: str
+
+class BridgeHistoryResponse(TypedDict):
+    history: List[BridgeLedgerRecord]
 
 # 2. REST API Routes (Formerly in routes_bridge.py)
-@bridge_bp.route('history', methods=['GET'])
+@bridge_bp.route('history', methods=['GET'], response_schema=BridgeHistoryResponse, docstring="Returns up to 100 historical patch and transaction receipts from the bridge ledger.")
 def bridge_history(ctx):
     """Phase C: Returns the ephemeral ledger history for the UI."""
     from flask import jsonify
     # Explicitly exclude the 'compressed_state' BLOB to prevent JSON serialization crashes
     records = ctx.db.execute("SELECT patch_id, transaction_id, repo, filepath, search_block, replace_block, post_patch_hash, is_snapshot, timestamp, ttl_expires_at, patch_count, chunks_json FROM bridge_ledger ORDER BY timestamp DESC LIMIT 100").fetchall()
     return jsonify({"history": [dict(r) for r in records]})
-@bridge_bp.route('revert', methods=['POST'])
+from typing import TypedDict, Literal, List, Dict
+
+class BridgeRevertPayload(TypedDict, total=False):
+    patch_id: str
+    transaction_id: str
+    target_state: Literal['initial', 'final']
+
+@bridge_bp.route('revert', methods=['POST'], request_schema=BridgeRevertPayload, docstring="Reverts a single patch or entire transaction to a specific state ('initial' or 'final').")
 def bridge_revert(ctx):
     """Phase 5: Forward-replay reversion. Handles both single-file and multi-file atomic transactions."""
     from flask import jsonify
@@ -129,8 +153,29 @@ def bridge_revert(ctx):
         ctx.db.commit()
 
     return jsonify({"status": "success", "message": f"Atomic revert complete. Reverted {reverted_count} file(s)."})
+from typing import TypedDict, List, Dict, Literal
 
-@bridge_bp.route('sync', methods=['POST'])
+class BridgeSyncPayload(TypedDict, total=False):
+    text: str
+    active_files: List[str]
+    dry_run: bool
+    pinned_repos: List[str]
+    allow_deep_search: bool
+    ignore_syntax: bool
+    confirmed_candidates: Dict[str, str]
+    force: bool
+@bridge_bp.route('sync', methods=['POST'], request_schema=BridgeSyncPayload, docstring=(
+    "Applies modifications to the VFS using the 'Yomama' Patch Protocol.\n\n"
+    "The 'text' parameter MUST strictly follow this exact format:\n"
+    "<<<<<<< FILE: path/to/file.ext\n"
+    "<<<<<<< SEARCH\n"
+    "[exact lines to match]\n"
+    "=======\n"
+    "[new lines to insert]\n"
+    ">>>>>>> REPLACE\n\n"
+    "Leave the SEARCH block blank for a genesis file. You MUST also provide the "
+    "'active_files' array containing the filepaths you are modifying."
+))
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
     data = ctx.req.json or {}
