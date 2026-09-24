@@ -44,6 +44,7 @@ Route handlers (`@my_ext_bp.route('path')`) and background workers (`@my_ext_bp.
 * **`ctx.sync_vfs_barrier(timeout=5.0)`** *(Method)*: Enqueues an event barrier sentinel onto `_VFS_WRITE_QUEUE` and halts the current thread until all preceding VFS write transactions physically commit.
 * **`ctx.jobs`** *(JobManager)*: Off-thread background execution dispatcher. Exposes `.submit(task_name, coalesce=False, **kwargs)` for immediate tasks. For ledger-scheduled execution, use `submit_job()` for recurring metronome tasks (`interval_ms > 0`) or `submit_one_shot_job()` for self-destructing delayed tasks (`delay_ms`).
     * **Step Chaining:** You may pass a reserved `_chain` dictionary (matching `JobChainPayload`) as a kwarg to `.submit()` to automatically sequence multiple background workers or trigger an `on_complete_hook` event upon final settlement.
+* **`resolve_dag_chain(ctx, hook_name)`** *(Helper)*: Queries event hook registrations (e.g. `register_compilation_steps`) and resolves a topologically sorted step chain array matching `ChainStepSchema` (`id`, `anchor` [`source`|`body`|`sink`], `order`, `ext_name`, `worker_name`, `depends_on`). Re-exported directly from `insetu.core.sdk`.
 
 ---
 
@@ -69,7 +70,7 @@ Extensions are strictly forbidden from relative-importing OS chassis functions. 
 * **`this.ui`**: `.openWorkspaceBrowser(options)`, `.openFolderBrowser(cb)`, `.setGlobalStatus(msg)`, `.viewTextBlob(title, content, suggestedFilename)`
 * **`this.sys`**: `.executeWorkspaceMutation(path, payload)`, `.executeSystemCompile()`, `.switchTab(tabId)`, `.refreshManifest()`
 * **`this.editor`**: `.getEditorContent()`, `.setEditorContent(text)`, `.insertTextAtCursor(text)`
-* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`
+* **`this.utils`**: `.slugify(str)`, `.fuzzyFilterObjects(arr, query)`, `.copyRawText(text)`, `.normalizeEntityData(data)`, `.extractManifestFiles(manifest, targetKey, domain)`, `.debounce(fn, ms)`, `.formatArtifactSize(meta)`, `.getScopedStorage(key, defaultVal, wsId)`, `.setScopedStorage(key, value, wsId)`, `.removeScopedStorage(key, wsId)`, `BucketAddress.fromFilepath(path, meta)`
 * **`.getOfflineMode(extName)`**: Retrieves the declarative offline mode capability (`"full"`, `"read_only"`, `"none"`) for a targeted extension.
 ### 3.2 Client Network Gateway (ADR 0016)
 
