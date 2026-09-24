@@ -26,7 +26,7 @@ These are fully built and compliant extensions currently operating within the sy
 * **Dependencies (`__depends__`):** `None`
 * **Data Containment:** Ephemeral (direct `.git/` inspection) with configuration states bound to tenant settings databases.
 * **Injection Surfaces:**
-    * Polymorphic Cards: Registers `git-push` and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
+    * Polymorphic Cards: Registers `git-push`, `git-sweep`, `git-state-continue`, `git-state-abort`, and `git-resolve-conflicts` actions inside the centralized Entity-Action Registry.
     * Core Hooks: `@hooks.on('compile_contexts')` to trigger JIT background diff asset compilation; returns `next_kwargs` (`touched_diffs`) for worker step chaining into `engine_flow.py`.
     * Configuration: Declares dynamic repo-level pull strategy selectors (`rebase`, `merge`, `ff_only`), as well as declarative `repoConfigOptions` (`git-repo-exclude`) and `bucketConfigOptions` (`git-exclude`).
 ### B. Citations (`engine_citations.py`)
