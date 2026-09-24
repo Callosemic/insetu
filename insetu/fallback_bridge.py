@@ -182,7 +182,7 @@ HTML_TEMPLATE = """
                 setInterval(async () => {
                     try {
                         const ping = await fetch('/auth/bootstrap', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', cache: 'no-store' });
-                        if (ping.ok) window.location.reload(true);
+                        if (ping.ok) window.location.href = '/';
                     } catch(err) {}
                 }, 1000);
             } catch (e) {
@@ -320,7 +320,7 @@ def fs_list():
     files = []
     for item in sorted(os.listdir(abs_dir)):
         # Hide internal Python files and Git noise
-        if item.startswith('__') or item == '.git':
+        if item in ('__pycache__', '.git'):
             continue
             
         if os.path.isdir(Path(abs_dir).joinpath(item).as_posix()):
@@ -345,26 +345,25 @@ def download(filepath):
 @app.route('/api/system/emergency_dump', methods=['POST'])
 def api_emergency_dump():
     """Zero-dependency hardcoded compiler that survives core config corruption."""
-    import os
     from datetime import datetime
     try:
+        import zipfile
         # Point to the repository root
         repo_root = Path(__file__).resolve().parent.parent.parent.as_posix()
-        out_file = "emergency_core_context.txt"
+        out_file = "emergency_core_context.zip"
         
         target_dirs = [
             "docs",
-            "insetu/kernel",
-            "insetu/core",
-            "insetu/static/js/core",
-            "insetu/static/vendor/sutram",
-            "insetu/static/vendor/yenvui",
-            "insetu/templates"
+            "akasa/akasa",
+            "insetu/insetu/core",
+            "insetu/insetu/extensions",
+            "insetu/insetu/static",
+            "insetu/insetu/templates"
         ]
         target_files = [
-            "insetu/app.py",
-            "insetu/cli.py",
-            "insetu/static/js/app.js",
+            "insetu/insetu/app.py",
+            "insetu/insetu/cli.py",
+            "insetu/insetu/fallback_bridge.py",
             "CODE_INDEX.md"
         ]
         
@@ -425,28 +424,56 @@ def api_emergency_dump():
         print(tree_str)
         print("---------------------------------------------\n")
 
-        # 3. Write tree structure and file contents to context dump
-        with open(out_file, "w", encoding="utf-8") as out:
-            out.write("============================================================\n")
-            out.write(f"INSETU EMERGENCY CORE CONTEXT ({datetime.now()})\n")
-            out.write("============================================================\n\n")
-            out.write("INCLUDED FILE STRUCTURE:\n")
-            out.write(tree_str + "\n\n")
-            out.write("============================================================\n")
+        # 3. Write tree structure and file contents to context dump as ZIP
+        with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as zf:
+            tree_content = (
+                "============================================================\n"
+                f"INSETU EMERGENCY CORE CONTEXT ({datetime.now()})\n"
+                "============================================================\n\n"
+                "INCLUDED FILE STRUCTURE:\n"
+                f"{tree_str}\n\n"
+            )
+            zf.writestr("00_FILE_STRUCTURE.txt", tree_content)
+            
+            buckets = {
+                "akasa.txt": [],
+                "vendor.txt": [],
+                "extensions.txt": [],
+                "core.txt": [],
+                "misc.txt": []
+            }
             
             for rel_path, filepath in matched_entries:
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as inf:
-                        content = inf.read()
-                    
-                    # Strip massive inline base64 source maps from vendor JS files to preserve LLM token context
-                    if filepath.endswith('.js'):
-                        import re
-                        content = re.sub(r'//#\s*sourceMappingURL=data:application/json;base64,[A-Za-z0-9+/=]+', '', content)
+                if "/vendor/" in rel_path or "vendor.json" in rel_path:
+                    buckets["vendor.txt"].append((rel_path, filepath))
+                elif rel_path.startswith("akasa/"):
+                    buckets["akasa.txt"].append((rel_path, filepath))
+                elif rel_path.startswith("insetu/insetu/extensions/"):
+                    buckets["extensions.txt"].append((rel_path, filepath))
+                elif "insetu/insetu/core/" in rel_path or "app.py" in rel_path or "cli.py" in rel_path or "fallback_bridge.py" in rel_path:
+                    buckets["core.txt"].append((rel_path, filepath))
+                else:
+                    buckets["misc.txt"].append((rel_path, filepath))
+            
+            import re
+            for bucket_name, entries in buckets.items():
+                if not entries: continue
+                bucket_content = []
+                for rel_path, filepath in entries:
+                    try:
+                        with open(filepath, 'r', encoding='utf-8') as inf:
+                            content = inf.read()
                         
-                    out.write(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
-                except Exception:
-                    pass
+                        # Strip massive inline base64 source maps from vendor JS files to preserve LLM token context
+                        if filepath.endswith('.js'):
+                            content = re.sub(r'//#\s*sourceMappingURL=data:application/json;base64,[A-Za-z0-9+/=]+', '', content)
+                            
+                        bucket_content.append(f"\n\n{'='*60}\n>>> FILE: {rel_path}\n{'='*60}\n\n{content}")
+                    except Exception:
+                        pass
+                
+                if bucket_content:
+                    zf.writestr(bucket_name, "".join(bucket_content))
                             
         return jsonify({"status": "success", "file": out_file})
     except Exception as e:

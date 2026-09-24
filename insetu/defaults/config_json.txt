@@ -2,6 +2,6 @@
     "instance_title": "inSetu Developer OS",
     "instance_emoji": "⚙️",
     "port": 5005,
-    "targets": [],
+    "target_repos": [],
     "extensions": []
 }

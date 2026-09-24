@@ -58,7 +58,7 @@ def enforce_token_gate():
     """Universal interceptor enforcing token verification on all REST paths."""
     # Always allow core landing, public assets, and the auth route to bypass checks
     # Expose the panic endpoint so the recovery OS button works even if JS crashes before the token handshake
-    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/recovery'] or request.path.startswith('/static/'):
+    if request.path in ['/', '/manifest.json', '/sw.js', '/favicon.ico', '/auth/bootstrap', '/api/system/panic', '/api/system/openapi.json', '/recovery'] or request.path.startswith('/static/'):
         return None
 
     # Check header first, fallback to query parameter for WebSockets
@@ -70,7 +70,6 @@ def load_workspace_extensions():
     from akasa.utils import load_config, _cwd
     import importlib
     import json
-    import os
 
     raw_extensions = set()
 
@@ -198,7 +197,6 @@ def load_workspace_extensions():
         except Exception as e:
             print(f"⚠️  Unexpected Mount Failure [{ext}]: {type(e).__name__} - {str(e)}")
     # Purge the config cache via decoupled event so the fully-mounted Extension DAG gets a chance to inject
-    from akasa.hooks import hooks
     hooks.emit('config_mutated')
 
 import operator
@@ -235,10 +233,8 @@ def satisfies_range(version_str, range_str):
     v_tuple = parse_semver(version_str)
     clauses = [c.strip() for c in re.split(r'&&|\s+', range_str) if c.strip()]
     return all(eval_single_clause(v_tuple, clause) for clause in clauses)
-
 def resolve_python_vendors(active_exts):
     """Statelessly scans core and extension vendor.json manifests to resolve and inject Python dependencies."""
-    import sys
     import json
 
     candidates = {}
@@ -323,7 +319,6 @@ def serve_extension_static(ext_name, filename):
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
     """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
-    import os
     from flask import send_file, Response
 
     # 1. Try bundled topology
@@ -348,11 +343,9 @@ def root_readme():
     if os.path.exists(readme_path):
         return send_file(readme_path, mimetype='text/markdown')
     return "Not found", 404
-
 @app.route('/' + 'manifest.json')
 def manifest():
     import json
-    import os
     from akasa.utils import load_config
     from akasa.extension import SettingsManager
 
@@ -391,7 +384,6 @@ def intercept_local_static_assets():
     Intercepts standard static asset routing routes before Flask's native 
     static file engine serves them, checking the local environment first.
     """
-    import os
     from flask import send_file
     from akasa.utils import get_workspace_physics
     path = request.path
@@ -406,7 +398,6 @@ def intercept_local_static_assets():
 @app.route('/favicon.ico')
 def favicon():
     from akasa.utils import load_config, get_workspace_physics
-    import os
     cfg = load_config()
     custom_icon_name = cfg.get("instance_favicon", "favicon.ico")
 
@@ -439,23 +430,17 @@ def api_system_stream():
                     yield ": heartbeat\n\n"
         finally:
             sse_bus.unsubscribe(q)
-
     return Response(event_stream(), content_type='text/event-stream', headers={
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no'
     })
-
 @app.route('/api/system/panic', methods=['POST'])
 def api_system_panic():
     """Hard reboot of the OS process, setting the simulated panic flag."""
-    import os
     import threading
     import time
     from flask import jsonify
     def crash_and_restart():
-        from akasa.hooks import hooks
-
         try: hooks.emit('system_shutdown')
         except Exception: pass
         time.sleep(0.5)
@@ -510,10 +495,21 @@ if is_werkzeug_worker or not is_cli_serve:
         hooks.emit('system_boot')
     except Exception as e:
         print(f"Warning: system_boot failed: {e}")
-
 def run_app():
     from akasa.utils import load_config
-    import os
+    import logging
+
+    class QuietPollingFilter(logging.Filter):
+        def filter(self, record):
+            if os.environ.get("INSETU_DEBUG") == "1":
+                return True
+            msg = record.getMessage()
+            # Filter standard polling heartbeat paths and manifest lookups
+            if any(p in msg for p in ['/system/deltas', '/system/jobs/', '/gather/manifest/entry', '/git/sweep/status']):
+                return False
+            return True
+
+    logging.getLogger('werkzeug').addFilter(QuietPollingFilter())
 
     cfg = load_config()
     if "INSETU_PORT" not in os.environ:
