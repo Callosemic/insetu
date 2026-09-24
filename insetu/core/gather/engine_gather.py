@@ -9,7 +9,7 @@ import uuid
 import concurrent.futures
 from flask import jsonify
 from akasa.utils import get_workspace_physics, generate_ascii_tree
-from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path
+from insetu.core.utils_core import evaluate_circuit_breaker, get_default_repo_template, resolve_logical_path, get_repo_path, InSetuURI
 from insetu.core.topology.engine_topology import resolve_file_bucket
 from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
@@ -149,7 +149,6 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
     """Stage 2 Slew Limiter: Catches resolved topology and schedules a delayed RAG compilation."""
     if not events: return
 
-    from akasa.db import get_connection
     conn = get_connection('workers', workspace_id=workspace_id)
     # The delayed compilation job ID. We use a static ID per workspace to coalesce updates.
     job_id = f"cmp_del_{workspace_id}"
@@ -162,9 +161,8 @@ def handle_topology_resolved(workspace_id=None, dirty_repos=None, dirty_buckets=
             old_events = old_args.get('ledger_events', [])
             def _get_fp(item):
                 raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
-                from akasa.utils import parse_uri
-                repo, rel = parse_uri(raw_fp)
-                clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
+                uri = InSetuURI.from_any(raw_fp)
+                clean_fp = str(uri)
                 if raw_fp.endswith('/') and not clean_fp.endswith('/'):
                     clean_fp += '/'
                 return clean_fp
@@ -476,9 +474,8 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
             raw_fp = item['filepath'] if isinstance(item, dict) and 'filepath' in item else str(item)
             m_type = item.get('mutation_type', default_op) if isinstance(item, dict) else default_op
 
-            from akasa.utils import parse_uri
-            repo, rel = parse_uri(raw_fp)
-            clean_fp = f"vfs://{repo}/{rel}" if rel else f"vfs://{repo}"
+            uri = InSetuURI.from_any(raw_fp)
+            clean_fp = str(uri)
 
             if raw_fp.endswith('/') and not clean_fp.endswith('/'):
                 clean_fp += '/'
@@ -511,16 +508,12 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         if not ledger_events:
             return
 
-        from insetu.core.utils_core import InSetuURI
         affected_repos = set()
         for e in ledger_events:
             fp = e.get('filepath', '') if isinstance(e, dict) else str(e)
-            uri = InSetuURI(fp)
-            if uri.repo:
-                affected_repos.add(uri.repo)
-            else:
-                parts = uri.path.split('/', 1)
-                if len(parts) > 0: affected_repos.add(parts[0])
+            repo = InSetuURI.from_any(fp).repo
+            if repo:
+                affected_repos.add(repo)
         # Collect context declarations across the OS
         declarations = []
         for res in ctx.emit('gather_declare_topology', ledger_events=ledger_events):
@@ -872,7 +865,6 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         err_trace = traceback.format_exc()
         print(f"CRITICAL COMPILER ERROR:\n{err_trace}")
         try:
-            from akasa.hooks import hooks
             hooks.emit_background('system_error', source="Gather:Compile", error_type=type(e).__name__, message=str(e), traceback=err_trace, payload=str(kwargs), workspace_id=ctx.workspace_id)
         except Exception: pass
         raise e
