@@ -698,7 +698,7 @@ export class InSetuExtGitCtrl extends InSetuElement {
             },
             onError: (err) => {
                 this.activePullJobId = null;
-                if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('tip of your current branch is behind')) {
+                if (err.message.includes('fetch first') || err.message.includes('contains work that you do not have locally') || err.message.includes('non-fast-forward') || err.message.includes('branch tip is behind') || err.message.includes('Updates were rejected')) {
                     this.remoteConflict = true;
                     this.remoteModalOpen = true;
                 } else {
@@ -873,6 +873,64 @@ window.ExtensionRegistry.registerExtension('git', {
             intent: 'highlight',
             order: 10,
             emitEvent: (data) => ({ name: 'insetu:git:sweep-repo', detail: { repoDir: data.repoDir } })
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-state-continue',
+            label: 'Continue',
+            icon: '▶️',
+            intent: 'success',
+            order: 6,
+            match: (data) => {
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.pending_operation && (!status.conflicts || status.conflicts.length === 0);
+            },
+            onClick: async (data, e) => {
+                try {
+                    const res = await window.inSetu.api.post('git/resolve_state', { repo: data.repoDir, action: 'continue' });
+                    if (res.ok) {
+                        const resData = await res.json();
+                        window.inSetu.utils.pollJob(resData.job_id, {
+                            onComplete: () => {
+                                alert(`✅ Successfully continued operation in ${data.repoDir}.`);
+                            },
+                            onError: (err) => alert(`❌ Failed to continue:\n\n${err.message}`)
+                        });
+                    }
+                } catch (err) {
+                    alert("Network error: " + err.message);
+                }
+            }
+        },
+        {
+            targetEntity: 'repo',
+            id: 'git-state-abort',
+            label: 'Abort',
+            icon: '🛑',
+            intent: 'danger',
+            order: 7,
+            match: (data) => {
+                const status = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir];
+                return status && status.pending_operation;
+            },
+            onClick: async (data, e) => {
+                const op = window.inSetu?.stores?.Git?.getState?.()?.reposStatus?.[data.repoDir]?.pending_operation || 'operation';
+                if (!confirm(`Abort the current ${op} for ${data.repoDir}? All conflict resolutions will be lost.`)) return;
+                try {
+                    const res = await window.inSetu.api.post('git/resolve_state', { repo: data.repoDir, action: 'abort' });
+                    if (res.ok) {
+                        const resData = await res.json();
+                        window.inSetu.utils.pollJob(resData.job_id, {
+                            onComplete: () => {
+                                alert(`✅ Successfully aborted ${op} in ${data.repoDir}.`);
+                            },
+                            onError: (err) => alert(`❌ Failed to abort:\n\n${err.message}`)
+                        });
+                    }
+                } catch (err) {
+                    alert("Network error: " + err.message);
+                }
+            }
         },
         {
             targetEntity: 'repo',

@@ -8,7 +8,7 @@ from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.utils import get_workspace_physics
 from akasa.hooks import hooks
-from insetu.core.utils_core import get_repo_path
+from insetu.core.utils_core import get_repo_path, execute_binary
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
     env = os.environ.copy()
@@ -43,7 +43,6 @@ def execute_git(*args_tuple, **kwargs):
             return ctx.exec.run(cmd, volume=target_str, check=check, env=env, **kwargs)
     else:
         # Fallback for purely decoupled physical executions
-        from insetu.core.utils_core import execute_binary
         kwargs.setdefault('capture_output', True)
         kwargs.setdefault('text', True)
         return execute_binary(cmd, cwd=target_str, check=check, env=env, **kwargs)
@@ -450,36 +449,53 @@ def api_git_sweep_status(ctx):
 def _background_sweep_push(ctx, selections, message, **kwargs):
     ctx.sync_vfs_barrier()
     output_log = ""
+    has_errors = False
 
-    try:
-        for repo, files in selections.items():
-            if not files: continue
-            ctx.jobs.update_progress(f"Pushing {repo}...")
+    for repo, files in selections.items():
+        if not files: continue
+        ctx.jobs.update_progress(f"Pushing {repo}...")
 
-            repo_path = get_repo_path(repo, ctx.workspace_id)
-            if not os.path.exists(repo_path): continue
+        repo_path = get_repo_path(repo, ctx.workspace_id)
+        if not os.path.exists(repo_path): continue
+
+        try:
             # Guarantee topology is perfectly mapped before staging
             from insetu.core.cartographer.cartographer import map_repositories
             map_repositories(ctx.workspace_id)
             execute_git(repo_path, ['add'] + files)
-            execute_git(repo_path, ['commit', '-m', message])
 
+            # Ensure we only commit if there are actually staged files to prevent empty-commit crashes
+            status_res = execute_git(repo_path, ['status', '--porcelain'], check=False)
+            if status_res.stdout.strip():
+                execute_git(repo_path, ['commit', '-m', message])
             try:
                 execute_git(repo_path, ['push'])
             except subprocess.CalledProcessError as e:
                 err_out = e.stderr or e.stdout
                 err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else str(err_out)
 
-                if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                    execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
+                if "non-fast-forward" in err_str or "fetch first" in err_str or "Updates were rejected" in err_str:
+                    output_log += f"⚠️ {repo}: Push rejected (remote changes pending). Please pull first.\n"
+                    has_errors = True
+                    continue
+                elif "has no upstream branch" in err_str or "set-upstream" in err_str or "setUpstream" in err_str:
+                    curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
+                    if curr_branch:
+                        execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
+                    else:
+                        raise RuntimeError(f"Cannot set upstream: detached HEAD state.")
                 else:
                     raise e
             output_log += f"✅ {repo}: Pushed {len(files)} files.\n"
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode('utf-8', errors='replace') if hasattr(e, 'stderr') and isinstance(e.stderr, bytes) else (getattr(e, 'stderr', None) or str(e))
+            output_log += f"❌ {repo} Error: {err}\n"
+            has_errors = True
 
-        return {"message": output_log.strip(), "artifact": {"git_state_mutated": True}}
-    except subprocess.CalledProcessError as e:
-        err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
-        raise RuntimeError(f"{repo} Error: {err}")
+    if has_errors:
+        return {"message": output_log.strip() + "\n\n⚠️ Some repositories failed to push. Please check their individual Git Control tabs.", "artifact": {"git_state_mutated": True}}
+
+    return {"message": output_log.strip(), "artifact": {"git_state_mutated": True}}
 class GitSweepPushPayload(TypedDict):
     selections: dict
     message: str
@@ -582,7 +598,6 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
         if status_res.stdout.strip():
             execute_git(repo_path, ['commit', '-m', message])
             committed = True
-
         try:
             push_res = execute_git(repo_path, ['push'])
             output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
@@ -590,10 +605,15 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
             err_out = e.stderr or e.stdout
             err_str = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
 
-            # Auto-heal missing upstream branches
-            if "has no upstream branch" in err_str or "setUpstream" in err_str:
-                push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
-                output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+            if "non-fast-forward" in err_str or "fetch first" in err_str or "Updates were rejected" in err_str:
+                raise RuntimeError(f"Push rejected: The remote branch has changes you don't have locally. Please pull first.")
+            elif "has no upstream branch" in err_str or "set-upstream" in err_str or "setUpstream" in err_str:
+                curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip()
+                if curr_branch:
+                    push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
+                    output = push_res.stdout + ("\n" + push_res.stderr if push_res.stderr else "")
+                else:
+                    raise RuntimeError("Cannot set upstream: repository is in detached HEAD state.")
             else:
                 raise e
 
@@ -661,6 +681,25 @@ def api_git_status(ctx):
             if check_git.returncode == 0 and 'true' in check_git.stdout.lower():
                 curr_res = execute_git(repo_path, ['branch', '--show-current'], check=False)
                 current_branch = curr_res.stdout.strip()
+                git_dir = repo_path / '.git'
+                pending_operation = None
+                if not current_branch:
+                    if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
+                        try:
+                            head_name = (git_dir / 'rebase-merge' / 'head-name').read_text().strip()
+                            current_branch = f"REBASING {head_name.replace('refs/heads/', '')}"
+                        except Exception:
+                            current_branch = "REBASING"
+                    elif (git_dir / 'MERGE_HEAD').exists():
+                        current_branch = "MERGING"
+                    else:
+                        current_branch = "DETACHED HEAD"
+
+                if 'REBASING' in current_branch or (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
+                    pending_operation = "rebase"
+                elif 'MERGING' in current_branch or (git_dir / 'MERGE_HEAD').exists():
+                    pending_operation = "merge"
+
                 br_res = execute_git(repo_path, ['branch', '--format=%(refname:short)'], check=False)
                 branches = [b.strip() for b in br_res.stdout.splitlines() if b.strip()]
                 ahead_behind = ""
@@ -670,7 +709,7 @@ def api_git_status(ctx):
 
                     # 1. Verify a remote exists and has an online network protocol
                     has_remote = bool(remotes_out.strip())
-                    is_online = any(proto in remotes_out for proto in ['http://', 'https://', 'git@', 'ssh://'])
+                    is_online = any(proto in remotes_out for proto in ['http://', 'https://', 'git@', 'ssh://', 'github.com', 'gitlab.com'])
 
                     if not has_remote or not is_online:
                         ahead_behind = "☁️ Local Only"
@@ -699,13 +738,61 @@ def api_git_status(ctx):
                     conflicts = [line[3:] for line in status_res.stdout.splitlines() if len(line) >= 2 and line[:2] in ('DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU')]
                 except Exception:
                     conflicts = []
-
-                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind, "conflicts": conflicts, "has_remote": has_remote}
+                repos_status[repo_dir] = {"is_git": True, "current": current_branch, "branches": branches, "sync_status": ahead_behind, "conflicts": conflicts, "has_remote": has_remote, "pending_operation": pending_operation}
             else:
                 repos_status[repo_dir] = {"is_git": False}
         except Exception:
             repos_status[repo_dir] = {"is_git": False}
     return jsonify({"status": "success", "repos": repos_status})
+@git_bp.worker("resolve_state_task")
+def _background_resolve_state(ctx, repo, action, **kwargs):
+    ctx.jobs.update_progress(f"Executing {action} for {repo}...")
+    repo_path = get_repo_path(repo, ctx.workspace_id)
+    git_dir = Path(repo_path) / '.git'
+    is_rebase = (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists()
+    is_merge = (git_dir / 'MERGE_HEAD').exists()
+
+    try:
+        if action == "abort":
+            if is_rebase:
+                execute_git(repo_path, ['rebase', '--abort'])
+            elif is_merge:
+                execute_git(repo_path, ['merge', '--abort'])
+            else:
+                raise RuntimeError("No active rebase or merge detected to abort.")
+            return {"message": "Operation aborted successfully.", "artifact": {"git_state_mutated": True}}
+
+        elif action == "continue":
+            if is_rebase:
+                env = get_headless_git_env()
+                # GIT_EDITOR=true bypasses the interactive text editor prompt during a headless rebase
+                env['GIT_EDITOR'] = 'true'
+                ctx.exec.run(['git', '--no-optional-locks', 'rebase', '--continue'], cwd=repo_path, check=True, env=env)
+            elif is_merge:
+                execute_git(repo_path, ['commit', '--no-edit'])
+            else:
+                raise RuntimeError("No active rebase or merge detected to continue.")
+            return {"message": "Operation continued successfully.", "artifact": {"git_state_mutated": True}}
+    except subprocess.CalledProcessError as e:
+        err_str = e.stderr.decode('utf-8', errors='replace') if hasattr(e, 'stderr') and isinstance(e.stderr, bytes) else (getattr(e, 'stderr', None) or str(e))
+        if not err_str and hasattr(e, 'stdout') and e.stdout:
+            err_str = e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else str(e.stdout)
+        raise RuntimeError(f"Git Error: {err_str}")
+
+class GitResolveStatePayload(TypedDict):
+    repo: str
+    action: str
+
+@git_bp.route('resolve_state', methods=['POST'], request_schema=GitResolveStatePayload, docstring="Continues or aborts an active rebase/merge state.")
+def api_git_resolve_state(ctx):
+    data = ctx.req.json or {}
+    repo = data.get('repo')
+    action = data.get('action')
+    if not repo or action not in ('continue', 'abort'): return jsonify({"error": "Invalid payload"}), 400
+
+    job_id = ctx.jobs.submit("resolve_state_task", repo=repo, action=action, job_category="ui_blocking")
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
+
 @git_bp.worker("init_task")
 def _background_git_init(ctx, repo, branch, **kwargs):
     ctx.jobs.update_progress(f"Initializing Git repository for {repo}...")
@@ -786,6 +873,8 @@ def _background_git_fetch_preview(ctx, repo, **kwargs):
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         if "could not read Username" in err_str or "No such device" in err_str:
             raise RuntimeError("Authentication failed. Headless Git requires SSH URLs (git@github.com:...) instead of HTTPS, or a cached credential helper.")
+        if "non-fast-forward" in err_str or "fetch first" in err_str or "Updates were rejected" in err_str:
+            raise RuntimeError("Push rejected (non-fast-forward): The remote branch contains work you do not have locally. Please pull and merge.")
         raise RuntimeError(err_str)
 @git_bp.route('fetch_preview', methods=['POST'], request_schema=GitRepoPayload, docstring="Fetches the remote repository and previews incoming commits and changes without pulling.")
 def api_git_fetch_preview(ctx):
@@ -821,8 +910,7 @@ def _background_git_pull(ctx, repo, strategy=None, **kwargs):
     remote = execute_git(repo_path, ['config', f'branch.{curr_branch}.remote'], check=False).stdout.strip() or 'origin'
     merge = execute_git(repo_path, ['config', f'branch.{curr_branch}.merge'], check=False).stdout.strip()
     remote_branch = merge.replace('refs/heads/', '') if merge.startswith('refs/heads/') else curr_branch
-
-    args = ['pull']
+    args = ['pull', '--autostash']
     if strategy == "rebase": args.append('--rebase')
     elif strategy == "merge": args.append('--no-rebase')
     elif strategy == "ff_only": args.append('--ff-only')
@@ -869,24 +957,24 @@ def _background_git_add_remote(ctx, repo, remote_url, resolution=None, **kwargs)
             execute_git(repo_path, ['remote', 'set-url', 'origin', remote_url])
         else:
             execute_git(repo_path, ['remote', 'add', 'origin', remote_url])
+        curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip() or 'main'
 
         if resolution == "force":
             ctx.jobs.update_progress("Force pushing to overwrite remote...")
-            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD', '--force'])
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch, '--force'])
             return push_res.stdout + push_res.stderr
         elif resolution == "pull":
             ctx.jobs.update_progress("Pulling and merging unrelated histories...")
             # Fetch first, then merge allowing unrelated histories
-            curr_branch = execute_git(repo_path, ['branch', '--show-current'], check=False).stdout.strip() or 'main'
             execute_git(repo_path, ['pull', 'origin', curr_branch, '--allow-unrelated-histories', '--no-edit', '--no-rebase'], timeout=30)
 
             ctx.jobs.update_progress("Pushing merged history to remote...")
-            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
             return push_res.stdout + push_res.stderr
         else:
             # Standard push
             ctx.jobs.update_progress("Pushing initial commit to remote...")
-            push_res = execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
+            push_res = execute_git(repo_path, ['push', '-u', 'origin', curr_branch])
             return push_res.stdout + push_res.stderr
 
     except subprocess.CalledProcessError as e:
