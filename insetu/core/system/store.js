@@ -79,4 +79,19 @@ export const AppStore = createExtensionStore('App', {
     // resetState is injected by the factory automatically
 });
 window.inSetu.stores.App = AppStore;
+// Centralized Invalidation Listener (ADR 0103)
+window.addEventListener('insetu:compile-step-complete', (e) => {
+    const artifact = e.detail?.artifact || {};
+    const cleared = artifact.cleared_buckets || artifact.touched_buckets || [];
+    const isFull = artifact.is_full_sweep || false;
+    AppStore.setState(state => {
+        const newBuckets = new Set(state.dirtyBuckets || []);
+        if (isFull) {
+            newBuckets.clear();
+        } else if (Array.isArray(cleared)) {
+            cleared.forEach(bKey => newBuckets.delete(bKey));
+        }
+        return { dirtyBuckets: newBuckets };
+    });
+});
 

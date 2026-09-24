@@ -529,11 +529,9 @@ def _surgically_update_manifest(workspace_id=None, files=None, filepath=None, **
         # Circuit Breaker Evaluation
         total_known = len(declarations)
         total_dirty = sum(1 for d in declarations if d.get('recall_callback') and d['recall_callback'](ledger_events) is not None)
-
         if evaluate_circuit_breaker(total_dirty, total_known, threshold=0.5):
             print(f"⚠️ Circuit Breaker Tripped: {total_dirty}/{total_known} contexts touched. Promoting to Full Sweep.")
-            generate_context_file(workspace_id=workspace_id, target_repos=list(affected_repos))
-            return
+            return generate_context_file(workspace_id=workspace_id, target_repos=list(affected_repos))
 
         touched_manifest = {}
         dirty = False
@@ -796,13 +794,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
 
         paths = ctx.paths
         manifest_data = ctx.manifest.get("ctx", {})
-
         forced_repos = target_repos or []
-        if isinstance(force_full, list):
-            forced_repos = force_full
-            needs_full_compile = False
-        else:
-            needs_full_compile = force_full or not manifest_data
+        needs_full_compile = force_full or not manifest_data
 
         ctx.jobs.update_progress("Running pre-compile hooks...")
         try:
@@ -826,13 +819,8 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                 import traceback
                 print(f"Warning: Differential compile failed, falling back to full sweep: {e}\n{traceback.format_exc()}")
                 needs_full_compile = True
-
         if needs_full_compile or forced_repos:
             sweep_label = "Full Sweep" if needs_full_compile else f"Targeted Sweep: {forced_repos}"
-
-            if force_full != "compile_only":
-                ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
-                ctx.emit('force_topology_scan', target_repos=None if needs_full_compile else forced_repos)
 
             ctx.jobs.update_progress(f"Compiling context payloads ({sweep_label})...")
             res = generate_context_file(ctx.workspace_id, target_repos=None if needs_full_compile else forced_repos)
@@ -849,20 +837,16 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
         if delta_manifest:
             ctx.save_manifest(delta_manifest, is_full_compile=False)
             touched_files.extend(list(delta_manifest.keys()))
-
         # Map compiled output URIs back to their abstract architectural bucket IDs
+        from insetu.core.utils_core import BucketAddress
         logical_buckets = set()
         final_manifest = ctx.manifest.get("ctx", {})
         for filepath in touched_files:
             entry = final_manifest.get(filepath) or delta_manifest.get(filepath)
             if entry and isinstance(entry, dict):
                 meta = entry.get("meta", {})
-                repo = meta.get("repo")
-                b_id = meta.get("bucket_id")
-                if repo and b_id:
-                    logical_buckets.add(f"{repo}::{b_id}")
-                elif repo:
-                    logical_buckets.add(f"{repo}::main")
+                addr = BucketAddress.from_uri(filepath, meta=meta)
+                logical_buckets.add(addr.key)
 
         logical_buckets_list = list(logical_buckets)
 
@@ -876,13 +860,19 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
             "artifact": {
                 "files": sorted(manifest_keys),
                 "touched_buckets": logical_buckets_list,
+                "cleared_buckets": logical_buckets_list,
                 "is_full_sweep": needs_full_compile
             },
             "next_kwargs": {"touched_buckets": logical_buckets_list if not needs_full_compile else None}
         }
     except Exception as e:
         import traceback
-        print(f"CRITICAL COMPILER ERROR:\n{traceback.format_exc()}")
+        err_trace = traceback.format_exc()
+        print(f"CRITICAL COMPILER ERROR:\n{err_trace}")
+        try:
+            from akasa.hooks import hooks
+            hooks.emit_background('system_error', source="Gather:Compile", error_type=type(e).__name__, message=str(e), traceback=err_trace, payload=str(kwargs), workspace_id=ctx.workspace_id)
+        except Exception: pass
         raise e
     finally:
         if acquired:
@@ -899,52 +889,6 @@ class RepoTemplateResponse(TypedDict):
 @gather_bp.route('repos/template', methods=['GET'], response_schema=RepoTemplateResponse, docstring="Returns the default configuration dictionary template required when appending a new target repository.")
 def api_repo_template(ctx):
     return jsonify(get_default_repo_template(""))
-class GatherSubmitPayload(TypedDict, total=False):
-    force_full: bool
-    target_repos: List[str]
-    start_step: str
-
-@gather_bp.route('submit', methods=['POST'], request_schema=GatherSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps.")
-def api_gather_submit(ctx):
-    data = ctx.req.get_json(force=True, silent=True) or {}
-    force_full = data.get("force_full", False)
-    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
-
-    # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
-    # Guardrail: Ignore ghost jobs older than 5 minutes to prevent infinite frontend polling loops.
-    import time
-    cutoff = time.time() - 300.0
-    existing_job = w_conn.execute(
-        "SELECT id FROM immediate_jobs WHERE callback_name IN ('compile_contexts', 'compile_diffs_task', 'compile_workflows_task') AND status IN ('pending', 'processing') AND updated_at > ?", 
-        (cutoff,)
-    ).fetchone()
-    if existing_job:
-        return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to active compilation."}), 202
-
-    ordered_steps = get_ordered_compilation_steps(ctx)
-
-    start_step = data.get("start_step")
-    if start_step:
-        try:
-            start_idx = next(i for i, s in enumerate(ordered_steps) if s['id'] == start_step)
-            ordered_steps = ordered_steps[start_idx:]
-        except StopIteration:
-            pass
-    if not ordered_steps:
-        return jsonify({"error": "No compilation steps registered."}), 400
-
-    payload = {"force_full": force_full}
-    if "target_repos" in data:
-        payload["target_repos"] = data["target_repos"]
-
-    job_id = ctx.jobs.submit_chain(
-        ordered_steps, 
-        on_complete_hook="compilation_sequence_complete", 
-        job_category="ui_blocking", 
-        **payload
-    )
-
-    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks.on('register_compilation_steps')
 def _register_gather_step(workspace_id=None, **kwargs):
     return [{

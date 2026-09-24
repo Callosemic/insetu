@@ -1,4 +1,4 @@
-import { AppStore } from '/static/extensions/system/store.js';
+import { AppStore, StatusStore } from '/static/extensions/system/store.js';
 import { SutramDB } from '/static/vendor/sutram/js/offline.js';
 import '/static/vendor/sutram/js/app_shell.js';
 export function bootServiceWorker() {
@@ -208,6 +208,7 @@ let warmedVfsSignatures = {};
 async function checkManifestVersion() {
     if (!window.BOOT_COMPLETE) return;
     if (window.inSetu?.stores?.App?.getState()?.isReconciling) return; // Wait for outbox drain
+    if (window.inSetu?.stores?.App?.getState()?.isPipelineActive) return; // Yield to active compilation DAG
 
     const activeWs = window.inSetu.utils.getActiveWorkspace();
     const nowMs = Date.now();
@@ -450,10 +451,6 @@ window.ExtensionRegistry.startMetronome(
 );
 import './api.js'; // Mount explicit API client and network interceptors
 import { createJobPoller } from '/static/vendor/sutram/js/poller.js';
-// Define the Job Polling Subroutine using the abstracted kernel
-const _basePoller = createJobPoller({
-    get: async (path) => window.inSetu.api.workspace.get('system/' + path)
-});
 // ADR 0017: Wrap the global poller to statelessly swallow callbacks and pin requests to the originating workspace
 window.inSetu.utils.pollJob = (jobId, options = {}) => {
     const initWs = window.inSetu.utils.getActiveWorkspace();
@@ -462,19 +459,23 @@ window.inSetu.utils.pollJob = (jobId, options = {}) => {
         if (options[cbName]) {
             safeOptions[cbName] = (...args) => {
                 if (window.inSetu.utils.getActiveWorkspace() !== initWs) return;
+
+                // UI Telemetry Mutex: Silence redundant HTTP polling updates if SSE is healthy
+                if (cbName === 'onProgress' && window.inSetu?.sse?.isConnected) {
+                    return;
+                }
+
                 return options[cbName](...args);
             };
         }
     });
 
-    // Pin job polling requests to the originating workspace scope
-    const pollPath = `jobs/${jobId}`;
-    const targetUrl = `/api/${initWs}/system/${pollPath}`;
-
-    return _basePoller(jobId, {
-        ...safeOptions,
-        get: async () => window.inSetu.api.request(targetUrl, { method: 'GET' }, initWs)
+    // Instantiate a dynamically bound poller to strictly lock network requests to the originating tenant
+    const scopedPoller = createJobPoller({
+        get: async (path) => window.inSetu.api.request(`/api/${initWs}/system/${path}`, { method: 'GET' }, initWs)
     });
+
+    return scopedPoller(jobId, safeOptions);
 };
 // Restore UI State on Load
 let bootCurrentStep = 0;
@@ -1072,6 +1073,14 @@ function updateRefreshText() {
     if (el) el.innerText = `Refreshed ${text}`;
 }
 export function setGlobalStatus(msg, timeout = 3000, isError = false) {
+    if (StatusStore && typeof StatusStore.getState === 'function') {
+        const state = StatusStore.getState();
+        if (typeof state.setStatus === 'function') {
+            state.setStatus(msg, timeout, isError);
+        } else if (typeof StatusStore.setState === 'function') {
+            StatusStore.setState({ message: msg, isError, timeout, timestamp: Date.now() });
+        }
+    }
     window.dispatchEvent(new CustomEvent('sutram-status-update', { detail: { msg, timeout, isError } }));
     window.dispatchEvent(new CustomEvent('insetu-status-update', { detail: { msg, timeout, isError } }));
 }

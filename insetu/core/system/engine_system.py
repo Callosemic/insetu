@@ -380,11 +380,73 @@ class SystemDeltasResponse(TypedDict):
     pending_modules: List[str]
     mutations: List[Dict[str, Any]]
     signatures: Dict[str, Any]
-
 @system_bp.route('deltas', methods=['GET'], request_schema=DeltasQueryPayload, response_schema=SystemDeltasResponse, docstring="Returns real-time file mutation logs, active/pending background compilation modules, and domain signatures modified since the 'since' timestamp.")
 def api_system_deltas(ctx):
     since = float(ctx.req.args.get('since', 0.0))
     return jsonify(get_system_deltas(ctx.workspace_id, since_ts=since))
+
+class PipelineSubmitPayload(TypedDict, total=False):
+    force_full: bool
+    target_repos: List[str]
+    start_step: str
+
+@system_bp.route('pipeline/submit', methods=['POST'], request_schema=PipelineSubmitPayload, docstring="Triggers the background context compilation sequence. Handles differential deltas or full sweeps via the Akasa DAG Orchestrator.")
+def api_system_pipeline_submit(ctx):
+    data = ctx.req.get_json(force=True, silent=True) or {}
+    force_full = data.get("force_full", False)
+    from akasa.db import get_connection
+    w_conn = get_connection("workers", workspace_id=ctx.workspace_id)
+    # Reattach check: Attach to any active stage of the compilation pipeline to prevent concurrent chain collisions.
+    import time
+    cutoff = time.time() - 300.0
+    from akasa.workers import resolve_dag_chain
+    ordered_steps = resolve_dag_chain(ctx, 'register_compilation_steps')
+
+    start_step = data.get("start_step")
+    upstream_worker_names = []
+
+    if start_step:
+        try:
+            start_idx = next(i for i, s in enumerate(ordered_steps) if s['id'] == start_step)
+            # Filter to upstream workers (including the start_step itself) that cascade down to our target
+            upstream_worker_names = [s.get('worker_name') for s in ordered_steps[:start_idx + 1] if s.get('worker_name')]
+            ordered_steps = ordered_steps[start_idx:]
+        except StopIteration:
+            upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
+    else:
+        upstream_worker_names = [s.get('worker_name') for s in ordered_steps if s.get('worker_name')]
+
+    if upstream_worker_names:
+        placeholders = ", ".join(["?"] * len(upstream_worker_names))
+        existing_job = w_conn.execute(
+            f"SELECT id, args_json FROM immediate_jobs WHERE callback_name IN ({placeholders}) AND status IN ('pending', 'processing') AND updated_at > ?", 
+            tuple(upstream_worker_names) + (cutoff,)
+        ).fetchone()
+
+        if existing_job:
+            import json
+            try:
+                job_args = json.loads(existing_job['args_json'])
+                # Safely merge if the active job satisfies our force_full requirement
+                if job_args.get("force_full") or not force_full:
+                    return jsonify({"status": "accepted", "job_id": existing_job['id'], "message": "Reattached to active compilation."}), 202
+            except Exception:
+                pass
+    if not ordered_steps:
+        return jsonify({"error": "No compilation steps registered."}), 400
+
+    payload = {"force_full": force_full}
+    if "target_repos" in data:
+        payload["target_repos"] = data["target_repos"]
+
+    job_id = ctx.jobs.submit_chain(
+        ordered_steps, 
+        on_complete_hook="compilation_sequence_complete", 
+        job_category="ui_blocking", 
+        **payload
+    )
+
+    return jsonify({"status": "accepted", "job_id": job_id}), 202
 @hooks.on('pre_file_save')
 def handle_config_pre_save(workspace_id=None, filepath=None, content=None, data=None, **kwargs):
     if data and data.get("is_new_repo") and data.get("repo_dir"):

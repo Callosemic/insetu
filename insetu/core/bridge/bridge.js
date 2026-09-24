@@ -251,6 +251,9 @@ export class InSetuExtBridge extends InSetuElement {
         BridgeStore.getState().fetchHistory();
         this.requestUpdate();
     }
+    onForceRefresh() {
+        BridgeStore.getState().fetchHistory();
+    }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(BridgeStore, (state) => {

@@ -45,10 +45,17 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
         "worker_name": "scan_topology_task"
     }]
 @topology_bp.worker("scan_topology_task")
-def _background_scan_topology(ctx, ledger_events=None, **kwargs):
+def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_repos=None, **kwargs):
     import time
     from akasa.db import get_connection
     w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
+
+    if force_full and force_full != "compile_only":
+        sweep_label = "Full Sweep" if not target_repos else f"Targeted Sweep: {target_repos}"
+        ctx.jobs.update_progress(f"Scanning physical disk ({sweep_label})...")
+        ctx.emit('force_topology_scan', target_repos=target_repos)
+    else:
+        ctx.jobs.update_progress("Resolving active topology boundaries...")
 
     # Barrier Sync: Await async VFS pipeline writes to settle before draining topology
     try:
@@ -255,7 +262,12 @@ def _topology_slew_limiter_loop():
                     )
                     conn.commit()
                 except Exception as e:
+                    import traceback
                     print(f"⚠️ [Topology Slew] Bulk DB insert failed for {ws_id}: {e}")
+                    try:
+                        from akasa.hooks import hooks
+                        hooks.emit_background('system_error', source="Topology:Slew_Insert", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=f"Workspace: {ws_id}, Events: {len(folded)}", workspace_id=ws_id)
+                    except Exception: pass
                 # Trigger macro-resolution worker FIRST (as a silent background task)
                 job_id = f"tpl_res_{ws_id}"
                 submit_immediate_job(job_id, "topology", "resolve_topology_task", "{}", workspace_id=ws_id, coalesce=True, job_category="system_background")
@@ -265,7 +277,12 @@ def _topology_slew_limiter_loop():
                 if sse_bus:
                     threading.Timer(0.25, lambda w=ws_id, f=folded: sse_bus.emit_sse('vfs_mutated', {"mutations": f, "workspace_id": w})).start()
         except Exception as e:
+            import traceback
             print(f"⚠️ [Topology Slew] Worker loop error: {e}")
+            try:
+                from akasa.hooks import hooks
+                hooks.emit_background('system_error', source="Topology:Slew_Loop", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload="", workspace_id="default")
+            except Exception: pass
 
 @hooks.on('vfs_mutated', priority=10)
 def buffer_topology_events(mutations=None, workspace_id=None, **kwargs):
@@ -514,14 +531,15 @@ def _background_boot_scan(ctx, job_id=None, **kwargs):
     # Flush dirty tracking to ensure clean boot UI state
     hooks.emit('topology_resolved', workspace_id=ctx.workspace_id, dirty_repos=[], dirty_buckets=[], events=[], clear_all=True)
     hooks.emit('topology_boot_complete', workspace_id=ctx.workspace_id)
-
 @topology_bp.worker("resolve_topology_task")
 def _background_resolve_topology(ctx, job_id=None, **kwargs):
     """
     Processes the event buffer after physical disk I/O settles, updates the tracking 
     ledger, and emits `topology_resolved` to awaken downstream compilers.
     """
-    print(f"🌍 [TOPOLOGY TELEMETRY] Worker starting. Sleeping for 2s debounce...")
+    import os
+    if os.environ.get("INSETU_DEBUG") == "1":
+        print(f"🌍 [TOPOLOGY TELEMETRY] Worker starting. Sleeping for 2s debounce...")
     # Absolute Settlement Barrier: 2.0 second debounce to outlast watchdog bursts (e.g. git checkout)
     time.sleep(2.0)
 
@@ -533,7 +551,8 @@ def _background_resolve_topology(ctx, job_id=None, **kwargs):
             break
         total_resolved += len(events)
 
-    print(f"🌍 [TOPOLOGY TELEMETRY] Worker resolved {total_resolved} events. Emitted topology_resolved.")
+    if os.environ.get("INSETU_DEBUG") == "1":
+        print(f"🌍 [TOPOLOGY TELEMETRY] Worker resolved {total_resolved} events. Emitted topology_resolved.")
     if total_resolved == 0:
         return {"message": "No topology events to resolve."}
 

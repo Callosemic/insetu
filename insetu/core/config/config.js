@@ -186,7 +186,7 @@ export class InSetuExtConfig extends InSetuElement {
     async openModal() {
         this._isOpen = true;
         try {
-            const res = await window.inSetu.api.workspace.get('system/config?t=' + Date.now(), { cache: 'no-store' });
+            const res = await window.inSetu.api.system.get('config?t=' + Date.now(), { cache: 'no-store' });
             if (res.ok) {
                 const data = await res.json();
                 this.configForm = data.config || {};
@@ -584,7 +584,7 @@ export class InSetuExtConfig extends InSetuElement {
     async _saveConfig() {
         try {
             // Config saves utilize explicit multi-tenant URL path boundaries
-            const res = await window.inSetu.api.workspace.post('system/config', this.configForm);
+            const res = await window.inSetu.api.system.post('config', this.configForm);
             if (res.ok) {
                 const data = await res.json();
                 if (window.inSetu.stores.Gather) {
@@ -657,7 +657,7 @@ window.ExtensionRegistry.registerExtension('config', {
             intent: 'primary',
             order: 10,
             asyncAction: async (data, e) => {
-                if (window.inSetu.stores.Gather) {
+                if (window.inSetu?.stores?.Gather) {
                     await window.inSetu.stores.Gather.getState().executeCompile(null, true);
                 }
             }

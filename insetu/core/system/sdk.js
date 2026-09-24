@@ -13,13 +13,71 @@ export function createExtensionStore(name, initialState, persistKeys = []) {
     window.inSetu.stores[name] = store;
     return store;
 }
-
 export function createIsolatedSlice(store, sliceKey) {
     return {
         get: () => store.getState()[sliceKey],
         set: (val) => store.setState({ [sliceKey]: typeof val === 'object' && val !== null ? { ...val } : val })
     };
 }
+
+export class BucketAddress {
+    constructor(repo, bucketId = 'main') {
+        this.repo = (repo || 'global').toLowerCase().trim();
+        this.bucketId = (bucketId || 'main').trim();
+    }
+
+    get key() {
+        return `${this.repo}::${this.bucketId}`;
+    }
+    get contextUri() {
+        const safeRepo = this.repo.startsWith('.') ? `dot_${this.repo.substring(1)}`.replace(/-/g, '_').toLowerCase() : this.repo.replace(/-/g, '_').toLowerCase();
+        if (this.bucketId === 'main') return `ctx://contexts/${safeRepo}_context.txt`;
+        return `ctx://contexts/${safeRepo}_${this.bucketId}_context.txt`;
+    }
+
+    get diffUri() {
+        const safeRepo = this.repo.startsWith('.') ? `dot_${this.repo.substring(1)}`.replace(/-/g, '_').toLowerCase() : this.repo.replace(/-/g, '_').toLowerCase();
+        if (this.bucketId === 'main') return `ctx://diffs/${safeRepo}_diffs.txt`;
+        return `ctx://diffs/${safeRepo}_${this.bucketId}_diffs.txt`;
+    }
+
+    static fromKey(key) {
+        if (!key) return new BucketAddress('global', 'main');
+        if (key.includes('::')) {
+            const [repo, bucketId] = key.split('::');
+            return new BucketAddress(repo, bucketId);
+        }
+        return new BucketAddress(key, 'main');
+    }
+    static fromFilepath(filepath, manifestMeta = null) {
+        // Strict SSOT Key-Value Lookup
+        if (manifestMeta && manifestMeta.repo && manifestMeta.bucket_id) {
+            return new BucketAddress(manifestMeta.repo, manifestMeta.bucket_id);
+        }
+
+        // If the metadata is missing, it is an orphan. No string splitting.
+        const filename = filepath.split('/').pop();
+        return new BucketAddress('orphan', filename);
+    }
+
+    static fromVfsPath(filepath) {
+        const manifestVfs = window.inSetu?.stores?.App?.getState()?.manifest?.vfs || {};
+        const normPath = filepath.replace(/^vfs:\/\//, '');
+
+        for (const [key, bucket] of Object.entries(manifestVfs)) {
+            if (bucket.files && bucket.files.includes(normPath)) {
+                return BucketAddress.fromKey(key);
+            }
+        }
+        const parts = normPath.split('/');
+        return new BucketAddress(parts[0] || 'global', 'main');
+    }
+}
+
+window.inSetu = window.inSetu || {};
+window.inSetu.utils = window.inSetu.utils || {};
+window.inSetu.utils.BucketAddress = BucketAddress;
+
 export class InSetuElement extends SutramElement {
     static properties = {
         workspaceId: { type: String },
@@ -200,7 +258,18 @@ export class InSetuElement extends SutramElement {
             if (typeof this.onForceRefresh === 'function') {
                 const { parentId, subId } = e.detail || {};
                 const mySubId = this.dataset.subId || this.extName;
-                if (subId === mySubId || (!subId && parentId === this.extName)) {
+
+                let myParentId = this.dataset.parentId;
+                if (!myParentId && window.ExtensionRegistry) {
+                    const slots = window.ExtensionRegistry.getLayoutSlots();
+                    const mySlot = slots.find(s => s.component === this.tagName.toLowerCase());
+                    if (mySlot) myParentId = mySlot.targetParent;
+                }
+
+                const matchesSub = subId && subId === mySubId;
+                const matchesParent = parentId && (parentId === this.extName || parentId === myParentId);
+
+                if (matchesSub || (!subId && matchesParent) || (parentId && !subId && matchesParent)) {
                     this.onForceRefresh();
                 }
             }

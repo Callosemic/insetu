@@ -235,16 +235,22 @@ class SSEPipeline {
             // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
             if (data.job_category === 'ui_blocking') {
                 window.inSetu.events.emitHook('insetu:compile-progress', data);
-                if (data.status === 'processing' || data.status === 'pending') {
+                if (data.status === 'processing' || data.status === 'pending' || (data.status === 'completed' && data.artifact && data.artifact.next_job_id)) {
                     const msg = data.message || "Compiling...";
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                     }
                 }
-                if (data.status === 'completed' && data.ext_name === 'gather') {
-                    const artifact = data.artifact || {};
-                    window.inSetu.events.emitHook('insetu:gather-compile-completed', artifact);
+                // 1. ALWAYS emit step completion hooks regardless of next_job_id
+                if (data.status === 'completed' && data.artifact) {
+                    window.inSetu.events.emitHook('insetu:compile-step-complete', {
+                        job_id: data.job_id,
+                        ext_name: data.ext_name,
+                        artifact: data.artifact
+                    });
                 }
+
+                // 2. Only terminate UI spinners when the ENTIRE chain completes
                 if ((data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {

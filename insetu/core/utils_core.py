@@ -30,12 +30,11 @@ def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, te
         candidate = py_dir / f"{bin_name}{ext}"
         if candidate.exists():
             resolved_bin = candidate.as_posix()
-
     if resolved_bin:
         full_cmd = [resolved_bin] + cmd_args[1:]
     else:
         module_name = bin_name.replace('-', '_')
-        full_cmd = [sys.executable, '-m', f"{module_name}.cli"] + cmd_args[1:]
+        full_cmd = [sys.executable, '-m', module_name] + cmd_args[1:]
     return subprocess.run(
         full_cmd,
         cwd=cwd,
@@ -62,7 +61,6 @@ class InSetuURI(AkasaURI):
     @property
     def is_diff(self) -> bool:
         return self.scheme == 'ctx' and self.volume == 'diffs'
-
     def bucket(self, workspace_id=None):
         from insetu.core.topology.engine_topology import resolve_file_bucket
         from akasa.utils import load_config
@@ -74,6 +72,69 @@ class InSetuURI(AkasaURI):
                 b, module = resolve_file_bucket(self.path, sub_buckets, repo_dir=self.repo)
                 return module if b and module else (b.get("id") if b else "main")
         return "main"
+
+class BucketAddress:
+    """
+    Immutable value object representing a canonical structural bucket address.
+    Format: <repo>::<bucket_id> (e.g., 'axoneme::main' or 'axoneme::docs')
+    """
+    def __init__(self, repo: str, bucket_id: str = "main"):
+        self.repo = repo.strip().lower() if repo else "global"
+        self.bucket_id = bucket_id.strip() if bucket_id else "main"
+
+    @property
+    def key(self) -> str:
+        """Canonical storage key used in dirty sets and state stores."""
+        return f"{self.repo}::{self.bucket_id}"
+    @property
+    def context_uri(self) -> str:
+        """Canonical URI for the context payload."""
+        safe_repo = get_safe_repo_id(self.repo)
+        if self.bucket_id == "main":
+            return f"ctx://contexts/{safe_repo}_context.txt"
+        return f"ctx://contexts/{safe_repo}_{self.bucket_id}_context.txt"
+
+    @property
+    def diff_uri(self) -> str:
+        """Canonical URI for the git diff payload."""
+        safe_repo = get_safe_repo_id(self.repo)
+        if self.bucket_id == "main":
+            return f"ctx://diffs/{safe_repo}_diffs.txt"
+        return f"ctx://diffs/{safe_repo}_{self.bucket_id}_diffs.txt"
+
+    @classmethod
+    def from_key(cls, key: str) -> 'BucketAddress':
+        if "::" in key:
+            repo, bucket_id = key.split("::", 1)
+            return cls(repo, bucket_id)
+        return cls(key, "main")
+    @classmethod
+    def from_uri(cls, uri_str: str, meta: dict = None, workspace_id: str = None) -> 'BucketAddress':
+        # Strict SSOT Key-Value Lookup
+        if meta and meta.get("repo") and meta.get("bucket_id"):
+            return cls(meta["repo"], meta["bucket_id"])
+
+        # If the metadata is missing, it is an orphan. No string splitting.
+        uri = InSetuURI(uri_str)
+        return cls("orphan", uri.basename)
+
+    @classmethod
+    def from_vfs_path(cls, filepath: str, workspace_id: str = None) -> 'BucketAddress':
+        uri = InSetuURI(filepath)
+        repo = uri.repo
+        bucket_id = uri.bucket(workspace_id)
+        return cls(repo, bucket_id)
+
+    def __repr__(self) -> str:
+        return f"<BucketAddress {self.key}>"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BucketAddress):
+            return False
+        return self.key == other.key
+
+    def __hash__(self) -> int:
+        return hash(self.key)
 
 
 def _get_yaml_engine():

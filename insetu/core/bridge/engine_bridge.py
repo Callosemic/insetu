@@ -232,6 +232,10 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
         import traceback
         err = traceback.format_exc()
         update_immediate_job_status(job_id, 'failed', f"Bridge Fatal Error: {str(e)}\n\n{err}", workspace_id=workspace_id)
+        try:
+            from akasa.hooks import hooks
+            hooks.emit_background('system_error', source="Bridge:Sync", error_type=type(e).__name__, message=str(e), traceback=err, payload=str(kwargs), workspace_id=workspace_id)
+        except Exception: pass
 register_callback("bridge", "sync_task", _background_bridge_sync)
 
 @bridge_bp.worker("sweep_ledger")

@@ -19,81 +19,35 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
         // Snapshot the dirty state at the exact moment compilation begins
         const snapshotRepos = Array.from(AppStore.getState().dirtyRepos || []);
         const snapshotBuckets = Array.from(AppStore.getState().dirtyBuckets || []);
-
         AppStore.setState({ isPipelineActive: true });
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('syncing');
+        if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('⏳ Initializing pipeline...', null);
         try {
             const payload = { force_full: forceFull };
             if (startStep) payload.start_step = startStep;
             if (targetRepos) payload.target_repos = targetRepos;
-
-            const response = await window.inSetu.api.workspace.post('gather/submit', payload);
+            const response = await window.inSetu.api.system.post('pipeline/submit', payload);
             const data = await response.json();
             let result = null;
             if (response.status === 202) {
-                let jobId = data.job_id;
-                if (jobId === 'offline_queue') {
+                if (data.job_id === 'offline_queue') {
+                    if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('🌩️ Queued for offline sync', 2000);
                     return { status: 'success', message: 'Queued for offline sync.', files: [] };
                 }
-                let retries = 0;
-                const processedSteps = new Set();
-                while (true) {
-                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
-                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
-                        break;
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 250));
-                    if (AppStore.getState().activeWorkspace !== compilePromiseWs) {
-                        result = { status: 'aborted', message: 'Workspace switched.', files: [] };
-                        break;
-                    }
-
-                    const pollRes = await window.inSetu.api.workspace.get(`system/jobs/${jobId}`, {
-                        headers: { 'X-Workspace-ID': compilePromiseWs }
-                    });
-
-                    if (pollRes.status === 404) {
-                        result = { status: 'aborted', message: 'Job not found (context shifted).', files: [] };
-                        break;
-                    }
-                    if (!pollRes.ok) throw new Error("Compilation job failed");
-                    const pollData = await pollRes.json();
-
-                    // INVERSION OF CONTROL: Broadcast progress statelessly
-                    window.inSetu.events.emitHook('insetu:compile-progress', pollData);
-                    if (pollData.artifact && pollData.artifact.chain_history) {
-                        pollData.artifact.chain_history.forEach(step => {
-                            if (!processedSteps.has(step.job_id)) {
-                                processedSteps.add(step.job_id);
-                                window.inSetu.events.emitHook('insetu:compile-step-complete', step);
-                            }
-                        });
-                    }
-
-                    if (pollData.status === 'processing' || pollData.status === 'pending') {
-                        const msg = pollData.message || "Compiling...";
-                        if (AppStore.getState().activeWorkspace === compilePromiseWs) {
-                            window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
+                result = await new Promise((resolve, reject) => {
+                    window.inSetu.utils.pollJob(data.job_id, {
+                        onProgress: (msg) => {
+                            if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                             if (onProgress) onProgress(msg);
+                        },
+                        onComplete: (statusData) => {
+                            resolve({ status: 'success', message: statusData.message, files: statusData.artifact?.files || [] });
+                        },
+                        onError: (err) => {
+                            reject(err);
                         }
-                        retries++;
-                        if (retries > 720) {
-                            result = { status: 'error', message: 'Compilation timed out. The background worker may have stalled.', files: [] };
-                            break;
-                        }
-                    } else if (pollData.status === 'completed') {
-                        if (pollData.artifact && pollData.artifact.next_job_id) {
-                            jobId = pollData.artifact.next_job_id;
-                            retries = 0;
-                            continue;
-                        }
-                        result = { status: 'success', message: pollData.message, files: pollData.artifact?.files || [] };
-                        break;
-                    } else if (pollData.status === 'failed') {
-                        result = { status: 'error', message: pollData.message, files: [] };
-                        break;
-                    }
-                }
+                    });
+                });
             } else {
                 result = data;
             }
@@ -105,30 +59,20 @@ export const executeCompile = async (onProgress = null, forceFull = false, start
                     AppStore.setState({ manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} } });
                 }
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('synced');
-
+                if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus('✅ Sync Complete', 2000);
                 // Clear dirty trackers upon successful context generation
                 AppStore.setState(s => {
                     const newDirtyRepos = new Set(s.dirtyRepos);
-                    const newDirtyBuckets = new Set(s.dirtyBuckets);
                     if (targetRepos && targetRepos.length > 0) {
                         targetRepos.forEach(r => newDirtyRepos.delete(r));
-                        Array.from(newDirtyBuckets).forEach(b => {
-                            if (targetRepos.some(r => b.startsWith(r + '::') || b === r)) {
-                                newDirtyBuckets.delete(b);
-                            }
-                        });
                     } else {
-                        // Only delete the targets that were dirty when we started, preserving mid-flight edits
                         snapshotRepos.forEach(r => newDirtyRepos.delete(r));
-                        snapshotBuckets.forEach(b => newDirtyBuckets.delete(b));
                     }
-
-                    return { dirtyRepos: newDirtyRepos, dirtyBuckets: newDirtyBuckets };
+                    return { dirtyRepos: newDirtyRepos };
                 });
             } else {
                 if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) window.inSetu.ui.setSyncStatus('pending'); // Fallback if error
             }
-            window.inSetu.ui.setGlobalStatus("✅ Sync Complete", 2000);
             return result;
         } catch (error) {
             if (error.name === 'AbortError') {
@@ -312,26 +256,13 @@ export class InSetuExtGather extends InSetuElement {
             this.requestUpdate();
         });
         const handleGatherCompleted = async (artifact = {}) => {
-            const touched = artifact.touched_buckets;
-            const isFull = artifact.is_full_sweep;
-
             try {
-                const activeWs = window.inSetu.utils.getActiveWorkspace();
                 const mRes = await window.inSetu.api.workspace.get('system/manifest?t=' + Date.now());
                 if (mRes.ok) {
                     const rawManifest = await mRes.json();
-                    AppStore.setState(s => {
-                        const newBuckets = new Set(s.dirtyBuckets);
-                        if (isFull || !touched) {
-                            newBuckets.clear();
-                        } else if (Array.isArray(touched)) {
-                            touched.forEach(b => newBuckets.delete(b));
-                        }
-                        return {
-                            manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} },
-                            dirtyBuckets: newBuckets
-                        };
-                    });
+                    AppStore.setState(s => ({
+                        manifest: { vfs: rawManifest?.vfs || {}, ctx: rawManifest?.ctx || {} }
+                    }));
                 }
             } catch (err) {
                 console.warn("[Gather] Failed to refresh manifest post-compile:", err);
@@ -339,7 +270,7 @@ export class InSetuExtGather extends InSetuElement {
         };
         this.registerGlobalListener('insetu:gather-compile-completed', window, (e) => handleGatherCompleted(e.detail || {}));
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail && e.detail.ext_name === 'gather') {
+            if (e.detail && e.detail.ext_name === 'gather' && (e.detail.artifact?.step_id === 'gather_base' || e.detail.artifact?.step_id === 'compile_contexts')) {
                 handleGatherCompleted(e.detail.artifact || {});
             }
         });
@@ -370,7 +301,7 @@ export class InSetuExtGather extends InSetuElement {
         super.disconnectedCallback();
     }
     onForceRefresh() {
-        this.loadContext(false);
+        this.loadContext(true);
     }
     async loadContext(forceFull = false) {
         GatherStore.setState({ loading: true });
@@ -516,11 +447,9 @@ export class InSetuExtGather extends InSetuElement {
                                     <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
                                         ${groups[cat].map(f => {
                                             const isDirty = (() => {
-                                                if (AppStore.getState().dirtyBuckets.has(f.filename)) return true;
-                                                if (!f.repoDir) return false;
-                                                const base = f.filename.split('/').pop().replace('_context.txt', '');
-                                                const bucketId = base.startsWith(f.repoDir + '_') ? (base.substring(f.repoDir.length + 1) || 'main') : (base === f.repoDir ? 'main' : base);
-                                                return AppStore.getState().dirtyBuckets.has(`${f.repoDir}::${bucketId}`);
+                                                const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
+                                                const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
+                                                return (AppStore.getState().dirtyBuckets || new Set()).has(addr.key);
                                             })();
                                             const isLocked = f.isSkeleton || (isGatherLoading && isDirty);
                                             return html`

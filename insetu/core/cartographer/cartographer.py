@@ -16,14 +16,20 @@ def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "cartographer",
         "worker_name": "map_task"
     }]
-
 def _background_map(job_id, workspace_id, target_repos=None, **kwargs):
     try:
         update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
         map_repositories(workspace_id, target_repos=target_repos)
-        update_immediate_job_status(job_id, 'completed', "Cartography complete.", workspace_id=workspace_id)
+        return {
+            "message": "Cartography complete.",
+            "artifact": {
+                "touched_buckets": [],
+                "cleared_buckets": [],
+                "is_full_sweep": False
+            }
+        }
     except Exception as e:
-        update_immediate_job_status(job_id, 'failed', f"Mapping failed: {str(e)}", workspace_id=workspace_id)
+        raise RuntimeError(f"Mapping failed: {str(e)}")
 register_callback("cartographer", "map_task", _background_map)
 
 def extract_existing_comments(index_path, repo_path=None):
