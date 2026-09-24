@@ -231,12 +231,15 @@ class SSEPipeline {
         this.source.addEventListener('job_progress', (e) => {
             const data = JSON.parse(e.data);
             if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
-
             // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
             if (data.job_category === 'ui_blocking') {
-                window.inSetu.events.emitHook('insetu:compile-progress', data);
+                const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
+                if (isPipelineJob) {
+                    window.inSetu.events.emitHook('insetu:compile-progress', data);
+                }
+
                 if (data.status === 'processing' || data.status === 'pending' || (data.status === 'completed' && data.artifact && data.artifact.next_job_id)) {
-                    const msg = data.message || "Compiling...";
+                    const msg = data.message || "Processing...";
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                     }
@@ -251,7 +254,7 @@ class SSEPipeline {
                 }
 
                 // 2. Only terminate UI spinners when the ENTIRE chain completes
-                if ((data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
+                if (isPipelineJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');

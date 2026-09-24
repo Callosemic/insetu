@@ -223,7 +223,7 @@ def init_gather_workers(workspace_id=None, **kwargs):
 @hooks.on('gather_settings_updated')
 def on_gather_settings_updated(workspace_id=None, **kwargs):
     job_id = f"cmp_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True}), workspace_id=workspace_id, job_category="ui_blocking")
+    submit_immediate_job(job_id, "gather", "compile_contexts", json.dumps({"force_full": True, "is_pipeline": True}), workspace_id=workspace_id, job_category="ui_blocking")
     return {"job_id": job_id}
 @hooks.on('vfs_search')
 def hook_vfs_search(workspace_id=None, query=None, **kwargs):
@@ -677,9 +677,11 @@ def generate_context_file(workspace_id=None, target_repos=None):
 def _pack_selection_worker(ctx, items=None, job_id=None, **kwargs):
     if items is None:
         items = kwargs.get('items', [])
-    ctx.jobs.update_progress("Compiling selected files into context payload...")
+    
     if not items:
-        raise ValueError("No items provided.")
+        return {"message": "No valid files selected for compilation."}
+        
+    ctx.jobs.update_progress("Compiling selected files into context payload...")
     files = ctx.expand_selection(items)
     from insetu.core.utils_core import InSetuURI
     clean_tree_files = []
@@ -861,9 +863,9 @@ def _background_compile(ctx, force_full=False, ledger_events=None, target_repos=
                 "files": sorted(manifest_keys),
                 "touched_buckets": logical_buckets_list,
                 "cleared_buckets": logical_buckets_list,
-                "is_full_sweep": needs_full_compile
-            },
-            "next_kwargs": {"touched_buckets": logical_buckets_list if not needs_full_compile else None}
+                "is_full_sweep": needs_full_compile,
+                "state_deltas": {"touched_buckets": logical_buckets_list if not needs_full_compile else None}
+            }
         }
     except Exception as e:
         import traceback
@@ -895,7 +897,7 @@ def _register_gather_step(workspace_id=None, **kwargs):
         "id": "gather_base",
         "anchor": "body",
         "order": 20,
-        "depends_on": ["topology_scan"],
+        "depends_on": ["topology_scan", "cartographer_map"],
         "ext_name": "gather",
         "worker_name": "compile_contexts"
     }]

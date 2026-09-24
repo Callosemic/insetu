@@ -352,10 +352,10 @@ async function checkManifestVersion() {
             }
         }
         // Phase 5: Drain the Global Cache Warming Queue (Background Priority Threads)
-        // Guardrail: Suspend warming during active I/O (is_compiling) and for 2.5 minutes after backend boot
+        // Guardrail: Suspend warming during active I/O (is_pipeline_active) and for 2.5 minutes after backend boot
         const backendUptimeSeconds = deltaData.timestamp - (deltaData.backend_boot_ts || deltaData.timestamp);
         const isBootSettled = backendUptimeSeconds > 150;
-        const isSystemSettled = !deltaData.is_compiling && isBootSettled;
+        const isSystemSettled = !deltaData.is_pipeline_active && isBootSettled;
 
         if (!AppStore.getState().isOffline && navigator.connection?.saveData !== true && isSystemSettled) {
             const q = Array.from(AppStore.getState().warmingQueue);
@@ -403,6 +403,9 @@ async function checkManifestVersion() {
         if (deltaData.pending_modules !== undefined) {
             AppStore.setState({ pendingModules: deltaData.pending_modules });
         }
+        if (deltaData.is_pipeline_active !== undefined) {
+            AppStore.setState({ isPipelineActive: deltaData.is_pipeline_active });
+        }
 
         if (deltaData.timestamp) {
             lastManifestSyncTs = deltaData.timestamp;
@@ -428,9 +431,9 @@ async function checkManifestVersion() {
                 console.error("VFS Mutation Hook Error:", e);
             }
         }
-        // 4. Sync UI Status with Kernel Compilation State
+        // 4. Sync UI Status with Kernel Pipeline State
         if (window.inSetu.ui && window.inSetu.ui.setSyncStatus) {
-            if (deltaData.is_compiling) {
+            if (deltaData.is_pipeline_active) {
                 window.inSetu.ui.setSyncStatus('syncing');
             } else if (!deltaData.mutations || deltaData.mutations.length === 0) {
                 window.inSetu.ui.setSyncStatus('synced');

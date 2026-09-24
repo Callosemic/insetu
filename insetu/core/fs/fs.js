@@ -274,10 +274,6 @@ function refreshActiveFileViews(oldPath, newPath = null) {
     const mutations = [{ filepath: oldPath, operation: 'delete' }];
     if (newPath) mutations.push({ filepath: newPath, operation: 'save' });
     window.inSetu.events.emitHook('insetu:vfs-mutated', { mutations });
-    // Trigger a proactive compile to let the Cartographer map the renamed/moved/deleted files
-    if (window.inSetu.stores.Gather) {
-        window.inSetu.stores.Gather.getState().executeCompile();
-    }
 }
 function updateManifestState(oldPath, newPath = null) {
     const { manifest } = AppStore.getState();
@@ -1569,9 +1565,6 @@ export async function uploadFileToWorkspace(targetDir) {
             onSuccess: (data) => {
                 if (data && data.filepaths) {
                     data.filepaths.forEach(fp => updateManifestState(null, fp));
-                }
-                if (window.inSetu.stores.Gather) {
-                    window.inSetu.stores.Gather.getState().executeCompile();
                 }
             }
         });

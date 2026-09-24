@@ -371,11 +371,10 @@ def api_system_openapi():
     return jsonify(spec)
 class DeltasQueryPayload(TypedDict):
     since: float
-
 class SystemDeltasResponse(TypedDict):
     timestamp: float
     backend_boot_ts: float
-    is_compiling: bool
+    is_pipeline_active: bool
     active_modules: List[str]
     pending_modules: List[str]
     mutations: List[Dict[str, Any]]

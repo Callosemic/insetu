@@ -111,6 +111,11 @@ def api_fs_move(ctx):
         res, code = execute_vfs_move(workspace_id, filepath, dest_path)
         return jsonify(res), code
     except Exception as e:
+        import traceback
+        try:
+            from akasa.hooks import hooks
+            hooks.emit_background('system_error', source="VFS:Move", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+        except Exception: pass
         return jsonify({"error": f"VFS Move Error: {str(e)}"}), 500
 
 class FileActionPayload(TypedDict):
@@ -138,6 +143,11 @@ def api_fs_archive(ctx):
         res["message"] = "File archive queued."
         return jsonify(res), code
     except Exception as e:
+        import traceback
+        try:
+            from akasa.hooks import hooks
+            hooks.emit_background('system_error', source="VFS:Archive", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+        except Exception: pass
         return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
 @fs_bp.route('delete', methods=['POST'], request_schema=FileActionPayload, docstring="[sync] Permanently deletes a file from the Virtual File System.")
 def api_fs_delete(ctx):
@@ -150,6 +160,11 @@ def api_fs_delete(ctx):
         res, code = execute_vfs_delete(workspace_id, filepath)
         return jsonify(res), code
     except Exception as e:
+        import traceback
+        try:
+            from akasa.hooks import hooks
+            hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
+        except Exception: pass
         return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
 class FileUploadRequest(TypedDict):
     file: List[bytes]
@@ -251,8 +266,14 @@ def api_fs_save(ctx):
 
                     execute_vfs_save(workspace_id, conflict_path, content, data={})
                     return jsonify({"error": f"OCC Conflict: File was modified externally. Offline changes saved to {conflict_name}"}), 409
-
         result = execute_vfs_save(workspace_id, filepath, content, data)
         return jsonify(result)
     except Exception as e:
+        import traceback
+        try:
+            from akasa.hooks import hooks
+            # Masking content string to prevent payload blowout in the ledger
+            safe_payload = {"filepath": data.get("filepath")} if isinstance(data, dict) else {}
+            hooks.emit_background('system_error', source="VFS:Save", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(safe_payload), workspace_id=workspace_id)
+        except Exception: pass
         return jsonify({"error": f"File System Error: {str(e)}"}), 500

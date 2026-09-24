@@ -170,10 +170,6 @@ const packSelectionPayload = async (items) => {
         window.inSetu.utils.pollJob(data.job_id, {
             onProgress: (msg) => { if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null); },
             onComplete: async (statusData) => {
-                try {
-                    const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
-                    if (mRes.ok) window.inSetu.stores.App.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
-                } catch(e) {}
                 resolve(statusData.artifact);
             },
             onError: (err) => reject(err)
@@ -274,23 +270,6 @@ export class InSetuExtGather extends InSetuElement {
                 handleGatherCompleted(e.detail.artifact || {});
             }
         });
-        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
-            const pollData = e.detail;
-            if (pollData.status === 'terminated') {
-                GatherStore.setState({ loading: false });
-                return;
-            }
-
-            const currentExt = pollData.ext_name || '';
-            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
-            const hasRun = history.some(step => step.ext_name === 'gather');
-
-            const isMyTurn = currentExt === 'gather';
-            const isWaiting = !isMyTurn && !hasRun;
-            GatherStore.setState({ 
-                loading: isMyTurn || isWaiting 
-            });
-        });
         const aState = AppStore.getState();
         this.manifestFiles = Object.keys(aState.manifest?.ctx || {});
         const gState = GatherStore.getState();
@@ -339,9 +318,8 @@ export class InSetuExtGather extends InSetuElement {
 
                 return { filename: file, finalCat, finalDesc, finalTitle, sizeStr, repoDir };
         }).filter(f => f !== null);
-        const isHeartbeatActive = !this.isPipelineActive && (this.activeModules || []).includes('gather');
-
-        const isGatherLoading = this.loading || isHeartbeatActive;
+        const isPipelineRunning = (this.activeModules || []).includes('gather') || (this.pendingModules || []).includes('gather');
+        const isGatherLoading = this.loading || isPipelineRunning;
         if (isGatherLoading) {
             const targetConfigs = this.ecosystem.targetConfigs || AppStore.getState().targetConfigs || [];
             if (targetConfigs) {
@@ -436,8 +414,6 @@ export class InSetuExtGather extends InSetuElement {
                                                 if (res.ok) {
                                                     const data = await res.json();
                                                     if (window.inSetu.ui.setGlobalStatus) window.inSetu.ui.setGlobalStatus(data.message, 2000);
-                                                    const mRes = await window.inSetu.api.system.get('manifest?t=' + Date.now());
-                                                    if (mRes.ok) AppStore.setState({ manifest: (await mRes.json()) || { vfs: {}, ctx: {} } });
                                                 }
                                             } catch(e) {
                                                 console.error("Failed to clear quickpacks: " + e.message);

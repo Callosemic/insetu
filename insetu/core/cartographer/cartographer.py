@@ -4,33 +4,28 @@ from pathlib import Path
 from akasa.utils import get_workspace_physics, load_config, build_tree_dict
 from insetu.core.topology.engine_topology import get_valid_workspace_files
 from akasa.hooks import hooks
-from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
-import uuid
+from insetu.core.sdk import InSetuExtension
+
+cartographer_bp = InSetuExtension('cartographer', __name__, title="Cartographer", description="Code index mapping.", core=True)
+
 SCRIPT_DIR = Path(__file__).resolve().parent.as_posix()
+
 @hooks.on('register_compilation_steps')
 def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
     return [{
         "id": "cartographer_map",
-        "anchor": "sink",
-        "order": 90,
+        "anchor": "body",
+        "order": 15,
+        "depends_on": ["topology_scan"],
         "ext_name": "cartographer",
         "worker_name": "map_task"
     }]
-def _background_map(job_id, workspace_id, target_repos=None, **kwargs):
-    try:
-        update_immediate_job_status(job_id, 'processing', "Mapping repository topology...", workspace_id=workspace_id)
-        map_repositories(workspace_id, target_repos=target_repos)
-        return {
-            "message": "Cartography complete.",
-            "artifact": {
-                "touched_buckets": [],
-                "cleared_buckets": [],
-                "is_full_sweep": False
-            }
-        }
-    except Exception as e:
-        raise RuntimeError(f"Mapping failed: {str(e)}")
-register_callback("cartographer", "map_task", _background_map)
+
+@cartographer_bp.worker("map_task")
+def _background_map(ctx, target_repos=None, **kwargs):
+    ctx.jobs.update_progress("Mapping repository topology...")
+    map_repositories(ctx.workspace_id, target_repos=target_repos)
+    return {"message": "Cartography complete."}
 
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
@@ -112,12 +107,10 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
     cfg = load_config(workspace_id)
     cfg_path, ws_root = get_workspace_physics(workspace_id)
     all_configs = cfg.get("target_repos", [])
-    for config in all_configs:
+    def process_repo(config):
         repo_dir = config.get("repo_dir")
-        if not repo_dir:
-            continue
-        if target_repos and repo_dir not in target_repos:
-            continue
+        if not repo_dir: return
+        if target_repos and repo_dir not in target_repos: return
         from pathlib import Path
         ws_root_path = Path(ws_root).resolve()
 
@@ -130,29 +123,24 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         index_path = (repo_path / "docs" / "CODE_INDEX.md") if config.get("is_core_chassis") else (repo_path / "CODE_INDEX.md")
         if not repo_path.exists():
             if not silent: print(f"⚠️  Skipping {repo_dir}: Directory not found.")
-            continue
+            return
         if not silent: print(f"🗺️  Cartographing {repo_dir}...")
-        # Pass 1: Preserve (checking disk and Git history)
+
         comments = extract_existing_comments(index_path, repo_path)
-        # Pass 2: SSOT Read (Strictly query the Topology Ledger)
+
         from insetu.core.topology.engine_topology import get_topology_files_for_repo
         valid_files = get_topology_files_for_repo(workspace_id, repo_dir, strip_prefix=True)
 
-        if not valid_files:
-            continue
+        if not valid_files: return
 
-        # Exclude highly volatile state folders like .tracker from the architectural code index
         filtered_files = [f for f in valid_files if not f.startswith('.tracker/') and '/.tracker/' not in f]
-
-        if not filtered_files:
-            continue
+        if not filtered_files: return
 
         tree_dict = build_tree_dict(filtered_files)
-        # Ensure the docs directory exists if writing to the core chassis
         if config.get("is_core_chassis"):
             os.makedirs(Path(index_path).parent, exist_ok=True)
+
         header = f"# {config.get('title', repo_dir)} Code Index\n\nThis index serves as the architectural map. It outlines the core directories and their operational purpose to maintain a clear mental model of the ecosystem, preventing cognitive overload and logic drift.\n\n```text\n{repo_dir}/\n"
-        # Extract declarative managed list from config
         managed_dirs = cfg.get("managed_dirs", []) + config.get("repo_managed_dirs", [])
         tree_lines = render_ascii_tree(tree_dict, comments, managed_dirs)
         footer = "\n```\n"
@@ -160,14 +148,19 @@ def map_repositories(workspace_id=None, silent=True, target_repos=None):
         logical_index_path = f"vfs://{repo_dir}/docs/CODE_INDEX.md" if config.get("is_core_chassis") else f"vfs://{repo_dir}/CODE_INDEX.md"
         from akasa.vfs import execute_vfs_save
 
-        # ADR 0018: Ignore Ledger to prevent Cartographer from triggering infinite recompilation loops
         execute_vfs_save(workspace_id, logical_index_path, header + "\n".join(tree_lines) + footer, data={"ignore_ledger": True})
 
         missing = sum(1 for line in tree_lines if "[comment required]" in line)
-        if missing > 0:
-            if not silent: print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
-        else:
-            if not silent: print(f"  └─ ✅ Index updated. Perfect documentation parity.")
+        if not silent:
+            if missing > 0:
+                print(f"  └─ ✅ Index updated. ⚠️ {missing} placeholders require attention.")
+            else:
+                print(f"  └─ ✅ Index updated. Perfect documentation parity.")
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(process_repo, config) for config in all_configs]
+        concurrent.futures.wait(futures)
 
     if not silent: print("\n🎉 Cartography complete!\n")
 

@@ -520,9 +520,8 @@ def init_topology_on_boot(workspace_id=None, **kwargs):
         ctx.db.commit()
     except Exception:
         pass
-
     job_id = f"tpl_boot_{uuid.uuid4().hex[:8]}"
-    submit_immediate_job(job_id, "topology", "boot_scan_task", "{}", workspace_id=workspace_id, job_category="ui_blocking")
+    submit_immediate_job(job_id, "topology", "boot_scan_task", '{"is_pipeline": true}', workspace_id=workspace_id, job_category="ui_blocking")
 @topology_bp.worker("boot_scan_task")
 def _background_boot_scan(ctx, job_id=None, **kwargs):
     ctx.jobs.update_progress("Initializing workspace topology...")
