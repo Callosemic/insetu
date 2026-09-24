@@ -376,7 +376,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                 telemetry["can_commit"] = False
                 telemetry["summary"]["failed"] += 1
                 telemetry["patches"].append(patch_tel)
-                from akasa.hooks import hooks
                 hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='patch_failed', details="Failed to anchor patch block in memory.", file_content=content, patch_payload=json.dumps(b))
                 continue
             # Step i: Phase 3 - Full-File AST Syntax Gate (Scoped to last chunk)
@@ -449,7 +448,6 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
                     telemetry["can_commit"] = False
                     telemetry["summary"]["action_required"] += 1
                     telemetry["patches"].append(patch_tel)
-                    from akasa.hooks import hooks
                     hooks.emit_background('bridge_error', workspace_id=workspace_id, filepath=resolved_path, error_type='syntax_error', details=err_str, file_content=new_content, patch_payload=json.dumps(b))
                     continue
 

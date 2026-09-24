@@ -113,7 +113,6 @@ def api_fs_move(ctx):
     except Exception as e:
         import traceback
         try:
-            from akasa.hooks import hooks
             hooks.emit_background('system_error', source="VFS:Move", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
         return jsonify({"error": f"VFS Move Error: {str(e)}"}), 500
@@ -145,7 +144,6 @@ def api_fs_archive(ctx):
     except Exception as e:
         import traceback
         try:
-            from akasa.hooks import hooks
             hooks.emit_background('system_error', source="VFS:Archive", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
         return jsonify({"error": f"VFS Archive Error: {str(e)}"}), 500
@@ -162,7 +160,6 @@ def api_fs_delete(ctx):
     except Exception as e:
         import traceback
         try:
-            from akasa.hooks import hooks
             hooks.emit_background('system_error', source="VFS:Delete", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(ctx.req.get_json(silent=True) or {}), workspace_id=workspace_id)
         except Exception: pass
         return jsonify({"error": f"VFS Delete Error: {str(e)}"}), 500
@@ -271,7 +268,6 @@ def api_fs_save(ctx):
     except Exception as e:
         import traceback
         try:
-            from akasa.hooks import hooks
             # Masking content string to prevent payload blowout in the ledger
             safe_payload = {"filepath": data.get("filepath")} if isinstance(data, dict) else {}
             hooks.emit_background('system_error', source="VFS:Save", error_type=type(e).__name__, message=str(e), traceback=traceback.format_exc(), payload=json.dumps(safe_payload), workspace_id=workspace_id)

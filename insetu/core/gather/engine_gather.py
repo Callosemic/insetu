@@ -48,7 +48,7 @@ def compile_context_payload(workspace_id, output_dir, base_uri, header_block, te
     if max_kb is None:
         max_kb = ctx.settings.get("max_context_size_kb", 0)
     # 1. Physical Idempotency: Hash payload structure (header, text blocks, files) before disk writes
-    import hashlib, json
+    import hashlib
     payload_fingerprint = f"{header_block}\n" + "".join(text_blocks) + json.dumps(files)
     content_hash = hashlib.sha256(payload_fingerprint.encode('utf-8')).hexdigest()
     existing_entry = ctx.manifest.get("ctx", {}).get(base_uri)
@@ -198,7 +198,7 @@ def _execute_delayed_compile(workspace_id=None, job_id=None, force_full=False, l
         ctx.jobs.submit_chain(
             ordered_steps, 
             on_complete_hook="compilation_sequence_complete", 
-            job_category="ui_blocking", 
+            job_category="system_background", 
             force_full=force_full, 
             ledger_events=ledger_events
         )
@@ -215,7 +215,7 @@ def init_gather_workers(workspace_id=None, **kwargs):
             ctx.jobs.submit_chain(
                 ordered_steps, 
                 on_complete_hook="compilation_sequence_complete", 
-                job_category="ui_blocking", 
+                job_category="system_background", 
                 force_full="compile_only"
             )
     except Exception as e:

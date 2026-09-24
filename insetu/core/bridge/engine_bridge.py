@@ -1,6 +1,8 @@
 import uuid
+import json
 from flask import jsonify
 from akasa.db import get_connection
+from akasa.hooks import hooks
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
 from insetu.core.sdk import InSetuExtension
 
@@ -179,7 +181,6 @@ class BridgeSyncPayload(TypedDict, total=False):
 def bridge_sync(ctx):
     """Receives Yomama payloads from the UI and dispatches the sync."""
     data = ctx.req.json or {}
-    import json
     args_json = json.dumps(data)
 
     # Idempotency Guardrail: Prevent duplicate overlapping patches
@@ -233,7 +234,6 @@ def _background_bridge_sync(job_id, workspace_id, **kwargs):
         err = traceback.format_exc()
         update_immediate_job_status(job_id, 'failed', f"Bridge Fatal Error: {str(e)}\n\n{err}", workspace_id=workspace_id)
         try:
-            from akasa.hooks import hooks
             hooks.emit_background('system_error', source="Bridge:Sync", error_type=type(e).__name__, message=str(e), traceback=err, payload=str(kwargs), workspace_id=workspace_id)
         except Exception: pass
 register_callback("bridge", "sync_task", _background_bridge_sync)
