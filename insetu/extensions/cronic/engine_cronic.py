@@ -5,6 +5,7 @@ import shutil
 import uuid
 import time
 from pathlib import Path
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
@@ -70,15 +71,17 @@ def _sync_system_crontab(ctx):
         crontab_lines.append(cron_entry)
     new_crontab = "\n".join(crontab_lines) + "\n"
     ctx.exec.run(["crontab", "-"], input=new_crontab, check=True)
-@cronic_bp.route('status', methods=['GET'])
+@cronic_bp.route('status', methods=['GET'], docstring="Checks if the underlying OS environment supports crontab scheduling.")
 def get_status(ctx):
     return jsonify({"has_crontab": has_crontab()})
-
-@cronic_bp.route('list', methods=['GET'])
+@cronic_bp.route('list', methods=['GET'], docstring="Lists all configured cronic jobs and their current execution status.")
 def list_jobs(ctx):
     return jsonify({"jobs": ctx.db.get_all("cronic_jobs")})
+class CronicSchedulePayload(TypedDict):
+    filepath: str
+    schedule: str
 
-@cronic_bp.route('schedule', methods=['POST'])
+@cronic_bp.route('schedule', methods=['POST'], request_schema=CronicSchedulePayload, docstring="Schedules a script file to execute periodically via the system crontab.")
 def schedule_job(ctx):
     data = ctx.req.json or {}
     filepath = data.get("filepath", "").strip()
@@ -98,8 +101,11 @@ def schedule_job(ctx):
 
     _sync_system_crontab(ctx)
     return jsonify({"status": "success", "job_id": job_id})
+class CronicTogglePayload(TypedDict):
+    job_id: str
+    enabled: bool
 
-@cronic_bp.route('toggle', methods=['POST'])
+@cronic_bp.route('toggle', methods=['POST'], request_schema=CronicTogglePayload, docstring="Enables or disables an existing scheduled job.")
 def toggle_job(ctx):
     data = ctx.req.json or {}
     job_id = data.get("job_id")
@@ -108,8 +114,10 @@ def toggle_job(ctx):
     ctx.db.update("cronic_jobs", {"enabled": enabled}, "id", job_id)
     _sync_system_crontab(ctx)
     return jsonify({"status": "success"})
+class CronicIdPayload(TypedDict):
+    job_id: str
 
-@cronic_bp.route('delete', methods=['POST'])
+@cronic_bp.route('delete', methods=['POST'], request_schema=CronicIdPayload, docstring="Permanently removes a job from the schedule.")
 def delete_job(ctx):
     data = ctx.req.json or {}
     job_id = data.get("job_id")
@@ -117,8 +125,7 @@ def delete_job(ctx):
     ctx.db.delete("cronic_jobs", "id", job_id)
     _sync_system_crontab(ctx)
     return jsonify({"status": "success"})
-
-@cronic_bp.route('logs', methods=['GET'])
+@cronic_bp.route('logs', methods=['GET'], docstring="Retrieves the recent execution logs for a specified job ID.")
 def get_logs(ctx):
     job_id = ctx.req.args.get("job_id")
     if not job_id:
@@ -162,7 +169,7 @@ def _run_manual_worker(ctx, job_id=None, **kwargs):
     ctx.exec.popen(full_cmd, shell=True, start_new_session=(os.name == 'posix'))
 
     return {"message": "Job dispatched to OS background."}
-@cronic_bp.route('run_now', methods=['POST'])
+@cronic_bp.route('run_now', methods=['POST'], request_schema=CronicIdPayload, docstring="Manually dispatches a cronic job to run immediately in the background.")
 def run_now(ctx):
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("run_manual_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")
@@ -197,7 +204,7 @@ def _kill_task_worker(ctx, job_id=None, **kwargs):
         return {"message": "Termination signal sent to running processes."}
     else:
         return {"message": "No active processes found for this job."}
-@cronic_bp.route('kill', methods=['POST'])
+@cronic_bp.route('kill', methods=['POST'], request_schema=CronicIdPayload, docstring="Terminates any currently running processes executing the specified cronic job script.")
 def kill_job(ctx):
     data = ctx.req.json or {}
     job_id = ctx.jobs.submit("kill_task", cronic_job_id=data.get("job_id"), job_category="ui_blocking")

@@ -1,4 +1,5 @@
 import time
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
@@ -26,8 +27,17 @@ dev_bp = InSetuExtension(
             'file_content': 'TEXT',
             'patch_payload': 'TEXT',
             'timestamp': 'REAL'
+        },
+        'system_errors': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'source': 'TEXT',
+            'error_type': 'TEXT',
+            'message': 'TEXT',
+            'traceback': 'TEXT',
+            'payload': 'TEXT',
+            'timestamp': 'REAL'
         }
-    }
+}
 )
 
 # 2. Intercept Ecosystem Hooks
@@ -35,20 +45,23 @@ dev_bp = InSetuExtension(
 def log_vfs_telemetry(mutations=None, workspace_id="default", **kwargs):
     if not mutations: return
     try:
+        from insetu.core.utils_core import InSetuURI
         ctx = dev_bp.get_context(workspace_id)
         conn = ctx.db
         now = time.time()
+        insert_data = []
         for m in mutations:
-            if m.get("ignore_ledger"):
-                continue
-            filepath = m.get("filepath")
-            if filepath:
-                ctx.parse_uri(filepath)
-                conn.execute(
-                    "INSERT INTO file_telemetry (filepath, operation, timestamp) VALUES (?, ?, ?)",
-                    (filepath, m.get("operation"), now)
-                )
-        conn.commit()
+            if not m.get("ignore_ledger") and m.get("filepath"):
+                uri = InSetuURI.from_any(m.get("filepath"))
+                if uri.scheme == 'vfs':
+                    insert_data.append((str(uri), m.get("operation"), now))
+
+        if insert_data:
+            conn.executemany(
+                "INSERT INTO file_telemetry (filepath, operation, timestamp) VALUES (?, ?, ?)",
+                insert_data
+            )
+            conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log VFS telemetry: {e}")
 @hooks.on('bridge_error')
@@ -64,14 +77,62 @@ def log_bridge_error(filepath=None, error_type=None, details=None, file_content=
         conn.commit()
     except Exception as e:
         print(f"⚠️ [Dev Dash] Failed to log bridge error: {e}")
+
+@hooks.on('system_error')
+def log_system_error(source="unknown", error_type="Exception", message="", traceback="", payload="", workspace_id="default", **kwargs):
+    try:
+        ctx = dev_bp.get_context(workspace_id)
+        conn = ctx.db
+        conn.execute(
+            "INSERT INTO system_errors (source, error_type, message, traceback, payload, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (source, error_type, message, traceback, payload, time.time())
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"⚠️ [Dev Dash] Failed to log system error: {e}")
+
 # 3. Rest Route for Metric Aggregation
-@dev_bp.route('metrics', methods=['GET'])
+class CmdExecPayload(TypedDict, total=False):
+    command: str
+    cwd: Optional[str]
+    timeout: Optional[int]
+
+class CmdExecResponse(TypedDict):
+    exit_code: int
+    stdout: str
+    stderr: str
+
+@dev_bp.route('exec', methods=['POST'], request_schema=CmdExecPayload, response_schema=CmdExecResponse, docstring="Executes an arbitrary shell command within the workspace sandbox for testing and verification.")
+def api_dev_exec(ctx):
+    data = ctx.req.json or {}
+    cmd = data.get("command", "").strip()
+    if not cmd:
+        return jsonify({"error": "Command string is required."}), 400
+
+    timeout = min(int(data.get("timeout", 30)), 120)
+    cwd = data.get("cwd")
+
+    try:
+        res = ctx.exec.run(cmd, shell=True, cwd=cwd, timeout=timeout)
+        return jsonify({
+            "exit_code": res.returncode,
+            "stdout": res.stdout or "",
+            "stderr": res.stderr or ""
+        })
+    except Exception as e:
+        return jsonify({
+            "exit_code": -1,
+            "stdout": "",
+            "stderr": str(e)
+        }), 500
+@dev_bp.route('metrics', methods=['GET'], docstring="Retrieves system telemetry metrics, including file thrashing limits and bridge errors.")
 def get_dev_metrics(ctx):
     now = time.time()
     cutoff = now - 3600  
-
-    # Fetch all telemetry in the last hour
-    raw_telemetry = ctx.db.execute("SELECT filepath, timestamp FROM file_telemetry WHERE timestamp >= ?", (cutoff,)).fetchall()
+    # Fetch all telemetry in the last hour from the correct workers ledger
+    import akasa.db as kernel_db
+    w_conn = kernel_db.get_connection("workers", workspace_id=ctx.workspace_id)
+    raw_telemetry = w_conn.execute("SELECT filepath, timestamp FROM vfs_event_log WHERE timestamp >= ?", (cutoff,)).fetchall()
 
     file_buckets = {}
     for row in raw_telemetry:
@@ -98,7 +159,6 @@ def get_dev_metrics(ctx):
             })
 
     thrashing_data.sort(key=lambda x: x['peak_mutations'], reverse=True)
-
     error_rows = ctx.db.execute("""
         SELECT 
             GROUP_CONCAT(DISTINCT filepath) as filepath,
@@ -114,37 +174,51 @@ def get_dev_metrics(ctx):
         LIMIT 50
     """).fetchall()
 
+    system_error_rows = ctx.db.execute("""
+        SELECT source, error_type, message, traceback, payload, timestamp
+        FROM system_errors
+        ORDER BY timestamp DESC
+        LIMIT 50
+    """).fetchall()
+
     return jsonify({
         "thrashing": thrashing_data,
-        "bridge_errors": [dict(r) for r in error_rows]
+        "bridge_errors": [dict(r) for r in error_rows],
+        "system_errors": [dict(r) for r in system_error_rows]
     })
-@dev_bp.route('sql/databases', methods=['GET'])
+@dev_bp.route('sql/databases', methods=['GET'], docstring="Lists all available SQLite databases within the tenant data directory.")
 def list_sql_databases(ctx):
     """Lists all available SQLite databases within the tenant data directory."""
     from pathlib import Path
-    artifacts_dir = Path(ctx.paths['artifacts_base'])
+    import os
+    ext_base = Path(ctx.paths['control_dir']).joinpath("ext")
     dbs = []
-    if artifacts_dir.exists():
-        for p in artifacts_dir.glob("*.db"):
-            dbs.append(p.stem)
-    return jsonify({"databases": sorted(dbs)})
+    if ext_base.exists() and ext_base.is_dir():
+        for ext_dir in ext_base.iterdir():
+            if ext_dir.is_dir():
+                db_dir = ext_dir.joinpath("db")
+                if db_dir.exists() and db_dir.is_dir():
+                    for p in db_dir.glob("*.db"):
+                        dbs.append(p.stem)
+    return jsonify({"databases": sorted(list(set(dbs)))})
+class SqlQueryPayload(TypedDict, total=False):
+    db_name: str
+    query: str
 
-@dev_bp.route('sql/query', methods=['POST'])
+@dev_bp.route('sql/query', methods=['POST'], request_schema=SqlQueryPayload, docstring="Executes a constrained SQL query against a target workspace database.")
 def execute_sql_query(ctx):
     """Executes a constrained SQL query against a target workspace database."""
     data = ctx.req.json or {}
     db_name = data.get("db_name", "workers").strip()
     query = data.get("query", "").strip()
-
     if not query:
         return jsonify({"error": "SQL query string is required."}), 400
-
     from pathlib import Path
+    import akasa.db as kernel_db
     clean_db_name = Path(db_name).stem or "workers"
-    import time
 
     try:
-        conn = ctx.db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
+        conn = kernel_db.get_connection(clean_db_name, workspace_id=ctx.workspace_id)
         t0 = time.time()
         cursor = conn.execute(query)
         elapsed_ms = round((time.time() - t0) * 1000, 2)
@@ -177,12 +251,12 @@ def execute_sql_query(ctx):
             "database": clean_db_name,
             "error": str(e)
         }), 400
-@dev_bp.route('logs', methods=['GET'])
+@dev_bp.route('logs', methods=['GET'], docstring="Retrieves the systemd journal logs for the background backend daemon.")
 def get_backend_logs(ctx):
-    import subprocess
+    from insetu.core.utils_core import execute_binary
     try:
         # Query the systemd journal for the user service if running in background
-        res = subprocess.run(  # IO_BLOCK_BAN bypass
+        res = execute_binary(  # IO_BLOCK_BAN bypass
             ["journalctl", "--user", "-u", "insetu.service", "-n", "200", "--no-pager"], 
             capture_output=True, text=True, timeout=5
         )
@@ -197,14 +271,14 @@ def get_backend_logs(ctx):
         return jsonify({"status": "error", "logs": f"Failed to fetch logs: {str(e)}"})
 @dev_bp.worker("download_boot_logs_task")
 def download_boot_logs_worker(ctx, **kwargs):
-    import subprocess
+    from insetu.core.utils_core import execute_binary
     from pathlib import Path
     from akasa.workers import register_ephemeral_artifact
 
     ctx.jobs.update_progress("Extracting current invocation systemd logs...")
     try:
         # 1. Retrieve the unique InvocationID for the current service run
-        inv_res = subprocess.run(  # IO_BLOCK_BAN bypass
+        inv_res = execute_binary(  # IO_BLOCK_BAN bypass
             ["systemctl", "--user", "show", "-p", "InvocationID", "--value", "insetu.service"],
             capture_output=True, text=True, timeout=5
         )
@@ -216,7 +290,7 @@ def download_boot_logs_worker(ctx, **kwargs):
         else:
             cmd = ["journalctl", "--user", "-u", "insetu.service", "-n", "5000", "--no-pager"]
 
-        res = subprocess.run(  # IO_BLOCK_BAN bypass
+        res = execute_binary(  # IO_BLOCK_BAN bypass
             cmd, capture_output=True, text=True, timeout=15
         )
         log_content = res.stdout.strip() if (res.returncode == 0 and res.stdout.strip()) else "No systemd logs found for current invocation of 'insetu.service'."
@@ -237,7 +311,7 @@ def download_boot_logs_worker(ctx, **kwargs):
             "url": f"/download/{out_file}"
         }
     }
-@dev_bp.route('logs/download', methods=['POST'])
+@dev_bp.route('logs/download', methods=['POST'], docstring="Exports the current backend daemon invocation logs to a downloadable text file.")
 def api_download_logs(ctx):
     job_id = ctx.jobs.submit("download_boot_logs_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
@@ -248,11 +322,11 @@ def sweep_telemetry_worker(ctx, **kwargs):
     # Retain 2 hours of telemetry to support the 1-hour dashboard window
     cutoff = time.time() - 7200
     ctx.db.execute("DELETE FROM file_telemetry WHERE timestamp < ?", (cutoff,))
-    
     # Retain bridge errors for up to 7 days for LLM analysis context
     week_cutoff = time.time() - (86400 * 7)
     ctx.db.execute("DELETE FROM bridge_errors WHERE timestamp < ?", (week_cutoff,))
-    
+    ctx.db.execute("DELETE FROM system_errors WHERE timestamp < ?", (week_cutoff,))
+
     ctx.db.commit()
     return "Telemetry swept."
 @hooks.on('topology_boot_complete')

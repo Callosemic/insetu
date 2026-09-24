@@ -4,6 +4,7 @@ import io
 import tempfile
 import subprocess
 import shutil
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.workers import register_ephemeral_artifact
@@ -47,8 +48,11 @@ def _background_compile(ctx, filepath, target_format, job_id=None, **kwargs):
             "filename": download_name
         }
     }
+class CompileDocumentPayload(TypedDict, total=False):
+    filepath: str
+    format: Optional[str]
 
-@publish_bp.route('compile-document', methods=['POST'])
+@publish_bp.route('compile-document', methods=['POST'], request_schema=CompileDocumentPayload, docstring="Compiles a Markdown document into a target format (PDF, DOCX, HTML) using Pandoc.")
 def api_publish_compile_document(ctx):
     data = ctx.req.json or {}
     filepath = data.get('filepath')

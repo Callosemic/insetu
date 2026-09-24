@@ -3,6 +3,7 @@ import os
 import json
 import urllib.request
 import urllib.parse
+from typing import TypedDict, Optional, List
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
@@ -113,7 +114,7 @@ def compile_citation_contexts(manifest, workspace_id=None, **kwargs):
 
     except Exception as e:
         print(f"Extension Hook Error (citations compile): {e}")
-@citations_bp.route('index', methods=['GET'])
+@citations_bp.route('index', methods=['GET'], docstring="Retrieves a unique index of all authors and publications present in the global library.")
 def get_metadata_index(ctx):
     """Leverages SQLite JSON1 C-extensions to calculate aggregates instantly, eliminating Python RAM caching."""
     conn = ctx.db
@@ -132,7 +133,7 @@ def get_metadata_index(ctx):
         return jsonify({"publications": pubs, "authors": sorted(list(authors))})
     except Exception as e:
         return jsonify({"publications": [], "authors": []})
-@citations_bp.route('list', methods=['GET'])
+@citations_bp.route('list', methods=['GET'], docstring="Retrieves all stored academic citations with their associated attachment metadata.")
 def get_citations(ctx):
     try:
         rows = ctx.db.get_all(table="citations", order_by="id ASC")
@@ -144,7 +145,10 @@ def get_citations(ctx):
         return jsonify({"citations": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('<path:csl_id>/attach', methods=['POST'])
+class AttachCitationPayload(TypedDict):
+    attachments: List[dict]
+
+@citations_bp.route('<path:csl_id>/attach', methods=['POST'], request_schema=AttachCitationPayload, docstring="Attaches files or metadata pointers to a specific citation ID.")
 def attach_citation(ctx, csl_id):
     data = ctx.req.json
     attachments = data.get("attachments", [])
@@ -159,7 +163,6 @@ def attach_citation(ctx, csl_id):
 def _background_citation_search(ctx, query, source, field, category, page, **kwargs):
     try:
         ctx.jobs.update_progress("Querying global academic catalogs...")
-        import urllib.parse, urllib.request, json
         safe_query = urllib.parse.quote(query) if query else ""
         csl_items = []
         offset = (page - 1) * 20
@@ -241,8 +244,14 @@ def _background_citation_search(ctx, query, source, field, category, page, **kwa
         return {"message": "Search complete.", "artifact": {"citations": csl_items}}
     except Exception as e:
         raise RuntimeError(f"Catalog Search Failed: {str(e)}")
+class SearchCitationsPayload(TypedDict, total=False):
+    q: str
+    source: str
+    field: str
+    category: str
+    page: int
 
-@citations_bp.route('search', methods=['POST'])
+@citations_bp.route('search', methods=['POST'], request_schema=SearchCitationsPayload, docstring="Queries global academic catalogs for citations matching the criteria.")
 def search_global_citations(ctx):
     data = ctx.req.json or {}
     query = data.get('q', '').strip()
@@ -258,8 +267,11 @@ def search_global_citations(ctx):
         return jsonify({"citations": []})
     job_id = ctx.jobs.submit("search_task", query=query, source=source, field=field, category=category, page=page, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+class ImportCitationsPayload(TypedDict, total=False):
+    citations: List[dict]
+    strategy: str
 
-@citations_bp.route('import', methods=['POST'])
+@citations_bp.route('import', methods=['POST'], request_schema=ImportCitationsPayload, docstring="Imports an array of CSL-JSON citation objects into the global library, resolving conflicts based on the chosen strategy.")
 def import_citations(ctx):
     data = ctx.req.json
     if not data:
@@ -308,7 +320,7 @@ def import_citations(ctx):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@citations_bp.route('<path:csl_id>', methods=['DELETE'])
+@citations_bp.route('<path:csl_id>', methods=['DELETE'], docstring="Permanently removes a citation from the global library.")
 def delete_citation(ctx, csl_id):
     try:
         conn = ctx.db

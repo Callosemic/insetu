@@ -3,6 +3,7 @@ import os
 import json
 import uuid
 import datetime
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 
@@ -17,14 +18,21 @@ FAVORITES_SCHEMA = {
 }
 favorites_bp = InSetuExtension('favorites', __name__, title="Favorites Bar", description="Pin files and folders for quick access.", schema=FAVORITES_SCHEMA)
 __depends__ = []
-@favorites_bp.route('list', methods=['GET'])
+@favorites_bp.route('list', methods=['GET'], docstring="Lists all favorited files, folders, and resources.")
 def list_favorites(ctx):
     try:
         items = ctx.db.get_all(table="favorites", order_by="created_at DESC")
         return jsonify({"favorites": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@favorites_bp.route('add', methods=['POST'])
+class FavoriteAddPayload(TypedDict, total=False):
+    folderpath: str
+    filepath: str
+    path: str
+    type: str
+    name: str
+
+@favorites_bp.route('add', methods=['POST'], request_schema=FavoriteAddPayload, docstring="Pins a new file or folder to the favorites bar.")
 def add_favorite(ctx):
     data = ctx.req.json or {}
 
@@ -52,7 +60,7 @@ def add_favorite(ctx):
         return jsonify({"status": "success", "id": fav_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'])
+@favorites_bp.route('delete/<fav_id>', methods=['DELETE', 'POST'], docstring="Removes a pinned item from the favorites bar.")
 def delete_favorite(ctx, fav_id):
     try:
         ctx.db.delete("favorites", "id", fav_id)

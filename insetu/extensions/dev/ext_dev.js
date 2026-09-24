@@ -4,16 +4,17 @@ import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
 export const DevStore = createExtensionStore('Dev', {
     thrashingFiles: [],
     bridgeErrors: [],
+    systemErrors: [],
     backendLogs: '',
     lastUpdate: null,
     forceRefreshTick: 0
 });
 export class InSetuExtDevDash extends InSetuElement {
     static get extensionName() { return 'dev'; }
-
     static properties = {
         thrashingFiles: { type: Array },
         bridgeErrors: { type: Array },
+        systemErrors: { type: Array },
         lastUpdate: { type: String },
         _expandedGraphs: { type: Object }
     };
@@ -21,35 +22,36 @@ export class InSetuExtDevDash extends InSetuElement {
     static styles = [sharedStyles, css`
         :host { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; background: var(--bg); }
     `];
-
     constructor() {
         super();
         this.thrashingFiles = [];
         this.bridgeErrors = [];
+        this.systemErrors = [];
         this.lastUpdate = '';
         this._expandedGraphs = {};
+        this._lastTick = 0;
     }
     connectedCallback() {
         super.connectedCallback();
         this.subscribe(DevStore, state => {
             this.thrashingFiles = state.thrashingFiles || [];
             this.bridgeErrors = state.bridgeErrors || [];
+            this.systemErrors = state.systemErrors || [];
             this.lastUpdate = state.lastUpdate;
-        });
 
-        this.subscribe(DevStore, state => state.forceRefreshTick, (tick) => {
-            if (tick) {
+            if (state.forceRefreshTick && state.forceRefreshTick !== this._lastTick) {
+                this._lastTick = state.forceRefreshTick;
                 this.fetchMetrics();
             }
         });
+
         this.registerGlobalListener('sutram-route-changed', window, (e) => {
             if (e.detail.tab === 'dev' && (!e.detail.subTabs['dev'] || e.detail.subTabs['dev'] === 'dash')) {
                 DevStore.setState({ forceRefreshTick: Date.now() });
             }
         });
-
         this.registerGlobalListener('insetu:soft-refresh', window, () => {
-            DevStore.setState({ thrashingFiles: [], bridgeErrors: [] });
+            DevStore.setState({ thrashingFiles: [], bridgeErrors: [], systemErrors: [] });
         });
         this.registerGlobalListener('insetu:vfs-mutated', window, this.utils.debounce((e) => {
             const payload = e.detail;
@@ -78,6 +80,7 @@ export class InSetuExtDevDash extends InSetuElement {
                 DevStore.setState({ 
                     thrashingFiles: data.thrashing || [],
                     bridgeErrors: data.bridge_errors || [],
+                    systemErrors: data.system_errors || [],
                     lastUpdate: this.utils.formatDate(new Date())
                 });
             } else {
@@ -141,6 +144,51 @@ export class InSetuExtDevDash extends InSetuElement {
                                                 })}
                                             </div>
                                         </div>
+                                    ` : ''}
+                                </div>
+                            `)}
+                        </div>
+                    </insetu-card>
+                    <insetu-card
+                        titleText="System Error Ledger"
+                        descriptionText="Background worker crashes, VFS write failures, and unhandled exceptions."
+                        icon="🚨"
+                        intentColor="var(--intent-danger)"
+                        ?disableSelection=${true}
+                        style="margin-bottom: 20px;">
+
+                        <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                            ${this.systemErrors.length === 0 ? html`
+                                <div style="color: var(--intent-success); font-style: italic; font-size: 0.9rem;">
+                                    ✅ No system errors recorded.
+                                </div>
+                            ` : this.systemErrors.map(err => html`
+                                <div style="display: flex; flex-direction: column; background: var(--bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">
+                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--intent-danger); font-weight: bold;">[${err.source}] ${err.error_type}</span>
+                                        </div>
+                                        <span style="font-size: 0.75rem; color: var(--text-muted);">${this.utils.formatDate(err.timestamp * 1000)}</span>
+                                    </div>
+                                    <div style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text); white-space: pre-wrap; background: var(--input-bg); padding: 6px; border-radius: 4px; margin-bottom: 8px;">${err.message}</div>
+                                    ${(err.traceback || err.payload) ? html`
+                                        <sutram-collapsible titleText="🔍 View Details" intent="neutral" style="--title-size: 0.8rem;">
+                                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                                                ${err.payload ? html`
+                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted);">Payload:</div>
+                                                    <pre style="margin: 0; font-size: 0.75rem; background: var(--input-bg); color: var(--text); padding: 8px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto;">${(() => {
+                                                        if (typeof err.payload !== 'string') return String(err.payload);
+                                                        if (!err.payload.trim().startsWith('{') && !err.payload.trim().startsWith('[')) return err.payload;
+                                                        try { return JSON.stringify(JSON.parse(err.payload), null, 2); } 
+                                                        catch(e) { return err.payload; }
+                                                    })()}</pre>
+                                                ` : ''}
+                                                ${err.traceback ? html`
+                                                    <div style="font-weight: bold; font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Traceback:</div>
+                                                    <pre style="margin: 0; font-size: 0.75rem; background: var(--input-bg); color: var(--text-muted); padding: 8px; border-radius: 4px; border: 1px solid var(--border); overflow-x: auto;">${err.traceback}</pre>
+                                                ` : ''}
+                                            </div>
+                                        </sutram-collapsible>
                                     ` : ''}
                                 </div>
                             `)}
@@ -406,13 +454,14 @@ export class InSetuExtDevSql extends InSetuElement {
                             @sutram-input-changed=${e => this.selectedDb = e.detail.value}
                             style="width: 220px;">
                         </sutram-select>
-
                         <div class="presets" style="flex: 1;">
                             <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: bold;">Quick Presets:</span>
                             <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM topology_ledger ORDER BY timestamp DESC LIMIT 20;', 'topology')}>Topology Ledger</button>
                             <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM manifest_ledger ORDER BY timestamp DESC LIMIT 20;', 'vfs_index')}>Manifest Ledger</button>
                             <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM vfs_event_log ORDER BY timestamp DESC LIMIT 20;', 'workers')}>VFS Event Log</button>
                             <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM immediate_jobs ORDER BY created_at DESC LIMIT 20;', 'workers')}>Immediate Jobs</button>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM system_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}>System Errors</button>
+                            <button class="preset-btn" @click=${() => this._applyPreset('SELECT * FROM bridge_errors ORDER BY timestamp DESC LIMIT 20;', 'dev')}>Bridge Errors</button>
                         </div>
                     </div>
 

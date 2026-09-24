@@ -2,6 +2,7 @@ import os
 import subprocess
 import threading
 import json
+from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
@@ -42,8 +43,7 @@ def set_winsize(fd, row, col, xpix=0, ypix=0):
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except Exception:
         pass
-
-@term_bp.route('status', methods=['GET'])
+@term_bp.route('status', methods=['GET'], docstring="Checks if the underlying system supports PTY streams and Websocket connections.")
 def term_status(ctx):
     return jsonify({
         "has_sock": HAS_SOCK,

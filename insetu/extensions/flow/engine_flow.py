@@ -2,10 +2,14 @@ from pathlib import Path
 import os
 import json
 import uuid
+import re
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
-from akasa.utils import slugify
+from akasa.utils import slugify, generate_ascii_tree
+from insetu.core.utils_core import InSetuURI, reconcile_and_vacuum_domain
+from insetu.core.gather.engine_gather import compile_context_payload
 flow_bp = InSetuExtension(
     'flow', 
     __name__,
@@ -41,7 +45,6 @@ def mount_flow_volumes(workspace_id=None, **kwargs):
     from akasa.vfs import mount_volume
     ctx = flow_bp.get_context(workspace_id)
     mount_volume(workspace_id, 'ctx', 'workflows', ctx.paths.get("workflows_dir"))
-
 @hooks.on('register_compilation_steps')
 def _register_flow_compilation_step(workspace_id=None, **kwargs):
     return [{
@@ -60,18 +63,18 @@ def _background_compile_workflows(ctx, **kwargs):
 
     context_batches = ctx.store.get("workflows.json", "context_batches", [])
     if not context_batches: return {"message": "No active workflows to pack."}
-    from insetu.core.gather.engine_gather import compile_context_payload
 
     full_manifest = ctx.manifest
     current_manifest = full_manifest.get("ctx", {})
     manifest_deltas = {}
     def process_batch(batch):
+        from insetu.core.utils_core import InSetuURI
         batch_id = batch.get("id")
         if not batch_id: return None, None
         includes = batch.get("includes", [])
         target_repos_set = set()
         for i in includes:
-            repo_cand, _ = ctx.parse_uri(i)
+            repo_cand = InSetuURI.from_any(i).repo
             if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
                 target_repos_set.add(repo_cand)
         base_uri = f"ctx://workflows/workflow_{batch_id}_context.txt"
@@ -79,29 +82,19 @@ def _background_compile_workflows(ctx, **kwargs):
         header_str = f"========== BATCH: {batch.get('title', batch.get('id'))} ==========\n\n"
         text_blocks = []
         resolved_files = []
-        from insetu.core.utils_core import InSetuURI
-        # Pre-process includes to auto-heal missing trailing slashes for known physical directories
+        # Canonicalize includes to InSetuURIs natively
         healed_includes = []
         for inc in includes:
-            uri = InSetuURI(inc)
-            if not uri.scheme:
-                if uri.basename.endswith('_context.txt'): inc = f"ctx://contexts/{uri.path}"
-                elif uri.basename.endswith('_diffs.txt'): inc = f"ctx://diffs/{uri.path}"
-                elif uri.path.startswith('prompts/'): inc = f"ctx://{uri.path}"
-                else: inc = f"vfs://{uri.path}"
-
-            check_uri = InSetuURI(inc)
-            if check_uri.scheme == 'vfs' and not check_uri.is_dir:
-                cand_path = ctx.resolve_path(check_uri.path)
-                if cand_path and os.path.isdir(cand_path):
-                    inc += '/'
-            healed_includes.append(inc)
-        print(f"\n🌊 [FLOW TELEMETRY] --- Starting Batch: {batch_id} ---")
+            uri = InSetuURI.from_any(inc)
+            if uri.scheme == 'vfs' and not uri.is_dir and uri.is_dir_physical(ctx.workspace_id):
+                healed_includes.append(f"{str(uri)}/")
+            else:
+                healed_includes.append(str(uri))
+        if os.environ.get("INSETU_DEBUG") == "1":
+            print(f"\n🌊 [FLOW TELEMETRY] --- Starting Batch: {batch_id} ---")
 
         # Centralized SSOT Expansion (handles raw strings, ctx:// chunks, and vfs:// folders natively)
         expanded_chunks = ctx.expand_selection(healed_includes)
-        import re
-        from insetu.core.utils_core import InSetuURI
         for chunk_identifier in expanded_chunks:
             safe_chunk_base = InSetuURI(chunk_identifier).basename
             display_name = chunk_identifier
@@ -111,7 +104,7 @@ def _background_compile_workflows(ctx, **kwargs):
                 if content is not None:
                     text_blocks.append(f"--- {display_name} ---\n{content}\n\n")
                     resolved_files.append(display_name)
-                elif "diffs/" in chunk_identifier or safe_chunk_base.endswith("_diffs.txt"):
+                elif InSetuURI.from_any(chunk_identifier).is_diff:
                     text_blocks.append(f"--- {display_name} (NO PENDING DIFFS) ---\n[Working tree clean. No uncommitted changes detected.]\n\n")
                     resolved_files.append(display_name)
                 else:
@@ -119,7 +112,6 @@ def _background_compile_workflows(ctx, **kwargs):
             except Exception as e:
                 import traceback
                 text_blocks.append(f"--- {display_name} (ERROR READING FILE: {str(e)})\n[Target URI: {chunk_identifier}]\n[Traceback: {traceback.format_exc()}] ---\n\n")
-        from akasa.utils import generate_ascii_tree
         header_str += generate_ascii_tree(resolved_files) + "\n\n"
         batch_repos = set()
         expanded_base_uris = set()
@@ -134,17 +126,17 @@ def _background_compile_workflows(ctx, **kwargs):
                 item_repos = meta_item.get("repos") or ([meta_item.get("repo")] if meta_item.get("repo") else [])
                 batch_repos.update(r for r in item_repos if r)
             else:
-                repo_cand, _ = ctx.parse_uri(chunk)
+                repo_cand = chunk_uri.repo
                 if repo_cand and repo_cand not in ('contexts', 'diffs', 'prompts', 'workflows'):
                     batch_repos.add(repo_cand)
 
         # Skip recompiling clean batches if target_repos is specified
         if target_repos and not (batch_repos & set(target_repos)):
             return None, None
-
         # Incremental Speed Boost: Skip workflows that don't depend on the specific context/diffs that just changed
-        touched_buckets = kwargs.get("touched_buckets")
-        touched_diffs = kwargs.get("touched_diffs")
+        chain_state = kwargs.get("chain_state", {})
+        touched_buckets = chain_state.get("touched_buckets")
+        touched_diffs = chain_state.get("touched_diffs")
         ledger_events = kwargs.get("ledger_events", [])
 
         if touched_buckets is not None and touched_diffs is not None:
@@ -167,9 +159,9 @@ def _background_compile_workflows(ctx, **kwargs):
                     if not active_repos or repo_cand in active_repos:
                         has_targeted_raw_files = True
                         break
-
             if not has_targeted_raw_files and not (expanded_base_uris & changed_deps):
-                print(f"🌊 [FLOW TELEMETRY] ⏭️ Incremental Skip: Batch {batch_id} untouched. Preserving manifest entry.")
+                if os.environ.get("INSETU_DEBUG") == "1":
+                    print(f"🌊 [FLOW TELEMETRY] ⏭️ Incremental Skip: Batch {batch_id} untouched. Preserving manifest entry.")
                 existing_entry = current_manifest.get(base_uri)
                 if existing_entry:
                     return base_uri, existing_entry
@@ -200,14 +192,20 @@ def _background_compile_workflows(ctx, **kwargs):
         domain_dir="ctx://workflows",
         target_repos=target_repos
     )
-
-    return {"message": "Workflows compiled successfully."}
-@flow_bp.route('batches', methods=['GET'])
+    return {
+        "message": "Workflows compiled successfully.",
+        "artifact": {
+            "files": list(manifest_deltas.keys()),
+            "cleared_buckets": ["global::workflows"],
+            "touched_buckets": ["global::workflows"],
+            "is_full_sweep": False
+        }
+    }
+@flow_bp.route('batches', methods=['GET'], docstring="Retrieves compiled workflow batches and available contexts.")
 def api_flow_batches(ctx):
     batches = ctx.store.get("workflows.json", "context_batches", [])
 
     # Auto-migrate IDs to match titles to prevent legacy recursion
-    from akasa.utils import slugify
     changed = False
     used_ids = set()
     for b in batches:
@@ -257,8 +255,7 @@ def api_flow_batches(ctx):
             if res: available_prompts.extend(res)
     except Exception:
         pass
-        
-    import re
+
     def _is_base(name):
         if not name or not isinstance(name, str): return False
         return not bool(re.search(r'_part\d+\.txt$', name))
@@ -299,7 +296,19 @@ def handle_flow_pre_save(workspace_id=None, filepath=None, content=None, data=No
                         if content is not None:
                             ctx.vfs.save(dest_path, content)
                             ctx.vfs.delete(walk_path, data={"ignore_ledger": True})
-@flow_bp.route('batches/save', methods=['POST'])
+class FlowBatchSavePayload(TypedDict, total=False):
+    id: str
+    title: str
+    domain: str
+    includes: list
+    original_id: Optional[str]
+    show_if_exists: Optional[list]
+    show_if_missing: Optional[list]
+    include_prompt: Optional[str]
+    response_path: Optional[str]
+    archive_path: Optional[str]
+
+@flow_bp.route('batches/save', methods=['POST'], request_schema=FlowBatchSavePayload, docstring="Creates or updates a workflow batch configuration.")
 def api_flow_batches_save(ctx):
     data = ctx.req.json
     batches = ctx.store.get("workflows.json", "context_batches", [])
@@ -322,13 +331,21 @@ def api_flow_batches_save(ctx):
         batches.append(data)
     ctx.store.set("workflows.json", "context_batches", batches)
 
-    return jsonify({"status": "success", "manifest": ctx.manifest})
+    # Backend-Driven Orchestration: Automatically trigger workflow compilation
+    ctx.jobs.submit("compile_workflows_task", coalesce=True, job_category="ui_blocking")
 
-@flow_bp.route('batches/delete', methods=['POST'])
+    return jsonify({"status": "success", "manifest": ctx.manifest})
+class FlowBatchDeletePayload(TypedDict):
+    id: str
+
+@flow_bp.route('batches/delete', methods=['POST'], request_schema=FlowBatchDeletePayload, docstring="Deletes a workflow batch configuration.")
 def api_flow_batches_delete(ctx):
     data = ctx.req.json
     batch_id = data.get("id")
     batches = ctx.store.get("workflows.json", "context_batches", [])
     ctx.store.set("workflows.json", "context_batches", [b for b in batches if b.get("id") != batch_id])
+
+    # Backend-Driven Orchestration: Automatically trigger workflow compilation
+    ctx.jobs.submit("compile_workflows_task", coalesce=True, job_category="ui_blocking")
 
     return jsonify({"status": "success", "manifest": ctx.manifest})

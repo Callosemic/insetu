@@ -3,12 +3,14 @@ import os
 import shutil
 import re
 import json
+import uuid
+from typing import TypedDict
 from datetime import datetime, timedelta
 from flask import request, jsonify
 from akasa.utils import sniff_tenant_id
 from akasa.hooks import hooks
 from insetu.core.sdk import InSetuExtension
-from insetu.core.utils_core import get_repo_path
+from insetu.core.utils_core import get_repo_path, InSetuURI
 TRACKER_SCHEMA = {
     "tracker_tickets": {
         "id": "TEXT PRIMARY KEY",
@@ -156,7 +158,8 @@ def handle_tracker_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
         filepath = m.get("filepath", "")
         op = m.get("operation") or m.get("mutation_type")
 
-        repo_dir, clean_rel = ctx.parse_uri(filepath)
+        uri = InSetuURI.from_any(filepath)
+        repo_dir, clean_rel = uri.repo, uri.path
         canonical_rel_path = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
         if ".tracker/" in canonical_rel_path and canonical_rel_path.endswith(".md"):
             if op in ("save", "added", "modified", "create", "created"):
@@ -197,7 +200,6 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
             desc = re.sub(r'^## Description\n+', '', desc).strip()
         inferred = Path(rel_path).parent.parent.name.lower()
         if inferred.endswith("s"): inferred = inferred[:-1]
-
         ticket_type = yaml_data.get('type', inferred if inferred else "task").lower()
         inferred_status = "unknown"
         if "/open/" in rel_path: inferred_status = "open"
@@ -209,7 +211,7 @@ def _parse_and_upsert_ticket(abs_path, rel_path, workspace_id):
 
         status = _normalize_status(yaml_data.get('status'), fallback=inferred_status)
 
-        repo_dir, _ = ctx.parse_uri(rel_path)
+        repo_dir = InSetuURI.from_any(rel_path).repo
         raw_repo = yaml_data.get('repo') or repo_dir or "unknown"
         repo = _canonicalize_repo(ctx, raw_repo)
         tier = yaml_data.get('tier')
@@ -458,7 +460,6 @@ def _background_harmonize_vocabulary(ctx, renames=None, **kwargs):
     """Background Metronome job to migrate physical Markdown files to new semantic types."""
     if not renames: return
     from insetu.core.utils_core import parse_frontmatter
-    import json
     conn = ctx.db
     try:
         for rename in renames:
@@ -505,7 +506,8 @@ def transition_ticket(ctx, repo, current_rel_path, new_status, new_type=None):
     """Moves a ticket across the ecosystem and stamps the close date if applicable."""
     from insetu.core.utils_core import update_frontmatter, parse_frontmatter, parse_list_field
 
-    repo_dir, clean_rel = ctx.parse_uri(current_rel_path)
+    uri = InSetuURI.from_any(current_rel_path)
+    repo_dir, clean_rel = uri.repo, uri.path
     canonical_current_rel = f"{repo_dir}/{clean_rel}" if repo_dir else clean_rel
 
     content = ctx.vfs.read(canonical_current_rel)
@@ -592,7 +594,8 @@ def enforce_declarative_tickets(workspace_id=None, specific_file=None):
         valid_buckets_by_repo[r] = buckets
     target_files = []
     if specific_file:
-        repo_dir, rel_path = ctx.parse_uri(specific_file)
+        uri = InSetuURI.from_any(specific_file)
+        repo_dir, rel_path = uri.repo, uri.path
         target_files.append((repo_dir, f"{repo_dir}/{rel_path}" if repo_dir else rel_path))
     else:
         from insetu.core.topology.engine_topology import get_topology_files_for_repo
@@ -847,10 +850,8 @@ def _background_spawn_template(ctx, target_repo=None, template_id=None, variable
     tree_tickets.append(root_ticket)
     collect_children(template_id)
 
-    import uuid, datetime, json
-
     id_map = {}
-    now = datetime.datetime.now()
+    now = datetime.now()
 
     repo_prefix = target_repo.split("-")[-1].upper()[:3] if "-" in target_repo else target_repo.upper()[:3]
     if not repo_prefix: repo_prefix = "TKT"
@@ -858,11 +859,10 @@ def _background_spawn_template(ctx, target_repo=None, template_id=None, variable
     # Generate sequential timestamps to prevent collision
     for idx, t in enumerate(tree_tickets):
         ticket_type = t['ticket_type']
-        timestamp = (now + datetime.timedelta(seconds=idx)).strftime("%Y%m%d_%H%M%S")
+        timestamp = (now + timedelta(seconds=idx)).strftime("%Y%m%d_%H%M%S")
         new_id = f"{repo_prefix}-{ticket_type.upper()}-{timestamp}"
         id_map[t['id']] = new_id
 
-    import re
     def apply_vars(text):
         if not text: return text
         def replacer(match):
@@ -910,8 +910,12 @@ def _background_spawn_template(ctx, target_repo=None, template_id=None, variable
         )
 
     return {"message": f"Successfully spawned template instance with {len(tree_tickets)} tasks.", "artifact": {}}
+class TrackerSpawnPayload(TypedDict, total=False):
+    target_repo: str
+    template_id: str
+    variables: dict
 
-@tracker_bp.route('spawn_template', methods=['POST'])
+@tracker_bp.route('spawn_template', methods=['POST'], request_schema=TrackerSpawnPayload, docstring="Spawns a new ticket tree from an existing template.")
 def api_tracker_spawn_template(ctx):
     data = ctx.req.json
     target_repo = data.get('target_repo')
@@ -999,18 +1003,22 @@ def archive_stale_tickets(workspace_id=None):
                             pass
 
     return archived_count
-@tracker_bp.route('system_schemas', methods=['GET'])
+@tracker_bp.route('system_schemas', methods=['GET'], docstring="Provides the immutable system schemas to the frontend.")
 def api_tracker_system_schemas(ctx):
     """SSOT: Provides the immutable system schemas to the frontend."""
-    from flask import jsonify
     # Hydrate the isSystem flag dynamically over the wire
     hydrated_schemas = [{**s, "isSystem": True} for s in SYSTEM_SCHEMAS]
     return jsonify({"system_schemas": hydrated_schemas})
-@tracker_bp.route('vocab_settings', methods=['POST'])
+class TrackerVocabPayload(TypedDict, total=False):
+    hierarchy_labels: dict
+    kanban_profiles: list
+    kanban_repo_map: dict
+    parent_tabs: list
+    global_views: list
+    renames: list
+@tracker_bp.route('vocab_settings', methods=['POST'], request_schema=TrackerVocabPayload, docstring="Saves custom Kanban vocabulary and structural layout settings, triggering a background harmonization job if renames are detected.")
 def save_vocab_settings(ctx):
     """Intercepts vocabulary changes to trigger the background harmonization engine."""
-    from flask import jsonify
-
     data = ctx.req.json
     repo = ctx.req.args.get('repo')
 
@@ -1030,8 +1038,22 @@ def save_vocab_settings(ctx):
         return jsonify({"status": "accepted", "job_id": job_id}), 202
 
     return jsonify({"status": "ok", "migrating": False})
+class TrackerNewPayload(TypedDict, total=False):
+    repo: str
+    type: str
+    status: str
+    title: str
+    description: str
+    tags: str
+    sub_bucket: str
+    delivery_date: str
+    parent_id: str
+    depends_on: str
+    priority: str
+    size: str
+    tier: int
 
-@tracker_bp.route('new', methods=['POST'])
+@tracker_bp.route('new', methods=['POST'], request_schema=TrackerNewPayload, docstring="Creates a new markdown-based Kanban ticket.")
 def api_tracker_new(ctx):
     data = ctx.req.json
     try:
@@ -1054,7 +1076,7 @@ def api_tracker_new(ctx):
         return jsonify({"status": "success", "filepath": new_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@tracker_bp.route('index', methods=['GET'])
+@tracker_bp.route('index', methods=['GET'], docstring="Retrieves a unique index of distinct tags, sub-buckets, and status counts across active tickets.")
 def api_tracker_index(ctx):
     """CQRS Aggregation Path: Leverages SQLite json_each to compile distinct tags and buckets in C."""
     conn = ctx.db
@@ -1090,8 +1112,10 @@ def api_tracker_index(ctx):
         })
     except Exception as e:
         return jsonify({"tags": [], "sub_buckets": [], "status_counts": {}})
+class TrackerFilesResponse(TypedDict):
+    tasks: list
 
-@tracker_bp.route('files', methods=['GET'])
+@tracker_bp.route('files', methods=['GET'], response_schema=TrackerFilesResponse, docstring="Returns a JSON array of all active Kanban tickets across the workspace.")
 def api_tracker_files(ctx):
     try:
         conn = ctx.db
@@ -1147,7 +1171,7 @@ def _background_restore_metadata(ctx, **kwargs):
     ctx.jobs.update_progress("Scanning Git history for wiped ticket metadata...")
     restored_count = restore_ticket_metadata_from_git(workspace_id=ctx.workspace_id)
     return f"Restored metadata for {restored_count} tickets from Git history."
-@tracker_bp.route('restore_metadata', methods=['POST'])
+@tracker_bp.route('restore_metadata', methods=['POST'], docstring="Scans Git history to restore wiped metadata (e.g. creation dates) for all tickets.")
 def api_tracker_restore_metadata(ctx):
     job_id = ctx.jobs.submit("restore_metadata_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
@@ -1302,8 +1326,13 @@ def restore_ticket_metadata_from_git(workspace_id=None):
 
     ctx.db.commit()
     return restored_count
+class TrackerTransitionPayload(TypedDict, total=False):
+    repo: str
+    filepath: str
+    new_status: str
+    new_type: str
 
-@tracker_bp.route('transition', methods=['POST'])
+@tracker_bp.route('transition', methods=['POST'], request_schema=TrackerTransitionPayload, docstring="Transitions a Kanban ticket to a new status or type, automatically relocating the markdown file on disk.")
 def api_tracker_transition(ctx):
     data = ctx.req.json
     try:

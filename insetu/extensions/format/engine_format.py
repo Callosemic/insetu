@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import sys
+from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 
@@ -53,8 +54,10 @@ def _background_format_code(ctx, filepath=None, **kwargs):
         return {"message": "Python code formatted successfully.", "artifact": {"filepath": filepath}}
     else:
         raise ValueError(f"Unsupported file type for code formatting: {ext}")
+class FormatCodePayload(TypedDict):
+    filepath: str
 
-@format_bp.route('format-code', methods=['POST'])
+@format_bp.route('format-code', methods=['POST'], request_schema=FormatCodePayload, docstring="Formats the specified source code file using standard beautifiers (e.g. autopep8, black, jsbeautifier).")
 def api_format_code(ctx):
     data = ctx.req.json or {}
     filepath = data.get('filepath')

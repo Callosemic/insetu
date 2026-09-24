@@ -1,5 +1,6 @@
 import os
 import subprocess
+from typing import TypedDict
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
@@ -115,7 +116,7 @@ def auto_bind_on_workspace_boot(workspace_id=None, **kwargs):
             ctx.jobs.submit("bind_serve_task", coalesce=True, job_category="system_background")
     except Exception as e:
         print(f"⚠️ [Tailscale] Auto-bind trigger failed for [{workspace_id}]: {e}")
-@tailscale_bp.route('bind', methods=['POST'])
+@tailscale_bp.route('bind', methods=['POST'], docstring="Manually triggers 'tailscale serve' to expose the local inSetu port to the Tailnet.")
 def api_bind_tailscale(ctx):
     job_id = ctx.jobs.submit("bind_serve_task", job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202

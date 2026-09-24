@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import json
 import uuid
+from typing import TypedDict, Optional
 from datetime import datetime
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
@@ -38,8 +39,7 @@ def hook_notes_request_paths(workspace_id=None, **kwargs):
 @hooks.on('workspace_boot')
 def mount_notes_volumes(workspace_id=None, **kwargs):
     from akasa.vfs import mount_volume
-    import os, shutil
-    from pathlib import Path
+    import shutil
 
     ctx = notes_bp.get_context(workspace_id)
     notes_dir = ctx.paths.get("notes_dir")
@@ -124,7 +124,7 @@ def handle_notes_vfs_mutations(mutations=None, workspace_id=None, **kwargs):
                     _parse_and_upsert_note(abs_path, filepath, workspace_id)
             elif m.get("operation") == "delete":
                 ctx.db.delete("notes_ledger", "filepath", filepath)
-@notes_bp.route('list', methods=['GET'])
+@notes_bp.route('list', methods=['GET'], docstring="Fetches the library of markdown notes.")
 def api_notes_list(ctx):
     """CQRS read-path: Fetches notes from DB, executing a disk-walk only if the DB is blank."""
     count_check = ctx.db.execute("SELECT count(*) FROM notes_ledger").fetchone()[0]
@@ -140,8 +140,13 @@ def api_notes_list(ctx):
         d['tags'] = json.loads(d['tags'])
         notes.append(d)
     return jsonify({"notes": notes})
+class NoteNewPayload(TypedDict, total=False):
+    title: str
+    repo: Optional[str]
+    sub_bucket: Optional[str]
+    tags: Optional[str]
 
-@notes_bp.route('new', methods=['POST'])
+@notes_bp.route('new', methods=['POST'], request_schema=NoteNewPayload, docstring="Generates a new markdown note file with managed YAML frontmatter.")
 def api_notes_new(ctx):
     """Generates a new note file with managed YAML frontmatter."""
     data = ctx.req.json or {}

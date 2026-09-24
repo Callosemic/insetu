@@ -117,8 +117,9 @@ export class InSetuExtFlow extends InSetuElement {
                 const itemRepos = meta.repos || (meta.repo ? [meta.repo] : []);
                 itemRepos.forEach(r => repos.add(r));
             } else {
-                const { repo } = this.utils.parseURI(uri);
-                if (repo) repos.add(repo);
+                // Ensure pure extraction of the volume mount/repo directory string from the VFS payload
+                const cleanUri = uri.replace('vfs://', '').split('/')[0];
+                if (cleanUri) repos.add(cleanUri);
             }
         });
         return Array.from(repos);
@@ -166,23 +167,8 @@ export class InSetuExtFlow extends InSetuElement {
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             FlowStore.getState().fetchBatches();
         });
-        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
-            const pollData = e.detail;
-            if (pollData.status === 'terminated') {
-                FlowStore.setState({ loading: false });
-                return;
-            }
-            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
-            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
-
-            const isMyTurn = currentExt === 'flow' || currentExt === 'flw';
-            const hasRun = history.some(step => step.ext_name === 'flow' || step.ext_name === 'flw');
-            const isWaiting = !isMyTurn && !hasRun;
-
-            FlowStore.setState({ loading: isMyTurn || isWaiting });
-        });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail.ext_name === 'flow') {
+            if (e.detail.ext_name === 'flow' && (e.detail.artifact?.step_id === 'flow_workflows' || e.detail.artifact?.step_id === 'compile_workflows_task')) {
                 if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
                     window.inSetu.sys.refreshManifest().then(() => {
                         FlowStore.getState().fetchBatches();
@@ -271,10 +257,6 @@ export class InSetuExtFlow extends InSetuElement {
                 if (responseData.manifest) {
                     AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
                 }
-
-                if (this.compileSystem) {
-                    this.compileSystem(null, false, 'flow_workflows');
-                }
             } else alert("Failed to delete batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -323,10 +305,6 @@ export class InSetuExtFlow extends InSetuElement {
                 if (responseData.manifest) {
                     AppStore.setState({ manifest: { vfs: responseData.manifest.vfs || {}, ctx: responseData.manifest.ctx || {} } });
                 }
-
-                if (this.compileSystem) {
-                    this.compileSystem(null, false, 'flow_workflows');
-                }
             } else alert("Failed to save batch.");
         } catch (e) {
             alert("Network error: " + e.message);
@@ -371,9 +349,8 @@ export class InSetuExtFlow extends InSetuElement {
         }
     }
     render() {
-        const isFlowActive = this.loading || (!this.isPipelineActive && (this.activeModules || []).includes('flow'));
-        const isFlowPending = !this.isPipelineActive && (this.pendingModules || []).includes('flow');
-        const isFlowLoading = isFlowActive || isFlowPending;
+        const isPipelineRunning = (this.activeModules || []).includes('flow') || (this.pendingModules || []).includes('flow');
+        const isFlowLoading = this.loading || isPipelineRunning;
 
         const appStore = window.inSetu?.stores?.App || (typeof AppStore !== 'undefined' ? AppStore : null);
             const appState = appStore?.getState ? appStore.getState() : {};
@@ -482,7 +459,18 @@ export class InSetuExtFlow extends InSetuElement {
                                             const meta = manifestObj.meta || {};
                                             const sizeStr = this.utils.formatArtifactSize(meta);
                                             const repoStr = b._repos && b._repos.length > 0 ? `[${b._repos.join(', ')}] ` : '';
-                                            const isDirty = (b._repos || []).some(r => AppStore.getState().dirtyRepos.has(r)) || AppStore.getState().dirtyBuckets.has(filename);
+                                            const isDirty = (() => {
+                                                const manifestCtx = AppStore.getState().manifest?.ctx || {};
+                                                const addr = window.inSetu.utils.BucketAddress.fromFilepath(filename, manifestCtx[filename]?.meta);
+                                                if ((AppStore.getState().dirtyBuckets || new Set()).has(addr.key)) return true;
+                                                return (b.includes || []).some(inc => {
+                                                    const uri = window.inSetu.utils.parseURI(inc);
+                                                    const incAddr = (uri.scheme === 'vfs') 
+                                                        ? window.inSetu.utils.BucketAddress.fromVfsPath(inc) 
+                                                        : window.inSetu.utils.BucketAddress.fromFilepath(inc, manifestCtx[inc]?.meta);
+                                                    return (AppStore.getState().dirtyBuckets || new Set()).has(incAddr.key);
+                                                });
+                                            })();
                                             const isLocked = isFlowLoading && isDirty;
                                             const statusIcon = isLocked ? '⏳' : (isDirty ? '⚠️' : '📦');
                                             return html`
@@ -500,19 +488,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                         .entityData=${{  
                                                             ...b, 
                                                             filepath: filename,
-                                                            outdated: (() => {
-                                                                if (AppStore.getState().dirtyBuckets.has(filename)) return true;
-                                                                return (b.includes || []).some(inc => {
-                                                                    if (AppStore.getState().dirtyBuckets.has(inc)) return true;
-                                                                    const uri = window.inSetu.utils.parseURI(inc);
-                                                                    if (uri.scheme === 'ctx' && uri.volume === 'contexts') {
-                                                                        const base = uri.basename.replace('_context.txt', '');
-                                                                        const bucketId = base.startsWith(uri.repo + '_') ? (base.substring(uri.repo.length + 1) || 'main') : (base === uri.repo ? 'main' : base);
-                                                                        return AppStore.getState().dirtyBuckets.has(`${uri.repo}::${bucketId}`);
-                                                                    }
-                                                                    return false;
-                                                                });
-                                                            })(),
+                                                            outdated: isDirty,
                                                             suppress: ['file-edit'], 
                                                             chunks: window.inSetu?.utils?.extractManifestFiles ? window.inSetu.utils.extractManifestFiles(AppStore.getState().manifest || {}, filename, 'ctx') : [filename]  
                                                         }}

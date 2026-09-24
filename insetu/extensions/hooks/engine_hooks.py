@@ -4,6 +4,7 @@ import json
 import uuid
 import datetime
 from pathlib import Path
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension, ExtensionContext
 from akasa.hooks import hooks
@@ -146,15 +147,19 @@ def process_vfs_triggers(dirty_repos=None, dirty_buckets=None, workspace_id=None
                 command=rule['command'],
                 job_category="system_background"
             )
-
-
-@hooks_bp.route('list', methods=['GET'])
+@hooks_bp.route('list', methods=['GET'], docstring="Lists all configured automation rules.")
 def list_rules(ctx):
     rules = ctx.db.get_all("hooks_rules", order_by="created_at DESC")
     return jsonify({"rules": rules})
+class HookSavePayload(TypedDict, total=False):
+    name: str
+    trigger_type: str
+    trigger_target: str
+    command: str
+    id: Optional[str]
+    enabled: Optional[bool]
 
-
-@hooks_bp.route('save', methods=['POST'])
+@hooks_bp.route('save', methods=['POST'], request_schema=HookSavePayload, docstring="Creates or updates a local automation rule.")
 def save_rule(ctx):
     data = ctx.req.json or {}
     rule_id = data.get('id') or f"rule_{uuid.uuid4().hex[:8]}"
@@ -178,9 +183,11 @@ def save_rule(ctx):
         "created_at": now
     })
     return jsonify({"status": "success", "id": rule_id})
+class HookTogglePayload(TypedDict):
+    id: str
+    enabled: bool
 
-
-@hooks_bp.route('toggle', methods=['POST'])
+@hooks_bp.route('toggle', methods=['POST'], request_schema=HookTogglePayload, docstring="Enables or disables an automation rule.")
 def toggle_rule(ctx):
     data = ctx.req.json or {}
     rule_id = data.get('id')
@@ -192,7 +199,10 @@ def toggle_rule(ctx):
     ctx.db.execute("UPDATE hooks_rules SET enabled = ? WHERE id = ?", (enabled, rule_id))
     ctx.db.commit()
     return jsonify({"status": "success"})
-@hooks_bp.route('execute', methods=['POST'])
+class HookIdPayload(TypedDict):
+    id: str
+
+@hooks_bp.route('execute', methods=['POST'], request_schema=HookIdPayload, docstring="Manually executes an automation rule.")
 def execute_rule_manual(ctx):
     data = ctx.req.json or {}
     rule_id = data.get('id')
@@ -210,9 +220,7 @@ def execute_rule_manual(ctx):
         job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-
-@hooks_bp.route('delete', methods=['POST'])
+@hooks_bp.route('delete', methods=['POST'], request_schema=HookIdPayload, docstring="Permanently deletes an automation rule.")
 def delete_rule(ctx):
     data = ctx.req.json or {}
     rule_id = data.get('id')
@@ -225,7 +233,6 @@ def delete_rule(ctx):
 @hooks_bp.route('logs', methods=['GET'])
 def get_logs(ctx):
     import akasa.db as kernel_db
-    import json
     # Use the central workers ledger, not the extension's local DB
     conn = kernel_db.get_connection('workers', workspace_id=ctx.workspace_id)
 

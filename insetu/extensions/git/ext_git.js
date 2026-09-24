@@ -11,7 +11,6 @@ export const GitStore = createExtensionStore('Git', {
     activePushJobId: null,
     activeDiffJobId: null,
     diffJobError: null,
-    dirtyDiffRepos: new Set(),
     fetchStatus: window.inSetu.utils.coalescedAsync(async () => {
         if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('git')) return;
         try {
@@ -29,27 +28,31 @@ window.inSetu.stores.Git = GitStore;
 export async function generateDiffs(force = false) {
     const gitStoreObj = typeof GitStore !== 'undefined' ? GitStore : window.inSetu?.stores?.Git;
     if (!gitStoreObj || !gitStoreObj.getState) return;
-    const { dirtyDiffRepos, activeDiffJobId } = gitStoreObj.getState();
+    const { activeDiffJobId } = gitStoreObj.getState();
     if (activeDiffJobId) return; // Prevent concurrent diff generation loops
 
     const manifestCtx = AppStore?.getState?.()?.manifest?.ctx || {};
     const hasCachedDiffs = Object.keys(manifestCtx).some(k => k.endsWith('_diffs.txt'));
+    const dirtyBuckets = AppStore?.getState?.()?.dirtyBuckets || new Set();
+
+    // Check if any dirty buckets belong to git tracked diff repos
+    const hasDirtyRepos = dirtyBuckets.size > 0; // Simple fallback
 
     // Skip recompiling if not forced, no repos are marked dirty, and diffs exist in manifest
-    if (!force && hasCachedDiffs && (!dirtyDiffRepos || dirtyDiffRepos.size === 0)) {
+    if (!force && hasCachedDiffs && !hasDirtyRepos) {
         return;
     }
 
-    const targetRepos = (force || !hasCachedDiffs || (dirtyDiffRepos && dirtyDiffRepos.has("ALL"))) 
+    const targetRepos = (force || !hasCachedDiffs || dirtyBuckets.has("global::main") || dirtyBuckets.has("ALL")) 
         ? null 
-        : (dirtyDiffRepos && dirtyDiffRepos.size > 0 ? Array.from(dirtyDiffRepos) : null);
+        : (hasDirtyRepos ? Array.from(new Set(Array.from(dirtyBuckets).map(b => b.split('::')[0]))).filter(r => r !== 'global') : null);
+
     gitStoreObj.setState({ activeDiffJobId: 'starting', diffJobError: null });
     if (window.inSetu?.stores?.Gather) {
         try {
-            await window.inSetu.stores.Gather.getState().executeCompile(null, false, 'git_diffs', targetRepos);
-            gitStoreObj.setState({  
+            await window.inSetu.stores.Gather.getState().executeCompile(null, force, 'git_diffs', targetRepos);
+            gitStoreObj.setState({    
                 activeDiffJobId: null, 
-                dirtyDiffRepos: new Set(),
                 diffJobError: null
             });
             window.inSetu.events.emit('insetu:git:diffs-refreshed');
@@ -135,24 +138,6 @@ export class InSetuExtGitDiffs extends InSetuElement {
             this.requestUpdate();
         });
         this.registerGlobalListener('insetu:git:sweep-repo', window, (e) => this._executeRepoSweep(e.detail.repoDir));
-        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
-            const payload = e.detail;
-            if (!payload || !payload.mutations) return;
-            const { dirtyDiffRepos } = GitStore.getState();
-            const newDirty = new Set(dirtyDiffRepos);
-            const reposChanged = payload.mutations.some(m => {
-                if (!m.filepath || m.ignore_ledger) return false;
-                const { scheme, repo } = window.inSetu.utils.parseURI(m.filepath);
-                if (repo && (!scheme || scheme === 'vfs')) {
-                    newDirty.add(repo);
-                    return true;
-                }
-                return false;
-            });
-            if (reposChanged) {
-                GitStore.setState({ dirtyDiffRepos: newDirty });
-            }
-        });
         this.registerGlobalListener('sutram-sync-complete', window, () => {
             this._fetchSweepStatusSilent();
             GitStore.getState().fetchStatus();
@@ -163,30 +148,21 @@ export class InSetuExtGitDiffs extends InSetuElement {
                 GitStore.setState({ activeDiffJobId: payload.next_job_id });
             }
         });
-        this.registerGlobalListener('insetu:compile-progress', window, (e) => {
-            const pollData = e.detail;
-            if (pollData.status === 'terminated') {
-                GitStore.setState({ activeDiffJobId: null });
-                return;
-            }
-            const currentExt = pollData.ext_name || (pollData.id ? pollData.id.split('_')[0] : '');
-            const history = (pollData.artifact && pollData.artifact.chain_history) ? pollData.artifact.chain_history : [];
-
-            const isMyTurn = currentExt === 'git' || currentExt === 'git_diffs';
-            const hasRun = history.some(step => step.ext_name === 'git' || step.ext_name === 'git_diffs');
-            const isWaiting = !isMyTurn && !hasRun;
-            if (isMyTurn || isWaiting) {
-                GitStore.setState({ activeDiffJobId: pollData.id || 'waiting' });
-            } else {
-                GitStore.setState({ activeDiffJobId: null });
-            }
-        });
         this.registerGlobalListener('insetu:compile-step-complete', window, (e) => {
-            if (e.detail.ext_name === 'git') {
-                if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
-                    window.inSetu.sys.refreshManifest().then(() => {
-                        window.inSetu.events.emitHook('insetu:git:diffs-refreshed');
-                    });
+            const detail = e.detail;
+            if (detail.ext_name === 'git') {
+                if (detail.artifact?.step_id === 'git_diffs' || detail.artifact?.step_id === 'compile_diffs_task') {
+                    if (window.inSetu.sys && window.inSetu.sys.refreshManifest) {
+                        window.inSetu.sys.refreshManifest().then(() => {
+                            window.inSetu.events.emitHook('insetu:git:diffs-refreshed');
+                        });
+                    }
+                }
+
+                // Reactive Orchestration: Listen for background Git mutations and automatically re-sync
+                if (detail.artifact?.git_state_mutated) {
+                    GitStore.getState().fetchStatus();
+                    generateDiffs(true);
                 }
             }
         });
@@ -237,13 +213,8 @@ disconnectedCallback() {
         }, {
             onProgress: (progressMsg) => { this.gitPushMessage = progressMsg || "Pushing to remote... please wait."; },
             onComplete: async (statusData) => {
-                const { currentPushRepo, dirtyDiffRepos } = GitStore.getState();
-                const newDirty = new Set(dirtyDiffRepos);
-                newDirty.add(currentPushRepo);
-                GitStore.setState({ dirtyDiffRepos: newDirty });
+                const { currentPushRepo } = GitStore.getState();
                 alert(`✅ Successfully pushed ${currentPushRepo}!\n\n${statusData.message}`);
-                try { await this.compileSystem(); } catch (e) {}
-                this.dispatch('insetu:git:generate-diffs', { force: true });
             },
             onError: (err) => alert(`❌ Push failed:\n\n${err.message}`)
         });
@@ -295,12 +266,7 @@ disconnectedCallback() {
         }, {
             onProgress: (msg) => { if (this.ui && this.ui.setGlobalStatus) this.ui.setGlobalStatus(`⏳ ${msg || "Sweeping workspaces..."}`, null); },
             onComplete: async (statusData) => {
-                const { dirtyDiffRepos } = GitStore.getState();
-                const newDirty = new Set(dirtyDiffRepos);
-                newDirty.add("ALL");
-                GitStore.setState({ dirtyDiffRepos: newDirty });
                 alert(`✅ Global Sweep successful:\n\n${statusData.message}`);
-                this.compileSystem().then(() => this.dispatch('insetu:git:generate-diffs', { force: true }));
             },
             onError: (err) => alert(`❌ Global Sweep failed:\n\n${err.message}`)
         });
@@ -320,14 +286,8 @@ disconnectedCallback() {
                 delete this.selectedSweepFiles[repo];
                 this.requestUpdate();
 
-                const { dirtyDiffRepos } = GitStore.getState();
-                const newDirty = new Set(dirtyDiffRepos);
-                newDirty.add(repo);
-                GitStore.setState({ dirtyDiffRepos: newDirty });
-
                 alert(`✅ Sweep successful for ${repo}:\n\n${statusData.message}`);
                 this._fetchSweepStatusSilent();
-                this.compileSystem().then(() => this.dispatch('insetu:git:generate-diffs', { force: true }));
             },
             onError: (err) => alert(`❌ Sweep failed for ${repo}:\n\n${err.message}`)
         });
@@ -387,9 +347,8 @@ disconnectedCallback() {
             if (iA !== iB) return iA - iB;
             return a.localeCompare(b);
         });
-        const isGitActive = this.activeDiffJobId || (!this.isPipelineActive && (this.activeModules || []).includes('git'));
-        const isGitPending = !this.isPipelineActive && (this.pendingModules || []).includes('git');
-        const isGitLoading = isGitActive || isGitPending;
+        const isPipelineRunning = (this.activeModules || []).includes('git') || (this.pendingModules || []).includes('git');
+        const isGitLoading = this.activeDiffJobId || isPipelineRunning;
 
         return html`
             <sutram-toolbar
@@ -423,11 +382,9 @@ disconnectedCallback() {
                                 // Extract sizes if previously stuffed into detailText
                                 const sizeStr = (f.detailText && f.detailText.includes(' | ')) ? f.detailText.split(' | ')[1] : "";
                                 const isDirty = (() => {
-                                    if (AppStore.getState().dirtyBuckets.has(f.filename)) return true;
-                                    if (!f.repoDir) return false;
-                                    const base = f.filename.split('/').pop().replace('_diffs.txt', '');
-                                    const bucketId = base.startsWith(f.repoDir + '_') ? (base.substring(f.repoDir.length + 1) || 'main') : (base === f.repoDir ? 'main' : base);
-                                    return AppStore.getState().dirtyBuckets.has(`${f.repoDir}::${bucketId}`);
+                                    const manifestObj = AppStore.getState().manifest?.ctx?.[f.filename];
+                                    const addr = window.inSetu.utils.BucketAddress.fromFilepath(f.filename, manifestObj?.meta);
+                                    return AppStore.getState().dirtyBuckets.has(addr.key);
                                 })();
                                 const isLocked = isGitLoading && isDirty;
                                 return html`
@@ -468,7 +425,7 @@ disconnectedCallback() {
                         <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 20px 20px 20px;">
                             <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: -10px; margin-bottom: 15px; padding-left: 5px;">Untracked metadata, tracker items, and configuration files ready for commit.</p>
                             ${Object.entries(this.sweepFiles).filter(([r, _]) => this.ecosystem.pinnedRepos.has('ALL') || this.ecosystem.pinnedRepos.has(r)).map(([repo, files]) => {
-                                const isLocked = this.sweepLoading || GitStore.getState().dirtyDiffRepos.has(repo);
+                                const isLocked = this.sweepLoading;
                                 const branch = GitStore.getState().reposStatus[repo]?.current;
                                 const descText = branch ? `🌿 Branch: ${branch} | ${files.length} untracked or excluded files pending.` : `${files.length} untracked or excluded files pending.`;
                                 return html`
@@ -483,7 +440,7 @@ disconnectedCallback() {
                                     .entityData=${{ 
                                         repoDir: repo, 
                                         has_untracked_files: files.length > 0,
-                                        outdated: this.sweepLoading || GitStore.getState().dirtyDiffRepos.has(repo)
+                                        outdated: this.sweepLoading
                                     }}
                                     @card-clicked=${() => {
                                         const newSet = new Set(this.sweepExpandedRepos);

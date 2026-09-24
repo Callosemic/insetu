@@ -5,6 +5,7 @@ from datetime import datetime
 import urllib.request
 import urllib.parse
 import json
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.workers import submit_job, register_callback
@@ -95,7 +96,6 @@ class GooglePlaywrightProvider(SearchProvider):
             from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
         except ImportError:
             raise Exception("Playwright is required for Google Search. Run: pip install playwright && playwright install chromium")
-        import urllib.parse
         safe_query = urllib.parse.quote(query)
         # Drop the &num parameter. Requesting 150 results on a single page triggers bot defenses.
         # The Metronome naturally pages through 10 standard results at a time via &start=
@@ -384,7 +384,15 @@ def _get_research_intervals():
     )
 
 # --- API ENDPOINTS ---
-@research_bp.route('start', methods=['POST'])
+class ResearchStartPayload(TypedDict, total=False):
+    query: str
+    provider: str
+    max_results: int
+    date_range: str
+    parser: str
+    target_dir: str
+
+@research_bp.route('start', methods=['POST'], request_schema=ResearchStartPayload, docstring="Starts a new asynchronous research and scraping job.")
 def start_job(ctx):
     workspace_id = ctx.workspace_id
     data = ctx.req.json
@@ -422,7 +430,11 @@ def start_job(ctx):
       return jsonify({"status": "success", "job_id": job_id, "message": "Gathering links asynchronously."})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@research_bp.route('<job_id>/action', methods=['POST'])
+class ResearchActionPayload(TypedDict, total=False):
+    action: str
+    meta: dict
+
+@research_bp.route('<job_id>/action', methods=['POST'], request_schema=ResearchActionPayload, docstring="Performs lifecycle actions (pause, resume, cancel, retry, delete) on a specific research job.")
 def job_action(ctx, job_id):
     workspace_id = ctx.workspace_id
     data = ctx.req.json
@@ -497,11 +509,11 @@ def job_action(ctx, job_id):
         return jsonify({"status": "success", "message": f"Job retrying in {target_status} phase"})
 
     return jsonify({"error": f"Invalid transition from {current_status} to {action}"}), 400
-@research_bp.route('jobs', methods=['GET'])
+@research_bp.route('jobs', methods=['GET'], docstring="Retrieves the history of active and past research jobs.")
 def list_jobs(ctx):
     jobs = ctx.db.get_all("research_jobs", order_by="created_at DESC")
     return jsonify({"jobs": jobs})
-@research_bp.route('inbox', methods=['GET'])
+@research_bp.route('inbox', methods=['GET'], docstring="Retrieves scraped research links currently awaiting triage in the inbox.")
 def list_inbox(ctx):
     status_filter = ctx.req.args.get('status', 'pending')
     statuses = tuple(status_filter.split(','))
@@ -513,7 +525,6 @@ def list_inbox(ctx):
 @research_bp.worker("export_context_task")
 def _background_export_context(ctx, research_job_id, **kwargs):
     from akasa.workers import register_ephemeral_artifact
-    from pathlib import Path
 
     ctx.jobs.update_progress("Compiling research context...")
     conn = ctx.db
@@ -548,11 +559,14 @@ def _background_export_context(ctx, research_job_id, **kwargs):
         artifacts.append({"filename": filename, "download_url": f"/download/{filename}"})
 
     return {"message": "Context packed.", "artifact": {"files": artifacts}}
-@research_bp.route('<job_id>/export_context', methods=['POST'])
+@research_bp.route('<job_id>/export_context', methods=['POST'], docstring="Packs all scraped content for a job into plain text artifacts suitable for LLM injection.")
 def export_context(ctx, job_id):
     jid = ctx.jobs.submit("export_context_task", research_job_id=job_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": jid}), 202
-@research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'])
+class InboxDispositionPayload(TypedDict):
+    status: str
+
+@research_bp.route('inbox/<inbox_id>/disposition', methods=['POST'], request_schema=InboxDispositionPayload, docstring="Applies a triage decision (accepted, rejected, force_scrape) to an item in the inbox.")
 def inbox_disposition(ctx, inbox_id):
     workspace_id = ctx.workspace_id
     data = ctx.req.json

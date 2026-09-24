@@ -3,6 +3,7 @@ import os
 import subprocess
 import uuid
 import json
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.utils import get_workspace_physics
@@ -10,7 +11,6 @@ from akasa.hooks import hooks
 from insetu.core.utils_core import get_repo_path
 def get_headless_git_env():
     """Returns a secure OS environment block pre-configured for non-interactive SSH connections."""
-    import os
     env = os.environ.copy()
     env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
     return env
@@ -43,10 +43,10 @@ def execute_git(*args_tuple, **kwargs):
             return ctx.exec.run(cmd, volume=target_str, check=check, env=env, **kwargs)
     else:
         # Fallback for purely decoupled physical executions
-        import subprocess
+        from insetu.core.utils_core import execute_binary
         kwargs.setdefault('capture_output', True)
         kwargs.setdefault('text', True)
-        return subprocess.run(cmd, cwd=target_str, check=check, env=env, **kwargs)
+        return execute_binary(cmd, cwd=target_str, check=check, env=env, **kwargs)
 GIT_SETTINGS_SCHEMA = [
     {
         "id": "pull_strategy",
@@ -91,16 +91,30 @@ _DIFF_FILE_CACHE_LOCK = threading.Lock()
 @git_bp.worker("compile_diffs_task")
 def _background_compile_diffs(ctx, force_full=False, target_repos=None, **kwargs):
     ctx.jobs.update_progress("Evaluating Git diffs...")
+    ctx.sync_vfs_barrier()
     manifest = ctx.manifest.get("ctx", {})
-
-    if isinstance(force_full, list):
-        target_repos = force_full
-    touched_buckets = kwargs.get('touched_buckets')
+    chain_state = kwargs.get('chain_state', {})
+    touched_buckets = chain_state.get('touched_buckets')
     _, manifest_deltas, truly_modified_diffs = generate_diff_context(ctx.workspace_id, target_repos=target_repos, manifest_ref=manifest, touched_buckets=touched_buckets)
+
+    from insetu.core.utils_core import BucketAddress
+    evaluated_bucket_keys = set(touched_buckets or [])
+    for filepath, entry in manifest_deltas.items():
+        if entry and isinstance(entry, dict):
+            meta = entry.get("meta", {})
+            addr = BucketAddress.from_uri(filepath, meta=meta)
+            evaluated_bucket_keys.add(addr.key)
 
     return {
         "message": "Git diffs evaluated successfully.",
-        "next_kwargs": {"touched_diffs": list(truly_modified_diffs) if touched_buckets is not None else None}
+        "artifact": {
+            "files": list(manifest_deltas.keys()),
+            "touched_buckets": list(evaluated_bucket_keys),
+            "cleared_buckets": list(evaluated_bucket_keys),
+            "touched_diffs": list(truly_modified_diffs),
+            "is_full_sweep": force_full is True,
+            "state_deltas": {"touched_diffs": list(truly_modified_diffs) if touched_buckets is not None else None}
+        }
     }
 def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=None, touched_buckets=None):
     from insetu.core.utils_core import get_safe_repo_id
@@ -138,13 +152,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
             git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else repo_path.resolve()
             changed_files = []
-
+            from insetu.core.utils_core import InSetuURI
             for line in lines:
                 if len(line) < 3: continue
                 status = line[:2]
                 filepath = line[3:].strip().strip('"')
                 if '->' in filepath: filepath = filepath.split('->')[-1].strip().strip('"')
-                if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
+                if InSetuURI.from_any(filepath).is_diff: continue
 
                 abs_filepath = git_root / filepath
                 try:
@@ -160,30 +174,32 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
             bucket_meta = {}
             ignore_dirs = set(live_cfg.get("ignore_dirs", []) + config.get("repo_ignore_dirs", []))
             ignore_patterns = live_cfg.get("ignore_patterns", []) + config.get("repo_ignore_patterns", [])
-
             if sub_buckets:
                 for rel_to_repo, status, orig_filepath in changed_files:
                     if any(pattern in rel_to_repo for pattern in ignore_patterns): continue
                     if set(p.lower() for p in rel_to_repo.split('/')).intersection(ignore_dirs): continue
 
-                    b, module = resolve_file_bucket(rel_to_repo, sub_buckets)
+                    b, module = resolve_file_bucket(rel_to_repo, sub_buckets, repo_dir=config.get('repo_dir'))
                     if b and b.get("exclude_from_diffs"): continue
                     if b and module:
                         b_id = f"ctx://diffs/{module}_diffs.txt"
                         b_title = b.get("meta_map", {}).get(module, {}).get("title", module.replace('_', ' ').title())
                         b_domain = b.get("meta_map", {}).get(module, {}).get("domain", b.get("domain", config.get("domain", "Workspaces")))
+                        b_bucket_id = module
                     elif b:
                         b_id = f"ctx://diffs/{safe_r_dir}_{b.get('id', 'bucket')}_diffs.txt"
                         b_title = b.get("title", b.get("id", "bucket").replace('_', ' ').title())
                         b_domain = b.get("domain", config.get("domain", "Workspaces"))
+                        b_bucket_id = b.get('id', 'bucket')
                     else:
                         b_id = f"ctx://diffs/{safe_r_dir}_diffs.txt"
                         b_title = config.get("title", safe_r_dir.replace('_', ' ').title())
                         b_domain = config.get("domain", "Workspaces")
+                        b_bucket_id = "main"
 
                     if b_id not in bucketed_files: 
                         bucketed_files[b_id] = []
-                        bucket_meta[b_id] = {"title": b_title, "domain": b_domain}
+                        bucket_meta[b_id] = {"title": b_title, "domain": b_domain, "bucket_id": b_bucket_id}
                     bucketed_files[b_id].append((rel_to_repo, status, orig_filepath))
             else:
                 out_filename = f"ctx://diffs/{safe_r_dir}_diffs.txt"
@@ -322,13 +338,13 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
                         continue
                     local_modified_diffs.add(out_filename)
                     b_meta = bucket_meta.get(out_filename, {})
-                    from insetu.core.utils_core import InSetuURI
                     meta = {
                         "type": "diff",
                         "title": b_meta.get("title", InSetuURI(out_filename).basename.replace('_diffs.txt', '').replace('_', ' ').title()),
                         "domain": b_meta.get("domain", "Git Diffs"),
                         "desc": "Just-In-Time generated diff payload.",
-                        "repo": config['repo_dir']
+                        "repo": config['repo_dir'],
+                        "bucket_id": b_meta.get("bucket_id", "main")
                     }
                     manifest_entry = compile_context_payload(
                         workspace_id, 
@@ -369,11 +385,11 @@ def generate_diff_context(workspace_id=None, target_repos=None, manifest_ref=Non
     return diff_manifest, manifest_deltas, truly_modified_diffs
 @git_bp.worker("sweep_status_task")
 def _background_sweep_status(ctx, **kwargs):
-    from akasa.utils import get_workspace_physics
     from insetu.core.topology.engine_topology import topology_bp
     cfg = ctx.config
     results = {}
     ctx.jobs.update_progress("Scanning workspaces for untracked files...")
+    ctx.sync_vfs_barrier()
 
     top_ctx = topology_bp.get_context(ctx.workspace_id)
     for c in cfg.get("target_repos", []):
@@ -426,15 +442,13 @@ def pre_warm_git_sweep(workspace_id=None, **kwargs):
     """Pre-warms the Git sweepable state silently in the background after the topology settles."""
     ctx = git_bp.get_context(workspace_id)
     ctx.jobs.submit_one_shot("sweep_status_task", 5000, job_category="system_background")
-@git_bp.route('sweep/status', methods=['POST'])
+@git_bp.route('sweep/status', methods=['POST'], docstring="Scans workspaces for untracked files or metadata ready to be swept into VCS.")
 def api_git_sweep_status(ctx):
     job_id = ctx.jobs.submit("sweep_status_task", coalesce=True, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("sweep_push_task")
 def _background_sweep_push(ctx, selections, message, **kwargs):
-    import os
-    import subprocess
-    from akasa.utils import get_workspace_physics
+    ctx.sync_vfs_barrier()
     output_log = ""
 
     try:
@@ -460,14 +474,17 @@ def _background_sweep_push(ctx, selections, message, **kwargs):
                     execute_git(repo_path, ['push', '-u', 'origin', 'HEAD'])
                 else:
                     raise e
-
             output_log += f"✅ {repo}: Pushed {len(files)} files.\n"
 
-        return output_log
+        return {"message": output_log.strip(), "artifact": {"git_state_mutated": True}}
     except subprocess.CalledProcessError as e:
         err = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or str(e))
         raise RuntimeError(f"{repo} Error: {err}")
-@git_bp.route('sweep/push', methods=['POST'])
+class GitSweepPushPayload(TypedDict):
+    selections: dict
+    message: str
+
+@git_bp.route('sweep/push', methods=['POST'], request_schema=GitSweepPushPayload, docstring="Commits and pushes selected untracked/swept files to their respective repositories.")
 def api_git_sweep_push(ctx):
     data = ctx.req.json
     job_id = ctx.jobs.submit(
@@ -477,7 +494,10 @@ def api_git_sweep_push(ctx):
         job_category="ui_blocking"
     )
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@git_bp.route('changelogs', methods=['GET'])
+class GitRepoPayload(TypedDict):
+    repo: str
+
+@git_bp.route('changelogs', methods=['GET'], request_schema=GitRepoPayload, docstring="Queries the tracking index to populate recent commit/changelog suggestions.")
 def api_git_changelogs(ctx):
     """Queries the rapid SQLite tracking index to populate recent commit suggestions."""
     repo = ctx.req.args.get('repo', '')
@@ -494,10 +514,8 @@ def api_git_changelogs(ctx):
     return jsonify({"repo": repo, "changelogs": changelogs})
 @git_bp.worker("push_task")
 def _background_git_push(ctx, repo, message, diff_file, **kwargs):
-    import os
-    import subprocess
-    from akasa.utils import get_workspace_physics
     ctx.jobs.update_progress(f"Preparing to push {repo}...")
+    ctx.sync_vfs_barrier()
     cfg = ctx.config
     repo_path = get_repo_path(repo, ctx.workspace_id)
     if not os.path.exists(repo_path): 
@@ -515,13 +533,12 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
     git_root_res = execute_git(str(repo_path), ['rev-parse', '--show-toplevel'], check=False)
     git_root = Path(git_root_res.stdout.strip()).resolve() if git_root_res.returncode == 0 else Path(repo_path).resolve()
     resolved_repo_path = Path(repo_path).resolve()
-
     for line in status_res.stdout.splitlines():
         if len(line) >= 3:
             filepath = line[3:].strip().strip('"')
             if '->' in filepath: 
                 filepath = filepath.split('->')[-1].strip().strip('"')
-            if filepath.startswith('diffs/') or filepath.endswith('_diffs.txt'): continue
+            if InSetuURI.from_any(filepath).is_diff: continue
 
             abs_filepath = git_root / filepath
             try:
@@ -580,7 +597,7 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
             else:
                 raise e
 
-        return output.strip()
+        return {"message": output.strip(), "artifact": {"git_state_mutated": True}}
     except subprocess.CalledProcessError as e:
         err_out = e.stderr or e.stdout
         err_out = err_out.decode('utf-8', errors='replace') if isinstance(err_out, bytes) else (err_out or str(e))
@@ -589,8 +606,12 @@ def _background_git_push(ctx, repo, message, diff_file, **kwargs):
             raise RuntimeError(f"Local commit succeeded, but pushing to remote failed.\n\nError: {err_out}")
         else:
             raise RuntimeError(err_out)
+class GitPushPayload(TypedDict, total=False):
+    repo: str
+    message: str
+    diff_file: Optional[str]
 
-@git_bp.route('push', methods=['POST'])
+@git_bp.route('push', methods=['POST'], request_schema=GitPushPayload, docstring="Commits and pushes staged changes to the remote repository. Requires 'repo' and commit 'message'.")
 def api_git_push(ctx):
     data = ctx.req.json
     repo = data.get('repo')
@@ -609,7 +630,6 @@ def api_git_push(ctx):
 def provide_available_diffs(workspace_id=None, **kwargs):
     """Soft-dependency provider: Supplies expected diffs to the Gather/Flow UI dropdowns."""
     from insetu.core.utils_core import get_available_contexts
-    import os
     ctx = git_bp.get_context(workspace_id)
     paths = ctx.paths
     # 1. Derive the baseline topology directly from the SSOT using exclusion flags array
@@ -623,14 +643,12 @@ def provide_available_diffs(workspace_id=None, **kwargs):
     # 3. Include ad-hoc diffs currently tracked in the manifest
     manifest = ctx.manifest.get("ctx", {})
     for key in manifest.keys():
-        if 'ctx://diffs/' in key and key.endswith('_diffs.txt'):
+        if InSetuURI.from_any(key).is_diff:
             expected_diffs.add(key)
 
     return list(expected_diffs)
-@git_bp.route('status', methods=['GET'])
+@git_bp.route('status', methods=['GET'], docstring="Retrieves the Git working tree status, active branches, and conflict state for all tracked repositories.")
 def api_git_status(ctx):
-    import subprocess
-    from pathlib import Path
     repos_status = {}
     for c in ctx.config.get("target_repos", []):
         repo_dir = c.get("repo_dir")
@@ -690,19 +708,20 @@ def api_git_status(ctx):
     return jsonify({"status": "success", "repos": repos_status})
 @git_bp.worker("init_task")
 def _background_git_init(ctx, repo, branch, **kwargs):
-    import subprocess
-    import os
     ctx.jobs.update_progress(f"Initializing Git repository for {repo}...")
     repo_path = get_repo_path(repo, ctx.workspace_id)
-
     try:
         execute_git(repo_path, ['init', '-b', branch])
-        return f"Initialized Git repository on branch '{branch}'."
+        return {"message": f"Initialized Git repository on branch '{branch}'.", "artifact": {"git_state_mutated": True}}
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         raise RuntimeError(err_str)
-@git_bp.route('init', methods=['POST'])
+class GitInitPayload(TypedDict, total=False):
+    repo: str
+    branch: Optional[str]
+
+@git_bp.route('init', methods=['POST'], request_schema=GitInitPayload, docstring="Initializes a new Git repository locally on a specified branch.")
 def api_git_init(ctx):
     repo = ctx.req.json.get('repo')
     branch = ctx.req.json.get('branch', 'main')
@@ -712,13 +731,10 @@ def api_git_init(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("fetch_preview_task")
 def _background_git_fetch_preview(ctx, repo, **kwargs):
-    import subprocess
-    import os
     ctx.jobs.update_progress(f"Fetching remote for {repo}...")
     repo_path = get_repo_path(repo, ctx.workspace_id)
     try:
         # Pre-flight check: intercept active rebase indicators
-        from pathlib import Path
         git_dir = Path(repo_path) / '.git'
         if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
             raise RuntimeError(f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.")
@@ -771,8 +787,7 @@ def _background_git_fetch_preview(ctx, repo, **kwargs):
         if "could not read Username" in err_str or "No such device" in err_str:
             raise RuntimeError("Authentication failed. Headless Git requires SSH URLs (git@github.com:...) instead of HTTPS, or a cached credential helper.")
         raise RuntimeError(err_str)
-
-@git_bp.route('fetch_preview', methods=['POST'])
+@git_bp.route('fetch_preview', methods=['POST'], request_schema=GitRepoPayload, docstring="Fetches the remote repository and previews incoming commits and changes without pulling.")
 def api_git_fetch_preview(ctx):
     repo = ctx.req.json.get('repo')
     if not repo: return jsonify({"error": "Repo required"}), 400
@@ -780,8 +795,6 @@ def api_git_fetch_preview(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("pull_task")
 def _background_git_pull(ctx, repo, strategy=None, **kwargs):
-    import subprocess
-    import os
     ctx.jobs.update_progress(f"Pulling {repo}...")
     repo_path = get_repo_path(repo, ctx.workspace_id)
 
@@ -794,14 +807,12 @@ def _background_git_pull(ctx, repo, strategy=None, **kwargs):
             strategy = "rebase" # Fall back to safe baseline if modal selection was skipped
     else:
         strategy = configured_strategy
-
     # Absolute Guardrail: Ensure a valid reconciliation flag is always present,
     # catching any nulls or empty strings leaking from the settings JSON.
     if strategy not in ["rebase", "merge", "ff_only"]:
         strategy = "rebase"
 
     # Pre-flight check: intercept active rebase indicators
-    from pathlib import Path
     git_dir = Path(repo_path) / '.git'
     if (git_dir / 'rebase-merge').exists() or (git_dir / 'rebase-apply').exists():
         raise RuntimeError(f"Active rebase in progress for '{repo}'. Please resolve conflicts and run 'git rebase --continue' or 'git rebase --abort' in the terminal before pulling.")
@@ -825,13 +836,16 @@ def _background_git_pull(ctx, repo, strategy=None, **kwargs):
         res = execute_git(repo_path, args, timeout=30)
         # Combine stdout and stderr to capture fetch logs and rebase outputs
         output = res.stdout.strip() + "\n" + res.stderr.strip()
-        return output.strip()
+        return {"message": output.strip(), "artifact": {"git_state_mutated": True}}
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         raise RuntimeError(err_str)
+class GitPullPayload(TypedDict, total=False):
+    repo: str
+    strategy: Optional[str]
 
-@git_bp.route('pull', methods=['POST'])
+@git_bp.route('pull', methods=['POST'], request_schema=GitPullPayload, docstring="Pulls incoming changes from the remote repository using the specified strategy (rebase, merge, ff_only).")
 def api_git_pull(ctx):
     data = ctx.req.json or {}
     repo = data.get('repo')
@@ -841,8 +855,6 @@ def api_git_pull(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("add_remote_task")
 def _background_git_add_remote(ctx, repo, remote_url, resolution=None, **kwargs):
-    import subprocess
-    import os
     ctx.jobs.update_progress(f"Adding remote origin for {repo}...")
     repo_path = get_repo_path(repo, ctx.workspace_id)
     try:
@@ -883,8 +895,12 @@ def _background_git_add_remote(ctx, repo, remote_url, resolution=None, **kwargs)
         if "could not read Username" in err_str or "No such device" in err_str:
             raise RuntimeError("Authentication failed. Headless Git requires SSH URLs (git@github.com:...) instead of HTTPS, or a cached credential helper.")
         raise RuntimeError(err_str)
+class GitRemoteAddPayload(TypedDict, total=False):
+    repo: str
+    url: str
+    resolution: Optional[str]
 
-@git_bp.route('remote/add', methods=['POST'])
+@git_bp.route('remote/add', methods=['POST'], request_schema=GitRemoteAddPayload, docstring="Connects a local repository to a remote Git URL and pushes.")
 def api_git_remote_add(ctx):
     repo = ctx.req.json.get('repo')
     url = ctx.req.json.get('url')
@@ -895,21 +911,22 @@ def api_git_remote_add(ctx):
     return jsonify({"status": "accepted", "job_id": job_id}), 202
 @git_bp.worker("checkout_task")
 def _background_git_checkout(ctx, repo, branch, create_new, **kwargs):
-    import subprocess
-    import os
     ctx.jobs.update_progress(f"Checking out {branch} in {repo}...")
     repo_path = get_repo_path(repo, ctx.workspace_id)
-
     args = ['checkout', '-b', branch] if create_new else ['checkout', branch]
     try:
         res = execute_git(repo_path, args)
-        return res.stdout + res.stderr
+        return {"message": (res.stdout + res.stderr).strip(), "artifact": {"git_state_mutated": True}}
     except subprocess.CalledProcessError as e:
         err = e.stderr or e.stdout
         err_str = err.decode('utf-8', errors='replace') if isinstance(err, bytes) else str(err)
         raise RuntimeError(err_str)
+class GitCheckoutPayload(TypedDict, total=False):
+    repo: str
+    branch: str
+    create_new: Optional[bool]
 
-@git_bp.route('checkout', methods=['POST'])
+@git_bp.route('checkout', methods=['POST'], request_schema=GitCheckoutPayload, docstring="Checks out an existing branch or creates a new one.")
 def api_git_checkout(ctx):
     repo = ctx.req.json.get('repo')
     branch = ctx.req.json.get('branch')

@@ -2,6 +2,7 @@ import base64
 import json
 import urllib.request
 import urllib.error
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 # Declarative schema for settings so users can input credentials via the UI
@@ -58,9 +59,7 @@ freshdesk_bp = InSetuExtension(
 )
 __depends__ = [] # Extension DAG resolution array
 __external_depends__ = ["mistune"] # External PyPI dependencies
-
 def _fd_request(ctx, endpoint, method='GET', payload=None):
-    import base64, json, urllib.request, urllib.error
     api_key = ctx.settings.get("api_key")
     domain = ctx.settings.get("domain")
 
@@ -83,7 +82,6 @@ def _fd_request(ctx, endpoint, method='GET', payload=None):
         raise ValueError(f"Freshdesk API Error: {err_msg}")
 @freshdesk_bp.worker("fetch_tickets_task")
 def _background_fetch_tickets(ctx, filters=None, **kwargs):
-    import time, json
     if filters is None: filters = {}
     page = filters.get("page", 1)
     two_page_spread = filters.get("twoPageSpread", False)
@@ -235,40 +233,45 @@ def _background_resolve_ticket(ctx, ticket_id=None, **kwargs):
     ctx.jobs.update_progress('Marking ticket as resolved...')
     updated_ticket = _fd_request(ctx, f"tickets/{ticket_id}", method='PUT', payload={"status": 4})
     return {"message": "Ticket resolved.", "artifact": {"ticket": updated_ticket}}
-@freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'])
+@freshdesk_bp.route('tickets/<int:ticket_id>/resolve', methods=['POST'], docstring="Marks a specific Freshdesk ticket as resolved.")
 def resolve_freshdesk_ticket(ctx, ticket_id):
     job_id = ctx.jobs.submit("resolve_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
+class FreshdeskReplyPayload(TypedDict):
+    body: str
 
-@freshdesk_bp.route('tickets/<int:ticket_id>/reply', methods=['POST'])
+@freshdesk_bp.route('tickets/<int:ticket_id>/reply', methods=['POST'], request_schema=FreshdeskReplyPayload, docstring="Posts a reply to a specific Freshdesk ticket.")
 def post_freshdesk_reply(ctx, ticket_id):
     data = ctx.req.json or {}
     body = data.get("body", "")
     job_id = ctx.jobs.submit("post_reply_task", ticket_id=ticket_id, body=body, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-@freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'])
+@freshdesk_bp.route('tickets/<int:ticket_id>/take', methods=['POST'], docstring="Assigns the specified Freshdesk ticket to the current authenticated agent.")
 def take_freshdesk_ticket(ctx, ticket_id):
     job_id = ctx.jobs.submit("take_ticket_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-
-@freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'])
+@freshdesk_bp.route('tickets/<int:ticket_id>/conversations', methods=['POST'], docstring="Fetches the conversation thread for a specific ticket.")
 def get_freshdesk_conversations(ctx, ticket_id):
     job_id = ctx.jobs.submit("fetch_conversations_task", ticket_id=ticket_id, job_category="ui_blocking")
     return jsonify({"status": "accepted", "job_id": job_id}), 202
-@freshdesk_bp.route('tickets/ignored', methods=['GET'])
+@freshdesk_bp.route('tickets/ignored', methods=['GET'], docstring="Retrieves a list of ticket IDs that the user has chosen to ignore.")
 def get_ignored_tickets(ctx):
     try:
         rows = ctx.db.get_all("freshdesk_ignored")
         return jsonify([r['ticket_id'] for row in rows])
     except Exception:
         return jsonify([])
-
-@freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'])
+@freshdesk_bp.route('tickets/<int:ticket_id>/ignore', methods=['POST'], docstring="Marks a specific ticket as ignored so it no longer appears in the UI.")
 def ignore_freshdesk_ticket(ctx, ticket_id):
     ctx.db.insert_or_replace("freshdesk_ignored", {"ticket_id": ticket_id})
     return jsonify({"status": "success"})
-@freshdesk_bp.route('tickets/fetch', methods=['POST'])
+class FreshdeskFetchPayload(TypedDict, total=False):
+    filterAssignee: str
+    filterStatus: str
+    page: int
+    twoPageSpread: bool
+
+@freshdesk_bp.route('tickets/fetch', methods=['POST'], request_schema=FreshdeskFetchPayload, docstring="Secure proxy endpoint using the asynchronous jobs ledger to fetch tickets without event loop starvation.")
 def get_freshdesk_tickets(ctx):
     """
     Secure proxy endpoint using the asynchronous jobs ledger to prevent event loop starvation.

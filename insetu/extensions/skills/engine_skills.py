@@ -4,6 +4,7 @@ import json
 import uuid
 import datetime
 from pathlib import Path
+from typing import TypedDict, Optional, Any
 from flask import request, jsonify
 from insetu.core.sdk import InSetuExtension
 from akasa.hooks import hooks
@@ -92,7 +93,7 @@ def _parse_and_upsert_skill(abs_path, filename, workspace_id=None):
         conn.commit()
     except Exception as e:
         print(f"Error parsing global skill file {filename}: {e}")
-@skills_bp.route('playlist', methods=['GET'])
+@skills_bp.route('playlist', methods=['GET'], docstring="Compiles a unified practice batch across all domains based on SM-2 spacing.")
 def get_practice_playlist(ctx):
     """Compiles a unified practice batch across all domains sorted globally."""
     try:
@@ -111,7 +112,16 @@ def get_practice_playlist(ctx):
         return jsonify({"playlist": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('log', methods=['POST'])
+class LogSkillPayload(TypedDict, total=False):
+    filepath: str
+    score: int
+    metrics: dict
+    name: str
+    tags: str
+    group: str
+    status: str
+
+@skills_bp.route('log', methods=['POST'], request_schema=LogSkillPayload, docstring="Logs a practice session and updates the SM-2 spaced repetition clocks.")
 def log_skill_practice(ctx):
     """Logs a practice run against the user's global profile tracking framework."""
     data = ctx.req.json or {}
@@ -178,7 +188,16 @@ def log_skill_practice(ctx):
         return jsonify({"status": "success", "interval_days": next_interval, "next_review": next_review_date.isoformat()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('update', methods=['POST'])
+class UpdateSkillPayload(TypedDict, total=False):
+    filepath: str
+    name: str
+    tags: str
+    group: str
+    status: str
+    parts: str
+    custom_steps: str
+
+@skills_bp.route('update', methods=['POST'], request_schema=UpdateSkillPayload, docstring="Updates structural properties of a skill item without affecting practice clocks.")
 def update_skill_structure(ctx):
     """Updates structural track properties without affecting the SM-2 spaced repetition clocks."""
     data = ctx.req.json or {}
@@ -234,7 +253,10 @@ def update_skill_structure(ctx):
         return jsonify({"status": "success", "filepath": final_filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('delete', methods=['POST'])
+class DeleteSkillPayload(TypedDict):
+    filepath: str
+
+@skills_bp.route('delete', methods=['POST'], request_schema=DeleteSkillPayload, docstring="Permanently deletes a skill tracking record and its associated physical markdown file.")
 def delete_skill_item(ctx):
     """Permanently purges a skill markdown asset from user space disk and index ledger."""
     data = ctx.req.json or {}
@@ -253,7 +275,7 @@ def delete_skill_item(ctx):
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('list', methods=['GET'])
+@skills_bp.route('list', methods=['GET'], docstring="Retrieves all registered skill items across the entire user profile.")
 def get_all_skills(ctx):
     """Returns every tracking item registered across the user profile layout."""
     try:
@@ -267,7 +289,17 @@ def get_all_skills(ctx):
         return jsonify({"skills": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-@skills_bp.route('create', methods=['POST'])
+class CreateSkillPayload(TypedDict, total=False):
+    name: str
+    domain: str
+    tags: str
+    group: str
+    status: str
+    custom_steps: str
+    parts: str
+    metrics: dict
+
+@skills_bp.route('create', methods=['POST'], request_schema=CreateSkillPayload, docstring="Generates a new skill tracking physical markdown file and inserts it into the index.")
 def create_new_skill(ctx):
     """Generates a physical markdown file structure inside global user space."""
     data = ctx.req.json or {}

@@ -1,12 +1,16 @@
 import { html, css } from 'lit';
 import { createExtensionStore, InSetuElement } from '/static/extensions/system/sdk.js';
 import { sharedStyles } from '/static/vendor/sutram/js/shared_styles.js';
+import { debounce } from '/static/vendor/sutram/js/utils.js';
 
 window.inSetu = window.inSetu || { stores: {}, extensions: {}, ui: {} };
 const AppStore = window.inSetu.stores.App;
 export const UpdateStore = createExtensionStore('Update', {
     targetRepo: '',
     repoVersion: null,
+    nextVersion: null,
+    hasPendingBump: false,
+    bumpReason: '',
     repoLoading: false,
     repoConfigured: false,
     hasPyproject: true,
@@ -23,6 +27,7 @@ export const UpdateStore = createExtensionStore('Update', {
     missingDependencies: [],
     missingBinaries: [],
     eligibleRepos: {},
+    isBackendMissing: false,
     previewModalOpen: false,
     previewOutput: '',
     previewChangelog: '',
@@ -36,7 +41,8 @@ export const UpdateStore = createExtensionStore('Update', {
 
     _runPreviewJob: async (repo, endpoint, actionType, defaultOutput, defaultChangelog, tab, defaultCaption, extraPayload = {}) => {
         if (!repo) return;
-        const res = await window.inSetu.api.post(endpoint, { repo, ...extraPayload });
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
+        const res = await window.inSetu.api.workspace.post(endpoint, { repo, ...extraPayload });
         if (res.status === 202) {
             const data = await res.json();
             return new Promise((resolve, reject) => {
@@ -77,8 +83,15 @@ export const UpdateStore = createExtensionStore('Update', {
         return UpdateStore.getState()._runPreviewJob(repo, 'update/preview_publish', 'publish', 'No publish operations required.', 'N/A (Publish Phase)', 'full', 'This is a dry run of the publish phase. If you proceed, the package will be uploaded to the target distribution registry.');
     },
     fetchEligibleRepos: async () => {
+        const state = UpdateStore.getState();
+        if (state.isBackendMissing) return;
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         try {
             const res = await window.inSetu.api.workspace.get('update/eligible_repos');
+            if (res.status === 404) {
+                UpdateStore.setState({ isBackendMissing: true });
+                return;
+            }
             if (res.ok) {
                 const data = await res.json();
                 const eligibility = data.eligibility || {};
@@ -103,6 +116,7 @@ export const UpdateStore = createExtensionStore('Update', {
         }
     },
     checkDependencies: async () => {
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
         try {
             const res = await window.inSetu.api.workspace.get('system/config');
             if (res.ok) {
@@ -119,11 +133,30 @@ export const UpdateStore = createExtensionStore('Update', {
             console.warn("Failed to check dependencies:", e);
         }
     },
-    fetchRepoStatus: async (repo) => {
+    _debouncedStatusFn: null,
+    fetchRepoStatus: (repo, silent = false) => {
         if (!repo) return;
-        UpdateStore.setState({ repoVersion: null, repoLoading: true }); // Clear and mark loading
+        let debounced = UpdateStore.getState()._debouncedStatusFn;
+        if (!debounced) {
+            debounced = debounce(async (targetRepo, isSilent) => {
+                UpdateStore.getState()._executeFetchRepoStatus(targetRepo, isSilent);
+            }, 500);
+            UpdateStore.setState({ _debouncedStatusFn: debounced });
+        }
+        debounced(repo, silent);
+    },
+    _executeFetchRepoStatus: async (repo, silent = false) => {
+        if (!repo) return;
+        const state = UpdateStore.getState();
+        if (state.isBackendMissing) return;
+        if (window.ACTIVE_EXTENSIONS && !window.ACTIVE_EXTENSIONS.includes('update')) return;
+        if (!silent) UpdateStore.setState({ repoLoading: true });
         try {
-            const res = await window.inSetu.api.post('update/status', { repo });
+            const res = await window.inSetu.api.workspace.post('update/status', { repo });
+            if (res.status === 404) {
+                UpdateStore.setState({ isBackendMissing: true, repoLoading: false });
+                return;
+            }
             if (res.status === 202) {
                 const data = await res.json();
                 window.inSetu.utils.pollJob(data.job_id, {
@@ -132,6 +165,9 @@ export const UpdateStore = createExtensionStore('Update', {
                         const isExistingPrerelease = Boolean(versionStr && (versionStr.includes('-') || /[a-zA-Z]/.test(versionStr)));
                         UpdateStore.setState({ 
                             repoVersion: statusData.artifact.version, 
+                            nextVersion: statusData.artifact.next_version || null,
+                            hasPendingBump: statusData.artifact.has_pending_bump === true,
+                            bumpReason: statusData.artifact.bump_reason || '',
                             repoConfigured: statusData.artifact.configured,
                             hasPyproject: statusData.artifact.has_pyproject !== false,
                             isClean: statusData.artifact.is_clean !== false,
@@ -337,6 +373,9 @@ export class InSetuExtUpdate extends InSetuElement {
     static properties = {
         targetRepo: { type: String },
         repoVersion: { type: String },
+        nextVersion: { type: String },
+        hasPendingBump: { type: Boolean },
+        bumpReason: { type: String },
         repoLoading: { type: Boolean },
         repoConfigured: { type: Boolean },
         hasPyproject: { type: Boolean },
@@ -374,6 +413,9 @@ export class InSetuExtUpdate extends InSetuElement {
         super();
         this.targetRepo = '';
         this.repoVersion = null;
+        this.nextVersion = null;
+        this.hasPendingBump = false;
+        this.bumpReason = '';
         this.repoLoading = false;
         this.repoConfigured = false;
         this.hasPyproject = true;
@@ -406,6 +448,9 @@ export class InSetuExtUpdate extends InSetuElement {
             const previousRepo = this.targetRepo;
             this.targetRepo = state.targetRepo;
             this.repoVersion = state.repoVersion;
+            this.nextVersion = state.nextVersion;
+            this.hasPendingBump = !!state.hasPendingBump;
+            this.bumpReason = state.bumpReason || '';
             this.repoLoading = !!state.repoLoading;
             this.repoConfigured = state.repoConfigured;
             this.hasPyproject = state.hasPyproject !== false;
@@ -458,7 +503,21 @@ export class InSetuExtUpdate extends InSetuElement {
         UpdateStore.getState().fetchEligibleRepos();
         this.registerGlobalListener('insetu:git:diffs-refreshed', window, () => {
             if (this.targetRepo) {
-                UpdateStore.getState().fetchRepoStatus(this.targetRepo);
+                UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
+            }
+        });
+        this.registerGlobalListener('insetu:vfs-mutated', window, (e) => {
+            if (this.targetRepo) {
+                const mutations = e.detail?.mutations || [];
+                const isRelevant = mutations.some(m => m.filepath && m.filepath.includes('pyproject.toml'));
+                if (isRelevant) {
+                    UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
+                }
+            }
+        });
+        this.registerGlobalListener('sutram-sync-complete', window, () => {
+            if (this.targetRepo) {
+                UpdateStore.getState().fetchRepoStatus(this.targetRepo, true);
             }
         });
     }
@@ -628,6 +687,19 @@ export class InSetuExtUpdate extends InSetuElement {
                                     </button>
                                 </div>
                             ` : ''}
+                            ${!this.repoLoading && this.repoConfigured && this.hasPendingBump ? html`
+                                <div style="margin-top: 10px; background: var(--bg); border: 1px solid var(--intent-success); border-radius: 4px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                                    <span style="font-size: 0.85rem; color: var(--intent-success); font-weight: bold;">
+                                        🚀 <strong>Ready to Version & Update:</strong> Next Version is <code style="font-family: var(--font-mono); color: var(--text);">v${this.nextVersion}</code>
+                                    </span>
+                                    <sutram-async-btn 
+                                        label="⚡ Bump to v${this.nextVersion}" 
+                                        intent="success" 
+                                        style="margin: 0; --btn-padding: 4px 10px; --btn-font-size: 0.8rem;"
+                                        .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
+                                    </sutram-async-btn>
+                                </div>
+                            ` : ''}
                         </div>
                         ${!this.repoLoading && this.repoConfigured ? html`
                             <span style="font-size: 0.75rem; color: var(--intent-success); border: 1px solid var(--intent-success); padding: 2px 6px; border-radius: 10px; font-weight: bold;">
@@ -759,8 +831,8 @@ export class InSetuExtUpdate extends InSetuElement {
                         <div style="flex: 1; min-width: 220px; display: flex; flex-direction: column; gap: 6px;">
                             <sutram-async-btn 
                                 style="width: 100%;" 
-                                label="📦 Step 1: Bump & Tag" 
-                                intent="primary" 
+                                label="${this.hasPendingBump ? '📦 Step 1: Bump to v' + this.nextVersion : '📦 Step 1: Bump & Tag'}" 
+                                intent="${this.hasPendingBump ? 'success' : 'primary'}" 
                                 ?disabled=${!this.repoConfigured || !this.isClean}
                                 .onClick=${async () => await UpdateStore.getState().previewBump(this.targetRepo)}>
                             </sutram-async-btn>

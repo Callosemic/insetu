@@ -2,6 +2,7 @@ import urllib.request
 import urllib.parse
 import uuid
 import json
+from typing import TypedDict, Optional
 from flask import jsonify
 from insetu.core.sdk import InSetuExtension
 ingest_bp = InSetuExtension('ingest', __name__, title="URL Ingestion", description="Webpage fetching and Markdown conversion.")
@@ -130,7 +131,11 @@ def extract_markdown_from_url(target_url, method="jina"):
         "published_time": published_time,
         "clean_markdown": final_markdown
     }
-@ingest_bp.route('url', methods=['POST'])
+class IngestUrlPayload(TypedDict, total=False):
+    url: str
+    method: Optional[str]
+
+@ingest_bp.route('url', methods=['POST'], request_schema=IngestUrlPayload, docstring="Fetches content from a URL and converts it into clean Markdown.")
 def api_ingest_url(ctx):
     data = ctx.req.json or {}
     target_url = data.get("url", "").strip()
