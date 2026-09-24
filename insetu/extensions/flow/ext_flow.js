@@ -379,14 +379,13 @@ export class InSetuExtFlow extends InSetuElement {
                         if (manifest[f]) return true;
                         return (gatherOptions?.prompts || []).includes(f) || (gatherOptions?.prompts || []).some(p => p.endsWith(f));
                     };
-
                     const existsArr = Array.isArray(b.show_if_exists) ? b.show_if_exists : (b.show_if_exists ? [b.show_if_exists] : []);
                     if (existsArr.length > 0) {
-                        if (!existsArr.every(checkLiteralExists)) return false;
+                        if (!existsArr.some(checkLiteralExists)) return false;
                     }
                     const missingArr = Array.isArray(b.show_if_missing) ? b.show_if_missing : (b.show_if_missing ? [b.show_if_missing] : []);
                     if (missingArr.length > 0) {
-                        if (missingArr.some(checkLiteralExists)) return false;
+                        if (!missingArr.every(f => !checkLiteralExists(f))) return false;
                     }
                 }
 
@@ -599,7 +598,7 @@ export class InSetuExtFlow extends InSetuElement {
                                     </div>
                                     <div>
                                             <h4 style="margin: 0 0 10px 0; color: var(--text); font-size: 1.05rem;">2. Visibility Prerequisites (Optional)</h4>
-                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these exist:</label>
+                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if at least one of these exist:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfExists || this._editForm?.showIfExists?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
                                                         this._editForm?.showIfExists?.map((inc, idx) => {
@@ -624,7 +623,7 @@ export class InSetuExtFlow extends InSetuElement {
                                                         `})}
                                             </div>
                                             <button class="btn-sm" style="background: var(--intent-neutral); margin: 0 0 15px 0; padding: 6px 12px;" @click=${() => { this._selectingFor = 'exists'; this._tempContexts = [...(this._editForm.showIfExists || [])]; this._showSelectContexts = true; }}>➕ Add Required Contexts</button>
-                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if these are missing:</label>
+                                            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 5px;">Show ONLY if all of these are missing:</label>
                                             <div style="display: flex; flex-direction: column; gap: 0; margin-bottom: 10px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 4px;">
                                                     ${!this._editForm?.showIfMissing || this._editForm?.showIfMissing?.length === 0 ? html`<insetu-empty-state text="No requirements."></insetu-empty-state>` : 
                                                         this._editForm?.showIfMissing?.map((inc, idx) => {
