@@ -112,21 +112,27 @@ function injectTextToModal(text, isSupportedEditor, isMarkdown, isFS, forceAllow
     }});
 }
 export async function ensureFreshContext(filePath) {
+    if (!filePath) return;
     const appState = AppStore.getState();
     const dirtyRepos = appState.dirtyRepos || new Set();
     const dirtyBuckets = appState.dirtyBuckets || new Set();
 
-    const repo = filePath.startsWith('vfs://') ? window.inSetu.utils.parseURI(filePath).repo : (filePath.includes('::') ? filePath.split('::')[0] : null);
-    const isDirty = dirtyBuckets.has(filePath) || (repo && dirtyRepos.has(repo));
+    const manifestObj = appState.manifest?.ctx?.[filePath];
+    const addr = window.inSetu.utils.BucketAddress ? window.inSetu.utils.BucketAddress.fromFilepath(filePath, manifestObj?.meta) : null;
+
+    const isDirty = (addr && addr.key && dirtyBuckets.has(addr.key)) || 
+                    (addr && addr.repo && dirtyRepos.has(addr.repo)) ||
+                    dirtyBuckets.has(filePath);
 
     if (isDirty) {
         if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
             window.inSetu.ui.setGlobalStatus("⏳ Compiling fresh context...", null);
         }
-        const targetRepos = repo ? [repo] : null;
+        const targetRepos = (addr && addr.repo && addr.repo !== 'orphan') ? [addr.repo] : null;
         await window.inSetu.stores.Gather.getState().executeCompile(null, false, null, targetRepos);
+        if (addr && addr.key) dirtyBuckets.delete(addr.key);
+        if (addr && addr.repo) dirtyRepos.delete(addr.repo);
         dirtyBuckets.delete(filePath);
-        if (repo) dirtyRepos.delete(repo);
         AppStore.setState({ dirtyBuckets: new Set(dirtyBuckets), dirtyRepos: new Set(dirtyRepos) });
     }
 }
@@ -155,21 +161,26 @@ export async function fetchAndCopy(filePath, explicitUrl = null) {
         throw e;
     }
 }
-
 export async function fetchAndDownloadState(filePath, explicitUrl = null) {
     try {
         let fetchUrl = explicitUrl;
         if (!fetchUrl) {
-            const activeWs = window.inSetu.utils.getActiveWorkspace();
-            fetchUrl = `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
-            const override = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
-            if (override) fetchUrl = override;
+            if (filePath.startsWith('/download/') || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+                fetchUrl = filePath;
+            } else {
+                const activeWs = window.inSetu.utils.getActiveWorkspace();
+                const isCtx = filePath.startsWith('ctx://') || filePath.endsWith('_context.txt') || filePath.endsWith('_diffs.txt');
+                fetchUrl = isCtx
+                    ? `/download/${encodeURIComponent(filePath)}`
+                    : `/api/${activeWs}/fs/fetch?file=` + encodeURIComponent(filePath);
+                const override = window.inSetu.events.emitHook('insetu:file-fetch-url', filePath);
+                if (override) fetchUrl = override;
+            }
         }
         await downloadFile(fetchUrl, filePath.split('/').pop());
         window.inSetu.ui.setGlobalStatus("✅ Downloaded!", 2000);
-} catch (e) {
+    } catch (e) {
         window.inSetu.ui.setGlobalStatus("❌ Error: " + e.message, 3000, true);
-        throw e;
     }
 }
 export async function shareFiles(baseFile, chunks = null, isFS = false) {
@@ -1053,7 +1064,7 @@ async function saveNewFolder() {
                 const rRes = await window.inSetu.api.system.get('topology?t=' + Date.now());
                 if (rRes.ok) {
                     const d = await rRes.json();
-                    AppStore.setState({ allRepos: d.repos, targetConfigs: d.targets || [] });
+                    AppStore.setState({ allRepos: d.repos, targetConfigs: d.target_repos || [] });
                 }
             }
             FsStore.getState().setModal('newFolder', { open: false });

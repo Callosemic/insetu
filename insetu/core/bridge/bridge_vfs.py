@@ -54,10 +54,10 @@ def _process_sync_transaction(vfs, workspace_id, data, sister_repos, ws_root):
     for raw_target_file, blocks in parsed_structure.items():
         if raw_target_file not in active_files or not blocks: continue
         from insetu.core.utils_core import InSetuURI
-        uri = InSetuURI(raw_target_file)
+        uri = InSetuURI.from_any(raw_target_file)
 
         # Enforce vfs:// logical boundary mapping natively
-        target_file = f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path
+        target_file = str(uri) if uri.scheme else (f"{uri.repo}/{uri.path}".strip('/') if uri.repo else uri.path)
         norm_target = target_file
 
         if uri.basename in ('cli.py', 'fallback_bridge.py') and 'insetu/' in norm_target:

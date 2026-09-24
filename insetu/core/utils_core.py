@@ -1,17 +1,27 @@
+import os
+import io
+import re
+import sys
+import time
+import json
+import shutil
+import threading
+import subprocess
 from pathlib import Path
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Any, Tuple, Union
+from ruamel.yaml import YAML
+
 from akasa.hooks import hooks
+from akasa.uri import AkasaURI
+from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
+from akasa.vfs import VFSTransaction, _resolve_physical_path as _vfs_resolve_physical_path
 
 @hooks.on('vfs_resolve_path')
 def hook_vfs_resolve_path(filename=None, workspace_id=None, **kwargs):
     if not filename:
         return None
     return resolve_logical_path(filename, workspace_id=workspace_id)
-import os
-import json
-import subprocess
-import sys
-import shutil
-from akasa.utils import load_config, get_workspace_physics, slugify, load_json_config, generate_ascii_tree, parse_uri
 def execute_binary(cmd, cwd=None, env=None, check=False, capture_output=True, text=True, **kwargs):
     """
     Universal binary execution wrapper resolving system PATH, venv directories,
@@ -50,17 +60,85 @@ import io
 import re
 from ruamel.yaml import YAML
 from akasa.uri import AkasaURI
-
 class InSetuURI(AkasaURI):
     """
-    Host application subclass injecting domain-specific routing aliases.
+    Host application subclass injecting domain-specific routing aliases,
+    polymorphic coercion, and physical disk inspection methods.
     """
+    @classmethod
+    def from_any(cls, raw: Any) -> 'InSetuURI':
+        if isinstance(raw, InSetuURI):
+            return raw
+        if isinstance(raw, AkasaURI):
+            return cls(str(raw))
+        if isinstance(raw, dict):
+            raw = raw.get('folderpath') or raw.get('filepath') or ''
+
+        raw_str = str(raw).replace('\\', '/').strip()
+        if not raw_str:
+            return cls("")
+
+        if "://" not in raw_str:
+            if raw_str.startswith('ctx://') or raw_str.startswith('vfs://'):
+                pass
+            elif raw_str.endswith('_context.txt') or '/contexts/' in raw_str:
+                clean_c = raw_str.replace('.insetu/ext/gather/data/contexts/', '').replace('contexts/', '')
+                raw_str = f"ctx://contexts/{clean_c}"
+            elif raw_str.endswith('_diffs.txt') or '/diffs/' in raw_str:
+                clean_d = raw_str.replace('.insetu/ext/git/data/diffs/', '').replace('diffs/', '')
+                raw_str = f"ctx://diffs/{clean_d}"
+            elif 'prompts/' in raw_str or raw_str.startswith('.insetu/prompts/'):
+                clean_p = raw_str.replace('.insetu/prompts/', '').replace('prompts/', '')
+                raw_str = f"ctx://prompts/{clean_p}"
+            else:
+                raw_str = f"vfs://{raw_str.lstrip('/')}"
+
+        return cls(raw_str)
+
     @property
     def repo(self) -> str:
         return self.volume
+
     @property
     def is_diff(self) -> bool:
         return self.scheme == 'ctx' and self.volume == 'diffs'
+    def resolve(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
+        return _vfs_resolve_physical_path(str(self), workspace_id, is_absolute_artifact=is_absolute_artifact)
+
+    def resolve_physical(self, workspace_id: Optional[str] = None) -> Optional[str]:
+        # Backward compatibility alias
+        return self.resolve(workspace_id)
+
+    def exists(self, workspace_id: Optional[str] = None) -> bool:
+        phys = self.resolve(workspace_id)
+        return bool(phys and os.path.exists(phys))
+
+    def is_dir_physical(self, workspace_id: Optional[str] = None) -> bool:
+        if self.is_dir or self.path.endswith('/'):
+            return True
+        phys = self.resolve(workspace_id)
+        return bool(phys and os.path.exists(phys) and os.path.isdir(phys))
+
+    def is_file_physical(self, workspace_id: Optional[str] = None) -> bool:
+        if self.is_dir or self.path.endswith('/'):
+            return False
+        phys = self.resolve(workspace_id)
+        return bool(phys and os.path.exists(phys) and os.path.isfile(phys))
+
+    def mtime(self, workspace_id: Optional[str] = None) -> Optional[float]:
+        phys = self.resolve(workspace_id)
+        if phys and os.path.exists(phys):
+            try:
+                return os.path.getmtime(phys)
+            except OSError:
+                return None
+        return None
+
+    def read(self, workspace_id: Optional[str] = None, is_absolute_artifact: bool = False) -> Optional[str]:
+        from akasa.vfs import VFSTransaction
+        with VFSTransaction(workspace_id) as vfs:
+            return vfs.read(str(self), is_absolute_artifact=is_absolute_artifact)
+
     def bucket(self, workspace_id=None):
         from insetu.core.topology.engine_topology import resolve_file_bucket
         from akasa.utils import load_config
@@ -110,13 +188,20 @@ class BucketAddress:
         return cls(key, "main")
     @classmethod
     def from_uri(cls, uri_str: str, meta: dict = None, workspace_id: str = None) -> 'BucketAddress':
-        # Strict SSOT Key-Value Lookup
-        if meta and meta.get("repo") and meta.get("bucket_id"):
-            return cls(meta["repo"], meta["bucket_id"])
+        meta = meta or {}
+        repo = meta.get("repo")
+        bucket_id = meta.get("bucket_id")
 
-        # If the metadata is missing, it is an orphan. No string splitting.
-        uri = InSetuURI(uri_str)
-        return cls("orphan", uri.basename)
+        # Explicit None check allows the root repository (repo="") to bypass guessing
+        if repo is None:
+            uri = InSetuURI.from_any(uri_str)
+            repo = uri.repo
+            if not repo and uri.scheme == 'ctx':
+                repo = "global"
+                if not bucket_id:
+                    bucket_id = uri.basename.replace('.txt', '')
+
+        return cls(repo if repo is not None else "global", bucket_id or "main")
 
     @classmethod
     def from_vfs_path(cls, filepath: str, workspace_id: str = None) -> 'BucketAddress':
@@ -815,64 +900,30 @@ def resolve_logical_path(path, workspace_id=None):
     return ws_root_path.joinpath(clean_fallback).resolve().as_posix()
 @hooks.on('expand_selection')
 def hook_expand_selection(items=None, workspace_id=None, **kwargs):
-    from akasa.vfs import VFSTransaction
-    from akasa.hooks import hooks
-    from insetu.core.utils_core import InSetuURI
+    if not items:
+        return []
 
-    vfs_manifest_res = hooks.emit('request_vfs_manifest', workspace_id=workspace_id)
-    vfs_manifest = next((m for m in vfs_manifest_res if m), {})
-    tracked_files = set()
-    for bucket in vfs_manifest.values():
-        tracked_files.update(bucket.get('files', []))
     files = []
     with VFSTransaction(workspace_id) as vfs:
         for item in items:
-            raw_path = None
-            is_folder = False
-
-            if isinstance(item, str):
-                raw_path = item
-            elif 'filepath' in item:
-                raw_path = item['filepath']
-            elif 'folderpath' in item:
-                raw_path = item['folderpath']
-                is_folder = True
-
-            if not raw_path:
+            uri = InSetuURI.from_any(item)
+            if not uri.path and not uri.volume:
                 continue
 
-            uri_obj = InSetuURI(raw_path)
+            is_folder = uri.is_dir_physical(workspace_id) or uri.is_dir
 
-            if not uri_obj.scheme:
-                if uri_obj.basename.endswith('_context.txt'): 
-                    uri_obj = InSetuURI(f"ctx://contexts/{uri_obj.path}")
-                elif uri_obj.basename.endswith('_diffs.txt'): 
-                    uri_obj = InSetuURI(f"ctx://diffs/{uri_obj.path}")
-                elif 'prompts/' in uri_obj.path or uri_obj.path.startswith('.insetu/prompts/'): 
-                    clean_prompt = uri_obj.path.replace('.insetu/prompts/', '').replace('prompts/', '')
-                    uri_obj = InSetuURI(f"ctx://prompts/{clean_prompt}")
-                else: 
-                    uri_obj = InSetuURI(f"vfs://{uri_obj.path}")
-
-            resolved_uri_str = f"{uri_obj.scheme}://{uri_obj.volume}/{uri_obj.path}".replace('//', '/').replace(':/', '://')
-            if is_folder or (uri_obj.is_dir and uri_obj.scheme == 'vfs'):
-                target_walk = uri_obj.path
-                # Fix for vfs.walk expecting volume boundaries
-                if uri_obj.scheme == 'vfs' and uri_obj.volume:
-                    target_walk = resolved_uri_str
-
+            if is_folder or (uri.scheme == 'vfs' and uri.is_dir):
+                target_walk = str(uri)
                 for f in vfs.walk(target_walk):
-                    f_uri = InSetuURI(f)
-                    clean_f = f"{f_uri.volume}/{f_uri.path}".strip('/') if f_uri.volume else f_uri.path
-                    if clean_f in tracked_files:
-                        files.append(f if InSetuURI(f).scheme == 'vfs' else f"vfs://{f}")
+                    f_uri = InSetuURI.from_any(f)
+                    files.append(str(f_uri))
             else:
-                if uri_obj.scheme == 'ctx':
-                    responses = hooks.emit('resolve_payload_chunks', uri=resolved_uri_str, workspace_id=workspace_id)
-                    chunks = next((r for r in responses if r), [resolved_uri_str])
+                if uri.scheme == 'ctx':
+                    responses = hooks.emit('resolve_payload_chunks', uri=str(uri), workspace_id=workspace_id)
+                    chunks = next((r for r in responses if r), [str(uri)])
                     files.extend(chunks)
                 else:
-                    files.append(resolved_uri_str if uri_obj.scheme == 'vfs' else f"vfs://{resolved_uri_str}")
+                    files.append(str(uri))
 
     unique_files = []
     seen = set()
@@ -925,7 +976,7 @@ def get_default_repo_template(repo_dir, title=None, domain=None, description=Non
     }
 def sanitize_workspace_config(cfg):
     cfg.pop("_settings_schemas", None)
-    raw_targets = cfg.get("target_repos") if "target_repos" in cfg else cfg.pop("targets", [])
+    raw_targets = cfg.get("target_repos", [])
     valid_repos = []
     seen_dirs = set()
     for repo in (raw_targets or []):

@@ -649,7 +649,7 @@ export async function executeBootSequence() {
                 const tabOrder = d.tab_order || [];
                 AppStore.setState({ 
                     allRepos: d.repos,
-                    targetConfigs: d.targets || [],
+                    targetConfigs: d.target_repos || [],
                     virtualContexts: d.virtual_contexts || [],
                     categoryOrder: d.category_order || [],
                     hiddenOutputs: d.hidden_outputs || [],
@@ -931,6 +931,9 @@ export async function executeBootSequence() {
         // Everything is fully booted, topologies mapped, and extensions mounted.
         updateBootProgress("System Ready!");
         window.BOOT_COMPLETE = true;
+        if (window.inSetu?.ui?.setGlobalStatus) {
+            window.inSetu.ui.setGlobalStatus("✅ System Ready", 2000);
+        }
         if (window.panicTimeout) clearTimeout(window.panicTimeout); // Linter bypass: Boot sequence watchdog
         const _initPanicBtn = document.getElementById('js-panic-button');
         if (_initPanicBtn) {
@@ -1220,7 +1223,7 @@ async function performSoftRefresh() {
             }
             AppStore.setState({ 
                 allRepos: d.repos,
-                targetConfigs: d.targets || [],
+                targetConfigs: d.target_repos || [],
                 virtualContexts: d.virtual_contexts || [],
                 categoryOrder: d.category_order || [],
                 hiddenOutputs: d.hidden_outputs || [],
@@ -1353,49 +1356,42 @@ async function performSoftRefresh() {
     }
 }
 async function fullRefresh() {
-    const btn = document.getElementById('full-refresh-btn');
-    if (btn) btn.innerText = "⏳ Syncing...";
+    if (window.inSetu?.sse?.disconnect) {
+        window.inSetu.sse.disconnect();
+    }
+    if (window.inSetu?.ui?.setGlobalStatus) {
+        window.inSetu.ui.setGlobalStatus("🔄 Rebooting Frontend & Purging Caches...", 2000);
+    }
     try {
-        // Purge stale UI state before syncing
+        // 1. Purge stale UI state keys
         const keys = Object.keys(localStorage);
         keys.forEach(k => {
             if (k.startsWith('insetu_pinned_') || k.startsWith('insetu_task_') || k.startsWith('insetu_lib_')) {
                 localStorage.removeItem(k);
             }
         });
-        // Guardrail: Only purge caches if we have an active network connection.
-        // Ping the server to ensure we can actually fetch new assets before destroying the safety net.
-        let canReachServer = false;
-        try {
-            // Bypass service worker interception completely to check true network connectivity
-            const activeWs = window.inSetu.utils.getActiveWorkspace();
-            const ping = await fetch(`/api/${activeWs}/system/manifest?t=` + Date.now(), { 
-                method: 'HEAD', 
-                cache: 'no-store',
-                headers: window.inSetu.api._getHeaders()
-            });
-            canReachServer = ping.ok;
-        } catch(e) {}
-        if (canReachServer) {
-            if ('caches' in window) {
-                try {
-                    const cacheKeys = await caches.keys();
-                    await Promise.all(cacheKeys.map(k => caches.delete(k)));
-                } catch(e) {}
-            }
-            // We skip performSoftRefresh here because the hard reload will natively  
-            // fetch the correct tenant configuration on boot via the interceptor.
-            window.location.reload(true);
-        } else {
-            if (window.inSetu?.stores?.Toast) {
-                window.inSetu.stores.Toast.getState().addToast("Offline Mode: Full refresh aborted to preserve cache. Performing soft refresh instead.", "warning");
-            }
-            await performSoftRefresh();
-            if (btn) btn.innerText = "🔄 Full UI Refresh";
+
+        // 2. Unregister Service Workers to force fresh JS bundle loads on reload
+        if ('serviceWorker' in navigator) {
+            try {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                for (let reg of regs) await reg.unregister();
+            } catch(e) {}
         }
+
+        // 3. Clear CacheStorage
+        if ('caches' in window) {
+            try {
+                const cacheKeys = await caches.keys();
+                await Promise.all(cacheKeys.map(k => caches.delete(k)));
+            } catch(e) {}
+        }
+
+        // 4. Hard reload browser
+        window.location.reload(true);
     } catch (error) {
-        alert("Error during full refresh.");
-        if (btn) btn.innerText = "🔄 Full UI Refresh";
+        console.error("Error during full UI refresh:", error);
+        window.location.reload();
     }
 }
 async function initializeWorkspaceTopology() {
@@ -1410,7 +1406,7 @@ async function initializeWorkspaceTopology() {
             const tabOrder = d.tab_order || [];
             AppStore.setState({ 
                 allRepos: d.repos,
-                targetConfigs: d.targets || [],
+                targetConfigs: d.target_repos || [],
                 virtualContexts: d.virtual_contexts || [],
                 categoryOrder: d.category_order || [],
                 hiddenOutputs: d.hidden_outputs || [],

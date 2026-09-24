@@ -7,8 +7,9 @@ from pathlib import Path
 from flask import jsonify
 from akasa.extension import ExtensionContext
 from insetu.core.sdk import InSetuExtension
+from akasa.db import get_connection
 from akasa.hooks import hooks
-from akasa.workers import submit_immediate_job, register_callback
+from akasa.workers import submit_immediate_job, register_callback, cancel_job
 from insetu.core.utils_core import get_repo_path
 
 TOPOLOGY_SCHEMA = {
@@ -46,8 +47,6 @@ def _register_topology_compilation_step(workspace_id=None, **kwargs):
     }]
 @topology_bp.worker("scan_topology_task")
 def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_repos=None, **kwargs):
-    import time
-    from akasa.db import get_connection
     w_conn = get_connection('workers', workspace_id=ctx.workspace_id)
 
     if force_full and force_full != "compile_only":
@@ -72,7 +71,6 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
         time.sleep(0.5)
         timeout_loops += 1
 
-    from insetu.core.topology.engine_topology import resolve_topology_buffer
     drained_events = resolve_topology_buffer(ctx.workspace_id)
     all_events = ledger_events or []
     event_dict = {e['filepath']: e for e in all_events}
@@ -82,11 +80,10 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
 
     # EVENT TRAP HEALER: Steal trapped events from the 12-second delayed job and assassinate it.
     delayed_job_id = f"cmp_del_{ctx.workspace_id}"
-    delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status='pending'", (delayed_job_id,)).fetchone()
+    delayed_job = w_conn.execute("SELECT args_json FROM jobs WHERE id=? AND status IN ('pending', 'running')", (delayed_job_id,)).fetchone()
 
     if delayed_job and delayed_job['args_json']:
         try:
-            import json
             delayed_args = json.loads(delayed_job['args_json'])
             for de in delayed_args.get('ledger_events', []):
                 event_dict[de['filepath']] = de
@@ -95,7 +92,6 @@ def _background_scan_topology(ctx, ledger_events=None, force_full=False, target_
 
     all_events = list(event_dict.values())
 
-    from akasa.workers import cancel_job
     cancel_job(delayed_job_id, workspace_id=ctx.workspace_id)
 
     return {
@@ -497,6 +493,7 @@ def mount_topology_volumes_dynamically(cfg, workspace_id=None, **kwargs):
     from pathlib import Path
 
     _, ws_root = get_workspace_physics(workspace_id)
+    mount_volume(workspace_id, 'vfs', '', ws_root)
     for repo_cfg in cfg.get("target_repos", []):
         repo_dir = repo_cfg.get("repo_dir")
         if repo_dir:

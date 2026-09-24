@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import TypedDict, Optional, List, Dict, Any
 from flask import request, jsonify, send_file
 from insetu.core.sdk import InSetuExtension
-from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save, _resolve_physical_path as resolve_physical_path
+from akasa.vfs import execute_vfs_move, execute_vfs_delete, execute_vfs_save
 from akasa.workers import submit_immediate_job, update_immediate_job_status, register_callback
+from insetu.core.utils_core import InSetuURI
 
 fs_bp = InSetuExtension(
     'fs', 
@@ -19,7 +20,6 @@ fs_bp = InSetuExtension(
 __depends__ = []
 class FileTargetPayload(TypedDict):
     file: str
-
 @fs_bp.route('exists', methods=['GET'], request_schema=FileTargetPayload, docstring="Verifies if a file exists on the Virtual File System.")
 def api_fs_exists(ctx):
     """Silent validation route that verifies file existence for the UI."""
@@ -27,9 +27,8 @@ def api_fs_exists(ctx):
     filename = ctx.req.args.get('file', '').strip()
     if not filename:
         return jsonify({"exists": False, "path": filename})
-    resolved_path = resolve_physical_path(filename, workspace_id)
-    exists = bool(resolved_path and os.path.exists(resolved_path))
-    return jsonify({"exists": exists, "path": filename})
+    uri = InSetuURI.from_any(filename)
+    return jsonify({"exists": uri.exists(workspace_id), "path": str(uri)})
 @fs_bp.route('fetch', methods=['GET'], request_schema=FileTargetPayload, docstring="Fetches the raw text content of a target VFS path.")
 def api_fs_fetch(ctx):
     """Fetches raw content of a target VFS path for frontend viewing."""
@@ -39,9 +38,8 @@ def api_fs_fetch(ctx):
     if not filename:
         return jsonify({"error": "Filepath required"}), 400
 
-    from akasa.vfs import VFSTransaction
-    with VFSTransaction(workspace_id) as vfs:
-        content = vfs.read(filename)
+    uri = InSetuURI.from_any(filename)
+    content = uri.read(workspace_id)
 
     if content is not None:
         return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
@@ -53,7 +51,8 @@ def download_file(filename):
     from akasa.utils import sniff_tenant_id
     workspace_id = sniff_tenant_id()
 
-    resolved_path = resolve_physical_path(filename, workspace_id)
+    uri = InSetuURI.from_any(filename)
+    resolved_path = uri.resolve(workspace_id)
     if not resolved_path or not os.path.exists(resolved_path):
         return jsonify({"error": "File object not found"}), 404
 

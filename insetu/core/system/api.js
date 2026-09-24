@@ -231,9 +231,19 @@ class SSEPipeline {
         this.source.addEventListener('job_progress', (e) => {
             const data = JSON.parse(e.data);
             if (data.workspace_id && data.workspace_id !== window.inSetu.utils.getActiveWorkspace()) return;
+            const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
+
+            // 1. ALWAYS emit step completion hooks regardless of job_category to keep manifest & dirty states fresh
+            if (data.status === 'completed' && data.artifact) {
+                window.inSetu.events.emitHook('insetu:compile-step-complete', {
+                    job_id: data.job_id,
+                    ext_name: data.ext_name,
+                    artifact: data.artifact
+                });
+            }
+
             // Route events to the UI spinner strictly if they belong to the 'ui_blocking' category
             if (data.job_category === 'ui_blocking') {
-                const isPipelineJob = ['topology', 'cartographer', 'gather', 'git', 'flow'].includes(data.ext_name);
                 if (isPipelineJob) {
                     window.inSetu.events.emitHook('insetu:compile-progress', data);
                 }
@@ -244,17 +254,9 @@ class SSEPipeline {
                         window.inSetu.ui.setGlobalStatus(`⏳ ${msg}`, null);
                     }
                 }
-                // 1. ALWAYS emit step completion hooks regardless of next_job_id
-                if (data.status === 'completed' && data.artifact) {
-                    window.inSetu.events.emitHook('insetu:compile-step-complete', {
-                        job_id: data.job_id,
-                        ext_name: data.ext_name,
-                        artifact: data.artifact
-                    });
-                }
-
                 // 2. Only terminate UI spinners when the ENTIRE chain completes
-                if (isPipelineJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
+                const isStatusTrackedJob = isPipelineJob || data.ext_name === 'bridge';
+                if (isStatusTrackedJob && (data.status === 'completed' || data.status === 'failed') && !(data.artifact && data.artifact.next_job_id)) {
                     window.inSetu.events.emitHook('insetu:compile-progress', { status: 'terminated' });
                     if (window.inSetu.ui && window.inSetu.ui.setGlobalStatus) {
                         window.inSetu.ui.setGlobalStatus(data.status === 'completed' ? "✅ Sync Complete" : "❌ Sync Failed", 2000, data.status === 'failed');

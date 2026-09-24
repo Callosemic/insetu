@@ -20,12 +20,14 @@ def _register_cartographer_compilation_step(workspace_id=None, **kwargs):
         "ext_name": "cartographer",
         "worker_name": "map_task"
     }]
-
 @cartographer_bp.worker("map_task")
 def _background_map(ctx, target_repos=None, **kwargs):
     ctx.jobs.update_progress("Mapping repository topology...")
     map_repositories(ctx.workspace_id, target_repos=target_repos)
-    return {"message": "Cartography complete."}
+    return {
+        "message": "Cartography complete.",
+        "next_kwargs": {"ledger_events": kwargs.get("ledger_events", [])}
+    }
 
 def extract_existing_comments(index_path, repo_path=None):
     """Pass 1: Extracts existing comments, falling back to Git history to prevent data loss."""
