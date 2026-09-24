@@ -2,6 +2,96 @@
 
 <!-- version list -->
 
+## v0.21.0 (2026-09-24)
+
+### Bug Fixes
+
+- Correct flow batch visibility prerequisite evaluation logic
+  ([`b55bca9`](https://github.com/Callosemic/insetu/commit/b55bca9700d94832b3b0709db8b4cdba7c89f5bb))
+
+- Enforce canonical VFS path resolution, OCC conflict VFS parity, watchdog multi-tenant isolation,
+  and offline cache eviction
+  ([`c2ce0ba`](https://github.com/Callosemic/insetu/commit/c2ce0baec343d20c978dd9bda0b72ec8e00f4ba8))
+
+- Normalize config target repos, allow openapi token bypass, and enhance emergency recovery zip dump
+  ([`123b9a6`](https://github.com/Callosemic/insetu/commit/123b9a6b89270464b5fa507fadf88c1ac52e658c))
+
+- Normalize config target repos, allow openapi token bypass, and enhance emergency recovery zip dump
+  ([`59f915c`](https://github.com/Callosemic/insetu/commit/59f915c93017b6fcc247014be0725b5384e8f32e))
+
+- Workspace cancellation, topology deletion resolution, and Yomama patch routing
+  ([`2fa50fe`](https://github.com/Callosemic/insetu/commit/2fa50fe396766bdb6c023c13881c42baec660969))
+
+- **gather**: Standardize compilation DAG step chaining, step complete telemetry, and watchdog event
+  exclusions
+  ([`d7a8993`](https://github.com/Callosemic/insetu/commit/d7a89933e1d5378277784ec14b1ca928a8bfab12))
+
+### Features
+
+- Add desktop GUI shell launcher, cross-platform app shortcuts, and SSE telemetry route
+  ([`67959de`](https://github.com/Callosemic/insetu/commit/67959dec9b512b52dc921ba97e3a70f0baedb3c8))
+
+- Add desktop GUI shell launcher, cross-platform app shortcuts, and SSE telemetry route
+  ([`6c4cdf0`](https://github.com/Callosemic/insetu/commit/6c4cdf01dedf2c7ed759917ff4dbc17701c643e1))
+
+- Add OpenAPI 3.0 spec gateway, typed API contracts, universal binary execution wrapper, and
+  workspace event router
+  ([`1d14fbc`](https://github.com/Callosemic/insetu/commit/1d14fbc190bb8e6b684f2c42611a1ea7dd0916bf))
+
+- Align pipeline state nomenclature, parallelize cartographer sweeps, and inject VFS error telemetry
+  ([`d12f573`](https://github.com/Callosemic/insetu/commit/d12f57333a258980043d2632e9df55539dc09eed))
+
+- Generalize system pipeline submission, introduce BucketAddress SSOT, and standardize background
+  step telemetry
+  ([`f9d9b66`](https://github.com/Callosemic/insetu/commit/f9d9b66bb7782f012925dfbc39ad82f31537b35e))
+
+- Implement SSE telemetry pipeline, stage 1 RAM slew limiter, and on-demand context compilation
+  ([`9c66bac`](https://github.com/Callosemic/insetu/commit/9c66bac09a5b37565c4466a04e9d7689f62804bf))
+
+- **bridge**: Implement Yomama anchor auto-healing and preformatted text blob rendering
+  ([`f8d7cec`](https://github.com/Callosemic/insetu/commit/f8d7cec6a27409551461ec4cfcbefd06fc142971))
+
+- **core**: Enable polymorphic InSetuURI resolution, BucketAddress SSOT refinement, and SSE step
+  telemetry
+  ([`707d7c1`](https://github.com/Callosemic/insetu/commit/707d7c1fb7c18b0e725318f202a4872b86bdfa96))
+
+- **extensions**: Enforce OpenAPI type contracts, docstrings, and binary execution parity across
+  extension suite
+  ([`90b07d5`](https://github.com/Callosemic/insetu/commit/90b07d566e9ba1a5bb72d8cf0dab7fea4690b302))
+
+- **extensions**: Standardize view lifecycle hooks, harden artifact pathing, and add boot log export
+  ([`e305376`](https://github.com/Callosemic/insetu/commit/e305376c94842258be5aa6a13c3df7b397ebf47b))
+
+- **git**: Add rebase and merge state resolution, autostash pull, and robust push error handling
+  ([`9458c2e`](https://github.com/Callosemic/insetu/commit/9458c2e2821ce8fb8f60413fd070155b99399357))
+
+### Refactoring
+
+- Extract Tier 1 kernel package to akasa and purge insetu/kernel submodules
+  ([`71a1c63`](https://github.com/Callosemic/insetu/commit/71a1c63140a8c3c2504f82f76239bede187a166f))
+
+- Extract Tier 1 kernel package to akasa and purge insetu/kernel submodules
+  ([`40c8978`](https://github.com/Callosemic/insetu/commit/40c8978098f2d04813248567c145270e6377f823))
+
+- Migrate core substrate to akasa framework package and introduce InSetuURI domain wrapper
+  ([`d2e1ee8`](https://github.com/Callosemic/insetu/commit/d2e1ee8222b99184bfa938aabd38d0dafc4d2cc0))
+
+- **core**: Consolidate top-level imports and optimize gather background job category
+  ([`89fb84b`](https://github.com/Callosemic/insetu/commit/89fb84bda880229f1fa33952e1b6486cdd9b6955))
+
+- **extensions**: Canonicalize VFS URIs and optimize step-chaining diff telemetry
+  ([`22e59d2`](https://github.com/Callosemic/insetu/commit/22e59d21357ff4c9e760f88e6871a8ab579526ef))
+
+- **extensions**: Complete akasa kernel extraction migration across extension suite
+  ([`d3b9926`](https://github.com/Callosemic/insetu/commit/d3b9926c3e0a7c9e878449c535fe178e9c35071b))
+
+- **gather**: Adopt polymorphic InSetuURI coercion and cleanup inline imports
+  ([`ffd6c53`](https://github.com/Callosemic/insetu/commit/ffd6c53a3f7b93d54075aa68b98a0a5b0e72a473))
+
+- **kernel**: Standardize URI parsing in sandbox resolution and simplify VFS archive pathing
+  ([`6c2e22d`](https://github.com/Callosemic/insetu/commit/6c2e22d5809b6b89fe1071dd81a08c3c587e5882))
+
+
 ## v0.20.0 (2026-09-13)
 
 ### Bug Fixes
