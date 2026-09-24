@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 from .core import (
     BACKEND_DIR, VFS_WRITE_WHITELIST, SQLITE_WHITELIST, 
-    SUBPROCESS_WHITELIST, report_violation
+    SUBPROCESS_WHITELIST, EXECUTE_BINARY_WHITELIST, report_violation
 )
 class BackendFitnessVisitor(ast.NodeVisitor):
     def __init__(self, filepath, filename):
@@ -11,6 +11,19 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         self.filename = filename
         self.has_save_json = False
         self.has_cache_clear = False
+        self.top_level_imports = set()
+
+    def visit_Module(self, node):
+        for stmt in node.body:
+            if isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    self.top_level_imports.add(alias.asname or alias.name)
+            elif isinstance(stmt, ast.ImportFrom):
+                module = stmt.module or ""
+                for alias in stmt.names:
+                    self.top_level_imports.add(f"{module}.{alias.name}" if module else alias.name)
+                    self.top_level_imports.add(alias.asname or alias.name)
+        self.generic_visit(node)
 
     def visit_Dict(self, node):
         dict_keys = {}
@@ -132,6 +145,14 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if node.args[0].value in ('vfs://', 'ctx://', 'system://'):
                     report_violation("URI_SCHEME_MANDATE", self.filepath, node.lineno, f"Manual scheme manipulation ({node.func.attr}) detected. Use InSetuURI(path).scheme or .path instead.")
 
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'endswith':
+            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                if node.args[0].value in ('_diffs.txt', '_context.txt', '_workflow_context.txt'):
+                    report_violation("URI_EXTENSION_MATCHING_BAN", self.filepath, node.lineno, f"Manual suffix matching ('{node.args[0].value}') detected. Rely on InSetuURI(path) domain resolution instead.")
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr == 'parse_uri':
+            report_violation("PARSE_URI_DEPRECATION", self.filepath, node.lineno, "ctx.parse_uri() is deprecated. Instantiate InSetuURI.from_any(path) to access .repo and .path natively.")
+
         if isinstance(node.func, ast.Name):
             if node.func.id == 'open' and self.filename not in VFS_WRITE_WHITELIST:
                 if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant) and any(m in node.args[1].value for m in ['w', 'a', 'x', '+']):
@@ -163,7 +184,9 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                             report_violation("IO_BLOCK_BAN", self.filepath, node.lineno, "Synchronous subprocess execution in a REST route. Offload to background workers.")
                         elif self.filename not in SUBPROCESS_WHITELIST:
                             print(f"⚠️ [WARNING: IO_BLOCK_BAN] {self.filename}:{node.lineno}\n   ↳ Subprocess call outside of designated engines (permitted but flagged).")
-
+                    if node.func.attr in ('run', 'Popen', 'call', 'check_output', 'check_call'):
+                        if self.filename not in EXECUTE_BINARY_WHITELIST:
+                            report_violation("EXECUTE_BINARY_MANDATE", self.filepath, node.lineno, f"Direct 'subprocess.{node.func.attr}()' invocation detected. Route through 'execute_binary()' in utils_core to resolve PATH binaries cleanly.")
                     if node.func.attr == 'run':
                         is_pull = False
                         if len(node.args) > 0 and isinstance(node.args[0], ast.List):
@@ -191,8 +214,10 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute):
             if getattr(node.func.value.value, 'id', '') == 'os' and node.func.value.attr == 'path' and node.func.attr in ('join', 'basename', 'dirname'):
                 report_violation("PATHLIB_MANDATE", self.filepath, node.lineno, f"os.path.{node.func.attr} detected. Migrate to pathlib.Path.")
-
         if isinstance(node.func, ast.Attribute) and node.func.attr == 'get':
+            if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == "targets":
+                if self.filename != "rules_python.py":
+                    report_violation("TARGET_REPOS_KEY_MANDATE", self.filepath, node.lineno, "Deprecated config key 'targets' accessed. Normalize to 'target_repos' instead.")
             if isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'headers':
                 if getattr(node.func.value.value, 'id', '') == 'request':
                     if len(node.args) > 0 and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'X-Workspace-ID':
@@ -237,7 +262,6 @@ class BackendFitnessVisitor(ast.NodeVisitor):
         if is_ext and any(alias.name == 'socket' for alias in node.names):
             report_violation("BANNED_SOCKET_MANAGEMENT", self.filepath, node.lineno, "Raw socket management loop detected in extension. Multi-tenant endpoints must utilize brokered WebSocket schemas or standard API routes.")
         self.generic_visit(node)
-
     def visit_FunctionDef(self, node):
         is_ext = self.filename.startswith("engine_") and 'extensions' in self.filepath.parts
         hook_events = []
@@ -246,6 +270,20 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 if getattr(dec.func.value, 'id', '') == 'hooks' and dec.func.attr == 'on':
                     if len(dec.args) > 0 and isinstance(dec.args[0], ast.Constant):
                         hook_events.append(dec.args[0].value)
+
+        for child in ast.walk(node):
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    name = alias.asname or alias.name
+                    if name in self.top_level_imports or alias.name in self.top_level_imports:
+                        report_violation("REDUNDANT_INLINE_IMPORT", self.filepath, child.lineno, f"Redundant inline import '{alias.name}' inside '{node.name}' (already imported at module level).")
+            elif isinstance(child, ast.ImportFrom):
+                module = child.module or ""
+                for alias in child.names:
+                    full_name = f"{module}.{alias.name}" if module else alias.name
+                    name = alias.asname or alias.name
+                    if full_name in self.top_level_imports or name in self.top_level_imports:
+                        report_violation("REDUNDANT_INLINE_IMPORT", self.filepath, child.lineno, f"Redundant inline import 'from {module} import {alias.name}' inside '{node.name}' (already imported at module level).")
         for legacy_hook in ['vfs_transaction_committed', 'post_file_save', 'post_file_delete']:
             if legacy_hook in hook_events:
                 report_violation("LEGACY_HOOK_BAN", self.filepath, node.lineno, f"Function subscribes to deprecated '{legacy_hook}'. Use unified 'vfs_mutated' instead.")
@@ -302,6 +340,17 @@ class BackendFitnessVisitor(ast.NodeVisitor):
                 for child in ast.walk(node):
                     if isinstance(child, ast.Yield):
                         report_violation("BANNED_MAGIC_GENERATOR", self.filepath, child.lineno, "Yield detected in worker task. Use ctx.jobs.update_progress() to prevent generator hijacking.")
+            for dec in node.decorator_list:
+                if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr == 'route':
+                    if not ast.get_docstring(node):
+                        report_violation("API_DOCSTRING_MANDATE", self.filepath, node.lineno, f"Route function '{node.name}' is missing a mandatory docstring for OpenAPI spec generation.")
+                    methods_arg = next((kw.value for kw in dec.keywords if kw.arg == 'methods'), None)
+                    if methods_arg and isinstance(methods_arg, ast.List):
+                        methods = [e.value for e in methods_arg.elts if isinstance(e, ast.Constant)]
+                        if any(m in ('POST', 'PUT', 'PATCH') for m in methods):
+                            has_schema = any(kw.arg == 'request_schema' for kw in dec.keywords)
+                            if not has_schema:
+                                report_violation("ROUTE_REQUEST_SCHEMA_MANDATE", self.filepath, node.lineno, f"Mutating route '{node.name}' ({', '.join(methods)}) is missing a mandatory 'request_schema' contract.")
         self.generic_visit(node)
     def visit_ImportFrom(self, node):
         self._check_sqlite_import(node)

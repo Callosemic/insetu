@@ -23,8 +23,6 @@ insetu/
 │       ├── 0004-asynchronous-vfs-commit-pipeline.md # Defines the non-blocking VFS write queue and thread safety.
 │       ├── 0006-tenant-isolated-compilation-locks.md # Defines thread-local locks for RAG payload compilations.
 │       ├── 0008-offline-first-synchronization.md # Offline capabilities and Service Worker caching.
-│       ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
-│       ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
 │       ├── 0013-posix-compliant-pathlib-migration.md # Standardization on POSIX paths for cross-platform parity.
 │       ├── 0014-event-bus-tenant-authorization.md # Authorization rules for cross-tenant event bus emissions.
 │       ├── 0015-codemirror6-migration.md # Transition from legacy editors to CodeMirror 6.
@@ -60,6 +58,9 @@ insetu/
 │       ├── 0047-queued-event-barrier-sentinel-vfs-synchronization.md # Queued event-driven barrier sentinel for exact VFS write watermark synchronization.
 │       ├── 0048-akasa-kernel-package-extraction-and-insetu-uri-wrapper.md # Extraction of Tier 1 Kernel into standalone 'akasa' package and InSetuURI domain wrapper.
 │       ├── 0049-sse-telemetry-pipeline-ram-slew-limiter-and-on-demand-context-compilation.md # Real-time SSE telemetry pipeline, Stage 1 RAM queue slew limiting, and on-demand context compilation.
+│       ├── 0050-openapi-spec-gateway-universal-binary-execution-and-workspace-event-routing.md # Real-time OpenAPI 3.0 spec gateway, universal binary execution wrapper, and multi-tenant workspace event routing.
+│       ├── 0051-generic-dag-compilation-chain-resolution-and-step-anchoring.md # Generic Akasa DAG compilation chain resolution, positional step anchoring, and Watchdog manifest exclusion.
+│       ├── 0052-polymorphic-uri-coercion-bucket-address-refinement-and-sse-step-telemetry.md # Polymorphic InSetuURI coercion, BucketAddress SSOT refinement, and un-blocked SSE step telemetry.
 │       └── archived/               # Superseded and historical ADR documents.
 │           ├── 0001-insetu-genesis-and-extension-architecture.md # Original inSetu extraction and extension architecture genesis.
 │           ├── 0002-workspace-physics-and-extensions.md # Defines the tenant workspace boundaries and extension loading.
@@ -67,6 +68,8 @@ insetu/
 │           ├── 0005-transport-shell-decoupling.md # Decoupling of HTTP transport shell from pure domain logic.
 │           ├── 0007-stateless-ui-factory-and-component-decoupling.md # UI decoupling from business logic via Zustand UDF.
 │           ├── 0009-ephemeral-artifacts-and-immediate-jobs-ledger.md # Management of short-lived job artifacts and garbage collection.
+│           ├── 0010-vfs-boundary-exemptions.md # Rules for paths exempt from strict VFS isolation.
+│           ├── 0011-vfs-barrier-synchronization.md # Synchronization barriers for asynchronous VFS flushes.
 │           └── 0012-extension-subdirectory-extraction.md # Extraction of domain extensions into isolated subdirectories.
 ├── insetu/                         # Python application package.
 │   ├── .gitkeep                    # Git folder retention.
