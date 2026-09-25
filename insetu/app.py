@@ -319,7 +319,7 @@ def serve_extension_static(ext_name, filename):
 @app.route('/static/js/extensions/ext_<ext_name>.js')
 def serve_extension_js(ext_name):
     """ADR 0012: Dynamically serve frontend JS from the bundled extension subdirectory."""
-    from flask import send_file, Response
+    from flask import Response
 
     # 1. Try bundled topology
     bundled_path = Path(app.root_path).joinpath("extensions", ext_name, f"ext_{ext_name}.js").as_posix()
@@ -384,7 +384,6 @@ def intercept_local_static_assets():
     Intercepts standard static asset routing routes before Flask's native 
     static file engine serves them, checking the local environment first.
     """
-    from flask import send_file
     from akasa.utils import get_workspace_physics
     path = request.path
     if path in ['/static/icon-192.png', '/static/icon-512.png']:
@@ -439,7 +438,6 @@ def api_system_panic():
     """Hard reboot of the OS process, setting the simulated panic flag."""
     import threading
     import time
-    from flask import jsonify
     def crash_and_restart():
         try: hooks.emit('system_shutdown')
         except Exception: pass

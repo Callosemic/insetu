@@ -24,13 +24,16 @@ def parse_blocks(text):
     files = {}
     current_file = None
     state = "OUTSIDE"
-    search_lines, replace_lines = [], []
+    comment_lines, search_lines, replace_lines = [], [], []
     lines = text.replace('\r\n', '\n').split('\n')
     for line in lines:
         if line.startswith("<<<<<<< FILE:"):
             current_file = line.replace("<<<<<<< FILE:", "").strip()
             if current_file not in files: files[current_file] = []
             state = "OUTSIDE"
+        elif line.startswith("<<<<<<< COMMENT"):
+            state = "COMMENT"
+            comment_lines = []
         elif line.startswith("<<<<<<< SEARCH"):
             state = "SEARCH"
             search_lines = []
@@ -41,12 +44,15 @@ def parse_blocks(text):
         elif line.startswith(">>>>>>> REPLACE"):
             if state == "REPLACE" and current_file:
                 files[current_file].append({
+                    "comment": "\n".join(comment_lines).strip(),
                     "search": "\n".join(search_lines),
                     "replace": "\n".join(replace_lines)
                 })
+                comment_lines = []
             state = "OUTSIDE"
         else:
-            if state == "SEARCH": search_lines.append(line)
+            if state == "COMMENT": comment_lines.append(line)
+            elif state == "SEARCH": search_lines.append(line)
             elif state == "REPLACE": replace_lines.append(line)
     return files
 
@@ -455,7 +461,6 @@ def api_emergency_dump():
                 else:
                     buckets["misc.txt"].append((rel_path, filepath))
             
-            import re
             for bucket_name, entries in buckets.items():
                 if not entries: continue
                 bucket_content = []
